@@ -26,7 +26,7 @@ You can change it in `.env`.
 For online hosting, use MongoDB Atlas and set these environment variables in the hosting dashboard:
 
 ```text
-MONGO_URI=mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/daksh_inventory_v2
+MONGO_URI=mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/daksh_inventory_v2?retryWrites=true&w=majority
 MONGO_DB_NAME=daksh_inventory_v2
 MONGO_SERVER_SELECTION_TIMEOUT_MS=15000
 MONGO_CONNECT_TIMEOUT_MS=15000
@@ -38,7 +38,7 @@ JWT_SECRET=replace-with-a-long-random-secret
 PUBLIC_BASE_URL=https://your-live-app-url
 ```
 
-In MongoDB Atlas, create a database user with `readWrite` permission, add the hosting server IP in Network Access, and keep the full `MONGO_URI` secret in the hosting environment variables. Do not put real database passwords in GitHub. `MONGO_DNS_SERVERS` is optional and only needed on networks where Node cannot resolve Atlas `mongodb+srv` records through the default DNS resolver.
+In MongoDB Atlas, create a database user with `readWrite` permission, add the hosting server IP in Network Access, and keep the full `MONGO_URI` secret in the hosting environment variables. Railway deployments can also use `MONGO_URL`, `MONGODB_URI`, or `DATABASE_URL`; the app checks those names too. Do not put real database passwords in GitHub. `MONGO_DNS_SERVERS` is optional and only needed on networks where Node cannot resolve Atlas `mongodb+srv` records through the default DNS resolver.
 
 The mobile scanner app auto-discovers the PC server on the local network using UDP on `MOBILE_DISCOVERY_PORT`. Keep this port aligned with `PORT` unless you intentionally separate discovery from the HTTP API.
 

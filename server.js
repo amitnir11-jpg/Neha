@@ -94,9 +94,14 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 const DEFAULT_MONGO_URI = 'mongodb://127.0.0.1:27017/daksh_inventory_v2';
-const MONGO_URI = String(process.env.MONGO_URI || DEFAULT_MONGO_URI).trim();
-const MONGO_FALLBACK_URI = String(process.env.MONGO_FALLBACK_URI || DEFAULT_MONGO_URI).trim();
-const MONGO_AUTO_LOCAL_FALLBACK = String(process.env.MONGO_AUTO_LOCAL_FALLBACK || 'true').toLowerCase() !== 'false';
+const IS_PRODUCTION = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+const MONGO_URI_ENV_NAMES = ['MONGO_URI', 'MONGODB_URI', 'MONGO_URL', 'DATABASE_URL'];
+const configuredMongoUri = firstEnvValue(MONGO_URI_ENV_NAMES);
+const MONGO_ALLOW_LOCAL_DEFAULT = String(process.env.MONGO_ALLOW_LOCAL_DEFAULT || (IS_PRODUCTION ? 'false' : 'true')).toLowerCase() === 'true';
+const MONGO_URI = String(configuredMongoUri.value || (MONGO_ALLOW_LOCAL_DEFAULT ? DEFAULT_MONGO_URI : '')).trim();
+const MONGO_URI_SOURCE = configuredMongoUri.name || (MONGO_URI ? 'local default' : '');
+const MONGO_FALLBACK_URI = String(process.env.MONGO_FALLBACK_URI || (IS_PRODUCTION ? '' : DEFAULT_MONGO_URI)).trim();
+const MONGO_AUTO_LOCAL_FALLBACK = String(process.env.MONGO_AUTO_LOCAL_FALLBACK || (IS_PRODUCTION ? 'false' : 'true')).toLowerCase() !== 'false';
 const MONGO_AUTO_PROMOTE_TO_ATLAS = String(process.env.MONGO_AUTO_PROMOTE_TO_ATLAS || 'true').toLowerCase() !== 'false';
 const MONGO_PRIMARY_RETRY_MS = envNumber('MONGO_PRIMARY_RETRY_MS', 30000);
 const MONGO_CLOUD_SYNC_BATCH_SIZE = envNumber('MONGO_CLOUD_SYNC_BATCH_SIZE', 500);
@@ -185,6 +190,14 @@ function envNumber(name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function firstEnvValue(names) {
+  for (const name of names) {
+    const value = String(process.env[name] || '').trim();
+    if (value) return { name, value };
+  }
+  return { name: '', value: '' };
+}
+
 function configureMongoDnsServers() {
   const servers = String(process.env.MONGO_DNS_SERVERS || '')
     .split(',')
@@ -207,6 +220,14 @@ function maskMongoUri(uri) {
 
 function sameMongoUri(left, right) {
   return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase();
+}
+
+function isLocalMongoUri(uri) {
+  return /^mongodb:\/\/(127\.0\.0\.1|localhost)(?::|\/|$)/i.test(String(uri || '').trim());
+}
+
+function isProductionLocalMongoBlocked(uri) {
+  return IS_PRODUCTION && isLocalMongoUri(uri) && !MONGO_ALLOW_LOCAL_DEFAULT;
 }
 
 function mongoUriHasDatabaseName(uri) {
@@ -237,10 +258,13 @@ let mongoReconnectTimer = null;
 let mongoConnecting = false;
 
 function mongoConnectionCandidates() {
+  const candidates = [];
+  if (!MONGO_URI) return candidates;
+
   const primaryLabel = /^mongodb\+srv:\/\//i.test(MONGO_URI) ? 'Atlas primary' : 'primary';
-  const candidates = [{ label: primaryLabel, uri: MONGO_URI }];
+  candidates.push({ label: primaryLabel, uri: MONGO_URI, source: MONGO_URI_SOURCE });
   if (MONGO_AUTO_LOCAL_FALLBACK && MONGO_FALLBACK_URI && !sameMongoUri(MONGO_FALLBACK_URI, MONGO_URI)) {
-    candidates.push({ label: 'local fallback', uri: MONGO_FALLBACK_URI });
+    candidates.push({ label: 'local fallback', uri: MONGO_FALLBACK_URI, source: 'MONGO_FALLBACK_URI' });
   }
   return candidates;
 }
@@ -579,8 +603,15 @@ async function monitorAtlasAndPromote() {
 }
 
 async function connectMongoCandidate(candidate) {
+  if (!candidate || !candidate.uri) {
+    throw new Error(`Missing MongoDB connection string. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} in Railway Variables.`);
+  }
+  if (isProductionLocalMongoBlocked(candidate.uri)) {
+    throw new Error(`Refusing local MongoDB URI from ${candidate.source || 'configuration'} in production. Railway needs a hosted MongoDB URI, not 127.0.0.1.`);
+  }
   configureMongoDnsServers();
-  console.log(`Connecting MongoDB (${candidate.label}): ${maskMongoUri(candidate.uri)}`);
+  const source = candidate.source ? ` from ${candidate.source}` : '';
+  console.log(`Connecting MongoDB (${candidate.label}${source}): ${maskMongoUri(candidate.uri)}`);
   await mongoose.connect(candidate.uri, mongoConnectOptions(candidate.uri));
   activeMongoUri = candidate.uri;
   activeMongoLabel = candidate.label;
@@ -606,7 +637,11 @@ async function connectMongoWithFallback() {
   mongoConnecting = true;
   let lastError = null;
   try {
-    for (const candidate of mongoConnectionCandidates()) {
+    const candidates = mongoConnectionCandidates();
+    if (!candidates.length) {
+      throw new Error(`Missing MongoDB connection string. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} in Railway Variables.`);
+    }
+    for (const candidate of candidates) {
       try {
         return await connectMongoCandidate(candidate);
       } catch (error) {
@@ -615,7 +650,7 @@ async function connectMongoWithFallback() {
         lastError.mongoLabel = candidate.label;
         markMongoCandidate(candidate, { connected: false, status: 'failed', message: error.message });
         console.error(`MongoDB ${candidate.label} connection failed: ${error.message}`);
-        if (candidate.label === 'primary' && mongoConnectionCandidates().length > 1) {
+        if (candidate.label === 'primary' && candidates.length > 1) {
           console.warn('Trying local MongoDB fallback so PC and mobile scans can continue.');
         }
         if (mongoose.connection.readyState !== 0) {
@@ -653,6 +688,16 @@ function scheduleMongoReconnect(delayMs = 30000) {
 }
 
 function mongoConnectionHelp(error, uri = activeMongoUri || MONGO_URI) {
+  if (!uri) {
+    return [
+      'MongoDB connection string is missing.',
+      `Reason: ${error.message}`,
+      'Fix:',
+      `- In Railway Variables, add one of: ${MONGO_URI_ENV_NAMES.join(', ')}.`,
+      '- Use a MongoDB Atlas mongodb+srv URI or Railway MongoDB private URI.',
+      '- Do not use 127.0.0.1 or localhost for the Railway deployment.'
+    ].join('\n');
+  }
   const isAtlas = /^mongodb\+srv:\/\//i.test(uri);
   const hints = isAtlas
     ? [
@@ -845,6 +890,24 @@ app.get('/api/ping', (req, res) => {
     uptimeSeconds: Math.round(process.uptime()),
     db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     serverUrl: info.serverUrl
+  });
+});
+
+app.get('/api/ready', (req, res) => {
+  const mongoReady = mongoose.connection.readyState === 1;
+  res.status(mongoReady ? 200 : 503).json({
+    success: mongoReady,
+    status: mongoReady ? 'ready' : 'not_ready',
+    serverStatus: 'online',
+    mongoStatus: mongoReady ? 'online' : 'offline',
+    db: mongoReady ? 'connected' : 'disconnected',
+    activeDatabase: activeMongoLabel,
+    activeDatabaseUri: maskMongoUri(activeMongoUri),
+    acceptedMongoEnvVars: MONGO_URI_ENV_NAMES,
+    configuredMongoEnvVar: MONGO_URI_SOURCE,
+    message: mongoReady
+      ? 'Daksh is ready.'
+      : `MongoDB is not connected. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} to a hosted MongoDB URI in Railway.`
   });
 });
 
