@@ -1,0 +1,34 @@
+{
+  "name": "daksh-inventory-v2",
+  "version": "2.0.0",
+  "description": "Advanced part inventory audit software with MongoDB, Socket.IO, Excel, PDF, email, backup, and device sync.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "inventory",
+    "audit",
+    "mongodb",
+    "socket.io",
+    "exceljs",
+    "jspdf"
+  ],
+  "author": "Daksh Inventory",
+  "license": "MIT",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "exceljs": "3.4.0",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
+    "mongoose": "^8.9.5",
+    "multer": "^2.1.1",
+    "nodemailer": "^8.0.7",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1"
+  }
+}

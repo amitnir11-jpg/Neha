@@ -1,0 +1,18 @@
+node_modules/
+dist/
+build/
+.env
+*.log
+uploads/temp/
+backup*/
+_cleanup_quarantine/
+*.zip
+*.apk
+
+# Runtime markers and local caches
+server_process.pid
+server_port.txt
+logs/
+.dart_tool/
+.gradle/
+.idea/
