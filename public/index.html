@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daksh Inventory v2 Login</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body data-page="login" class="login-body">
+  <main class="login-shell">
+    <section class="login-brand">
+      <div class="brand-mark">DI</div>
+      <h1>Daksh Inventory v2</h1>
+      <p>Advanced part inventory audit software</p>
+      <div class="login-metrics">
+        <span>Real-time sync</span>
+        <span>MongoDB audit store</span>
+        <span>Excel and PDF reports</span>
+      </div>
+    </section>
+
+    <section class="login-panel">
+      <div class="login-tabs">
+        <button class="tab-button active" data-login-tab="admin">Admin Login</button>
+        <button class="tab-button" data-login-tab="staff">PIN Login</button>
+        <button class="tab-button" data-login-tab="register">New User</button>
+        <button class="tab-button" data-login-tab="reset">Reset</button>
+      </div>
+
+      <form id="adminLoginForm" class="login-form active">
+        <label>
+          Username
+          <input name="username" placeholder="Enter user ID" autocomplete="username" required>
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" placeholder="Enter password" autocomplete="current-password" required>
+        </label>
+        <button class="primary-button" type="submit">Login</button>
+      </form>
+
+      <form id="staffLoginForm" class="login-form">
+        <label>
+          Username
+          <input name="username" placeholder="Enter user ID" autocomplete="username" required>
+        </label>
+        <label>
+          4-digit PIN
+          <input name="pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="one-time-code" required>
+        </label>
+        <button class="primary-button" type="submit">PIN Login</button>
+      </form>
+
+      <form id="registerLoginForm" class="login-form">
+        <label>
+          Full Name
+          <input name="name" autocomplete="name" required>
+        </label>
+        <label>
+          Username
+          <input name="username" autocomplete="username" required>
+        </label>
+        <label>
+          Email ID
+          <input name="email" type="email" autocomplete="email" required>
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="new-password">
+        </label>
+        <label>
+          4-digit PIN
+          <input name="pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}">
+        </label>
+        <button class="primary-button" type="submit">Request User Login</button>
+      </form>
+
+      <section id="resetLoginForm" class="login-form reset-flow">
+        <form id="resetRequestForm">
+          <label>
+            Username or Email ID
+            <input name="usernameOrEmail" type="text" autocomplete="username" required>
+          </label>
+          <button class="primary-button" type="submit">Send OTP Reset Link</button>
+        </form>
+
+        <form id="resetPasswordForm">
+          <label>
+            Email ID
+            <input name="email" id="resetEmailInput" type="email" autocomplete="email" required>
+          </label>
+          <label>
+            Reset Link Token
+            <input name="token" id="resetTokenInput" autocomplete="one-time-code" required>
+          </label>
+          <label>
+            OTP
+            <input name="otp" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required>
+          </label>
+          <label>
+            New Password
+            <input name="password" type="password" autocomplete="new-password" required>
+          </label>
+          <button class="primary-button" type="submit">Reset Password</button>
+        </form>
+      </section>
+
+      <div id="loginMessage" class="form-message"></div>
+    </section>
+  </main>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

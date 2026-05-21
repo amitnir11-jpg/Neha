@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DAKSH INVENTORY SYSTEM</title>
+  <link rel="stylesheet" href="/style.css?v=20260513-enterprise-compact">
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="side-brand">
+        <div class="brand-box">DI</div>
+        <div>
+          <strong>DAKSH</strong>
+          <span>Inventory System</span>
+        </div>
+      </div>
+      <nav class="side-nav">
+        <button class="side-link active" data-view="dashboard"><span class="nav-icon blue">D</span>Dashboard</button>
+        <button class="side-link" data-view="scan"><span class="nav-icon teal">S</span>Scan Management</button>
+        <button class="side-link" data-view="reports"><span class="nav-icon violet">R</span>Reports</button>
+        <button class="side-link" data-view="binTransfer"><span class="nav-icon cyan">B</span>Bin Transfer</button>
+        <button class="side-link" data-view="reconciliation"><span class="nav-icon amber">C</span>Reconciliation</button>
+        <button class="side-link" data-view="master"><span class="nav-icon green">M</span>Master Data</button>
+        <button class="side-link" data-view="validator"><span class="nav-icon teal">V</span>Master Scan Validator</button>
+        <button class="side-link" data-view="qr"><span class="nav-icon rose">Q</span>QR / Barcode Tools</button>
+        <button class="side-link" data-view="devices"><span class="nav-icon cyan">V</span>Device Control</button>
+        <button class="side-link" data-view="syncCenter"><span class="nav-icon teal">Y</span>Device Sync / Data Sync Center</button>
+        <button class="side-link" data-view="admin"><span class="nav-icon red">A</span>Admin Settings</button>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="viewTitle">Dashboard</h1>
+          <span id="systemSubline" class="muted"></span>
+        </div>
+        <div class="top-actions">
+          <span id="topServerStatus" class="live-pill red-dot">Server: Checking</span>
+          <span id="topDeviceStatus" class="live-pill red-dot">Devices: 0 Connected</span>
+          <span id="topScannerStatus" class="live-pill red-dot">Scanners: 0 Active</span>
+          <span id="topWifiStatus" class="live-pill red-dot">WiFi: Idle</span>
+          <span id="topSyncStatus" class="live-pill green-dot">Sync: Auto ON / Synced</span>
+          <span id="topPendingStatus" class="live-pill green-dot">Pending: 0</span>
+          <span id="topOfflineStatus" class="live-pill green-dot">Offline: 0</span>
+          <span id="topBatteryStatus" class="live-pill green-dot">Battery: OK</span>
+          <span id="topRealtimeStatus" class="live-pill red-dot">Realtime: Waiting</span>
+          <span id="activeAuditBadge" class="live-pill red-dot">No active audit</span>
+          <button id="globalRefresh" class="btn light" type="button">Refresh</button>
+          <div id="userMenu" class="user-menu">
+            <button id="userMenuButton" class="user-menu-button" type="button" aria-haspopup="true" aria-expanded="false">
+              <span id="userBadge">Administrator - admin</span>
+              <span class="user-menu-caret" aria-hidden="true">v</span>
+            </button>
+            <div id="userDropdown" class="user-dropdown" role="menu" hidden>
+              <div class="user-dropdown-meta">
+                <span>Logged in as: <strong id="userDropdownLogin">admin</strong></span>
+                <span>Role: <strong id="userDropdownRole">Administrator</strong></span>
+              </div>
+              <button id="logoutBtn" class="user-dropdown-logout" type="button" role="menuitem">Logout</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section id="dashboard" class="view active dashboard-page">
+        <form id="dashboardDealerFilters" class="filter-grid dashboard-dealer-filters">
+          <label>Dealer<select id="dashboardDealerSelect" class="dealerSelect dashboard-dealer-select"></select></label>
+        </form>
+        <div class="dashboard-kpi-summary-wrap">
+          <table class="dashboard-kpi-summary-table" aria-label="Dashboard KPI summary">
+            <thead>
+              <tr>
+                <th>Total Scanned Today</th>
+                <th>Total Scan Qty</th>
+                <th>Last Scanned Part</th>
+                <th>Damage Count</th>
+                <th>Duplicate Scans</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="dashToday">0</td>
+                <td id="dashTotalScanQty">0</td>
+                <td id="dashLastScannedPart">-</td>
+                <td id="dashDamage">0</td>
+                <td id="dashDuplicates">0</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <section class="card dashboard-sync-card">
+          <div class="card-head dashboard-sync-head">
+            <h2>Sync Snapshot</h2>
+            <div class="actions dashboard-sync-toolbar">
+              <span id="homeSyncBadge" class="live-pill green-dot">Sync: Auto ON / Synced</span>
+              <button class="btn primary show-tab-open" type="button">Show Tab</button>
+              <button id="homeManualSyncBtn" class="btn primary" type="button">Manual Sync</button>
+              <button id="repairSyncStatusBtn" class="btn light admin-only" type="button">Repair Sync Status</button>
+            </div>
+          </div>
+          <div class="metric-grid four dashboard-sync-grid">
+            <div class="metric mini"><span>Last Sync</span><strong id="homeLastSync">Never</strong></div>
+            <div class="metric mini"><span>Pending</span><strong id="homePendingSync">0</strong></div>
+            <div class="metric mini"><span>Failed</span><strong id="homeFailedSync">0</strong></div>
+            <div class="metric mini"><span>Live Inventory</span><strong id="dashInventoryCount">0</strong></div>
+            <div class="metric mini"><span>Connected Scanners</span><strong id="dashConnectedScanners">0</strong></div>
+            <div class="metric mini"><span>Offline Devices</span><strong id="dashOfflineDevices">0</strong></div>
+            <div class="metric mini"><span>Failed Scans</span><strong id="dashFailedScans">0</strong></div>
+          </div>
+        </section>
+        <div class="dashboard-main-grid">
+          <section class="card dashboard-card">
+            <div class="card-head">
+              <h2>Real-Time Scan Stream</h2>
+              <span class="muted">Last 12</span>
+            </div>
+            <div class="table-wrap compact-table dashboard-table-wrap dashboard-stream-wrap">
+              <table class="dashboard-data-table dashboard-stream-table">
+                <thead><tr><th data-col-key="time">Time</th><th data-col-key="part-number">Part Number</th><th data-col-key="qty">Qty</th><th data-col-key="mrp">MRP</th><th data-col-key="scan-type">Scan Type</th><th data-col-key="bin-location">Bin Location</th><th data-col-key="dealer-code">Dealer Code</th><th data-col-key="entry-source">Entry Source</th><th data-col-key="device-id">Device ID</th><th data-col-key="sync-status">Sync Status</th></tr></thead>
+                <tbody id="streamRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+        <section class="card dashboard-card product-summary-card">
+          <div class="card-head">
+            <h2>Product Group Summary</h2>
+            <div class="actions dashboard-summary-actions">
+              <span id="productGroupSummaryCount" class="muted">0 groups</span>
+              <input id="productGroupSearch" class="dashboard-summary-search" type="search" placeholder="Search group or subgroup">
+              <button id="productGroupExportBtn" class="btn light" type="button">Export Excel</button>
+            </div>
+          </div>
+          <div class="table-wrap dashboard-table-wrap dashboard-summary-wrap">
+            <table class="dashboard-data-table product-group-summary-table">
+              <thead>
+                <tr>
+                  <th data-col-key="product-group">Product Group</th>
+                  <th data-col-key="product-sub-group">Product Sub Group</th>
+                  <th data-col-key="total-scans">Total Scans</th>
+                  <th data-col-key="total-quantity">Total Quantity</th>
+                  <th data-col-key="unique-parts">Unique Parts</th>
+                  <th data-col-key="total-mrp-value">Total MRP Value</th>
+                  <th data-col-key="total-dlc-value">Total DLC Value</th>
+                </tr>
+              </thead>
+              <tbody id="productGroupSummaryRows">
+                <tr><td colspan="7" class="muted">No product group data yet</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="productGroupDetailPanel" class="product-group-detail-panel" hidden>
+            <div class="card-head product-group-detail-head">
+              <h3 id="productGroupDetailTitle">Product Group Details</h3>
+              <div class="actions">
+                <span id="productGroupDetailTotals" class="muted"></span>
+                <button id="productGroupDetailExportBtn" class="btn light" type="button">Export Detail Excel</button>
+              </div>
+            </div>
+            <div class="table-wrap dashboard-table-wrap product-group-detail-wrap">
+              <table class="dashboard-data-table product-group-detail-table">
+                <thead>
+                  <tr>
+                    <th>Part Number</th>
+                    <th>Part Description</th>
+                    <th>Qty</th>
+                    <th>Bin Location</th>
+                    <th>MRP</th>
+                    <th>MRP Total</th>
+                  </tr>
+                </thead>
+                <tbody id="productGroupDetailRows">
+                  <tr><td colspan="6" class="muted">Click a product group to view parts</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="showTab" class="view">
+        <section class="card show-tab-card">
+          <div class="card-head">
+            <h2>SHOW TAB</h2>
+            <div class="actions">
+              <button id="showTabSearchBtn" class="btn primary" type="button">Search</button>
+              <button id="showTabResetBtn" class="btn light" type="button">Reset</button>
+              <button id="showTabExcelBtn" class="btn primary" type="button">Download Excel</button>
+              <button id="showTabCsvBtn" class="btn light" type="button">Download CSV</button>
+              <button id="showTabDeleteBtn" class="btn danger-soft admin-only" type="button">Delete selected records</button>
+            </div>
+          </div>
+          <form id="showTabFilters" class="filter-grid show-tab-filters">
+            <label>Dealer<select name="dealerCode" id="showTabDealer" class="dealerSelect"></select></label>
+            <label>Dealer Code<input name="dealerText" id="showTabDealerCode" placeholder="Dealer Code"></label>
+            <label>Date From<input name="dateFrom" type="date"></label>
+            <label>Date To<input name="dateTo" type="date"></label>
+            <label>Part Number<input name="partNumber" placeholder="Part Number"></label>
+            <label>Bin Location<input name="binLocation" placeholder="Bin Location"></label>
+            <label>Scan Type<select name="scanType"><option value="">All Types</option><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
+            <label>Local / Server / Both<select name="dataSource"><option value="both">Both</option><option value="server">Server</option><option value="local">Local</option></select></label>
+          </form>
+          <div class="metric-grid six show-tab-summary">
+            <div class="metric mini"><span>Total records</span><strong id="showTabTotalRecords">0</strong></div>
+            <div class="metric mini"><span>Total quantity</span><strong id="showTabTotalQty">0</strong></div>
+            <div class="metric mini"><span>Total inward</span><strong id="showTabTotalInward">0</strong></div>
+            <div class="metric mini"><span>Total outward</span><strong id="showTabTotalOutward">0</strong></div>
+            <div class="metric mini"><span>Total fitted</span><strong id="showTabTotalFitted">0</strong></div>
+            <div class="metric mini"><span>Total damage</span><strong id="showTabTotalDamage">0</strong></div>
+          </div>
+          <div class="show-tab-toolbar">
+            <span id="showTabPageInfo" class="muted">Page 1</span>
+            <button id="showTabPrevBtn" class="btn light" type="button">Previous</button>
+            <button id="showTabNextBtn" class="btn light" type="button">Next</button>
+            <button id="showTabResetColumnsBtn" class="btn light" type="button">Reset Column Order</button>
+          </div>
+          <div class="table-wrap show-tab-table-wrap">
+            <table class="show-tab-table">
+              <thead><tr><th><input id="showTabSelectAll" type="checkbox"></th><th>Scan Time</th><th>Dealer Code</th><th>Dealer Name</th><th>Part Number</th><th>Raw Scan</th><th>Qty</th><th>MRP</th><th>Scan Type</th><th>Bin Location</th><th>Device ID</th><th>Sync Status</th></tr></thead>
+              <tbody id="showTabRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="scan" class="view">
+        <div class="card">
+          <div class="subtabs">
+            <button class="subtab active" data-subview="manualEntry">Manual Entry</button>
+            <button class="subtab" data-subview="barcodeEntry">Barcode/Web Scan</button>
+            <button class="subtab" data-subview="mobileSync">Mobile Sync</button>
+          </div>
+
+          <div id="manualEntry" class="subview active">
+            <form id="manualScanForm" class="grid-form">
+              <label>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
+              <label>Part Number<div class="suggest-wrap"><input name="part" class="partSuggestInput" autocomplete="off" required><div class="suggest-menu"></div></div></label>
+              <label>Part Description<input name="partName" data-fill="partName" readonly></label>
+              <label>Bin<input name="bin" data-fill="bin"></label>
+              <label>MRP<input name="mrp" data-fill="mrp" type="number" step="0.01"></label>
+              <label>Category<input name="category" data-fill="category"></label>
+              <label>Quantity<input name="qty" type="number" min="0" value="1" required></label>
+              <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
+              <label>Staff<input name="staffName" id="manualStaff"></label>
+              <label class="span-3">Raw UPI / Barcode<input name="rawScan" placeholder="Optional raw scan text"></label>
+              <div class="actions span-3">
+                <button class="btn primary" type="submit">Save Manual Scan</button>
+                <button class="btn light" type="reset">Clear</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="barcodeEntry" class="subview">
+            <form id="barcodeScanForm" class="grid-form">
+              <label class="span-3">Barcode / QR Raw Scan<textarea name="rawScan" id="barcodeRaw" rows="3" required></textarea></label>
+              <label>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
+              <label>Bin Location *<div class="inline-field"><input name="binLocation" id="barcodeBinLocation" list="barcodeBinOptions" autocomplete="off" required><button class="btn light icon-btn" id="clearBarcodeBin" type="button" title="Clear Bin Location">X</button></div><datalist id="barcodeBinOptions"></datalist></label>
+              <label>Part Number<div class="suggest-wrap"><input name="part" class="partSuggestInput" autocomplete="off"><div class="suggest-menu"></div></div></label>
+              <label>Quantity<input name="qty" type="number" min="0" value="1"></label>
+              <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
+              <label>Device ID<input name="deviceId" id="barcodeDeviceId" readonly></label>
+              <div class="actions span-3">
+                <span id="barcodeAutoSaveStatus" class="live-pill green-dot">Auto Save: ON</span>
+                <span id="barcodeReadyStatus" class="live-pill green-dot">Ready for Scan</span>
+                <button class="btn primary" type="submit">Save Web Scan</button>
+                <button class="btn light" type="button" id="focusScanner">Focus Scanner</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="mobileSync" class="subview">
+            <div class="toolbar">
+              <span class="live-pill green-dot">Auto Sync ON</span>
+              <button id="manualSyncBtn" class="btn primary" type="button">Manual Sync</button>
+              <button id="clearSyncQueue" class="btn light" type="button">Clear Queue</button>
+            </div>
+            <div class="sync-grid">
+              <div class="metric mini"><span>Last Sync Time</span><strong id="syncLast">Never</strong></div>
+              <div class="metric mini"><span>Total Synced</span><strong id="syncTotal">0</strong></div>
+              <div class="metric mini"><span>Pending</span><strong id="syncPending">0</strong></div>
+              <div class="metric mini"><span>Failed</span><strong id="syncFailed">0</strong></div>
+            </div>
+            <label>Mobile Scan JSON Queue<textarea id="mobileSyncQueue" rows="7" placeholder='[{"upiScanId":"U1","part":"P001","dealerCode":"D001","qty":1,"type":"INWARD"}]'></textarea></label>
+          </div>
+        </div>
+
+        <section class="card">
+          <div class="card-head"><h2>Scan History</h2><div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="scanHistorySearchBtn" class="btn light" type="button">Search</button><button id="scanHistoryDeleteSelectedBtn" class="btn danger-soft admin-only" type="button">Delete Selected</button><button id="scanHistoryDeleteUnknownBtn" class="btn danger-soft admin-only" type="button">Delete Unknown Parts</button><button id="scanHistoryDeleteDealerBtn" class="btn danger-soft admin-only" type="button">Delete by Dealer Code</button></div></div>
+          <form id="scanHistoryFilters" class="filter-grid">
+            <input name="part" placeholder="Part">
+            <input name="bin" placeholder="Bin">
+            <select name="dealerCode" id="scanHistoryDealer" class="dealerSelect scan-history-dealer"></select>
+            <select name="type"><option value="">All Types</option><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select>
+            <select name="testScanMode"><option value="real" selected>Show Real Scans Only</option><option value="test">Show Test Scans</option><option value="all">Show All</option></select>
+          </form>
+          <div class="metric-grid four scan-history-summary">
+            <div class="metric mini"><span>Parts scanned</span><strong id="scanHistoryTotalQty">0</strong></div>
+            <div class="metric mini"><span>Scan rows</span><strong id="scanHistoryTotalRows">0</strong></div>
+            <div class="metric mini"><span>Unique parts</span><strong id="scanHistoryUniqueParts">0</strong></div>
+            <div class="metric mini"><span>Visible rows</span><strong id="scanHistoryVisibleRows">0</strong></div>
+          </div>
+          <div class="table-wrap scan-history-wrap">
+            <table class="scan-history-table">
+              <thead><tr><th><input id="scanHistorySelectAll" type="checkbox"></th><th>Time</th><th>Part Number</th><th>Part Description</th><th>Product Category</th><th>MRP</th><th>DLC</th><th>Product Group</th><th>Model</th><th>Year</th><th>Qty</th><th>Type</th><th>Bin</th><th>Dealer</th><th>Device</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody id="scanHistoryRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="reports" class="view">
+        <section class="card">
+          <div class="card-head"><h2>Reports</h2><div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Refresh</button><button id="reportReset" class="btn light" type="button">Reset Filter</button><button id="moveNotInMasterScansBtn" class="btn danger-soft" type="button">Move Not-In-Master Scans To Rejected Report</button><button id="reportExcel" class="btn primary" type="button" disabled>Export Excel</button><button id="reportPdf" class="btn light" type="button" disabled>Export PDF</button><button id="partsRefreshTemplateCsv" class="btn light" type="button">Download CSV Template</button><button id="reportEmail" class="btn light" type="button" disabled>Send Email</button></div></div>
+          <form id="reportFilters" class="filter-grid">
+            <label>Report Type<select name="reportType" id="reportTypeSelect" required>
+              <option value="">Select report</option>
+              <option value="full-audit">Full Audit Report</option>
+              <option value="bin-wise-stock">Bin Wise Stock Report</option>
+              <option value="user-dealer-wise">User & Dealer Wise Report</option>
+              <option value="movement-scans">Movement Scan Report</option>
+              <option value="raw-upi">Raw UPI Report</option>
+              <option value="valid-scans">Valid Scan Report</option>
+              <option value="device-wise">Device Wise Scan Report</option>
+              <option value="duplicate-scans">Duplicate Scan Report</option>
+              <option value="wrong-not-found-master">Wrong / Not Found In Master Scan Report</option>
+              <option value="main-inventory-audit">Main Inventory Audit Report</option>
+              <option value="compile-audit">Compile Audit Report</option>
+              <option value="consolidated-final">Consolidated Final Report</option>
+              <option value="stock-summary">Stock Summary</option>
+              <option value="category-wise-variance-summary">Category Wise Variance Summary</option>
+              <option value="partwise-inventory-audit">Partwise Inventory Audit Report</option>
+              <option value="parts-inventory-refresh-template">Part Inventory Refresh Template CSV</option>
+            </select></label>
+            <label>Dealer Name<input name="dealerName" placeholder="Dealer Name"></label>
+            <label>Dealer Code<select name="dealerCode" class="dealerSelect"></select></label>
+            <label>Audit<input name="auditId" placeholder="Audit ID"></label>
+            <label>Audit Date<input name="auditDate" type="date"></label>
+            <label>From Date<input name="fromDate" type="date"></label>
+            <label>To Date<input name="toDate" type="date"></label>
+            <label>Category<select name="category" id="reportCategoryFilter"><option value="">All Categories</option></select></label>
+            <label>Model<input name="model" placeholder="Model"></label>
+            <label>Year<input name="year" placeholder="Year"></label>
+            <label>Part Number<input name="partNumber" placeholder="Part Number"></label>
+            <label>Product Group<select name="productGroup" id="reportProductGroupFilter"><option value="">All Product Groups</option></select></label>
+            <label>Product SubGroup<select name="partSubGroup" id="reportProductSubGroupFilter"><option value="">All Product SubGroups</option></select></label>
+            <label>Bin Location<input name="bin" placeholder="Bin Location"></label>
+            <label>Scan Type<select name="scanType"><option value="">All Types</option><option>AUDIT</option><option>INWARD</option><option>OUTWARD</option><option>DAMAGE</option></select></label>
+            <label>Action<select name="action"><option value="">All Actions</option><option>Inventory Addition</option><option>Inventory Matched</option><option>Inward</option><option>Outward</option><option>Fitted</option><option>Damage</option></select></label>
+            <label>Variance Type<select name="varianceType"><option value="">All Variance</option><option value="matched">Matched</option><option value="short">Short</option><option value="excess">Excess</option><option value="inventory-addition">Inventory Addition</option><option value="not-scanned">Not Scanned</option><option value="damage">Damage</option><option value="non-moving">Non Moving</option></select></label>
+            <label>Status<select name="status"><option value="">All Status</option><option>MATCHED</option><option>EXCESS</option><option>SHORT</option><option>MASTER NOT FOUND</option><option>EXTRA PHYSICAL STOCK</option></select></label>
+            <label class="toggle"><input name="showScannedPartsOnly" type="checkbox">Show Scanned Parts Only</label>
+            <label class="toggle"><input name="showFullMasterWithZeroScan" type="checkbox">Show Full Master With Zero Scan</label>
+          </form>
+          <div id="reportMessage" class="form-message"></div>
+        </section>
+        <section id="reportPreviewCard" class="card report-preview-card">
+          <div class="card-head report-preview-head">
+            <h2 id="reportTitle">Main Inventory Audit Report</h2>
+            <div class="actions report-layout-actions">
+              <input id="reportTableSearch" class="report-table-search" type="search" placeholder="Search within table">
+              <button class="btn light report-layout-btn" data-report-layout="full" type="button">Full Width</button>
+              <button class="btn light report-layout-btn" data-report-layout="compact" type="button">Compact View</button>
+              <button class="btn light report-layout-btn" data-report-layout="split" type="button">Split View</button>
+              <button class="btn light" id="reportSaveLayout" type="button">Save Layout</button>
+              <button class="btn light" id="reportResetSize" type="button">Reset Size</button>
+              <button class="btn light" id="reportResetColumns" type="button">Reset Column Order</button>
+              <span id="reportCount" class="muted">0 rows</span>
+            </div>
+          </div>
+          <div id="reportResizeHandle" class="report-resize-handle" title="Drag to resize report preview"></div>
+          <div id="reportTableWrap" class="table-wrap report-table-wrap">
+            <table id="reportTable">
+              <thead id="reportHead"></thead>
+              <tbody id="reportRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="binTransfer" class="view">
+        <div class="toolbar"><button id="refreshBinTransferBtn" class="btn light" type="button">Refresh</button></div>
+        <div class="master-tabs" role="tablist" aria-label="Bin Transfer modes">
+          <button class="bin-transfer-tab active" type="button" role="tab" aria-selected="true" aria-controls="binTransferMainTab" data-bin-transfer-tab="binTransferMainTab">Bin Transfer</button>
+          <button class="bin-transfer-tab" type="button" role="tab" aria-selected="false" aria-controls="binLabelPrintTab" data-bin-transfer-tab="binLabelPrintTab">Print Bin Label</button>
+          <button class="bin-transfer-tab" type="button" role="tab" aria-selected="false" aria-controls="binSequenceTab" data-bin-transfer-tab="binSequenceTab">Bin Master / Sequence Creation</button>
+          <button class="bin-transfer-tab" type="button" role="tab" aria-selected="false" aria-controls="binTransferHistoryTab" data-bin-transfer-tab="binTransferHistoryTab">Transfer History</button>
+        </div>
+
+        <section id="binTransferMainTab" class="bin-transfer-panel active" role="tabpanel">
+          <section class="card">
+            <div class="card-head">
+              <h2>Bin Transfer</h2>
+              <div class="actions">
+                <button id="binTransferSelectAllBtn" class="btn light" type="button">Select All</button>
+                <button id="binTransferClearSelectionBtn" class="btn light" type="button">Clear Selection</button>
+                <button id="openBinLabelPrintBtn" class="btn primary" type="button">Print Bin Label</button>
+                <button id="binTransferExportPartsBtn" class="btn light" type="button">Export Excel</button>
+              </div>
+            </div>
+            <form id="binTransferForm" class="filter-grid compact-filter">
+              <label>Dealer Code<select name="dealerCode" id="binTransferDealer" class="dealerSelect bin-transfer-dealer" required></select></label>
+              <label>Source Bin<select name="sourceBin" id="binTransferFromBin" class="bin-transfer-from"></select></label>
+              <label>Destination Bin<select name="destinationBin" id="binTransferToBin" class="bin-transfer-to"></select></label>
+              <label>Part Number Search<input name="partNumber" id="binTransferPartSearch" placeholder="Enter part number to find bin"></label>
+              <button id="binTransferShowPartsBtn" class="btn primary" type="button">Show Parts</button>
+              <button id="binTransferResetBtn" class="btn light" type="button">Reset</button>
+            </form>
+            <div class="card-head transfer-table-head">
+              <h2>Available Scanned Parts</h2>
+              <div class="actions">
+                <span id="binTransferPartsCount" class="muted">0 parts</span>
+                <button id="binTransferSubmitSelectedBtn" class="btn primary" type="button">Transfer Selected</button>
+              </div>
+            </div>
+            <div id="binTransferMessage" class="form-message">Select Dealer Code and Source Bin, then click Show Parts.</div>
+            <div class="table-wrap transfer-parts-wrap">
+              <table class="bin-transfer-parts-table">
+                <colgroup>
+                  <col style="width:44px">
+                  <col style="width:150px">
+                  <col style="width:260px">
+                  <col style="width:170px">
+                  <col style="width:120px">
+                  <col style="width:180px">
+                  <col style="width:110px">
+                  <col style="width:110px">
+                  <col style="width:120px">
+                  <col style="width:110px">
+                </colgroup>
+                <thead><tr><th><input id="binTransferSelectAll" type="checkbox"></th><th>Part Number</th><th>Part Description</th><th>Product Category</th><th>Current Bin</th><th>Transfer To Bin</th><th>Available Qty</th><th>Transfer Qty</th><th>Dealer Code</th><th>Status</th></tr></thead>
+                <tbody id="binTransferPartsRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="binLabelPrintTab" class="bin-transfer-panel" role="tabpanel" hidden>
+          <section class="card">
+            <div class="card-head">
+              <h2>Print Bin Label</h2>
+              <div class="actions">
+                <button id="binLabelLoadBinsBtn" class="btn light" type="button">Load Bins</button>
+                <button id="binLabelLoadPartsBtn" class="btn primary" type="button">Show Parts</button>
+                <button id="binLabelPreviewBtn" class="btn light" type="button">Preview</button>
+                <button id="binLabelPrintBtn" class="btn primary" type="button">Print Selected Labels</button>
+                <button id="binLabelLogExportBtn" class="btn light" type="button">Export Print Log</button>
+              </div>
+            </div>
+            <form id="binLabelForm" class="filter-grid compact-filter">
+              <label>Dealer Code<select name="dealerCode" id="binLabelDealer" class="dealerSelect bin-transfer-dealer"></select></label>
+              <label class="bin-label-bin-field">Select Bins
+                <div class="bin-label-multi-select" id="binLabelBinsControl">
+                  <button id="binLabelBinsButton" class="bin-label-multi-button" type="button">Select Bin(s)</button>
+                  <div id="binLabelBinsPanel" class="bin-label-multi-panel" hidden></div>
+                </div>
+                <select name="bins" id="binLabelBins" multiple hidden></select>
+              </label>
+              <label>Label Width (mm)<input name="labelWidthMm" id="binLabelWidth" type="number" min="20" max="210" value="70"></label>
+              <label>Label Height (mm)<input name="labelHeightMm" id="binLabelHeight" type="number" min="12" max="140" value="28"></label>
+              <label>QR Code Size (mm)<input name="qrSizeMm" id="binLabelQrSize" type="number" min="8" max="90" value="20"></label>
+              <label>Part Font Size<input name="partFontSize" id="binLabelPartFont" type="number" min="6" max="32" value="12"></label>
+              <label>Bin Font Size<input name="binFontSize" id="binLabelBinFont" type="number" min="6" max="24" value="9"></label>
+              <label>Text Darkness<select name="boldText" id="binLabelBold"><option value="true">Dark / Bold</option><option value="false">Normal</option></select></label>
+              <label>Printing Area<select name="printArea" id="binLabelPrintAreaMode"><option value="full">Full label</option><option value="custom">Custom area</option></select></label>
+              <label>Copies<input name="copies" id="binLabelCopies" type="number" min="1" max="100" value="1"></label>
+            </form>
+            <div id="binLabelMessage" class="form-message">Select Dealer Code and bin(s), then click Show Parts.</div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Parts Available In Selected Bins</h2>
+              <div class="actions">
+                <span id="binLabelPartsCount" class="muted">0 parts</span>
+                <button id="binLabelSelectAllPartsBtn" class="btn light" type="button">Select All</button>
+                <button id="binLabelClearPartsBtn" class="btn light" type="button">Clear</button>
+              </div>
+            </div>
+            <div class="grid-form compact bin-label-part-filter">
+              <label>Search Part Number<input id="binLabelPartSearch" placeholder="Search selected bin parts"></label>
+            </div>
+            <div class="table-wrap">
+              <table class="bin-label-parts-table">
+                <thead><tr><th><input id="binLabelSelectAllParts" type="checkbox"></th><th>Bin Number</th><th>Part Number</th><th>Part Description</th><th>Available Qty</th></tr></thead>
+                <tbody id="binLabelPartsRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Label Preview</h2>
+              <span id="binLabelPreviewCount" class="muted">0 labels</span>
+            </div>
+            <div id="binLabelPreviewArea" class="bin-label-preview-area"></div>
+            <div id="binLabelPrintArea" class="bin-label-print-area"></div>
+          </section>
+        </section>
+
+        <section id="binSequenceTab" class="bin-transfer-panel" role="tabpanel" hidden>
+          <section class="card">
+            <div class="card-head"><h2>Single Bin Create</h2></div>
+            <form id="binMasterForm" class="grid-form master-form">
+              <label>Dealer Code<select name="dealerCode" class="dealerSelect"></select></label>
+              <label>Bin Code<input name="binCode" placeholder="Bin Code" required></label>
+              <label>Category<input name="category" placeholder="Category"></label>
+              <button class="btn primary admin-only form-action" type="submit">Save Bin</button>
+            </form>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2>Sequence Bin Create</h2><span id="bulkBinStats" class="muted"></span></div>
+            <form id="bulkBinForm" class="grid-form master-form">
+              <label>Dealer Code<select name="dealerCode" class="dealerSelect"></select></label>
+              <label>Prefix<input name="prefix" placeholder="Prefix e.g. B"></label>
+              <label>Suffix<input name="suffix" placeholder="Suffix optional"></label>
+              <label>Start Number<input name="start" type="number" min="0" value="1" placeholder="Start Number" required></label>
+              <label>End Number<input name="end" type="number" min="0" value="20" placeholder="End Number" required></label>
+              <label>Padding<input name="padding" type="number" min="0" max="8" value="0" placeholder="Padding"></label>
+              <label>Category<input name="category" placeholder="Category"></label>
+              <button class="btn primary admin-only form-action" type="submit">Create Sequence</button>
+            </form>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>BIN Management</h2>
+              <div class="actions">
+                <button id="refreshBinManagementBtn" class="btn light" type="button">Refresh</button>
+                <button id="exportBinMasterBtn" class="btn light" type="button">Export Bin Master</button>
+                <button id="deleteSelectedBinsBtn" class="btn danger-soft admin-only" type="button">Delete Selected</button>
+                <button id="deleteAllDealerBinsBtn" class="btn danger-soft admin-only" type="button">Delete All for Dealer</button>
+              </div>
+            </div>
+            <div class="grid-form compact">
+              <label>Dealer Code<select id="binManagementDealer" class="dealerSelect"></select></label>
+              <label>Search BIN<input id="binManagementSearch" placeholder="Search BIN, name or category"></label>
+            </div>
+            <div id="binManagementStatus" class="form-message"></div>
+            <div class="table-wrap master-table-wrap bin-management-wrap"><table class="bin-management-table"><thead><tr><th class="select-col"><input id="selectAllBins" type="checkbox" aria-label="Select all BINs"></th><th>Bin</th><th>Dealer</th><th>Category</th><th class="action-col">Action</th></tr></thead><tbody id="binMasterRows"></tbody></table></div>
+          </section>
+        </section>
+
+        <section id="binTransferHistoryTab" class="bin-transfer-panel" role="tabpanel" hidden>
+          <section class="card">
+            <div class="card-head"><h2>Transfer History</h2></div>
+            <form id="binTransferHistoryFilters" class="filter-grid compact-filter">
+              <label>Dealer<select name="dealerCode" id="binTransferHistoryDealer" class="dealerSelect"></select></label>
+              <label>From Bin<input name="sourceBin" placeholder="From Bin"></label>
+              <label>To Bin<input name="destinationBin" placeholder="To Bin"></label>
+              <label>Part Number<input name="partNumber" placeholder="Part Number"></label>
+              <label>Date From<input name="dateFrom" type="date"></label>
+              <label>Date To<input name="dateTo" type="date"></label>
+              <button id="binTransferShowHistoryBtn" class="btn primary" type="button">Show History</button>
+              <button id="binTransferExportHistoryBtn" class="btn light" type="button">Export Excel</button>
+            </form>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Date</th><th>Dealer</th><th>From Bin</th><th>To Bin</th><th>Part Number</th><th>Part Description</th><th>Qty</th><th>Transfer Type</th><th>User</th></tr></thead>
+                <tbody id="binTransferHistoryRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </section>
+
+      <section id="reconciliation" class="view">
+        <div class="recon-tabs" role="tablist" aria-label="Reconciliation sections">
+          <button class="recon-tab active" type="button" role="tab" aria-selected="true" aria-controls="reconUploadTab" data-recon-tab="reconUploadTab">Dealer Stock Upload</button>
+          <button class="recon-tab" type="button" role="tab" aria-selected="false" aria-controls="reconReportTab" data-recon-tab="reconReportTab">Dealer Reconciliation Report</button>
+          <button class="recon-tab" type="button" role="tab" aria-selected="false" aria-controls="reconSummaryTab" data-recon-tab="reconSummaryTab">Final Summary</button>
+        </div>
+
+        <section id="reconUploadTab" class="recon-panel active" role="tabpanel">
+          <section class="card">
+            <div class="card-head"><h2>Dealer Stock Upload</h2><div class="actions"><button id="reconPreviewBtn" class="btn light" type="button">Preview Uploaded Stock</button><button id="reconDeleteStockBtn" class="btn danger-soft" type="button">Delete Old Dealer Stock</button><button id="reconReprocessBtn" class="btn light" type="button">Reprocess Reconciliation</button></div></div>
+            <form id="dealerStockUploadForm" class="grid-form master-form">
+              <label>Dealer Code<select name="dealerCode" id="dealerStockDealer" class="dealerSelect" required></select></label>
+              <label>Upload DMS stock Excel/CSV<input name="file" type="file" accept=".xlsx,.xls,.csv" required></label>
+              <button class="btn primary form-action" type="submit">Upload & Save Stock</button>
+            </form>
+            <div id="dealerStockUploadMessage" class="form-message">Upload columns: Part Number, Part Description, Product Category, MRP, DLC, System Quantity / DMS Stock, System Bin Loc 1-3, Reserved Qty, Dealer Code.</div>
+            <div class="table-wrap recon-stock-preview-wrap">
+              <table>
+                <thead><tr><th>Part Number</th><th>Part Description</th><th>Product Category</th><th>MRP</th><th>DLC</th><th>DMS Stock</th><th>Bin Loc 1</th><th>Bin Loc 2</th><th>Bin Loc 3</th><th>Reserved Qty</th><th>Dealer Code</th></tr></thead>
+                <tbody id="dealerStockPreviewRows"><tr><td colspan="11" class="muted">No dealer stock uploaded yet</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="reconReportTab" class="recon-panel" role="tabpanel" hidden>
+          <section class="card">
+            <div class="card-head"><h2>Dealer Reconciliation Report</h2><div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="reconReset" class="btn light" type="button">Reset Filter</button><button id="reconExcel" class="btn primary" type="button">Export Excel</button><button id="reconPdf" class="btn light" type="button">Export PDF</button><button id="reconFullReport" class="btn light" type="button">Download Full Report</button></div></div>
+            <form id="reconFilters" class="filter-grid">
+              <label>Dealer Code<select name="dealerCode" id="reconDealer" class="dealerSelect"></select></label>
+              <label>Category<input name="category" placeholder="Category"></label>
+              <label>Part Number<input name="partNumber" placeholder="Part Number"></label>
+              <label>Bin<input name="bin" placeholder="Bin"></label>
+              <button id="reconShow" class="btn primary" type="submit">Show Report</button>
+            </form>
+            <div id="reconMessage" class="form-message">Please select filters and click Show Report.</div>
+            <div class="metric-grid five">
+              <div class="metric mini"><span>DMS Stock</span><strong id="reconDms">0</strong></div>
+              <div class="metric mini"><span>Physical</span><strong id="reconPhysical">0</strong></div>
+              <div class="metric mini"><span>Excess</span><strong id="reconExcess">0</strong></div>
+              <div class="metric mini"><span>Short</span><strong id="reconShort">0</strong></div>
+              <div class="metric mini"><span>Net Difference</span><strong id="reconNet">0</strong></div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Part Number</th><th>Part Description</th><th>Model</th><th>Year</th><th>Category</th><th>MRP</th><th>DLC</th><th>Product Group</th><th>Bin</th><th>DMS Stock</th><th>Physical</th><th>Excess</th><th>Short</th><th>Net</th><th>Status</th><th>Raw Proof</th></tr></thead>
+                <tbody id="reconRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="reconSummaryTab" class="recon-panel" role="tabpanel" hidden>
+          <section class="card">
+            <div class="card-head"><h2>Final Summary</h2></div>
+            <div class="metric-grid five">
+              <div class="metric mini"><span>DMS Stock</span><strong id="reconSummaryDms">0</strong></div>
+              <div class="metric mini"><span>Physical Qty</span><strong id="reconSummaryPhysical">0</strong></div>
+              <div class="metric mini"><span>Excess</span><strong id="reconSummaryExcess">0</strong></div>
+              <div class="metric mini"><span>Short</span><strong id="reconSummaryShort">0</strong></div>
+              <div class="metric mini"><span>Net Difference</span><strong id="reconSummaryNet">0</strong></div>
+            </div>
+            <div class="metric-grid two">
+              <div class="metric mini"><span>Variance on MRP</span><strong id="reconSummaryMrp">0.00</strong></div>
+              <div class="metric mini"><span>Variance on DLC</span><strong id="reconSummaryDlc">0.00</strong></div>
+            </div>
+          </section>
+        </section>
+      </section>
+
+      <section id="master" class="view">
+        <div class="master-tabs" role="tablist" aria-label="Master Data sections">
+          <button class="master-tab active" type="button" role="tab" aria-selected="true" aria-controls="partMasterTab" data-master-tab="partMasterTab">Part Master</button>
+          <button class="master-tab" type="button" role="tab" aria-selected="false" aria-controls="dealerAuditTab" data-master-tab="dealerAuditTab">Dealer Master / Audit Setup</button>
+        </div>
+
+        <div class="master-tab-panels">
+          <section id="partMasterTab" class="master-tab-panel active" role="tabpanel">
+            <section class="card">
+              <div class="card-head"><h2>Master Catalogue</h2><div class="actions"><span id="uploadStats" class="muted"></span><button id="deleteCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete Old Catalogue</button><button id="reprocessProductGroupBtn" class="btn light admin-only" type="button">Reprocess Product Group</button><button id="reprocessMasterDataBtn" class="btn light admin-only" type="button">Reprocess Catalogue Data</button><button id="reprocessScanCatalogueBtn" class="btn light admin-only" type="button">Reprocess Scan History with Catalogue</button></div></div>
+              <form id="partUploadForm" class="inline-form"><input name="file" type="file" accept=".xlsx,.xls,.csv" required><button class="btn primary admin-only" type="submit">Upload Master Catalogue</button><button id="deleteReuploadCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete & Reupload Catalogue</button></form>
+            </section>
+
+            <section class="card">
+              <div class="card-head"><h2>Part Search</h2></div>
+              <form id="partSearchForm" class="filter-grid small-filter advanced-part-search">
+                <label>Part Number<div class="suggest-wrap"><input name="partNumber" id="partMasterSearchInput" class="masterSuggestInput" placeholder="Type part number" autocomplete="off"><div id="partMasterSuggestMenu" class="suggest-menu master-suggest-menu"></div></div></label>
+                <label>Category<select name="category" id="partCategoryFilter"><option value="">All Categories</option></select></label>
+                <label>Product Group<select name="group" id="partGroupFilter"><option value="">All Groups</option></select></label>
+                <label>Year<select name="year" id="partYearFilter"><option value="">All Years</option></select></label>
+                <label>Model<select name="model" id="partModelFilter"><option value="">All Models</option></select></label>
+                <label>MRP<input name="mrp" id="partMrpFilter" placeholder="Exact or range e.g. 100-500"></label>
+                <div class="actions span-3 advanced-part-actions">
+                  <button class="btn primary" type="submit">Show</button>
+                  <button id="partClearSearchBtn" class="btn light" type="button">Clear</button>
+                  <button id="partExportSearchBtn" class="btn light" type="button">Export Search Result</button>
+                </div>
+              </form>
+              <div id="partSearchMessage" class="form-message">Use filters and click Show to view master details.</div>
+            </section>
+
+            <section id="partMasterResultsCard" class="card" hidden>
+              <div class="card-head"><h2>Part Master Table</h2><div class="actions"><button id="partPrevPageBtn" class="btn light" type="button">Previous</button><span id="partPageInfo" class="muted">Page 1</span><button id="partNextPageBtn" class="btn light" type="button">Next</button></div></div>
+              <div class="table-wrap master-table-wrap">
+                <table class="advanced-part-result-table"><thead><tr><th>Part Number</th><th>Part Description</th><th>Category</th><th>Product Group</th><th>Product Sub Group</th><th>Year</th><th>Model</th><th>MRP</th><th>DLC</th></tr></thead><tbody id="partMasterRows"></tbody></table>
+              </div>
+            </section>
+          </section>
+
+          <section id="dealerAuditTab" class="master-tab-panel" role="tabpanel" hidden>
+            <section class="card">
+              <div class="card-head"><h2>Dealer Master / Audit Setup</h2></div>
+              <form id="dealerMasterForm" class="grid-form master-form">
+                <label>Dealer Name<input name="dealerName" placeholder="Dealer Name" required></label>
+                <label>Dealer Code<input name="dealerCode" placeholder="Dealer Code" required></label>
+                <label>Brand<input name="brand" placeholder="Brand"></label>
+                <label>Location<input name="location" placeholder="Location"></label>
+                <label>Audit Start Date<input name="auditStartDate" type="date" required></label>
+                <label>Status<select name="auditStatus"><option>Active</option><option>Closed</option></select></label>
+                <button class="btn primary admin-only form-action" type="submit">Start Audit</button>
+              </form>
+            </section>
+
+            <section class="card">
+              <div class="card-head"><h2>Dealer List</h2></div>
+              <div class="table-wrap master-table-wrap"><table><thead><tr><th>Dealer</th><th>Code</th><th>Location</th><th>Action</th></tr></thead><tbody id="dealerMasterRows"></tbody></table></div>
+            </section>
+          </section>
+
+        </div>
+      </section>
+
+      <section id="validator" class="view">
+        <section class="card admin-only">
+          <div class="card-head"><h2>Master Scan Validator</h2><div class="actions"><button id="validatorRefreshBtn" class="btn light" type="button">Refresh Report</button><button id="reprocessMasterLookupBtn" class="btn primary" type="button">Fix Master Matching</button><button id="recheckInvalidPartsBtn" class="btn light" type="button">Recheck Invalid Parts</button><button id="exportMissingMasterBtn" class="btn light" type="button">Export Invalid Parts</button></div></div>
+          <form id="validatorFilters" class="filter-grid show-tab-filters">
+            <label>Dealer<select name="dealerCode" class="cleanupDealerSelect"><option value="">All Dealers</option></select></label>
+            <label>Part Number<input name="partNumber" placeholder="Invalid / extracted part"></label>
+            <label>Raw Scan<input name="rawScan" placeholder="Raw scan value"></label>
+            <label>User<input name="user" placeholder="User / login"></label>
+            <label>Device<input name="deviceId" placeholder="Device ID"></label>
+            <label>Date From<input name="dateFrom" type="date"></label>
+            <label>Date To<input name="dateTo" type="date"></label>
+            <label>Scan Type<select name="scanType"><option value="">All Types</option><option>INWARD</option><option>OUTWARD</option><option>VERIFICATION</option><option>FITTED</option><option>DAMAGE</option></select></label>
+          </form>
+          <div id="validatorStats" class="metric-grid"></div>
+        </section>
+        <section class="card admin-only">
+          <div class="card-head"><h2>Invalid / Unmatched Scan Summary</h2></div>
+          <div class="table-wrap validator-table-wrap">
+            <table class="validator-summary-table"><thead><tr><th>Invalid Part</th><th>Scan Count</th><th>Dealer</th><th>Device</th><th>User</th><th>Last Scan</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead><tbody id="validatorMissingRows"></tbody></table>
+          </div>
+        </section>
+      </section>
+
+      <div id="validatorDetailModal" class="modal hidden">
+        <div class="modal-card validator-detail-card">
+          <div class="card-head"><h2 id="validatorDetailTitle">Invalid Scan Details</h2><button id="validatorDetailClose" class="btn light" type="button">Close</button></div>
+          <div class="table-wrap validator-detail-wrap">
+            <table class="validator-summary-table"><thead><tr><th>Scan Time</th><th>Raw Scan Value</th><th>Device ID</th><th>User</th><th>Scan Type</th><th>Bin</th></tr></thead><tbody id="validatorDetailRows"></tbody></table>
+          </div>
+        </div>
+      </div>
+
+      <section id="qr" class="view">
+        <div class="qr-tool-tabs">
+          <button class="qr-tool-tab active" data-qr-panel="qrClassicPanel" type="button">QR / Barcode Tools</button>
+          <button class="qr-tool-tab" data-qr-panel="qrBulkLabelPanel" type="button">Bulk Bin / Part Label Generator</button>
+        </div>
+        <div id="qrClassicPanel" class="qr-tool-panel active three-col">
+          <section class="card">
+            <div class="card-head"><h2>Bin QR Creation</h2></div>
+            <form id="binQrForm" class="stack-form"><input name="bin" placeholder="Bin Code" required><button class="btn primary" type="submit">Create Bin QR</button></form>
+            <img id="binQrImage" class="qr-preview" alt="">
+          </section>
+          <section class="card">
+            <div class="card-head"><h2>Part QR Creation</h2></div>
+            <form id="partQrForm" class="stack-form"><input name="partNo" placeholder="Part Number" required><button class="btn primary" type="submit">Create Part QR</button></form>
+            <img id="partQrImage" class="qr-preview" alt="">
+          </section>
+          <section class="card">
+            <div class="card-head"><h2>Bulk QR PDF</h2></div>
+            <textarea id="bulkQrItems" rows="8" placeholder="One bin or part per line"></textarea>
+            <div class="grid-form two print-grid">
+              <label>Paper Size<select id="qrPaperSize"><option value="a4">A4</option><option value="a5">A5</option><option value="letter">Letter</option><option value="legal">Legal</option><option value="thermal80">Thermal 80mm</option><option value="thermal58">Thermal 58mm</option><option value="custom">Custom</option></select></label>
+              <label>Orientation<select id="qrOrientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
+              <label>Custom Width mm<input id="qrPaperWidth" type="number" min="40" value="210"></label>
+              <label>Custom Height mm<input id="qrPaperHeight" type="number" min="40" value="297"></label>
+              <label>QR Print Size mm<input id="qrSizeMm" type="number" min="12" max="120" value="44"></label>
+              <label>Columns<input id="qrColumns" type="number" min="1" max="8" value="2"></label>
+              <label>Margin mm<input id="qrMarginMm" type="number" min="2" max="40" value="10"></label>
+              <label>Label Font<input id="qrLabelFont" type="number" min="6" max="18" value="9"></label>
+            </div>
+            <button id="bulkQrBtn" class="btn primary" type="button">Download Bulk QR PDF</button>
+          </section>
+        </div>
+        <div id="qrBulkLabelPanel" class="qr-tool-panel">
+          <section class="card">
+            <div class="card-head"><h2>Bulk Bin / Part Label Generator</h2><span id="labelPreviewCount" class="live-pill red-dot">0 labels</span></div>
+            <div class="grid-form three">
+              <label>Mode<select id="labelMode"><option value="bin">Bin QR Only</option><option value="part">Part QR + Part Number</option><option value="combined">Bin + Part Combined Label</option></select></label>
+              <label>Dealer<select id="labelDealerSelect" class="dealerSelect"><option value="">Select dealer</option></select></label>
+              <label>Category Optional<input id="labelCategory" placeholder="All categories"></label>
+              <label>Bin Location<select id="labelBinSelect"><option value="">All bins</option></select></label>
+              <label>Selected Bins<textarea id="labelSelectedBins" rows="3" placeholder="B1, B2 or one bin per line"></textarea></label>
+              <label>Bin Range<div class="range-inline"><input id="labelRangeFrom" placeholder="B1"><input id="labelRangeTo" placeholder="B50"></div></label>
+            </div>
+            <div class="actions">
+              <button id="loadLabelBinsBtn" class="btn light" type="button">Load Bins</button>
+              <button id="previewLabelsBtn" class="btn primary" type="button">Preview Labels</button>
+              <button id="printLabelsBtn" class="btn light" type="button">Print</button>
+              <button id="downloadLabelPdfBtn" class="btn light" type="button">Download PDF</button>
+              <button id="downloadLabelExcelBtn" class="btn light" type="button">Download Excel List</button>
+              <button id="downloadLabelPngZipBtn" class="btn light" type="button">Download PNG ZIP</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2>Label Size Settings</h2></div>
+            <div class="grid-form four">
+              <label>Label Width mm<input id="labelWidthMm" type="number" min="20" value="70"></label>
+              <label>Label Height mm<input id="labelHeightMm" type="number" min="12" value="28"></label>
+              <label>QR Size mm<input id="labelQrSizeMm" type="number" min="8" value="20"></label>
+              <label>Font Size<input id="labelFontSize" type="number" min="5" value="8"></label>
+              <label>Part Number Font<input id="labelPartFontSize" type="number" min="6" value="11"></label>
+              <label>Description Font<input id="labelDescriptionFontSize" type="number" min="5" value="7"></label>
+              <label>Margin mm<input id="labelMarginMm" type="number" min="1" value="8"></label>
+              <label>Gap mm<input id="labelGapMm" type="number" min="0" value="3"></label>
+              <label>Labels per row<input id="labelLabelsPerRow" type="number" min="1" max="8" value="2"></label>
+              <label>Paper Size<select id="labelPaperSize"><option value="a4">A4</option><option value="custom">Custom</option><option value="thermal80">Thermal 80mm</option><option value="thermal58">Thermal 58mm</option></select></label>
+              <label>Orientation<select id="labelOrientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
+              <label>Custom Width mm<input id="labelPaperWidthMm" type="number" min="40" value="210"></label>
+              <label>Custom Height mm<input id="labelPaperHeightMm" type="number" min="40" value="297"></label>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2>Preview List</h2><span class="muted">Part Number | Part Description | Category | Bin | Qty</span></div>
+            <div id="labelPrintArea" class="label-print-area"></div>
+            <div class="table-wrap compact-table">
+              <table>
+                <thead><tr><th>Part Number</th><th>Part Description</th><th>Category</th><th>Bin</th><th>Dealer</th><th>Qty</th></tr></thead>
+                <tbody id="labelPreviewRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="devices" class="view">
+        <div class="two-col">
+          <section class="card">
+            <div class="card-head">
+              <h2>Mobile App Pairing QR</h2>
+              <span id="pairingConnectionStatus" class="live-pill red-dot">Checking</span>
+            </div>
+            <img id="pairingQrImage" class="qr-preview large" alt="">
+            <div class="server-detail-grid">
+              <div><span>Server IP</span><strong id="pairingServerIp">Detecting...</strong></div>
+              <div><span>Port</span><strong id="pairingServerPort">3001</strong></div>
+              <div class="span-all"><span>Full URL</span><strong id="pairingServerUrl">Detecting...</strong></div>
+              <div class="span-all"><span>Health API</span><strong id="pairingHealthUrl">Detecting...</strong></div>
+              <div class="span-all"><span>Active Audit</span><strong id="pairingActiveAudit">Checking...</strong></div>
+              <div class="span-all"><span>Connection Status</span><strong id="pairingStatusText">Checking...</strong></div>
+            </div>
+            <div class="actions pairing-actions">
+              <button id="testConnectionBtn" class="btn primary" type="button">Test Connection</button>
+              <button class="btn primary show-tab-open" type="button">SHOW TAB</button>
+              <button id="refreshPairingQrBtn" class="btn light" type="button">Refresh QR</button>
+              <button id="copyServerUrlBtn" class="btn light" type="button">Copy Server URL</button>
+              <button id="copyHealthUrlBtn" class="btn light" type="button">Copy Health URL</button>
+              <button id="networkTestBtn" class="btn light" type="button">Network Test</button>
+            </div>
+            <div id="networkDebugText" class="sync-note">Cloud sync works across WiFi, mobile data, hotspot, and different networks</div>
+            <div class="sync-note">Last sync: <strong id="deviceLastSync">Never</strong></div>
+          </section>
+          <section class="card">
+            <div class="card-head">
+              <h2>Mobile App Devices</h2>
+              <span id="deviceCount" class="live-pill red-dot">Devices: 0 Online</span>
+            </div>
+            <div class="scanner-management-toolbar">
+              <button id="autoDetectScannersBtn" class="btn primary" type="button">Auto Detect Mobile Devices</button>
+              <button id="openPairingQrBtn" class="btn light" type="button">QR Pair</button>
+              <div class="inline-field manual-ip-field">
+                <input id="manualScannerIp" placeholder="Network device IP / URL">
+                <button id="manualIpConnectBtn" class="btn light" type="button">Connect</button>
+              </div>
+            </div>
+            <div id="scannerNetworkSummary" class="scanner-network-summary"></div>
+            <div id="deviceRows" class="device-grid"></div>
+            <details class="old-device-panel">
+              <summary>Disconnected / Old Devices</summary>
+              <div class="table-wrap compact-table">
+                <table>
+                  <thead><tr><th>Device Name</th><th>Last Dealer</th><th>Last Seen</th><th>Last Sync</th><th>Status</th><th>Actions</th></tr></thead>
+                  <tbody id="oldDeviceRows"></tbody>
+                </table>
+              </div>
+            </details>
+          </section>
+        </div>
+        <section class="card">
+          <div class="card-head">
+            <h2>Connection Logs</h2>
+            <button id="clearConnectionLogsBtn" class="btn light" type="button">Clear Logs</button>
+          </div>
+          <div id="connectionLogRows" class="connection-log-list"></div>
+          <div id="scannerLogRows" class="scanner-log-list"></div>
+        </section>
+      </section>
+
+      <section id="syncCenter" class="view">
+        <section class="card">
+          <div class="card-head">
+            <h2>Device Sync Center</h2>
+            <div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="syncCopyServerUrlBtn" class="btn light" type="button">Copy Server URL</button></div>
+          </div>
+          <div class="pairing-layout">
+            <img id="syncPairingQrImage" class="qr-preview large" alt="">
+            <div class="server-detail-grid">
+              <div><span>Server IP</span><strong id="syncServerIp">Detecting...</strong></div>
+              <div><span>Port</span><strong id="syncServerPort">3001</strong></div>
+              <div class="span-all"><span>Full URL</span><strong id="syncServerUrlText">Detecting...</strong></div>
+              <div class="span-all"><span>QR Payload</span><code id="syncQrPayload">Waiting for pairing data...</code></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Device Sync / Data Sync Center</h2>
+            <div class="actions">
+              <button id="syncCenterManualBtn" class="btn primary" type="button">Manual Sync Now</button>
+              <button class="btn primary show-tab-open" type="button">SHOW TAB</button>
+              <button id="syncCenterRetryBtn" class="btn light" type="button">Retry Failed</button>
+            </div>
+          </div>
+          <div class="sync-status-grid">
+            <div class="status-tile"><span>Server Status</span><strong id="syncServerStatus" class="live-pill red-dot">Offline</strong></div>
+            <div class="status-tile"><span>MongoDB Status</span><strong id="syncMongoStatus" class="live-pill red-dot">Offline</strong></div>
+            <div class="status-tile"><span>Active Database</span><strong id="syncActiveDatabase">Checking</strong></div>
+            <div class="status-tile"><span>Atlas Connection</span><strong id="syncAtlasStatus" class="live-pill orange-dot">Not checked</strong></div>
+            <div class="status-tile"><span>Local DB Connection</span><strong id="syncLocalDbStatus" class="live-pill orange-dot">Not checked</strong></div>
+            <div class="status-tile"><span>Current LAN IP</span><strong id="syncCurrentLanIp">-</strong></div>
+            <div class="status-tile"><span>Cloud Sync</span><strong id="syncCloudStatus" class="live-pill orange-dot">Idle</strong></div>
+            <div class="status-tile"><span>Cloud Pending</span><strong id="syncCloudPending">0</strong></div>
+            <div class="status-tile"><span>Last Sync Time</span><strong id="syncCenterLastSync">Never</strong></div>
+            <div class="status-tile"><span>Total Synced</span><strong id="syncCenterTotalSynced">0</strong></div>
+            <div class="status-tile"><span>Pending Records</span><strong id="syncCenterPending">0</strong></div>
+            <div class="status-tile"><span>Failed Records</span><strong id="syncCenterFailed">0</strong></div>
+            <div class="status-tile"><span>Connected Devices</span><strong id="syncCenterDevices">0</strong></div>
+            <div class="status-tile"><span>Auto Sync</span><strong id="syncCenterAutoState" class="live-pill green-dot">Auto ON</strong></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Live Connected Devices</h2>
+            <span id="syncDeviceCount" class="live-pill red-dot">0 active</span>
+          </div>
+          <div class="table-wrap compact-table">
+            <table>
+              <thead><tr><th>Device ID</th><th>Name</th><th>Model</th><th>Dealer</th><th>Last Seen</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody id="syncDeviceRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Pending Local Queue</h2>
+            <span class="muted">Failed scans are never discarded; they stay here until synced.</span>
+          </div>
+          <div class="table-wrap compact-table">
+            <table>
+              <thead><tr><th>Time</th><th>Part Number</th><th>UPI ID</th><th>Dealer</th><th>Type</th><th>Sync Key</th><th>Status</th></tr></thead>
+              <tbody id="pendingSyncRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Sync Log</h2>
+            <button id="clearSyncLogBtn" class="btn light" type="button">Clear Log</button>
+          </div>
+          <div class="table-wrap compact-table">
+            <table>
+              <thead><tr><th>Time</th><th>Part Number</th><th>UPI ID</th><th>Dealer</th><th>Status</th><th>Error Message</th></tr></thead>
+              <tbody id="syncLogRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Sync API Response</h2>
+            <button id="syncDebugRefreshBtn" class="btn light" type="button">Fetch Latest DB Records</button>
+          </div>
+          <div class="sync-debug-grid">
+            <div><span>Inserted</span><strong id="syncDebugInserted">0</strong></div>
+            <div><span>Duplicates</span><strong id="syncDebugDuplicates">0</strong></div>
+            <div><span>Failed</span><strong id="syncDebugFailed">0</strong></div>
+            <div><span>Verified</span><strong id="syncDebugVerified">0</strong></div>
+          </div>
+          <pre id="syncApiResponseViewer" class="api-response-viewer">No sync response captured yet.</pre>
+        </section>
+      </section>
+
+      <section id="admin" class="view">
+        <section class="card admin-only">
+          <div class="card-head">
+            <h2>User Login Approval</h2>
+            <div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="refreshUsersBtn" class="btn light" type="button">Refresh Users</button></div>
+          </div>
+          <form id="createUserForm" class="grid-form">
+            <label>Name<input name="name" required></label>
+            <label>Username<input name="username" required></label>
+            <label>Email ID<input name="email" type="email" required></label>
+            <label>Password<input name="password" type="password"></label>
+            <label>4-digit PIN<input name="pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}"></label>
+            <label>Role<select name="role"><option value="admin">Admin</option><option value="staff" selected>Staff</option><option value="mobile_user">Mobile User</option></select></label>
+            <label class="span-3">Dealer Access<input name="dealerAccess" placeholder="Dealer codes comma separated, or ALL"></label>
+            <label class="toggle"><input name="approved" type="checkbox" checked>Approve login now</label>
+            <label class="toggle"><input name="active" type="checkbox" checked>Active</label>
+            <div class="actions span-3">
+              <button class="btn primary" type="submit">Create User</button>
+            </div>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Username</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Dealer Access</th>
+                  <th>Approved</th>
+                  <th>Active</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="userRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card admin-only">
+          <div class="card-head">
+            <h2>Reset User / PIN</h2>
+          </div>
+          <form id="resetUserForm" class="grid-form">
+            <label>Username<select name="username" id="resetUsernameSelect" required><option value="">Select user</option></select></label>
+            <label>New Password<input name="newPassword" type="password" autocomplete="new-password"></label>
+            <label>Confirm Password<input name="confirmPassword" type="password" autocomplete="new-password"></label>
+            <label>New PIN<input name="newPin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}"></label>
+            <label class="toggle"><input name="forcePasswordChange" type="checkbox">Force password change on next login</label>
+            <div class="actions span-3">
+              <button class="btn primary" type="submit">Reset</button>
+              <span id="resetUserMessage" class="form-message"></span>
+            </div>
+          </form>
+        </section>
+
+        <div id="editUserModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editUserTitle">
+          <div class="modal-card user-edit-card">
+            <div class="card-head">
+              <h2 id="editUserTitle">Edit User</h2>
+              <button id="closeEditUserModalBtn" class="btn light" type="button">Close</button>
+            </div>
+            <form id="editUserForm" class="grid-form user-edit-form">
+              <input name="id" type="hidden">
+              <label>Name<input name="name" required></label>
+              <label>Username<input name="username" required></label>
+              <label>Email ID<input name="email" type="email"></label>
+              <label>Role<select name="role"><option value="admin">Admin</option><option value="staff">Staff</option><option value="mobile_user">Mobile User</option></select></label>
+              <label class="span-3">Dealer Access<input name="dealerAccess" placeholder="24874, 24875, or ALL"></label>
+              <label>Reset Password<input name="password" type="password" autocomplete="new-password"></label>
+              <label>Reset 4-digit PIN<input name="pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}"></label>
+              <label class="toggle"><input name="approved" type="checkbox">Approved</label>
+              <label class="toggle"><input name="active" type="checkbox">Active</label>
+              <div class="actions span-3">
+                <button class="btn primary" type="submit">Save User</button>
+                <span id="editUserMessage" class="form-message"></span>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <section class="card admin-only">
+          <div class="card-head">
+            <h2>SMTP OTP Settings</h2>
+            <span id="smtpStatus" class="pill">SMTP checking</span>
+          </div>
+          <form id="smtpSettingsForm" class="grid-form smtp-grid">
+            <label>SMTP Email<input name="smtpEmail" id="smtpEmail" type="email" value="amitsvision4u@gmail.com" required></label>
+            <label>SMTP App Password<input name="smtpPassword" id="smtpPassword" type="password" autocomplete="new-password" placeholder="Enter once during first setup"></label>
+            <label>SMTP Host<input name="smtpHost" id="smtpHost" value="smtp.gmail.com" required></label>
+            <label>SMTP Port<input name="smtpPort" id="smtpPort" type="number" min="1" max="65535" value="587" required></label>
+            <label>From Email<input name="fromEmail" id="fromEmail" type="email" value="amitsvision4u@gmail.com" required></label>
+            <label class="toggle"><input name="secure" id="smtpSecure" type="checkbox">Secure</label>
+            <label class="toggle"><input name="requireTLS" id="smtpRequireTls" type="checkbox" checked>TLS</label>
+            <div class="actions span-3">
+              <button class="btn primary" type="submit">Save Settings</button>
+              <button id="changeSmtpPasswordBtn" class="btn light" type="button">Change SMTP Password</button>
+              <span id="smtpSettingsMessage" class="form-message"></span>
+            </div>
+          </form>
+
+          <form id="smtpChangePasswordForm" class="grid-form smtp-grid hidden">
+            <label>New Gmail App Password<input name="newPassword" type="password" autocomplete="new-password" required></label>
+            <label>Confirm Password<input name="confirmPassword" type="password" autocomplete="new-password" required></label>
+            <div class="actions span-3">
+              <button class="btn primary" type="submit">Save New Password</button>
+              <button id="cancelSmtpPasswordBtn" class="btn light" type="button">Cancel</button>
+              <span id="smtpPasswordMessage" class="form-message"></span>
+            </div>
+          </form>
+
+          <form id="smtpTestForm" class="inline-form smtp-test-form">
+            <input name="testEmail" id="smtpTestEmail" type="email" placeholder="Test email" required>
+            <button id="smtpTestBtn" class="btn light" type="submit">Send Test OTP</button>
+            <span id="smtpTestMessage" class="form-message"></span>
+          </form>
+          <p class="muted">Use a Gmail App Password only. The password is saved encrypted, hidden after setup, and never returned to the browser.</p>
+        </section>
+
+        <section class="card admin-only admin-delete-card">
+          <div class="card-head"><h2>Admin Delete Manager</h2><span id="adminDeleteMessage" class="form-message"></span></div>
+          <div class="admin-delete-tabs" role="tablist" aria-label="Admin delete tools">
+            <button class="admin-delete-tab active" type="button" data-admin-delete-tab="dealer">Dealer Data Delete</button>
+            <button class="admin-delete-tab" type="button" data-admin-delete-tab="location">Local / Server Data Delete</button>
+          </div>
+          <div id="dealerDeletePanel" class="admin-delete-panel active">
+            <form id="dealerDeleteForm" class="grid-form admin-delete-form">
+              <label>Dealer Code<select name="dealerCode" id="dealerDeleteDealer" class="cleanupDealerSelect"><option value="">Select Dealer</option></select></label>
+              <label>Delete Type<select name="deleteType" id="dealerDeleteType"><option value="single-part">Single Part</option><option value="multiple-parts">Multiple Parts</option><option value="selected-parts">Selected Parts From Dealer</option><option value="all-scan-data">All Scan Data</option><option value="unknown-not-master">Unknown / Not in Master Scans</option><option value="bin-data">Bin Data</option><option value="master-parts">Master Parts</option><option value="full-dealer-data">Full Dealer Data</option></select></label>
+              <label>Part Number<input name="partNumber" id="dealerDeletePartNumber" placeholder="Part Number"></label>
+              <label class="span-3">Multiple Part Numbers<textarea name="parts" id="dealerDeletePartNumbers" rows="3" placeholder="One part number per line"></textarea></label>
+              <label>Date From<input name="dateFrom" id="dealerDeleteDateFrom" type="date"></label>
+              <label>Date To<input name="dateTo" id="dealerDeleteDateTo" type="date"></label>
+              <label>Search Visible Rows<input id="dealerDeleteSearch" type="search" placeholder="Search part, bin, source, status"></label>
+              <div class="actions span-3 admin-delete-actions">
+                <button id="dealerShowPartsBtn" class="btn primary" type="button">Show Parts</button>
+                <button id="dealerPreviewDeleteBtn" class="btn light" type="button">Preview Data</button>
+                <button id="dealerDeleteSelectedBtn" class="btn danger-soft" type="button">Delete Selected</button>
+                <button id="dealerDeleteAllBtn" class="btn danger-soft" type="button">Delete All For Dealer</button>
+                <button id="dealerDeleteResetBtn" class="btn light" type="reset">Reset</button>
+                <span id="dealerDeleteCount" class="admin-delete-count">Selected: 0</span>
+              </div>
+            </form>
+            <div class="table-wrap admin-delete-table-wrap">
+              <table class="admin-delete-table">
+                <thead><tr><th><input id="dealerDeleteSelectAll" type="checkbox" aria-label="Select all visible rows"></th><th>Part Number</th><th>Part Description</th><th>Product Category</th><th>Bin Location</th><th>Quantity</th><th>Scan Type</th><th>Dealer Code</th><th>Date Time</th><th>Source</th><th>Status</th></tr></thead>
+                <tbody id="dealerDeleteRows"><tr><td colspan="11" class="muted">Select dealer and click Show Parts.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div id="locationDeletePanel" class="admin-delete-panel">
+            <form id="locationDeleteForm" class="grid-form admin-delete-form">
+              <label>Dealer Code<select name="dealerCode" id="locationDeleteDealer" class="cleanupDealerSelect"><option value="">Select Dealer</option></select></label>
+              <label>Data Location<select name="dataLocation" id="locationDeleteLocation"><option value="local">Local Storage</option><option value="server">Server</option><option value="both">Both</option></select></label>
+              <label>Data Type<select name="dataType" id="locationDeleteType"><option value="scan-data">Scan Data</option><option value="master-data">Master Data</option><option value="bin-data">Bin Data</option><option value="transfer-history">Transfer History</option><option value="full-dealer-data">Full Dealer Data</option></select></label>
+              <div class="actions span-3 admin-delete-actions">
+                <button id="locationCheckCountBtn" class="btn primary" type="button">Check Data Count</button>
+                <button id="locationDeleteBtn" class="btn danger-soft" type="button">Delete From Selected Location</button>
+                <button id="locationDeleteResetBtn" class="btn light" type="reset">Reset</button>
+                <span id="locationDeleteCount" class="admin-delete-count">Count: 0</span>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head"><h2>Backup / Tools</h2></div>
+          <div class="toolbar">
+            <button id="backupDbBtn" class="btn primary" type="button">Backup Database</button>
+            <button id="reprocessScansBtn" class="btn light admin-only" type="button">Reprocess Scan Master Matching</button>
+            <button id="dedupeBtn" class="btn light admin-only" type="button">Deduplication Tool</button>
+            <label class="toggle admin-only"><input id="allowUnknownToggle" type="checkbox">Allow UNKNOWN save prompt</label>
+          </div>
+          <form id="restoreDbForm" class="inline-form">
+            <input name="file" type="file" accept=".json" required>
+            <button class="btn danger-soft admin-only" type="submit">Restore Database</button>
+          </form>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div id="scanPopup" class="scan-popup" aria-live="polite"></div>
+  <div id="toast" class="toast"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/ui.js?v=20260513-enterprise-compact"></script>
+  <script>
+    (function () {
+      function setPill(id, text, ok) {
+        var node = document.getElementById(id);
+        if (!node) return;
+        node.textContent = text;
+        node.classList.toggle('green-dot', Boolean(ok));
+        node.classList.toggle('red-dot', !ok);
+      }
+
+      async function refreshMongoHealth() {
+        try {
+          var response = await fetch('/api/health', { cache: 'no-store' });
+          var data = await response.json();
+          var serverOk = data.server === 'online';
+          var dbOk = data.db === 'connected';
+          setPill('syncServerStatus', serverOk ? 'Connected' : 'Offline', serverOk);
+          setPill('syncMongoStatus', dbOk ? 'Connected' : 'Offline', dbOk);
+        } catch (error) {
+          setPill('syncServerStatus', 'Offline', false);
+          setPill('syncMongoStatus', 'Offline', false);
+        }
+      }
+
+      window.addEventListener('DOMContentLoaded', function () {
+        refreshMongoHealth();
+        setInterval(refreshMongoHealth, 3000);
+      });
+    })();
+  </script>
+</body>
+</html>

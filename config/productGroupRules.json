@@ -1,0 +1,36 @@
+{
+  "HARDWARE": {
+    "FASTENERS": ["BOLT", "NUT", "SCREW", "WASHER"]
+  },
+  "ENGINE PARTS": {
+    "CLUTCH": ["CLUTCH"],
+    "TRANSMISSION": ["GEAR"],
+    "BEARINGS": ["BEARING"]
+  },
+  "BODY PARTS": {
+    "PANELS": ["COWL", "COVER", "PANEL"],
+    "FENDERS": ["FENDER"],
+    "SEAT": ["SEAT"],
+    "MIRRORS": ["MIRROR"]
+  },
+  "CHASSIS": {
+    "SWINGARM": ["SWINGARM"],
+    "HANDLEBAR": ["HANDLE"]
+  },
+  "ELECTRICAL": {
+    "ELECTRONICS": ["ECU", "SENSOR", "SWITCH"],
+    "LIGHTING": ["HEADLIGHT", "TAILLIGHT"]
+  },
+  "BRAKE SYSTEM": {
+    "BRAKE PARTS": ["DISK", "BRAKE", "CALIPER"]
+  },
+  "DRIVE SYSTEM": {
+    "CHAIN KIT": ["CHAIN", "SPROCKET"]
+  },
+  "SERVICE PARTS": {
+    "FILTERS": ["FILTER", "OIL FILTER", "AIR FILTER"]
+  },
+  "WHEEL PARTS": {
+    "TYRES": ["TYRE", "TUBE"]
+  }
+}

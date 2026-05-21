@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daksh Inventory v2 Dashboard</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body data-page="dashboard">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark">DI</div>
+        <div>
+          <strong>Daksh Inventory</strong>
+          <span>v2 Audit Suite</span>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="nav-link active" data-view="dashboardView">Dashboard</button>
+        <button class="nav-link" data-view="scanView">Scan</button>
+        <button class="nav-link" data-view="auditView">Audit Setup</button>
+        <button class="nav-link" data-view="dealerView">Dealers</button>
+        <button class="nav-link" data-view="masterView">Master Catalog</button>
+        <button class="nav-link" data-view="verifyView">Cross Verification</button>
+        <button class="nav-link" data-view="intelligenceView">Part Intelligence</button>
+        <a class="nav-link nav-anchor" href="/report" target="_blank" rel="noopener noreferrer">Reports</a>
+        <button class="nav-link" data-view="backupView">Backup</button>
+      </nav>
+    </aside>
+
+    <main class="main-area">
+      <header class="top-header">
+        <div>
+          <h1 id="pageTitle">Dashboard</h1>
+          <span id="mobileUrl" class="muted"></span>
+        </div>
+        <div class="header-actions">
+          <span id="userBadge" class="user-badge"></span>
+          <button id="refreshButton" class="ghost-button" type="button">Refresh</button>
+          <button id="logoutButton" class="danger-light-button" type="button">Logout</button>
+        </div>
+      </header>
+
+      <section id="dashboardView" class="view active">
+        <div class="stats-grid">
+          <div class="stat-card"><span>Total scanned today</span><strong id="statToday">0</strong></div>
+          <div class="stat-card"><span>Total inward</span><strong id="statInward">0</strong></div>
+          <div class="stat-card"><span>Total outward</span><strong id="statOutward">0</strong></div>
+          <div class="stat-card"><span>Fitted count</span><strong id="statFitted">0</strong></div>
+          <div class="stat-card"><span>Damage count</span><strong id="statDamage">0</strong></div>
+          <div class="stat-card"><span>Active devices</span><strong id="statDevices">0</strong></div>
+          <div class="stat-card"><span>Pending sync</span><strong id="statPending">0</strong></div>
+          <div class="stat-card"><span>Duplicates</span><strong id="statDuplicates">0</strong></div>
+          <div class="stat-card"><span>Mismatches</span><strong id="statMismatch">0</strong></div>
+          <div class="stat-card value-card"><span>Total scanned value</span><strong id="statValue">0</strong></div>
+        </div>
+
+        <div class="toolbar">
+          <label>
+            Dealer
+            <select id="dashboardDealerFilter" class="dealer-select"><option value="">All dealers</option></select>
+          </label>
+          <label>
+            Audit ID
+            <input id="dashboardAuditFilter" placeholder="All audits">
+          </label>
+          <button id="loadDashboardButton" class="secondary-button" type="button">Apply</button>
+          <button id="deleteSelectedButton" class="danger-button admin-only" type="button">Delete Selected</button>
+          <button id="deleteDealerButton" class="danger-light-button admin-only" type="button">Delete Dealer Records</button>
+          <button id="deleteSystemButton" class="danger-light-button admin-only" type="button">Delete All System Records</button>
+        </div>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Recent Scan Table</h2>
+            <span class="muted" id="scanCountLabel">0 records</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th><input id="selectAllScans" type="checkbox"></th>
+                  <th>Time</th>
+                  <th>Part Number</th>
+                  <th>Part Description</th>
+                  <th>Qty</th>
+                  <th>Type</th>
+                  <th>Bin</th>
+                  <th>Dealer</th>
+                  <th>Device</th>
+                  <th>Status</th>
+                  <th>Raw Scan</th>
+                  <th class="admin-only">Delete</th>
+                </tr>
+              </thead>
+              <tbody id="recentScanBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Connected Devices</h2>
+            <span class="muted" id="deviceCountLabel">0 active</span>
+          </div>
+          <div id="deviceList" class="device-list"></div>
+        </section>
+      </section>
+
+      <section id="scanView" class="view">
+        <section class="panel compact-panel">
+          <div class="panel-heading">
+            <h2>Scan Entry</h2>
+            <span class="muted">Barcode, manual, mobile API, UPI or QR raw scan</span>
+          </div>
+          <form id="scanForm" class="grid-form">
+            <label class="wide">
+              Raw Scan
+              <textarea name="rawScan" id="rawScanInput" rows="3" placeholder="Scan or paste raw barcode / UPI / QR text"></textarea>
+            </label>
+            <label>
+              Dealer
+              <select name="dealerCode" id="scanDealerSelect" class="dealer-select" required><option value="">Select dealer</option></select>
+            </label>
+            <label>
+              Audit ID
+              <input name="auditId" id="scanAuditId" placeholder="Auto from dealer">
+            </label>
+            <label class="suggestion-field">
+              Part Number
+              <input name="part" id="partInput" autocomplete="off" placeholder="Type part number" required>
+              <div id="partSuggestions" class="suggestions"></div>
+            </label>
+            <label>
+              Part Description
+              <input name="partName" id="partNameInput" readonly>
+            </label>
+            <label>
+              Model
+              <input name="model" id="modelInput" readonly>
+            </label>
+            <label>
+              Year
+              <input name="year" id="yearInput" readonly>
+            </label>
+            <label>
+              Category
+              <input name="category" id="categoryInput" readonly>
+            </label>
+            <label>
+              MRP
+              <input name="mrp" id="mrpInput" type="number" step="0.01">
+            </label>
+            <label>
+              DLC
+              <input name="dlc" id="dlcInput" type="number" step="0.01">
+            </label>
+            <label>
+              Bin
+              <input name="bin" id="binInput">
+            </label>
+            <label>
+              Qty
+              <input name="qty" type="number" min="0" step="1" value="1" required>
+            </label>
+            <label>
+              Scan Type
+              <select name="type" required>
+                <option>INWARD</option>
+                <option>OUTWARD</option>
+                <option>VERIFICATION</option>
+                <option>FITTED</option>
+                <option>DAMAGE</option>
+              </select>
+            </label>
+            <label>
+              Staff Name
+              <input name="staffName" id="staffNameInput">
+            </label>
+            <div class="form-actions wide">
+              <button class="primary-button" type="submit">Save Scan</button>
+              <button class="ghost-button" type="reset">Clear</button>
+            </div>
+          </form>
+        </section>
+      </section>
+
+      <section id="auditView" class="view">
+        <section class="panel compact-panel">
+          <div class="panel-heading">
+            <h2>Audit Setup</h2>
+          </div>
+          <form id="auditForm" class="grid-form">
+            <label>Dealer Name<input name="dealerName" required></label>
+            <label>Dealer Code<input name="dealerCode" required></label>
+            <label>Brand<input name="brand"></label>
+            <label>Location<input name="location"></label>
+            <label>Audit Name<input name="auditName"></label>
+            <label>Audit Start Date<input name="auditStartDate" type="date"></label>
+            <label>Audit Closed Date<input name="auditClosedDate" type="date"></label>
+            <label>Auditor Name<input name="auditorName"></label>
+            <label>General Manager<input name="generalManager"></label>
+            <label>SPM Name<input name="spmName"></label>
+            <div class="form-actions wide">
+              <button class="primary-button admin-only" type="submit">Save Audit</button>
+            </div>
+          </form>
+        </section>
+      </section>
+
+      <section id="dealerView" class="view">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Dealer System</h2>
+            <button id="loadDealersButton" class="ghost-button" type="button">Refresh</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Dealer</th>
+                  <th>Code</th>
+                  <th>Brand</th>
+                  <th>Location</th>
+                  <th>Current Audit</th>
+                  <th>Auditor</th>
+                  <th>GM</th>
+                  <th>SPM</th>
+                </tr>
+              </thead>
+              <tbody id="dealerTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="masterView" class="view">
+        <section class="panel compact-panel">
+          <div class="panel-heading">
+            <h2>Master Part Catalog</h2>
+          </div>
+          <form id="masterUploadForm" class="inline-form">
+            <input name="file" type="file" accept=".xlsx,.xls" required>
+            <button class="primary-button admin-only" type="submit">Upload Excel</button>
+          </form>
+          <div class="toolbar">
+            <label class="wide">
+              Search Master
+              <input id="masterSearchInput" placeholder="Part no, name, model, category">
+            </label>
+            <button id="masterSearchButton" class="secondary-button" type="button">Search</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Part Number</th>
+                  <th>Part Description</th>
+                  <th>Model</th>
+                  <th>Year</th>
+                  <th>Category</th>
+                  <th>MRP</th>
+                  <th>DLC</th>
+                  <th>Bin</th>
+                  <th>Active</th>
+                  <th>Opening Stock</th>
+                </tr>
+              </thead>
+              <tbody id="masterTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="verifyView" class="view">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Cross Verification</h2>
+            <button id="loadVerifyButton" class="secondary-button" type="button">Refresh</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Part Number</th>
+                  <th>Part Description</th>
+                  <th>Master Qty</th>
+                  <th>Physical Qty</th>
+                  <th>Difference</th>
+                  <th>Status</th>
+                  <th>MRP</th>
+                  <th>Raw Scan Proof</th>
+                </tr>
+              </thead>
+              <tbody id="verifyTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="intelligenceView" class="view">
+        <section class="panel compact-panel">
+          <div class="panel-heading">
+            <h2>Part Intelligence</h2>
+          </div>
+          <form id="partIntelForm" class="inline-form">
+            <input id="partIntelInput" placeholder="Enter part number" required>
+            <button class="primary-button" type="submit">Open</button>
+          </form>
+          <div id="partIntelResult" class="intel-result"></div>
+        </section>
+      </section>
+
+      <section id="backupView" class="view">
+        <section class="panel compact-panel">
+          <div class="panel-heading">
+            <h2>Backup</h2>
+          </div>
+          <div class="toolbar">
+            <button id="downloadBackupButton" class="primary-button" type="button">Download Full Backup JSON</button>
+            <button id="downloadDealerBackupButton" class="secondary-button" type="button">Dealer-wise Backup</button>
+            <button id="downloadDateBackupButton" class="secondary-button" type="button">Date-wise Backup</button>
+          </div>
+          <form id="restoreBackupForm" class="inline-form">
+            <input name="file" type="file" accept=".json" required>
+            <button class="danger-button admin-only" type="submit">Restore Backup</button>
+          </form>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div id="deleteModal" class="modal-backdrop">
+    <div class="modal">
+      <h2 id="deleteModalTitle">Confirm Delete</h2>
+      <p id="deleteModalText">Type DELETE to confirm.</p>
+      <input id="deleteConfirmInput" placeholder="DELETE">
+      <div class="modal-actions">
+        <button id="cancelDeleteButton" class="ghost-button" type="button">Cancel</button>
+        <button id="confirmDeleteButton" class="danger-button" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

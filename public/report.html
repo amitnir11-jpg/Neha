@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daksh Inventory v2 Reports</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body data-page="report">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark">DI</div>
+        <div>
+          <strong>Daksh Inventory</strong>
+          <span>v2 Audit Suite</span>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <a class="nav-link nav-anchor" href="/dashboard" target="_blank" rel="noopener noreferrer">Dashboard</a>
+        <a class="nav-link nav-anchor active" href="/report" target="_blank" rel="noopener noreferrer">Reports</a>
+      </nav>
+    </aside>
+
+    <main class="main-area">
+      <header class="top-header">
+        <div>
+          <h1>Reports</h1>
+          <span class="muted">Full inventory audit exports and dealer email</span>
+        </div>
+        <div class="header-actions">
+          <span id="userBadge" class="user-badge"></span>
+          <button id="logoutButton" class="danger-light-button" type="button">Logout</button>
+        </div>
+      </header>
+
+      <section class="panel compact-panel">
+        <div class="panel-heading">
+          <h2>Report Filters</h2>
+        </div>
+        <form id="reportFilterForm" class="grid-form">
+          <label>
+            Dealer
+            <select name="dealerCode" id="reportDealerFilter" class="dealer-select">
+              <option value="">All dealers</option>
+            </select>
+          </label>
+          <label>From Date<input name="from" type="date"></label>
+          <label>To Date<input name="to" type="date"></label>
+          <label>Part Category<input name="category" placeholder="All categories"></label>
+          <label>Product Group<input name="productGroup" placeholder="All groups"></label>
+          <label>Product SubGroup<input name="partSubGroup" placeholder="All subgroups"></label>
+          <label>
+            Scan Type
+            <select name="type">
+              <option value="">All types</option>
+              <option>INWARD</option>
+              <option>OUTWARD</option>
+              <option>FITTED</option>
+              <option>DAMAGE</option>
+            </select>
+          </label>
+          <label>Audit ID<input name="auditId" placeholder="All audits"></label>
+          <div class="form-actions wide">
+            <button class="secondary-button" type="submit">Show Report</button>
+            <button id="resetReportFilterButton" class="ghost-button" type="button">Reset Filter</button>
+            <button id="downloadFullReportButton" class="primary-button" type="button">Download Full Report</button>
+            <button id="downloadCsvReportButton" class="secondary-button" type="button">Export CSV</button>
+            <button id="downloadPartsRefreshTemplateButton" class="secondary-button" type="button">Parts Refresh CSV</button>
+            <button id="downloadPdfButton" class="secondary-button" type="button">Export PDF</button>
+            <button id="printReportButton" class="ghost-button" type="button">Print Report</button>
+            <button id="emailReportButton" class="secondary-button admin-only" type="button">Email Report to Dealer</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="stats-grid report-stats">
+        <div class="stat-card"><span>System Qty</span><strong id="reportSystemQty">0</strong></div>
+        <div class="stat-card"><span>Physical Qty</span><strong id="reportPhysicalQty">0</strong></div>
+        <div class="stat-card"><span>Matched</span><strong id="reportMatched">0</strong></div>
+        <div class="stat-card"><span>Short</span><strong id="reportShort">0</strong></div>
+        <div class="stat-card"><span>Excess</span><strong id="reportExcess">0</strong></div>
+        <div class="stat-card"><span>Not scanned</span><strong id="reportNotScanned">0</strong></div>
+      </section>
+      <div id="legacyReportMessage" class="form-message">Please select filters and click Show Report.</div>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <h2>Final Compile Report</h2>
+          <span id="reportRowsLabel" class="muted">0 rows</span>
+        </div>
+        <div class="table-wrap">
+          <table id="printableReportTable">
+            <thead>
+              <tr>
+                <th>Part Number</th>
+                <th>Part Description</th>
+                <th>Model</th>
+                <th>Year</th>
+                <th>Category</th>
+                <th>MRP</th>
+                <th>DLC</th>
+                <th>Product Group</th>
+                <th>Product SubGroup</th>
+                <th>System Qty</th>
+                <th>Physical Qty</th>
+                <th>Difference</th>
+                <th>System MRP Value</th>
+                <th>Physical MRP Value</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="reportTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
