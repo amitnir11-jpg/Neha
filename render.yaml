@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: daksh-inventory-v2
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/ping
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB_NAME
+        value: daksh_inventory_v2
+      - key: MONGO_SERVER_SELECTION_TIMEOUT_MS
+        value: 15000
+      - key: MONGO_CONNECT_TIMEOUT_MS
+        value: 15000
+      - key: MONGO_SOCKET_TIMEOUT_MS
+        value: 45000
+      - key: MONGO_MAX_POOL_SIZE
+        value: 20
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PUBLIC_BASE_URL
+        sync: false
