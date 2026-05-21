@@ -91,12 +91,25 @@ const io = new Server(server, {
   maxHttpBufferSize: 10 * 1024 * 1024
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT, 10) || 3000;
 const HOST = '0.0.0.0';
+const IS_PRODUCTION = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 const DEFAULT_MONGO_URI = 'mongodb://127.0.0.1:27017/daksh_inventory_v2';
+
+// In production, MONGO_URI must be set to a MongoDB Atlas connection string.
+// Falling back to localhost in a cloud environment will always fail.
+if (IS_PRODUCTION && !process.env.MONGO_URI) {
+  console.error('FATAL: MONGO_URI environment variable is not set.');
+  console.error('Set MONGO_URI to your MongoDB Atlas connection string in Railway environment variables.');
+  console.error('Example: mongodb+srv://<user>:<password>@cluster.mongodb.net/daksh_inventory_v2');
+}
+
 const MONGO_URI = String(process.env.MONGO_URI || DEFAULT_MONGO_URI).trim();
 const MONGO_FALLBACK_URI = String(process.env.MONGO_FALLBACK_URI || DEFAULT_MONGO_URI).trim();
-const MONGO_AUTO_LOCAL_FALLBACK = String(process.env.MONGO_AUTO_LOCAL_FALLBACK || 'true').toLowerCase() !== 'false';
+// In production, disable the local MongoDB fallback unless explicitly enabled.
+const MONGO_AUTO_LOCAL_FALLBACK = IS_PRODUCTION
+  ? String(process.env.MONGO_AUTO_LOCAL_FALLBACK || 'false').toLowerCase() !== 'false'
+  : String(process.env.MONGO_AUTO_LOCAL_FALLBACK || 'true').toLowerCase() !== 'false';
 const MONGO_AUTO_PROMOTE_TO_ATLAS = String(process.env.MONGO_AUTO_PROMOTE_TO_ATLAS || 'true').toLowerCase() !== 'false';
 const MONGO_PRIMARY_RETRY_MS = envNumber('MONGO_PRIMARY_RETRY_MS', 30000);
 const MONGO_CLOUD_SYNC_BATCH_SIZE = envNumber('MONGO_CLOUD_SYNC_BATCH_SIZE', 500);
@@ -796,6 +809,23 @@ app.get('/force-login', (req, res) => {
   </script>
   <p>Opening Daksh login...</p>
 </body></html>`);
+});
+
+// Dedicated /health endpoint for Railway healthchecks and monitoring.
+// Returns a concise status object without requiring database queries.
+app.get('/health', (req, res) => {
+  const activePort = req.app.locals.activePort || PORT;
+  const mongoConnected = mongoose.connection.readyState === 1;
+  const activeKey = activeMongoKey();
+  res.status(200).json({
+    status: 'ok',
+    serverStatus: 'running',
+    mongoStatus: mongoConnected ? 'connected' : 'disconnected',
+    activeDatabase: activeKey === 'atlas' ? 'atlas' : 'local',
+    port: activePort,
+    environment: process.env.NODE_ENV || 'development',
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get('/api/health', async (req, res) => {
