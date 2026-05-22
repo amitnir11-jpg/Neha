@@ -4745,7 +4745,9 @@
           <span>Priority: <strong>${escapeHtml(device.scannerPriority || 0)}</strong></span>
         </div>
         <span>Model: ${escapeHtml(device.model || '-')}</span>
-        <span>Dealer Assigned: ${escapeHtml(device.dealerName || device.dealerCode || '-')} ${device.dealerCode ? `(${escapeHtml(device.dealerCode)})` : ''}</span>
+          <span>Dealer Assigned: ${escapeHtml(device.dealerName || device.dealerCode || '-')} ${device.dealerCode ? `(${escapeHtml(device.dealerCode)})` : ''}</span>
+        <span>User: ${escapeHtml(device.userName || device.staffName || device.loginId || device.userId || '-')}</span>
+        <span>Pending Sync: <strong>${escapeHtml(device.pendingCount || 0)}</strong> ${Number(device.failedCount || 0) ? `| Failed: <strong>${escapeHtml(device.failedCount || 0)}</strong>` : ''}</span>
         <span>IP: ${escapeHtml(device.ipAddress)}</span>
         <span>Connected: ${escapeHtml(dateTime(device.connectedAt || device.createdAt))}</span>
         <span>Last Sync: ${escapeHtml(dateTime(device.lastSyncTime) || 'Never')}</span>
@@ -4768,9 +4770,11 @@
         <tr>
           <td>${deviceLink(device.deviceId)}</td>
           <td>${scannerLink(device)}</td>
-          <td>${escapeHtml(device.model || '-')}</td>
+          <td>${escapeHtml(device.userName || device.staffName || device.loginId || device.userId || '-')}</td>
           <td>${escapeHtml(device.dealerName || device.dealerCode || '-')}</td>
           <td>${escapeHtml(dateTime(device.lastSeen))}</td>
+          <td>${escapeHtml(dateTime(device.lastSyncTime) || 'Never')}</td>
+          <td>${escapeHtml(device.pendingCount || 0)}</td>
           <td><span class="${scannerStatusClass(device) === 'green-dot' ? 'status-ok' : 'status-warn'}">${escapeHtml(device.healthStatus || 'Online')}</span></td>
           <td><button class="btn danger-soft admin-only disconnectDevice ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Disconnect</button></td>
         </tr>

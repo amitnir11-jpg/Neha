@@ -121,7 +121,7 @@ async function resolveScanUserContext(req = {}, scan = {}) {
 
 function normalizeScanType(value) {
   const type = upper(value || 'INWARD');
-  if (type === 'VERIFICATION' || type === 'FITTED') return 'AUDIT';
+  if (type === 'VERIFY') return 'VERIFICATION';
   return type;
 }
 
@@ -363,7 +363,7 @@ function normalizeScan(item = {}) {
     : { ...item, deviceId: item.deviceId };
   const uniqueScanId = scanSource === 'manual'
     ? makeScanId(idSource, timestamp)
-    : (explicitScanId ? [explicitScanId, upper(binLocation)].filter(Boolean).join('::BIN::') : makeScanId(idSource, timestamp));
+    : (explicitScanId || makeScanId(idSource, timestamp));
   const itemMrpProvided = item.mrpProvided === true || String(item.mrpProvided).toLowerCase() === 'true';
   const parsedMrpProvided = parsed.mrpProvided === true || String(parsed.mrpProvided).toLowerCase() === 'true';
   const mrpProvided = itemMrpProvided || parsedMrpProvided;
@@ -431,10 +431,13 @@ function duplicateQuery(scan) {
   if (rawScan) terms.push({ rawScan }, { rawScanString: rawScan }, { rawBarcode: rawScan }, { rawQR: rawScan }, { rawUpi: rawScan });
   if (upiNo) terms.push({ upiNo }, { upiId: upiNo });
   if (qrFingerprint) terms.push({ qrFingerprint });
-  return scanIdentityScope({
+  const filter = {
     scanStatus: { $in: acceptedStatuses() },
     $or: terms.length ? terms : [{ uniqueScanId: '__missing__' }]
-  }, scan);
+  };
+  const scanType = upper(scan.scanType || scan.type);
+  if (scanType) filter.scanType = scanType;
+  return scanIdentityScope(filter, scan);
 }
 
 function isManualEntry(scan = {}) {
@@ -891,13 +894,13 @@ async function pushHandler(req, res) {
           { uniqueScanId: { $in: normalizedScanIds } },
           { scanId: { $in: normalizedScanIds } },
           { qrFingerprint: { $in: normalizedQrFingerprints } },
-          { dealerCode, rawScan: { $in: normalizedRawScans } },
-          { dealerCode, rawScanString: { $in: normalizedRawScans } },
-          { dealerCode, rawUpi: { $in: normalizedRawScans } },
-          { dealerCode, upiNo: { $in: normalizedUpiNos } },
-          { dealerCode, upiId: { $in: normalizedUpiNos } }
+          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawScan: { $in: normalizedRawScans } },
+          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawScanString: { $in: normalizedRawScans } },
+          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawUpi: { $in: normalizedRawScans } },
+          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiNo: { $in: normalizedUpiNos } },
+          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiId: { $in: normalizedUpiNos } }
         ]
-      }).select('uniqueScanId scanId qrFingerprint rawScan rawScanString rawUpi upiNo upiId dealerCode binLocation bin').lean()
+      }).select('uniqueScanId scanId qrFingerprint rawScan rawScanString rawUpi upiNo upiId dealerCode binLocation bin scanType type').lean()
     ]);
     const masterByPart = new Map();
     const masterByDealer = new Map();
@@ -913,6 +916,7 @@ async function pushHandler(req, res) {
     existingScans.forEach((scan) => {
       const identity = { uniqueScanId: scan.uniqueScanId, scanId: scan.scanId, qrFingerprint: scan.qrFingerprint };
       const scanDealer = upper(scan.dealerCode);
+      const scanType = upper(scan.scanType || scan.type);
       const scanBin = upper(scan.binLocation || scan.bin);
       if (scan.uniqueScanId) {
         existingScanIds.add(scan.uniqueScanId);
@@ -927,12 +931,12 @@ async function pushHandler(req, res) {
         existingIdentityByKey.set(scan.qrFingerprint, identity);
       }
       [scan.rawScan, scan.rawScanString, scan.rawUpi].filter(Boolean).forEach((raw) => {
-        const key = `${scanDealer}::${scanBin}::RAW::${clean(raw)}`;
+        const key = `${scanDealer}::${scanType}::${scanBin}::RAW::${clean(raw)}`;
         existingScanIds.add(key);
         existingIdentityByKey.set(key, identity);
       });
       [scan.upiNo, scan.upiId].filter(Boolean).forEach((upi) => {
-        const key = `${scanDealer}::${scanBin}::UPI::${upper(upi)}`;
+        const key = `${scanDealer}::${scanType}::${scanBin}::UPI::${upper(upi)}`;
         existingScanIds.add(key);
         existingIdentityByKey.set(key, identity);
       });
@@ -1009,8 +1013,9 @@ async function pushHandler(req, res) {
 
       const manualEntry = isManualEntry(scan);
       const identityBin = upper(scan.binLocation || scan.bin);
-      const rawIdentityKey = !manualEntry && clean(scan.rawScanString) ? `${upper(scan.dealerCode)}::${identityBin}::RAW::${clean(scan.rawScanString)}` : '';
-      const upiIdentityKey = !manualEntry && upper(scan.upiNo || scan.upiId) ? `${upper(scan.dealerCode)}::${identityBin}::UPI::${upper(scan.upiNo || scan.upiId)}` : '';
+      const identityType = upper(scan.scanType || scan.type);
+      const rawIdentityKey = !manualEntry && clean(scan.rawScanString) ? `${upper(scan.dealerCode)}::${identityType}::${identityBin}::RAW::${clean(scan.rawScanString)}` : '';
+      const upiIdentityKey = !manualEntry && upper(scan.upiNo || scan.upiId) ? `${upper(scan.dealerCode)}::${identityType}::${identityBin}::UPI::${upper(scan.upiNo || scan.upiId)}` : '';
       if (!manualEntry && (existingScanIds.has(scan.uniqueScanId) || existingScanIds.has(scan.qrFingerprint) || (rawIdentityKey && existingScanIds.has(rawIdentityKey)) || (upiIdentityKey && existingScanIds.has(upiIdentityKey)) || duplicateScanIds.has(scan.uniqueScanId) || duplicateScanIds.has(scan.qrFingerprint) || (rawIdentityKey && duplicateScanIds.has(rawIdentityKey)) || (upiIdentityKey && duplicateScanIds.has(upiIdentityKey)))) {
         duplicateScanIds.add(scan.uniqueScanId);
         duplicateScanIds.add(scan.qrFingerprint);
