@@ -1,5 +1,6 @@
 :root {
-  --sidebar-width: 90px;
+  --sidebar-width-desktop: 90px;
+  --sidebar-width: var(--sidebar-width-desktop);
   --bg: #ffffff;
   --panel: #ffffff;
   --panel-soft: #f7f9fb;
@@ -3730,6 +3731,42 @@ a,
   border-right: 1px solid #1d252d;
 }
 
+.side-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 9px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: col-resize;
+}
+
+.side-resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 58px;
+  bottom: 8px;
+  left: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.side-resize-handle:hover::before,
+body.sidebar-resizing .side-resize-handle::before {
+  background: #3b82f6;
+}
+
+body.sidebar-resizing,
+body.sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
 .side-brand {
   height: 56px;
   justify-content: center;
@@ -3801,6 +3838,32 @@ a,
   color: inherit;
   font-size: 12px;
   font-weight: 700;
+}
+
+body.sidebar-wide .side-brand {
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 12px;
+}
+
+body.sidebar-wide .side-brand strong,
+body.sidebar-wide .side-brand span {
+  display: block;
+}
+
+body.sidebar-wide .side-link {
+  min-height: 44px;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+body.sidebar-wide .nav-icon {
+  flex: 0 0 24px;
 }
 
 .main {
@@ -3949,7 +4012,7 @@ body:not(.dashboard-view-active) .topbar {
 }
 
 .dashboard-dealer-filters {
-  width: min(520px, 100%);
+  width: min(620px, 100%);
 }
 
 .dashboard-dealer-filters label,
@@ -3979,6 +4042,13 @@ textarea {
   border-radius: 4px;
   font-size: 12.5px;
   font-weight: 500;
+}
+
+#activeAuditBadge {
+  max-width: min(420px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card {
@@ -4199,6 +4269,10 @@ tr:hover td,
     flex-direction: row;
     justify-content: flex-start;
     text-align: left;
+  }
+
+  .side-resize-handle {
+    display: none;
   }
 
   .main {

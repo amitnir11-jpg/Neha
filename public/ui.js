@@ -71,6 +71,10 @@
   const REPORT_SCAN_MODE_DEFAULT_VERSION = 4;
   const DATA_VERSION_KEY = 'dakshDataVersion';
   const BARCODE_LAST_BIN_KEY = 'dakshBarcodeLastBin';
+  const SIDEBAR_WIDTH_KEY = 'dakshSidebarWidth';
+  const SIDEBAR_MIN_WIDTH = 90;
+  const SIDEBAR_MAX_WIDTH = 260;
+  const SIDEBAR_WIDE_WIDTH = 132;
   const CURRENT_DATA_VERSION = '2026-05-12-real-scans-only';
   if (localStorage.getItem(DATA_VERSION_KEY) !== CURRENT_DATA_VERSION) {
     [SYNC_QUEUE_KEY, SYNC_LOG_KEY, CONNECTION_LOG_KEY, 'dakshReportPreviewCache'].forEach((key) => localStorage.removeItem(key));
@@ -175,6 +179,96 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  function formatDealerDisplay(dealer = {}) {
+    const code = cleanDealerCode(dealer.dealerCode || dealer.code || '');
+    const name = String(dealer.dealerName || dealer.name || '').trim();
+    if (code && name) return `${code} - ${name}`;
+    return code || name || 'Dealer';
+  }
+
+  function clampSidebarWidth(width) {
+    const parsed = Number.parseInt(width, 10);
+    if (!Number.isFinite(parsed)) return SIDEBAR_MIN_WIDTH;
+    return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, parsed));
+  }
+
+  let sidebarWidth = SIDEBAR_MIN_WIDTH;
+
+  function storedSidebarWidth() {
+    try {
+      return window.localStorage ? localStorage.getItem(SIDEBAR_WIDTH_KEY) : '';
+    } catch (error) {
+      console.warn('Sidebar width preference unavailable', error.message);
+      return '';
+    }
+  }
+
+  function saveSidebarWidth(width) {
+    try {
+      if (window.localStorage) localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+    } catch (error) {
+      console.warn('Sidebar width preference not saved', error.message);
+    }
+  }
+
+  function clearSidebarWidth() {
+    try {
+      if (window.localStorage) localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+    } catch (error) {
+      console.warn('Sidebar width preference not cleared', error.message);
+    }
+  }
+
+  function applySidebarWidth(width, persist = false) {
+    sidebarWidth = clampSidebarWidth(width);
+    document.documentElement.style.setProperty('--sidebar-width-desktop', `${sidebarWidth}px`);
+    if (document.body) document.body.classList.toggle('sidebar-wide', sidebarWidth >= SIDEBAR_WIDE_WIDTH);
+    if (persist) saveSidebarWidth(sidebarWidth);
+    return sidebarWidth;
+  }
+
+  function initSidebarResize() {
+    const handle = $('#sideResizeHandle');
+    applySidebarWidth(storedSidebarWidth() || SIDEBAR_MIN_WIDTH);
+    if (!handle) return;
+    let startX = 0;
+    let startWidth = sidebarWidth;
+    let dragging = false;
+
+    function stopDragging() {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove('sidebar-resizing');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', stopDragging);
+      window.removeEventListener('pointercancel', stopDragging);
+    }
+
+    function onMove(event) {
+      if (!dragging) return;
+      applySidebarWidth(startWidth + event.clientX - startX, true);
+      event.preventDefault();
+    }
+
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      startX = event.clientX;
+      startWidth = sidebarWidth;
+      document.body.classList.add('sidebar-resizing');
+      if (handle.setPointerCapture && event.pointerId !== undefined) handle.setPointerCapture(event.pointerId);
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', stopDragging);
+      window.addEventListener('pointercancel', stopDragging);
+      event.preventDefault();
+    });
+
+    handle.addEventListener('dblclick', () => {
+      clearSidebarWidth();
+      applySidebarWidth(SIDEBAR_MIN_WIDTH);
+    });
   }
 
   function dashboardHref(params = {}) {
@@ -747,10 +841,10 @@
   function updateActiveAuditUi() {
     const audit = state.activeAudit;
     if (audit && audit.dealerCode) {
-      setLivePill('activeAuditBadge', `Active Audit: Dealer ${audit.dealerCode}`, true);
+      setLivePill('activeAuditBadge', `Active Audit: ${formatDealerDisplay(audit)}`, true);
       setLivePill('pairingConnectionStatus', 'Ready', true);
-      setDashboardKpiValue('dashActiveAuditDealer', audit.dealerCode);
-      setText('pairingActiveAudit', `${audit.dealerName || 'Dealer'} (${audit.dealerCode})`);
+      setDashboardKpiValue('dashActiveAuditDealer', formatDealerDisplay(audit));
+      setText('pairingActiveAudit', formatDealerDisplay(audit));
       setText('pairingStatusText', 'Mobile sync enabled');
       const createUserDealerAccess = $('#createUserForm [name="dealerAccess"]');
       if (createUserDealerAccess && !String(createUserDealerAccess.value || '').trim()) createUserDealerAccess.value = audit.dealerCode;
@@ -1532,13 +1626,13 @@
     state.dealers = data.dealers || [];
     const realDealers = state.dealers.filter((dealer) => !isTestDealer(dealer));
     const options = '<option value="">All Dealers</option>' + realDealers.map((dealer) => (
-      `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(dealer.dealerName)} (${escapeHtml(dealer.dealerCode)})</option>`
+      `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
     )).join('');
     $$('.dealerSelect').forEach((select) => {
       const selected = cleanDealerCode(select.value);
       const firstOption = select.closest('#reportFilters') ? '<option value="">Select Dealer</option>' : (select.id === 'dashboardDealerSelect' ? '<option value="">Active Audit</option>' : (select.classList.contains('bin-transfer-dealer') || select.id === 'binManagementDealer' || select.closest('#binSequenceTab') || select.closest('#reconciliation')) ? '<option value="">Select Dealer</option>' : '<option value="">All Dealers</option>');
       select.innerHTML = firstOption + realDealers.map((dealer) => (
-        `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(dealer.dealerName)} (${escapeHtml(dealer.dealerCode)})</option>`
+        `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
       )).join('');
       const activeDealer = state.activeAudit && state.activeAudit.dealerCode ? cleanDealerCode(state.activeAudit.dealerCode) : '';
       const preferred = selected ||
@@ -1549,7 +1643,7 @@
     });
     updateActiveAuditUi();
     const cleanupOptions = '<option value="">Select Dealer</option>' + state.dealers.map((dealer) => (
-      `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(dealer.dealerName)} (${escapeHtml(dealer.dealerCode)})</option>`
+      `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
     )).join('');
     $$('.cleanupDealerSelect').forEach((select) => {
       const selected = select.value;
@@ -6695,6 +6789,7 @@
     if (!await validateSession()) return;
     if (!setUserChrome()) return;
     ensureDeviceId();
+    initSidebarResize();
     restoreBarcodeScanDefaults();
     bindNavigation();
     bindEvents();
