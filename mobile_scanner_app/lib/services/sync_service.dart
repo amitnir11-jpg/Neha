@@ -89,10 +89,23 @@ class SyncService {
     if (!await hasNetwork) {
       return SyncResult(false, 'Offline', synced: 0, serverReached: false);
     }
+
     final pending = await database.pendingScans();
     if (pending.isEmpty) {
-      return SyncResult(true, 'No pending records',
-          synced: 0, serverReached: false);
+      try {
+        await ApiClient(settings).health();
+        return SyncResult(true, 'No pending records',
+            synced: 0, serverReached: true);
+      } catch (_) {
+        return SyncResult(true, 'No pending records',
+            synced: 0, serverReached: false);
+      }
+    }
+
+    try {
+      await ApiClient(settings).mobileStatus();
+    } catch (_) {
+      // The sync request below is the source of truth; this is only a heartbeat.
     }
 
     try {
@@ -166,6 +179,7 @@ class SyncService {
           }
         }
       }
+
       return SyncResult(true, (data['message'] ?? 'Sync completed').toString(),
           synced: synced, serverReached: true);
     } on ApiException catch (error) {

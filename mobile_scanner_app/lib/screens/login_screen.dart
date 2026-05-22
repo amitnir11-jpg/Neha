@@ -35,6 +35,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _serverController.text = await _settings.serverUrl;
     _dealerController.text = await _settings.dealerCode;
     if (mounted) setState(() {});
+    await _testServer(silent: true);
   }
 
   @override
@@ -56,20 +57,24 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _message = 'Server URL loaded from QR');
   }
 
-  Future<void> _testServer() async {
-    setState(() {
-      _busy = true;
-      _message = '';
-    });
+  Future<void> _testServer({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _busy = true;
+        _message = '';
+      });
+    }
     try {
       await _settings.saveServerUrl(_serverController.text);
       final data = await ApiClient(_settings).health();
-      setState(() => _message =
-          'Server connected: ${data['db'] ?? data['mongoStatus'] ?? 'OK'}');
+      if (!silent && mounted) {
+        setState(() => _message =
+            'Server connected: ${data['db'] ?? data['mongoStatus'] ?? 'OK'}');
+      }
     } catch (error) {
-      setState(() => _message = error.toString());
+      if (!silent && mounted) setState(() => _message = error.toString());
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (!silent && mounted) setState(() => _busy = false);
     }
   }
 
@@ -132,7 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Daksh Mobile Scanner v1.0')),
+      appBar: AppBar(title: const Text('Daksh Scanner v1.0.1')),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(18),
@@ -152,11 +157,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   controller: _serverController,
                   keyboardType: TextInputType.url,
                   decoration: const InputDecoration(
-                      labelText: 'Server URL', prefixIcon: Icon(Icons.cloud)),
-                  validator: (value) =>
-                      SettingsStore.normalizeServerUrl(value ?? '').isEmpty
-                          ? 'Server URL is required'
-                          : null,
+                      labelText: 'Cloud Server',
+                      prefixIcon: Icon(Icons.cloud),
+                      helperText: 'Auto configured'),
+                  validator: (_) => null,
                 ),
                 const SizedBox(height: 10),
                 Row(

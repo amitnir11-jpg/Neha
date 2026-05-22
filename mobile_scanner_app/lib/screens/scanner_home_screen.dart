@@ -53,6 +53,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     ],
   );
 
+  Timer? _foregroundSyncTimer;
   StreamSubscription<ConnectivityResult>? _connectivitySub;
   List<ScanRecord> _lastScans = [];
   String _scanType = 'INWARD';
@@ -67,6 +68,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   bool _online = false;
   bool _serverConnected = false;
   bool _processing = false;
+  bool _syncInFlight = false;
   int _pendingCount = 0;
   int _failedCount = 0;
   String _statusText = 'Ready';
@@ -82,11 +84,20 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       if (mounted) setState(() => _online = hasNetwork);
       if (hasNetwork) _syncPending(silent: true);
     });
+    _foregroundSyncTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      if (!_online || _syncInFlight || _processing) return;
+      if (_pendingCount > 0 || _failedCount > 0) {
+        unawaited(_syncPending(silent: true));
+      } else {
+        unawaited(_testServer(silent: true));
+      }
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _foregroundSyncTimer?.cancel();
     _connectivitySub?.cancel();
     _defaultBinController.dispose();
     _cameraController.dispose();
@@ -148,6 +159,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         pendingCount: _pendingCount.toString(),
         failedCount: _failedCount.toString(),
       );
+      if (mounted) setState(() => _serverConnected = true);
     } catch (_) {
       // Device registration is refreshed on the next successful sync/heartbeat.
     }
@@ -178,18 +190,24 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   }
 
   Future<void> _syncPending({bool silent = false}) async {
-    final result = await _syncService.syncPending();
-    await _refreshLocalState();
-    await _registerDevice();
-    if (!mounted) return;
-    setState(() {
-      if (result.serverReached) _serverConnected = true;
-      if (silent) return;
-      _statusText = result.success
-          ? result.message
-          : (result.message.trim().isEmpty ? 'Sync failed' : result.message);
-      _statusColor = result.success ? Colors.green : Colors.red;
-    });
+    if (_syncInFlight) return;
+    _syncInFlight = true;
+    try {
+      final result = await _syncService.syncPending();
+      await _refreshLocalState();
+      await _registerDevice();
+      if (!mounted) return;
+      setState(() {
+        if (result.serverReached) _serverConnected = true;
+        if (silent) return;
+        _statusText = result.success
+            ? result.message
+            : (result.message.trim().isEmpty ? 'Sync failed' : result.message);
+        _statusColor = result.success ? Colors.green : Colors.red;
+      });
+    } finally {
+      _syncInFlight = false;
+    }
   }
 
   Future<void> _onDetect(BarcodeCapture capture) async {
@@ -269,25 +287,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         return;
       }
 
-      final result = await _syncService.syncPending();
-      await _refreshLocalState();
-      await _registerDevice();
-      if (mounted && result.serverReached) {
-        setState(() => _serverConnected = true);
-      }
-      if (result.success) {
-        _setStatus(
-            result.message.toLowerCase().contains('duplicate')
-                ? 'Duplicate'
-                : 'Success',
-            Colors.green);
-      } else {
-        _setStatus(
-            result.message.trim().isEmpty ? 'Sync failed' : result.message,
-            Colors.red);
-      }
+      await _syncPending();
     } catch (error) {
-      _setStatus('Sync failed', Colors.red);
+      _setStatus(error.toString(), Colors.red);
     } finally {
       if (mounted) setState(() => _processing = false);
     }
@@ -372,7 +374,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Daksh Mobile Scanner'),
+        title: const Text('Daksh Scanner'),
         actions: [
           IconButton(onPressed: _openPendingSync, icon: const Icon(Icons.sync)),
           IconButton(

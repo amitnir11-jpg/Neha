@@ -7,6 +7,8 @@ import 'package:uuid/uuid.dart';
 import '../models/session.dart';
 
 class SettingsStore {
+  static const productionServerUrl =
+      'https://daksh-inventory-v2-production.up.railway.app';
   static const _secure = FlutterSecureStorage();
   static const _tokenKey = 'daksh_token';
   static const _serverUrlKey = 'server_url';
@@ -19,7 +21,10 @@ class SettingsStore {
 
   Future<String> get serverUrl async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_serverUrlKey) ?? '';
+    final saved = normalizeServerUrl(prefs.getString(_serverUrlKey) ?? '');
+    if (saved.isNotEmpty) return saved;
+    await prefs.setString(_serverUrlKey, productionServerUrl);
+    return productionServerUrl;
   }
 
   Future<String> get deviceId async {
@@ -52,7 +57,9 @@ class SettingsStore {
 
   Future<void> saveServerUrl(String value) async {
     final prefs = await SharedPreferences.getInstance();
-    final url = normalizeServerUrl(value);
+    final url = normalizeServerUrl(value).isEmpty
+        ? productionServerUrl
+        : normalizeServerUrl(value);
     await prefs.setString(_serverUrlKey, url);
   }
 

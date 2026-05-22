@@ -1,0 +1,4 @@
+-keep class androidx.camera.** { *; }
+-keep class com.google.android.gms.** { *; }
+-keep class com.google.mlkit.** { *; }
+-keep class io.flutter.plugins.** { *; }

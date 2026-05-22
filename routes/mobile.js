@@ -21,7 +21,7 @@ const { normalizePartNumber } = require('../utils/normalize');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
-const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.0 Fresh Build';
+const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.0.1';
 
 function clean(value) {
   return String(value || '').trim();

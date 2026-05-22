@@ -1,5 +1,6 @@
 import 'package:daksh_mobile_scanner/services/settings_store.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   test('normalizes pairing QR payloads to a server URL', () {
@@ -14,5 +15,11 @@ void main() {
         SettingsStore.normalizeServerUrl(
             'https://daksh.example.com/api/health'),
         'https://daksh.example.com');
+  });
+
+  test('uses production server URL on fresh install', () async {
+    SharedPreferences.setMockInitialValues({});
+
+    expect(await SettingsStore().serverUrl, SettingsStore.productionServerUrl);
   });
 }

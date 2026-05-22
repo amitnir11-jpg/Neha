@@ -8,10 +8,12 @@ import '../models/session.dart';
 import 'settings_store.dart';
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode, this.data = const {}});
+  ApiException(this.message,
+      {this.statusCode, this.data = const {}, this.retryable = false});
   final String message;
   final int? statusCode;
   final Map<String, dynamic> data;
+  final bool retryable;
 
   @override
   String toString() => message;
@@ -28,8 +30,41 @@ class ApiClient {
     Map<String, dynamic>? body,
     bool auth = true,
   }) async {
-    final baseUrl = await settings.serverUrl;
-    if (baseUrl.isEmpty) throw ApiException('Set server URL first');
+    final savedBaseUrl =
+        SettingsStore.normalizeServerUrl(await settings.serverUrl);
+    final candidates = {
+      if (savedBaseUrl.isNotEmpty) savedBaseUrl,
+      SettingsStore.productionServerUrl,
+    }.toList();
+    ApiException? lastApiError;
+    Object? lastError;
+
+    for (final baseUrl in candidates) {
+      try {
+        final data = await _requestOnce(baseUrl, path,
+            method: method, body: body, auth: auth);
+        if (baseUrl != savedBaseUrl) await settings.saveServerUrl(baseUrl);
+        return data;
+      } on ApiException catch (error) {
+        lastApiError = error;
+        if (!error.retryable) rethrow;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (lastApiError != null) throw lastApiError;
+    throw ApiException(lastError?.toString() ?? 'Server connection failed',
+        retryable: true);
+  }
+
+  Future<Map<String, dynamic>> _requestOnce(
+    String baseUrl,
+    String path, {
+    required String method,
+    Map<String, dynamic>? body,
+    required bool auth,
+  }) async {
     final token = await settings.token;
     final uri = Uri.parse('$baseUrl$path');
     final headers = <String, String>{'Content-Type': 'application/json'};
@@ -42,22 +77,35 @@ class ApiClient {
             .get(uri, headers: headers)
             .timeout(const Duration(seconds: 20));
     final text = response.body.trim();
-    final decoded = text.isEmpty ? <String, dynamic>{} : jsonDecode(text);
+    dynamic decoded;
+    try {
+      decoded = text.isEmpty ? <String, dynamic>{} : jsonDecode(text);
+    } catch (_) {
+      throw ApiException('Unexpected server response',
+          statusCode: response.statusCode, retryable: true);
+    }
     final data = decoded is Map<String, dynamic>
         ? decoded
         : <String, dynamic>{'data': decoded};
     if (response.statusCode < 200 ||
         response.statusCode >= 300 ||
         data['success'] == false) {
+      final retryable = response.statusCode >= 500 ||
+          response.statusCode == 404 ||
+          response.statusCode == 0;
       throw ApiException((data['message'] ?? 'Request failed').toString(),
-          statusCode: response.statusCode, data: data);
+          statusCode: response.statusCode, data: data, retryable: retryable);
     }
     return data;
   }
 
   Future<Map<String, dynamic>> health() => _request('/api/health', auth: false);
 
-  Future<Map<String, dynamic>> mobileStatus() => _request('/api/mobile/status');
+  Future<Map<String, dynamic>> mobileStatus({String deviceId = ''}) async {
+    final id = deviceId.isEmpty ? await settings.deviceId : deviceId;
+    final query = id.isEmpty ? '' : '?deviceId=${Uri.encodeComponent(id)}';
+    return _request('/api/mobile/status$query', auth: false);
+  }
 
   Future<UserSession> login({
     required String username,
@@ -76,7 +124,7 @@ class ApiClient {
         'pin': pin,
         'dealerCode': dealerCode,
         'deviceId': deviceId,
-        'appVersion': 'Daksh Mobile Scanner v1.0 Fresh Build',
+        'appVersion': 'Daksh Mobile Scanner v1.0.1',
       },
     );
     return UserSession.fromLogin(data);
@@ -100,6 +148,7 @@ class ApiClient {
     required String failedCount,
   }) async {
     final session = await settings.session;
+    final serverUrl = await settings.serverUrl;
     return _request(
       '/api/mobile/device-register',
       method: 'POST',
@@ -107,10 +156,11 @@ class ApiClient {
         'deviceId': deviceId,
         'deviceName': 'Daksh Android Scanner',
         'model': 'Android',
-        'appVersion': 'Daksh Mobile Scanner v1.0 Fresh Build',
+        'appVersion': 'Daksh Mobile Scanner v1.0.1',
         'dealerCode': dealerCode,
         'pendingCount': pendingCount,
         'failedCount': failedCount,
+        'serverUrl': serverUrl,
         ...session,
       },
     );
@@ -120,13 +170,15 @@ class ApiClient {
     final session = await settings.session;
     final deviceId = await settings.deviceId;
     final dealerCode = await settings.dealerCode;
+    final serverUrl = await settings.serverUrl;
     return _request(
       '/api/mobile/sync-bulk',
       method: 'POST',
       body: {
         'deviceId': deviceId,
         'dealerCode': dealerCode,
-        'appVersion': 'Daksh Mobile Scanner v1.0 Fresh Build',
+        'appVersion': 'Daksh Mobile Scanner v1.0.1',
+        'serverUrl': serverUrl,
         ...session,
         'scans': scans.map((scan) => scan.toApiPayload()).toList(),
       },
