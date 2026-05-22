@@ -31,6 +31,31 @@ function upper(value) {
   return clean(value).toUpperCase();
 }
 
+function validDate(value) {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function newestDate(...values) {
+  return values
+    .map(validDate)
+    .filter(Boolean)
+    .sort((a, b) => b.getTime() - a.getTime())[0] || null;
+}
+
+async function latestSuccessfulSyncTime() {
+  const [lastLog, lastDevice, lastInventory] = await Promise.all([
+    SyncLog.findOne({ status: { $in: ['success', 'partial'] } }).sort({ updatedAt: -1, createdAt: -1 }).select('updatedAt createdAt').lean(),
+    Device.findOne({ lastSyncTime: { $exists: true, $ne: null } }).sort({ lastSyncTime: -1 }).select('lastSyncTime').lean(),
+    Inventory.findOne({ $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }).sort({ updatedAt: -1, timestamp: -1 }).select('updatedAt timestamp').lean()
+  ]);
+  return newestDate(
+    lastLog && (lastLog.updatedAt || lastLog.createdAt),
+    lastDevice && lastDevice.lastSyncTime,
+    lastInventory && (lastInventory.updatedAt || lastInventory.timestamp)
+  );
+}
+
 function compactUserContext(source = {}) {
   const loginId = clean(source.loginId || source.username || source.email || source.user || source.userID);
   const userId = clean(source.userId || source.id || source._id || loginId);
@@ -702,19 +727,24 @@ async function saveNormalizedScan(scan, req) {
 
 async function syncSummary(activePort) {
   await Device.updateMany({ status: 'online', lastSeen: { $lt: liveCutoff() } }, { status: 'offline' });
-  const [pendingRecords, failedRecords, totalSynced, connectedDevices] = await Promise.all([
+  const [pendingRecords, failedRecords, totalSynced, connectedDevices, lastSyncAt] = await Promise.all([
     Inventory.countDocuments({ $or: [{ syncStatus: 'pending' }, { isSynced: false }] }),
     Inventory.countDocuments({ syncStatus: 'failed' }),
     Inventory.countDocuments({ $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }),
-    Device.countDocuments({ status: 'online', lastSeen: { $gte: liveCutoff() } })
+    Device.countDocuments({ status: 'online', lastSeen: { $gte: liveCutoff() } }),
+    latestSuccessfulSyncTime()
   ]);
   const info = serverInfo(activePort);
+  const lastSync = lastSyncAt ? lastSyncAt.toISOString() : '';
 
   return {
     serverStatus: 'online',
     mongoStatus: mongoose.connection.readyState === 1 ? 'online' : 'offline',
     db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    lastSyncTime: new Date(),
+    lastSync,
+    lastSyncTime: lastSync,
+    lastSuccessfulSyncAt: lastSync,
+    hasSyncData: Boolean(lastSync),
     totalSynced,
     pendingRecords,
     failedRecords,
@@ -1244,6 +1274,9 @@ async function pushHandler(req, res) {
 
     const duplicateCount = logs.filter((log) => log.status === 'duplicate').length;
     const failedCount = failedRows.filter((row) => row.status !== 'invalid').length;
+    const acceptedCount = insertedCount + duplicateCount;
+    const allRowsRejected = incomingRaw.length > 0 && acceptedCount === 0 && (failedCount > 0 || invalidCleanedCount > 0);
+    const completedAt = new Date();
     logSync('DB batch result', {
       collection: Inventory.collection.name,
       insertedCount,
@@ -1256,40 +1289,39 @@ async function pushHandler(req, res) {
 
     if (deviceId) {
       const info = serverInfo(req.app.locals.activePort);
+      const deviceUpdate = {
+        deviceId,
+        deviceName: clean(body.deviceName || 'Scanner Device'),
+        model: clean(body.model),
+        deviceType: 'mobile',
+        approved: true,
+        dealerCode,
+        dealerName: activeAuditPayload.dealerName,
+        auditId: activeAuditPayload.auditId,
+        userId: requestUserContext.userId || '',
+        loginId: requestUserContext.loginId || '',
+        userName: requestUserContext.userName || '',
+        staffName: requestUserContext.staffName || '',
+        role: requestUserContext.role || '',
+        serverUrl: clean(body.serverUrl || info.serverUrl),
+        status: 'online',
+        lastSeen: completedAt,
+        syncStatus: allRowsRejected || failedCount ? 'failed' : 'working',
+        appVersion: clean(body.appVersion || body.version),
+        batteryPercent: body.batteryPercent ?? body.battery,
+        failedCount
+      };
+      if (!allRowsRejected) deviceUpdate.lastSyncTime = completedAt;
       await Device.findOneAndUpdate(
         { deviceId },
-        {
-          deviceId,
-          deviceName: clean(body.deviceName || 'Scanner Device'),
-          model: clean(body.model),
-          deviceType: 'mobile',
-          approved: true,
-          dealerCode,
-          dealerName: activeAuditPayload.dealerName,
-          auditId: activeAuditPayload.auditId,
-          userId: requestUserContext.userId || '',
-          loginId: requestUserContext.loginId || '',
-          userName: requestUserContext.userName || '',
-          staffName: requestUserContext.staffName || '',
-          role: requestUserContext.role || '',
-          serverUrl: clean(body.serverUrl || info.serverUrl),
-          status: 'online',
-          lastSeen: new Date(),
-          lastSyncTime: new Date(),
-          syncStatus: failedCount ? 'failed' : 'working',
-          appVersion: clean(body.appVersion || body.version),
-          batteryPercent: body.batteryPercent ?? body.battery,
-          failedCount
-        },
+        deviceUpdate,
         { upsert: true, setDefaultsOnInsert: true }
       );
-      if (io) io.emit('device:heartbeat', { deviceId, dealerCode, status: 'online', lastSeen: new Date() });
+      if (io) io.emit('device:heartbeat', { deviceId, dealerCode, status: 'online', lastSeen: completedAt });
     }
 
     const summary = await syncSummary(req.app.locals.activePort);
     await emitEnterpriseRealtime(io, savedScans);
-    const acceptedCount = insertedCount + duplicateCount;
-    const allRowsRejected = incomingRaw.length > 0 && acceptedCount === 0 && (failedCount > 0 || invalidCleanedCount > 0);
     const payload = {
       success: !allRowsRejected,
       activeAudit: activeAuditPayload,
@@ -1299,7 +1331,7 @@ async function pushHandler(req, res) {
       receivedCount: incomingRaw.length,
       insertedCount,
       startedAt,
-      completedAt: new Date(),
+      completedAt,
       syncedCount: insertedCount,
       duplicateCount,
       failedCount,

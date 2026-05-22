@@ -65,6 +65,7 @@ patchExpressAsyncErrors();
 const User = require('./models/User');
 const Device = require('./models/Device');
 const Inventory = require('./models/Inventory');
+const SyncLog = require('./models/SyncLog');
 const { serverInfo } = require('./utils/network');
 const { getActiveAudit, publicAudit } = require('./utils/audit');
 const syncRoutes = require('./routes/sync');
@@ -848,12 +849,21 @@ app.get('/api/health', async (req, res) => {
   const info = serverInfo(activePort, req.ip || req.socket.remoteAddress);
   const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
   const databaseDetails = mongoHealthDetails();
-  const [connectedDevices, pending, failed, lastSyncDoc] = await Promise.all([
+  const [connectedDevices, pending, failed, lastSyncDoc, lastSyncLog, lastSyncDevice] = await Promise.all([
     mongoose.connection.readyState === 1 ? Device.countDocuments({ status: 'online' }).catch(() => 0) : 0,
     mongoose.connection.readyState === 1 ? Inventory.countDocuments({ $or: [{ syncStatus: 'pending' }, { isSynced: false }] }).catch(() => 0) : 0,
     mongoose.connection.readyState === 1 ? Inventory.countDocuments({ syncStatus: 'failed' }).catch(() => 0) : 0,
-    mongoose.connection.readyState === 1 ? Inventory.findOne({ syncStatus: 'synced' }).sort({ updatedAt: -1, timestamp: -1 }).select('updatedAt timestamp').lean().catch(() => null) : null
+    mongoose.connection.readyState === 1 ? Inventory.findOne({ $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }).sort({ updatedAt: -1, timestamp: -1 }).select('updatedAt timestamp').lean().catch(() => null) : null,
+    mongoose.connection.readyState === 1 ? SyncLog.findOne({ status: { $in: ['success', 'partial'] } }).sort({ updatedAt: -1, createdAt: -1 }).select('updatedAt createdAt').lean().catch(() => null) : null,
+    mongoose.connection.readyState === 1 ? Device.findOne({ lastSyncTime: { $exists: true, $ne: null } }).sort({ lastSyncTime: -1 }).select('lastSyncTime').lean().catch(() => null) : null
   ]);
+  const lastSyncTimes = [
+    lastSyncLog && (lastSyncLog.updatedAt || lastSyncLog.createdAt),
+    lastSyncDevice && lastSyncDevice.lastSyncTime,
+    lastSyncDoc && (lastSyncDoc.updatedAt || lastSyncDoc.timestamp)
+  ].map((value) => (value ? new Date(value) : null)).filter((date) => date && !Number.isNaN(date.getTime()));
+  const lastSyncAt = lastSyncTimes.sort((a, b) => b.getTime() - a.getTime())[0] || null;
+  const lastSync = lastSyncAt ? lastSyncAt.toISOString() : '';
   res.json({
     status: 'OK',
     message: 'Daksh Inventory Backend Running',
@@ -865,7 +875,10 @@ app.get('/api/health', async (req, res) => {
     ...databaseDetails,
     connectedDevices,
     mobileConnectedDevices: connectedDevices,
-    lastSync: lastSyncDoc ? (lastSyncDoc.updatedAt || lastSyncDoc.timestamp) : '',
+    lastSync,
+    lastSyncTime: lastSync,
+    lastSuccessfulSyncAt: lastSync,
+    hasSyncData: Boolean(lastSync),
     pending,
     failed,
     db: dbStatus,

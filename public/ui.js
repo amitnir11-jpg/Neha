@@ -1,7 +1,101 @@
 (function () {
+  const UI_BOOT_VERSION = '20260521-frontend-diagnostics';
+  const uiBootStartedAt = Date.now();
+  const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
+    startedAt: new Date(uiBootStartedAt).toISOString(),
+    markers: []
+  });
+
+  function errorDetails(error) {
+    return {
+      message: error && error.message ? error.message : String(error),
+      status: error && error.status,
+      stack: error && error.stack
+    };
+  }
+
+  function bootMark(level, label, details = {}) {
+    const entry = {
+      label,
+      ms: Date.now() - uiBootStartedAt,
+      details
+    };
+    if (!Array.isArray(uiBootRoot.markers)) uiBootRoot.markers = [];
+    uiBootRoot.markers.push(entry);
+    const method = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
+    console[method](`[DAKSH_UI_BOOT] ${label}`, entry);
+  }
+
+  const bootLog = (label, details = {}) => bootMark('log', label, details);
+  const bootWarn = (label, details = {}) => bootMark('warn', label, details);
+  const bootError = (label, details = {}) => bootMark('error', label, details);
+
+  function storageGet(key) {
+    try {
+      return window.localStorage ? localStorage.getItem(key) : null;
+    } catch (error) {
+      bootWarn('localStorage read failed', { key, error: errorDetails(error) });
+      return null;
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      if (window.localStorage) localStorage.setItem(key, value);
+    } catch (error) {
+      bootWarn('localStorage write failed', { key, error: errorDetails(error) });
+    }
+  }
+
+  function storageRemove(key) {
+    try {
+      if (window.localStorage) localStorage.removeItem(key);
+    } catch (error) {
+      bootWarn('localStorage remove failed', { key, error: errorDetails(error) });
+    }
+  }
+
+  function readStoredJson(key) {
+    const raw = storageGet(key);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      bootError('localStorage JSON parse failed', {
+        key,
+        rawPreview: raw.slice(0, 120),
+        error: errorDetails(error)
+      });
+      return null;
+    }
+  }
+
+  bootLog('ui.js executing', {
+    version: UI_BOOT_VERSION,
+    href: window.location.href,
+    readyState: document.readyState,
+    tokenPresent: Boolean(storageGet('dakshToken')),
+    userPresent: Boolean(storageGet('dakshUser')),
+    socketIoPresent: Boolean(window.io)
+  });
+
+  window.addEventListener('error', (event) => {
+    bootError('window error observed by ui.js', {
+      message: event.message,
+      source: event.filename,
+      line: event.lineno,
+      column: event.colno,
+      error: event.error ? errorDetails(event.error) : null
+    });
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    bootError('unhandled promise rejection observed by ui.js', errorDetails(event.reason));
+  });
+
   const state = {
-    token: localStorage.getItem('dakshToken') || '',
-    user: JSON.parse(localStorage.getItem('dakshUser') || 'null'),
+    token: storageGet('dakshToken') || '',
+    user: readStoredJson('dakshUser'),
     dealers: [],
     users: [],
     categories: [],
@@ -22,7 +116,7 @@
     adminDeleteLastPreview: null,
     locationDeleteLastCount: null,
     syncInProgress: false,
-    deviceId: localStorage.getItem('dakshDeviceId') || '',
+    deviceId: storageGet('dakshDeviceId') || '',
     activeDeviceCount: 0,
     serverInfo: null,
     lastSyncStatus: {},
@@ -76,9 +170,13 @@
   const SIDEBAR_MAX_WIDTH = 260;
   const SIDEBAR_WIDE_WIDTH = 132;
   const CURRENT_DATA_VERSION = '2026-05-12-real-scans-only';
-  if (localStorage.getItem(DATA_VERSION_KEY) !== CURRENT_DATA_VERSION) {
-    [SYNC_QUEUE_KEY, SYNC_LOG_KEY, CONNECTION_LOG_KEY, 'dakshReportPreviewCache'].forEach((key) => localStorage.removeItem(key));
-    localStorage.setItem(DATA_VERSION_KEY, CURRENT_DATA_VERSION);
+  if (storageGet(DATA_VERSION_KEY) !== CURRENT_DATA_VERSION) {
+    bootLog('local data version refresh', {
+      from: storageGet(DATA_VERSION_KEY) || '',
+      to: CURRENT_DATA_VERSION
+    });
+    [SYNC_QUEUE_KEY, SYNC_LOG_KEY, CONNECTION_LOG_KEY, 'dakshReportPreviewCache'].forEach((key) => storageRemove(key));
+    storageSet(DATA_VERSION_KEY, CURRENT_DATA_VERSION);
   }
   const REPORT_TITLES = {
     'full-audit': 'Full Audit Report',
@@ -111,15 +209,15 @@
   };
   const VIEW_TITLES = {
     dashboard: 'Dashboard',
-    scan: 'Scan Management',
+    scan: 'Scan',
     reports: 'Reports',
     binTransfer: 'Bin Transfer',
     reconciliation: 'Reconciliation',
     master: 'Master Data',
-    validator: 'Master Scan Validator',
-    qr: 'QR / Barcode Tools',
+    validator: 'Validator',
+    qr: 'QR / Barcode',
     devices: 'Device Control',
-    syncCenter: 'Device Sync / Data Sync Center',
+    syncCenter: 'Sync Report',
     admin: 'Admin Settings',
     showTab: 'SHOW TAB'
   };
@@ -186,6 +284,61 @@
     const name = String(dealer.dealerName || dealer.name || '').trim();
     if (code && name) return `${code} - ${name}`;
     return code || name || 'Dealer';
+  }
+
+  function normalizeLastSyncValue(...values) {
+    for (const value of values) {
+      const text = String(value || '').trim();
+      if (!text || /^never$/i.test(text)) continue;
+      const date = new Date(text);
+      if (!Number.isNaN(date.getTime())) return date.toISOString();
+    }
+    return '';
+  }
+
+  function rememberLastSyncTime(...values) {
+    const normalized = normalizeLastSyncValue(...values);
+    if (normalized) storageSet(LAST_SYNC_KEY, normalized);
+    return normalized;
+  }
+
+  function selectedOptionText(select) {
+    if (!select) return '';
+    const option = select.options && select.options[select.selectedIndex];
+    return option ? String(option.textContent || option.label || option.value || '').trim() : '';
+  }
+
+  function fitDashboardDealerSelect(select = $('#dashboardDealerSelect')) {
+    if (!select) return;
+    const labels = Array.from(select.options || [])
+      .map((option) => String(option.textContent || option.label || option.value || '').trim())
+      .filter(Boolean);
+    const longest = labels.reduce((best, label) => (label.length > best.length ? label : best), selectedOptionText(select));
+    const measurer = document.createElement('span');
+    const style = window.getComputedStyle(select);
+    measurer.style.position = 'fixed';
+    measurer.style.left = '-9999px';
+    measurer.style.top = '-9999px';
+    measurer.style.visibility = 'hidden';
+    measurer.style.whiteSpace = 'nowrap';
+    measurer.style.font = style.font;
+    measurer.textContent = longest || 'Active Audit';
+    document.body.appendChild(measurer);
+    const textWidth = Math.ceil(measurer.getBoundingClientRect().width);
+    measurer.remove();
+    const left = select.getBoundingClientRect().left || 0;
+    const viewportRoom = Math.max(320, window.innerWidth - left - 24);
+    const width = Math.min(Math.max(360, textWidth + 64), Math.min(760, viewportRoom));
+    const wrapper = $('#dashboardDealerFilters');
+    select.style.width = `${width}px`;
+    select.style.maxWidth = '100%';
+    if (wrapper) wrapper.style.width = `min(${width}px, 100%)`;
+  }
+
+  function syncDealerSelectDisplay(select) {
+    if (!select) return;
+    select.title = selectedOptionText(select);
+    if (select.id === 'dashboardDealerSelect') fitDashboardDealerSelect(select);
   }
 
   function clampSidebarWidth(width) {
@@ -416,10 +569,11 @@
   }
 
   function clearSession() {
+    bootLog('clearSession called');
     state.token = '';
     state.user = null;
-    localStorage.removeItem('dakshToken');
-    localStorage.removeItem('dakshUser');
+    storageRemove('dakshToken');
+    storageRemove('dakshUser');
   }
 
   async function parseApiResponse(response) {
@@ -654,18 +808,14 @@
     const connectedDevices = Number(status.connectedDevices ?? status.activeCount ?? state.activeDeviceCount ?? 0);
     const activeScanners = Number(status.activeScannerCount ?? connectedDevices);
     const offlineDevices = Number(status.offlineDevices ?? 0);
-    const lowBatteryCount = Number(status.lowBatteryCount ?? 0);
     const pendingSyncCount = Number(status.pendingSyncCount ?? counts.total ?? 0);
-    const wifiOnline = Boolean(status.wifiOnline || connectedDevices > 0);
     const lastActivityAt = status.lastActivityAt || status.at || state.lastRealtimeAt;
     state.activeDeviceCount = connectedDevices;
     setStatusPill('topServerStatus', 'Server: Connected', 'green');
     setHeaderDeviceStatus(connectedDevices);
     setStatusPill('topScannerStatus', `Scanners: ${activeScanners} Active`, activeScanners ? 'green' : 'red');
-    setStatusPill('topWifiStatus', `WiFi: ${wifiOnline ? 'Online' : 'Idle'}`, wifiOnline ? 'green' : 'red');
     setStatusPill('topPendingStatus', `Pending: ${pendingSyncCount}`, pendingSyncCount ? 'orange' : 'green');
     setStatusPill('topOfflineStatus', `Offline: ${offlineDevices}`, offlineDevices ? 'orange' : 'green');
-    setStatusPill('topBatteryStatus', lowBatteryCount ? `Battery: ${lowBatteryCount} Low` : 'Battery: OK', lowBatteryCount ? 'orange' : 'green');
     setStatusPill('topRealtimeStatus', lastActivityAt ? 'Realtime: Live' : 'Realtime: Waiting', lastActivityAt ? 'blue' : 'red');
     setDashboardKpiValue('dashConnectedScanners', wholeNumber(activeScanners));
     setDashboardKpiValue('dashOfflineDevices', wholeNumber(offlineDevices));
@@ -1182,8 +1332,10 @@
     const connectionStatus = hasConnectionStatus(status) ? state.lastSyncStatus : state.lastSyncStatus;
     if (connectionStatus.serverUrl || connectionStatus.ip) applyServerInfo(connectionStatus);
     const counts = syncCounts();
-    const lastSync = connectionStatus.lastSync || localStorage.getItem(LAST_SYNC_KEY) || 'Never';
-    localStorage.setItem(AUTO_SYNC_KEY, 'true');
+    const serverReportedNoSync = hasConnectionStatus(status) && (status.hasSyncData === false || connectionStatus.hasSyncData === false);
+    const reportedLastSync = status.completedAt || status.lastSync || status.lastSyncTime || status.lastSuccessfulSyncAt || connectionStatus.lastSync || connectionStatus.lastSyncTime || connectionStatus.lastSuccessfulSyncAt;
+    const lastSync = rememberLastSyncTime(reportedLastSync) || (serverReportedNoSync ? '' : normalizeLastSyncValue(storageGet(LAST_SYNC_KEY)));
+    storageSet(AUTO_SYNC_KEY, 'true');
     const serverStatusText = String(connectionStatus.server || connectionStatus.serverStatus || '').toLowerCase();
     const mongoStatusText = String(connectionStatus.db || connectionStatus.mongoStatus || '').toLowerCase();
     const serverKnown = Boolean(serverStatusText);
@@ -1214,18 +1366,18 @@
     setStatusPill('syncCloudStatus', cloudStatus.replace(/^./, (char) => char.toUpperCase()), cloudOk ? 'green' : /queued|syncing|checking|partial/i.test(cloudStatus) ? 'orange' : 'red');
     setText('syncCloudPending', Number(connectionStatus.cloudSyncPendingRecords || 0));
 
-    setText('homeLastSync', lastSync === 'Never' ? 'Never' : dashboardScanTime(lastSync));
+    setText('homeLastSync', lastSync ? dashboardScanTime(lastSync) : 'Never');
     setText('homePendingSync', counts.total);
     setText('homeConnectedDevices', connectedDevices);
     setText('homeFailedSync', counts.failed);
-    setText('syncCenterLastSync', lastSync === 'Never' ? 'Never' : dateTime(lastSync));
+    setText('syncCenterLastSync', lastSync ? dateTime(lastSync) : 'Never');
     setText('syncCenterTotalSynced', totalSynced);
     setText('syncCenterPending', counts.total);
     setText('syncCenterFailed', counts.failed);
     setText('syncCenterDevices', connectedDevices);
     setText('syncPending', counts.total);
     setText('syncFailed', counts.failed);
-    setText('syncLast', lastSync === 'Never' ? 'Never' : dateTime(lastSync));
+    setText('syncLast', lastSync ? dateTime(lastSync) : 'Never');
   }
 
   async function loadSyncStatus() {
@@ -1588,9 +1740,17 @@
 
   function setUserChrome() {
     if (!state.token) {
+      bootWarn('setUserChrome missing token; redirecting to login', {
+        path: window.location.pathname
+      });
       window.location.href = '/';
       return false;
     }
+    bootLog('setUserChrome start', {
+      userPresent: Boolean(state.user),
+      role: state.user && state.user.role,
+      login: userLoginName()
+    });
     const roleName = roleDisplayName(state.user && state.user.role);
     const loginName = userLoginName();
     setText('userBadge', `${roleName} - ${loginName}`);
@@ -1600,21 +1760,38 @@
     $('#systemSubline').textContent = `${window.location.origin}/dashboard`;
     $('#manualStaff').value = state.user ? state.user.name || state.user.username || '' : '';
     $('#barcodeDeviceId').value = ensureDeviceId();
-    $('#allowUnknownToggle').checked = localStorage.getItem('dakshAllowUnknown') === 'true';
+    $('#allowUnknownToggle').checked = storageGet('dakshAllowUnknown') === 'true';
+    bootLog('setUserChrome complete', {
+      userBadgePresent: Boolean($('#userBadge')),
+      adminOnlyCount: $$('.admin-only').length
+    });
     return true;
   }
 
   async function validateSession() {
     if (!state.token) {
+      bootWarn('validateSession missing token; redirecting to login', {
+        path: window.location.pathname
+      });
       window.location.href = '/';
       return false;
     }
     try {
+      bootLog('validateSession request start', {
+        endpoint: '/api/auth/me',
+        tokenPresent: true
+      });
       const data = await api('/api/auth/me');
       state.user = data.user || state.user;
-      localStorage.setItem('dakshUser', JSON.stringify(state.user));
+      storageSet('dakshUser', JSON.stringify(state.user));
+      bootLog('validateSession success', {
+        userPresent: Boolean(state.user),
+        role: state.user && state.user.role,
+        username: state.user && (state.user.username || state.user.email || state.user.name)
+      });
       return true;
     } catch (error) {
+      bootError('validateSession failed; clearing session and redirecting to login', errorDetails(error));
       clearSession();
       window.location.href = '/';
       return false;
@@ -1640,6 +1817,7 @@
         (select.id === 'scanHistoryDealer' ? selectedScanDealerCode() || activeDealer : '') ||
         (select.classList.contains('bin-transfer-dealer') ? activeDealer : '');
       select.value = Array.from(select.options).some((option) => option.value === preferred) ? preferred : select.options[0].value;
+      syncDealerSelectDisplay(select);
     });
     updateActiveAuditUi();
     const cleanupOptions = '<option value="">Select Dealer</option>' + state.dealers.map((dealer) => (
@@ -1649,6 +1827,7 @@
       const selected = select.value;
       select.innerHTML = cleanupOptions;
       select.value = selected;
+      syncDealerSelectDisplay(select);
     });
     renderDealerMaster();
   }
@@ -2448,7 +2627,7 @@
           status: data.duplicate ? 'duplicate' : 'synced',
           errorMessage: data.duplicate ? 'Duplicate scan skipped' : ''
         });
-        localStorage.setItem(LAST_SYNC_KEY, new Date().toISOString());
+        rememberLastSyncTime(data.completedAt || data.lastSyncTime || data.lastSync || new Date().toISOString());
       }
       playScanTone(data.duplicate ? 'duplicate' : 'success');
       if (isBarcodeForm) {
@@ -2599,8 +2778,7 @@
           : item);
       saveSyncQueue(nextQueue);
 
-      const syncTime = data.completedAt || data.lastSyncTime || new Date().toISOString();
-      localStorage.setItem(LAST_SYNC_KEY, syncTime);
+      const syncTime = rememberLastSyncTime(data.completedAt || data.lastSync || data.lastSyncTime || data.lastSuccessfulSyncAt || new Date().toISOString());
       setText('deviceLastSync', dateTime(syncTime));
       setText('syncTotal', data.totalSynced || 0);
       updateSyncBadges(data);
@@ -5860,6 +6038,7 @@
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') setUserMenuOpen(false);
     });
+    window.addEventListener('resize', () => fitDashboardDealerSelect());
     $('#globalRefresh').addEventListener('click', () => refreshAll().then(() => toast('Refreshed')).catch((error) => toast(error.message, 'error')));
     $('#copyServerUrlBtn').addEventListener('click', () => copyServerUrl().catch((error) => toast(error.message, 'error')));
     $('#copyHealthUrlBtn')?.addEventListener('click', () => copyHealthUrl().catch((error) => toast(error.message, 'error')));
@@ -6052,6 +6231,7 @@
     });
     $$('.dealerSelect').forEach((select) => {
       select.addEventListener('change', () => {
+        syncDealerSelectDisplay(select);
         if (select.id === 'dashboardDealerSelect') {
           state.dashboardDealerCode = cleanDealerCode(select.value || '');
           state.selectedProductGroupSummary = null;
@@ -6751,7 +6931,7 @@
     });
     socket.on('sync:completed', (payload) => {
       state.lastRealtimeAt = Date.now();
-      if (payload && payload.completedAt) localStorage.setItem(LAST_SYNC_KEY, payload.completedAt);
+      if (payload) rememberLastSyncTime(payload.completedAt || payload.lastSync || payload.lastSyncTime || payload.lastSuccessfulSyncAt);
       updateSyncBadges(payload || {});
       addConnectionLog('Sync completed', 'success');
       refreshAfterSync(payload || {}).catch(console.warn);
@@ -6786,50 +6966,94 @@
   }
 
   document.addEventListener('DOMContentLoaded', async () => {
-    if (!await validateSession()) return;
-    if (!setUserChrome()) return;
-    ensureDeviceId();
-    initSidebarResize();
-    restoreBarcodeScanDefaults();
-    bindNavigation();
-    bindEvents();
-    bindSuggestions();
-    bindMasterSearchSuggestions();
-    bindUppercaseInputs();
-    secureNewTabLinks();
-    initReportLayout();
-    renderSyncQueue();
-    renderSyncLog();
-    renderConnectionLog();
-    resetReportPreview('Please select filters and click Show Report.');
-    const restoredView = restoreActiveViewShell();
-    bindSocket();
-    startDashboardFallbackRefresh();
-    const auditStartDate = $('[name="auditStartDate"]', $('#dealerMasterForm'));
-    if (auditStartDate && !auditStartDate.value) auditStartDate.value = new Date().toISOString().slice(0, 10);
-    clearPartSearch();
-    loadReconciliation().catch(() => null);
-    setAutoSyncState();
-    window.addEventListener('online', () => syncPendingQueue({ silent: true, includeFailed: true }).catch(console.warn));
-    window.addEventListener('storage', (event) => {
-      if (event.key === 'dakshToken' && !event.newValue) {
-        state.token = '';
-        state.user = null;
-        window.location.href = '/';
-      }
+    bootLog('DOMContentLoaded handler entered', {
+      readyState: document.readyState,
+      bodyChildren: document.body ? document.body.children.length : 0,
+      appShellPresent: Boolean($('.app')),
+      tokenPresent: Boolean(state.token)
     });
-    setInterval(sendHeartbeat, 15000);
-    setInterval(() => loadHealth().catch(console.warn), 5000);
+    let restoredView = {};
     try {
+      if (!await validateSession()) {
+        bootWarn('startup stopped: validateSession returned false');
+        return;
+      }
+      if (!setUserChrome()) {
+        bootWarn('startup stopped: setUserChrome returned false');
+        return;
+      }
+      ensureDeviceId();
+      initSidebarResize();
+      bootLog('device id ensured', {
+        deviceIdPresent: Boolean(storageGet('dakshDeviceId'))
+      });
+      restoreBarcodeScanDefaults();
+      bootLog('binding dashboard UI start');
+      bindNavigation();
+      bindEvents();
+      bindSuggestions();
+      bindMasterSearchSuggestions();
+      bindUppercaseInputs();
+      secureNewTabLinks();
+      initReportLayout();
+      bootLog('binding dashboard UI complete', {
+        sideLinks: $$('.side-link').length,
+        views: $$('.view').length
+      });
+      renderSyncQueue();
+      renderSyncLog();
+      renderConnectionLog();
+      resetReportPreview('Please select filters and click Show Report.');
+      restoredView = restoreActiveViewShell();
+      bootLog('active view restored', restoredView);
+      bootLog('socket bind start', {
+        socketIoPresent: Boolean(window.io)
+      });
+      bindSocket();
+      bootLog('socket bind complete');
+      startDashboardFallbackRefresh();
+      const auditStartDate = $('[name="auditStartDate"]', $('#dealerMasterForm'));
+      if (auditStartDate && !auditStartDate.value) auditStartDate.value = new Date().toISOString().slice(0, 10);
+      clearPartSearch();
+      loadReconciliation().catch((error) => bootWarn('initial reconciliation load skipped', errorDetails(error)));
+      setAutoSyncState();
+      window.addEventListener('online', () => syncPendingQueue({ silent: true, includeFailed: true }).catch(console.warn));
+      window.addEventListener('storage', (event) => {
+        if (event.key === 'dakshToken' && !event.newValue) {
+          bootWarn('storage event cleared token; redirecting to login');
+          state.token = '';
+          state.user = null;
+          window.location.href = '/';
+        }
+      });
+      setInterval(sendHeartbeat, 15000);
+      setInterval(() => loadHealth().catch(console.warn), 5000);
+    } catch (error) {
+      bootError('fatal startup failure before network refresh', errorDetails(error));
+      toast(`Startup failed: ${error.message}`, 'error');
+      return;
+    }
+    try {
+      bootLog('network startup start');
       await connectDevice();
+      bootLog('connectDevice complete');
       await sendHeartbeat();
+      bootLog('initial heartbeat complete');
       await refreshAll();
+      bootLog('refreshAll complete');
       await finishRestoredViewLoad(restoredView);
+      bootLog('finishRestoredViewLoad complete', restoredView);
       secureNewTabLinks();
       restoreBarcodeScanDefaults();
       await loadBarcodeBins().catch(() => null);
+      bootLog('loadBarcodeBins complete or skipped');
       await syncPendingQueue({ silent: true, includeFailed: true });
+      bootLog('initial syncPendingQueue complete');
+      bootLog('DOMContentLoaded startup complete', {
+        totalMs: Date.now() - uiBootStartedAt
+      });
     } catch (error) {
+      bootError('network startup failed', errorDetails(error));
       toast(error.message, 'error');
     }
   });

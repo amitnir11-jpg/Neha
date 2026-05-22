@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAKSH INVENTORY SYSTEM</title>
-  <link rel="stylesheet" href="/style.css?v=20260522-dms-clean" onload="console.log('[DAKSH_DASHBOARD_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/style.css?v=20260522-ui-sync-fix" onload="console.log('[DAKSH_DASHBOARD_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -83,17 +83,17 @@
         </div>
       </div>
       <nav class="side-nav">
-        <button class="side-link active" data-view="dashboard"><span class="nav-icon blue">D</span>Dashboard</button>
-        <button class="side-link" data-view="scan"><span class="nav-icon teal">S</span>Scan Management</button>
-        <button class="side-link" data-view="reports"><span class="nav-icon violet">R</span>Reports</button>
-        <button class="side-link" data-view="binTransfer"><span class="nav-icon cyan">B</span>Bin Transfer</button>
-        <button class="side-link" data-view="reconciliation"><span class="nav-icon amber">C</span>Reconciliation</button>
-        <button class="side-link" data-view="master"><span class="nav-icon green">M</span>Master Data</button>
-        <button class="side-link" data-view="validator"><span class="nav-icon teal">V</span>Master Scan Validator</button>
-        <button class="side-link" data-view="qr"><span class="nav-icon rose">Q</span>QR / Barcode Tools</button>
-        <button class="side-link" data-view="devices"><span class="nav-icon cyan">V</span>Device Control</button>
-        <button class="side-link" data-view="syncCenter"><span class="nav-icon teal">Y</span>Device Sync / Data Sync Center</button>
-        <button class="side-link" data-view="admin"><span class="nav-icon red">A</span>Admin Settings</button>
+        <button class="side-link active" data-view="dashboard">Dashboard</button>
+        <button class="side-link" data-view="scan">Scan</button>
+        <button class="side-link" data-view="reports">Reports</button>
+        <button class="side-link" data-view="binTransfer">Bin Transfer</button>
+        <button class="side-link" data-view="reconciliation">Reconciliation</button>
+        <button class="side-link" data-view="master">Master Data</button>
+        <button class="side-link" data-view="validator">Validator</button>
+        <button class="side-link" data-view="qr">QR / Barcode</button>
+        <button class="side-link" data-view="devices">Device Control</button>
+        <button class="side-link" data-view="syncCenter">Sync Report</button>
+        <button class="side-link" data-view="admin">Admin Settings</button>
       </nav>
       <button id="sideResizeHandle" class="side-resize-handle" type="button" aria-label="Adjust menu width" title="Adjust menu width"></button>
     </aside>
@@ -108,11 +108,9 @@
           <span id="topServerStatus" class="live-pill red-dot">Server: Checking</span>
           <span id="topDeviceStatus" class="live-pill red-dot">Devices: 0 Connected</span>
           <span id="topScannerStatus" class="live-pill red-dot">Scanners: 0 Active</span>
-          <span id="topWifiStatus" class="live-pill red-dot">WiFi: Idle</span>
           <span id="topSyncStatus" class="live-pill green-dot">Sync: Auto ON / Synced</span>
           <span id="topPendingStatus" class="live-pill green-dot">Pending: 0</span>
           <span id="topOfflineStatus" class="live-pill green-dot">Offline: 0</span>
-          <span id="topBatteryStatus" class="live-pill green-dot">Battery: OK</span>
           <span id="topRealtimeStatus" class="live-pill red-dot">Realtime: Waiting</span>
           <span id="activeAuditBadge" class="live-pill red-dot">No active audit</span>
           <button id="globalRefresh" class="btn light" type="button">Refresh</button>
@@ -1230,7 +1228,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260513-enterprise-compact" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260522-ui-sync-fix" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {
