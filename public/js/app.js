@@ -1,7 +1,44 @@
 (function () {
+  function storageGet(key) {
+    try {
+      return window.localStorage ? localStorage.getItem(key) : null;
+    } catch (error) {
+      console.warn('Local browser storage read failed:', key, error);
+      return null;
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      if (window.localStorage) localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('Local browser storage write failed:', key, error);
+    }
+  }
+
+  function storageRemove(key) {
+    try {
+      if (window.localStorage) localStorage.removeItem(key);
+    } catch (error) {
+      console.warn('Local browser storage remove failed:', key, error);
+    }
+  }
+
+  function storageJson(key) {
+    const raw = storageGet(key);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      console.warn('Local browser storage JSON was invalid and has been reset:', key, error);
+      storageRemove(key);
+      return null;
+    }
+  }
+
   const state = {
-    token: localStorage.getItem('dakshToken') || '',
-    user: JSON.parse(localStorage.getItem('dakshUser') || 'null'),
+    token: storageGet('dakshToken') || '',
+    user: storageJson('dakshUser'),
     dealers: [],
     audits: [],
     deleteAction: null,
@@ -178,15 +215,15 @@
   function clearSession() {
     state.token = '';
     state.user = null;
-    localStorage.removeItem('dakshToken');
-    localStorage.removeItem('dakshUser');
+    storageRemove('dakshToken');
+    storageRemove('dakshUser');
   }
 
   function saveSession(payload) {
     state.token = payload.token;
     state.user = payload.user;
-    localStorage.setItem('dakshToken', payload.token);
-    localStorage.setItem('dakshUser', JSON.stringify(payload.user));
+    storageSet('dakshToken', payload.token);
+    storageSet('dakshUser', JSON.stringify(payload.user));
   }
 
   function logout() {
@@ -223,22 +260,35 @@
   }
 
   function clientDeviceId() {
-    let id = localStorage.getItem('dakshDeviceId');
+    let id = storageGet('dakshDeviceId');
     if (!id) {
       id = `WEB-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      localStorage.setItem('dakshDeviceId', id);
+      storageSet('dakshDeviceId', id);
     }
     return id;
   }
 
-  function initLogin() {
+  async function validateStoredLogin() {
+    if (!state.token) return false;
+    try {
+      const data = await api('/api/auth/me');
+      state.user = data.user || state.user;
+      storageSet('dakshUser', JSON.stringify(state.user));
+      return true;
+    } catch (error) {
+      clearSession();
+      return false;
+    }
+  }
+
+  async function initLogin() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('logout') === '1' || params.get('forceLogin') === '1') {
       clearSession();
       window.history.replaceState({}, document.title, '/');
     }
 
-    if (state.token) {
+    if (await validateStoredLogin()) {
       window.location.href = '/dashboard';
       return;
     }
@@ -1097,7 +1147,7 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     secureNewTabLinks();
-    if (page() === 'login') initLogin();
+    if (page() === 'login') initLogin().catch((error) => toast(error.message, 'error'));
     if (page() === 'dashboard') initDashboard().catch((error) => toast(error.message, 'error'));
     if (page() === 'report') initReport().catch((error) => toast(error.message, 'error'));
   });
