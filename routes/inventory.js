@@ -20,7 +20,17 @@ const { getActiveAudit, publicAudit } = require('../utils/audit');
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
 const BIN_REQUIRED_MESSAGE = 'Please enter/select bin location first.';
+const SCAN_VERBOSE_LOGS = process.env.SCAN_VERBOSE_LOGS === 'true';
+const realtimeRefreshDelay = Number(process.env.REALTIME_SCAN_REFRESH_DELAY_MS || 900);
+const REALTIME_SCAN_REFRESH_DELAY_MS = Number.isFinite(realtimeRefreshDelay) && realtimeRefreshDelay >= 100
+  ? realtimeRefreshDelay
+  : 900;
 let bluetoothScanQueue = Promise.resolve();
+const realtimeDashboardTimers = new Map();
+
+function scanDebug(...args) {
+  if (SCAN_VERBOSE_LOGS) console.log(...args);
+}
 
 function clean(value) {
   return String(value || '').trim();
@@ -874,29 +884,8 @@ async function emitScanUpdate(req, savedScan) {
   if (!io) return;
   const plainScan = publicScan(savedScan.toObject ? savedScan.toObject() : savedScan);
   const dashboardFilter = scanDashboardScope(plainScan);
-  const [stats, recent] = await Promise.all([
-    dashboardStats(dashboardFilter),
-    Inventory.find(applyTestScanMode({ ...dashboardFilter }, 'real')).sort({ timestamp: -1, createdAt: -1 }).limit(12).lean()
-  ]);
-  stampDashboardScope(stats, dashboardFilter);
   io.emit('scan:new', plainScan);
   io.emit('scan:saved', plainScan);
-  io.emit('scan:count:update', stats);
-  const recentPublic = recent.map(publicScan);
-  const realtimePayload = {
-    source: 'inventory-api',
-    scans: [plainScan],
-    stats,
-    recent: recentPublic,
-    count: 1,
-    at: new Date(),
-    dealerCode: dashboardFilter.dealerCode || '',
-    auditId: dashboardFilter.auditId || ''
-  };
-  io.emit('dashboard:update', realtimePayload);
-  io.emit('inventory:update', realtimePayload);
-  io.emit('reports:update', realtimePayload);
-  io.emit('warehouse:feed', realtimePayload);
   io.emit('scanner:activity', {
     deviceId: plainScan.deviceId || '',
     deviceName: plainScan.deviceName || '',
@@ -905,10 +894,56 @@ async function emitScanUpdate(req, savedScan) {
     scanType: plainScan.scanType || plainScan.type || '',
     timestamp: plainScan.timestamp || new Date()
   });
-  io.emit('scan:last10:update', recentPublic);
-  io.emit('stats:update', stats);
+  queueRealtimeDashboardUpdate(io, dashboardFilter, plainScan);
   const scannerManager = req.app.get('scannerManager');
   if (scannerManager) scannerManager.recordScanActivity(plainScan).catch((error) => console.warn('Scanner activity update failed:', error.message));
+}
+
+function realtimeDashboardKey(filter = {}) {
+  return `${filter.dealerCode || ''}|${filter.auditId || ''}`;
+}
+
+function queueRealtimeDashboardUpdate(io, dashboardFilter = {}, plainScan = {}) {
+  const key = realtimeDashboardKey(dashboardFilter);
+  const entry = realtimeDashboardTimers.get(key) || {
+    count: 0,
+    latestScan: null,
+    timer: null
+  };
+  entry.count += 1;
+  entry.latestScan = plainScan || entry.latestScan;
+  clearTimeout(entry.timer);
+  entry.timer = setTimeout(async () => {
+    realtimeDashboardTimers.delete(key);
+    try {
+      const [stats, recent] = await Promise.all([
+        dashboardStats(dashboardFilter),
+        Inventory.find(applyTestScanMode({ ...dashboardFilter }, 'real')).sort({ timestamp: -1, createdAt: -1 }).limit(12).lean()
+      ]);
+      stampDashboardScope(stats, dashboardFilter);
+      const recentPublic = recent.map(publicScan);
+      const realtimePayload = {
+        source: 'inventory-api',
+        scans: entry.latestScan ? [entry.latestScan] : [],
+        stats,
+        recent: recentPublic,
+        count: entry.count,
+        at: new Date(),
+        dealerCode: dashboardFilter.dealerCode || '',
+        auditId: dashboardFilter.auditId || ''
+      };
+      io.emit('scan:count:update', stats);
+      io.emit('dashboard:update', realtimePayload);
+      io.emit('inventory:update', realtimePayload);
+      io.emit('reports:update', realtimePayload);
+      io.emit('warehouse:feed', realtimePayload);
+      io.emit('scan:last10:update', recentPublic);
+      io.emit('stats:update', stats);
+    } catch (error) {
+      console.warn('[MANUAL SCAN] realtime dashboard update failed', error.message);
+    }
+  }, REALTIME_SCAN_REFRESH_DELAY_MS);
+  realtimeDashboardTimers.set(key, entry);
 }
 
 async function cleanupTestScans(req, res) {
@@ -938,13 +973,13 @@ async function validateScan(payload, master, timestamp) {
     if (!master.activeStatus) warnings.push('Inactive part');
   }
 
-  console.log('RAW_SCAN:', payload.rawScan || payload.rawScanString || '');
-  console.log('EXTRACTED_PART:', payload.part || payload.partNumber || '');
-  console.log('MASTER_MRP:', master ? master.mrp : '');
-  console.log('SCANNED_MRP:', mrpCompareRequired ? scannedMrp : '');
-  console.log('MRP_COMPARE_REQUIRED', mrpCompareRequired);
-  console.log('MRP_MATCH', mrpMatch);
-  console.log('FINAL_STATUS:', !master ? 'Rejected / Not in Master' : warnings.includes('MRP mismatch') ? 'MRP mismatch' : warnings.length ? warnings.join(', ') : 'Synced');
+  scanDebug('RAW_SCAN:', payload.rawScan || payload.rawScanString || '');
+  scanDebug('EXTRACTED_PART:', payload.part || payload.partNumber || '');
+  scanDebug('MASTER_MRP:', master ? master.mrp : '');
+  scanDebug('SCANNED_MRP:', mrpCompareRequired ? scannedMrp : '');
+  scanDebug('MRP_COMPARE_REQUIRED', mrpCompareRequired);
+  scanDebug('MRP_MATCH', mrpMatch);
+  scanDebug('FINAL_STATUS:', !master ? 'Rejected / Not in Master' : warnings.includes('MRP mismatch') ? 'MRP mismatch' : warnings.length ? warnings.join(', ') : 'Synced');
 
   return warnings;
 }
@@ -994,7 +1029,7 @@ async function logValidationFailure(payload = {}, reason = 'Not Found In Master'
 async function saveScanRequest(req, res) {
   try {
     const rawScanInput = firstValue(req.body, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText']);
-    console.log('[MANUAL SCAN] request received', {
+    scanDebug('[MANUAL SCAN] request received', {
       bodyKeys: Object.keys(req.body || {}).slice(0, 30),
       partNumber: req.body.partNumber || req.body.partNo || req.body.part || '',
       dealerCode: req.body.dealerCode || req.body.dealer || '',
@@ -1011,7 +1046,7 @@ async function saveScanRequest(req, res) {
       partNumber: normalizedPartNumber,
       dealerCode: req.body.dealerCode || parsed.dealerCode,
       rawScannedValue: rawScanInput || parsed.rawScan || part,
-      logger: console
+      logger: SCAN_VERBOSE_LOGS ? console : null
     });
     const master = validation.master;
 
@@ -1264,10 +1299,10 @@ async function saveScanRequest(req, res) {
       throw error;
     }
 
-    console.log('[MANUAL SCAN] DB insert success', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode, scanType: scan.scanType, deviceId: scan.deviceId });
-    console.log('SAVED_VALID_SCAN', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode });
-    console.log("Matched category:", scan.category || '');
-    console.log("Matched partDescription:", scan.partDescription || scan.partName || '');
+    scanDebug('[MANUAL SCAN] DB insert success', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode, scanType: scan.scanType, deviceId: scan.deviceId });
+    scanDebug('SAVED_VALID_SCAN', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode });
+    scanDebug("Matched category:", scan.category || '');
+    scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
     emitScanUpdate(req, scan).catch((error) => console.warn('[MANUAL SCAN] realtime refresh failed', error.message));
     res.status(201).json({ success: true, scan, warnings });
   } catch (error) {
@@ -1760,7 +1795,7 @@ router.get('/history', auth.requireAuth, async (req, res) => {
       ];
     }
     const records = await Inventory.find(filter).sort({ timestamp: -1 }).limit(500).lean();
-    await repairParsedFields(records);
+    if (req.query.repair === '1' || req.query.repair === 'true') await repairParsedFields(records);
     res.json({ success: true, records: records.map(publicScan) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

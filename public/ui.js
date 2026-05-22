@@ -104,6 +104,10 @@
     reportGroupSubGroups: {},
     autoSyncTimer: null,
     dashboardFallbackTimer: null,
+    scanRefreshTimer: null,
+    scanRefreshInFlight: false,
+    scanRefreshQueued: false,
+    deviceRefreshTimer: null,
     lastRealtimeAt: 0,
     dashboardFallbackBusy: false,
     recentRealtimeScanIds: new Set(),
@@ -2143,7 +2147,7 @@
     setStatusPill('topRealtimeStatus', 'Realtime: Scan Received', 'blue');
     setDashboardKpiValue('dashRealtimeActivity', compactDateTime(scan.timestamp || new Date()), { time: true });
     queueRealtimeReportRefresh('scan update');
-    await Promise.all([loadDashboard(), loadScanHistory(), loadSyncStatus()].map((job) => job.catch ? job : Promise.resolve(job)));
+    queueScanRefresh(1200);
   }
 
   async function loadDashboard() {
@@ -2554,8 +2558,44 @@
     input.addEventListener('blur', () => setTimeout(() => { menu.style.display = 'none'; }, 180));
   }
 
-  function refreshScanViews() {
-    return Promise.all([loadDashboard(), loadScanHistory(), loadSyncStatus()])
+  async function refreshScanViews() {
+    if (state.scanRefreshInFlight) {
+      state.scanRefreshQueued = true;
+      return null;
+    }
+    state.scanRefreshInFlight = true;
+    state.scanRefreshQueued = false;
+    try {
+      return await Promise.all([loadDashboard(), loadScanHistory(), loadSyncStatus()])
+        .catch((error) => console.warn('[SCAN] refresh failed', error));
+    } finally {
+      state.scanRefreshInFlight = false;
+      if (state.scanRefreshQueued) queueScanRefresh(700);
+    }
+  }
+
+  function queueScanRefresh(delay = 900) {
+    clearTimeout(state.scanRefreshTimer);
+    state.scanRefreshTimer = setTimeout(() => {
+      refreshScanViews().catch((error) => console.warn('[SCAN] queued refresh failed', error));
+    }, delay);
+  }
+
+  function queueDeviceRefresh(delay = 2500) {
+    clearTimeout(state.deviceRefreshTimer);
+    state.deviceRefreshTimer = setTimeout(() => {
+      loadDevices().catch((error) => console.warn('[DEVICES] queued refresh failed', error));
+    }, delay);
+  }
+
+  function refreshScanViewsSoon(delay = 900) {
+    queueScanRefresh(delay);
+    return Promise.resolve(null);
+  }
+
+  function refreshScanViewsNow() {
+    clearTimeout(state.scanRefreshTimer);
+    return refreshScanViews()
       .catch((error) => console.warn('[SCAN] refresh failed', error));
   }
 
@@ -2641,8 +2681,11 @@
       } else {
         resetManualScanFields(form);
       }
-      const refreshTask = refreshScanViews();
-      if (!options.backgroundRefresh) await refreshTask;
+      if (options.backgroundRefresh) {
+        refreshScanViewsSoon(650);
+      } else {
+        await refreshScanViewsNow();
+      }
     } catch (error) {
       if (error.status === 409 && state.user && state.user.role === 'admin') {
         const warnings = (error.data.warnings || []).join(', ');
@@ -2657,7 +2700,7 @@
           const overrideData = await api('/api/scans/manual', { method: 'POST', body: normalized });
           playScanTone(overrideData.duplicate ? 'duplicate' : 'success');
           resetManualScanFields(form);
-          await refreshScanViews(false);
+          await refreshScanViewsNow();
         }
         return;
       }
@@ -6860,12 +6903,13 @@
     socket.on('scan:saved', () => {
       state.lastRealtimeAt = Date.now();
       queueRealtimeReportRefresh('scan saved');
-      Promise.all([loadDashboard(), loadScanHistory(), loadSyncStatus(), loadBinTransferParts(activeBinTransferForm()), loadBinTransferHistory()]).catch(console.warn);
+      queueScanRefresh(1200);
+      Promise.all([loadBinTransferParts(activeBinTransferForm()), loadBinTransferHistory()]).catch(console.warn);
     });
     socket.on('scan:duplicate', (scan = {}) => {
       state.lastRealtimeAt = Date.now();
       toast(`Duplicate scan: ${scan.partNumber || scan.part || ''}`, 'error');
-      loadDashboard().catch(console.warn);
+      queueScanRefresh(1200);
     });
     socket.on('scan:deleted', () => Promise.all([loadDashboard(), loadScanHistory(), loadBinTransferParts(activeBinTransferForm())]).catch(console.warn));
     socket.on('scan:count:update', (stats) => {
@@ -6897,7 +6941,7 @@
       state.lastRealtimeAt = Date.now();
       setStatusPill('topRealtimeStatus', 'Realtime: Active Scan', 'blue');
       setDashboardKpiValue('dashRealtimeActivity', compactDateTime(activity.timestamp || new Date()), { time: true });
-      loadDevices().catch(console.warn);
+      queueDeviceRefresh();
     });
     socket.on('scanner:status', (device = {}) => {
       updateScannerStatusBar({ connectedDevices: state.activeDeviceCount, activeScannerCount: state.activeDeviceCount, lastActivityAt: device.lastActivity || device.lastSeen || new Date() });
@@ -6906,13 +6950,16 @@
       state.lastRealtimeAt = Date.now();
       if (Array.isArray(scans)) renderScanStream(scans);
     });
-    socket.on('stats:update', () => loadDashboard().catch(console.warn));
-    socket.on('devices:update', () => loadDevices().catch(console.warn));
+    socket.on('stats:update', (stats) => {
+      if (stats && dashboardStatsMatchesActiveAudit(stats)) updateDashboardCards(stats);
+      else queueScanRefresh(1200);
+    });
+    socket.on('devices:update', () => queueDeviceRefresh(1200));
     socket.on('device:connected', () => {
       addConnectionLog('Device connected', 'success');
-      loadDevices().catch(console.warn);
+      queueDeviceRefresh(500);
     });
-    socket.on('device:heartbeat', () => loadDevices().catch(console.warn));
+    socket.on('device:heartbeat', () => queueDeviceRefresh());
     socket.on('device:disconnected', () => {
       addConnectionLog('Device disconnected', 'warning');
       loadDevices().catch(console.warn);

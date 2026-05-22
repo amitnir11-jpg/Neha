@@ -132,6 +132,8 @@ masterPartSchema.pre('save', function syncMasterAliases(next) {
 });
 
 masterPartSchema.index({ bin: 1, category: 1, dealerCode: 1 });
+masterPartSchema.index({ normalizedPartNumber: 1, dealerCode: 1 });
+masterPartSchema.index({ partNo: 1, dealerCode: 1 });
 masterPartSchema.index({ partDescription: 1 });
 masterPartSchema.index({ productCategory: 1 });
 masterPartSchema.index({ model: 1 });
