@@ -4,7 +4,73 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAKSH INVENTORY SYSTEM</title>
-  <link rel="stylesheet" href="/style.css?v=20260513-enterprise-compact">
+  <link rel="stylesheet" href="/style.css?v=20260522-dms-clean" onload="console.log('[DAKSH_DASHBOARD_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
+  <script>
+    (function () {
+      var startedAt = Date.now();
+      window.__DAKSH_DASHBOARD_BOOT__ = {
+        startedAt: new Date(startedAt).toISOString(),
+        markers: []
+      };
+
+      function safeStorage(key) {
+        try {
+          return window.localStorage ? localStorage.getItem(key) : null;
+        } catch (error) {
+          console.warn('[DAKSH_DASHBOARD_BOOT] localStorage read failed', key, error);
+          return null;
+        }
+      }
+
+      function mark(label, details) {
+        var entry = {
+          label: label,
+          ms: Date.now() - startedAt,
+          details: details || {}
+        };
+        window.__DAKSH_DASHBOARD_BOOT__.markers.push(entry);
+        console.log('[DAKSH_DASHBOARD_BOOT] ' + label, entry);
+      }
+
+      window.addEventListener('error', function (event) {
+        console.error('[DAKSH_DASHBOARD_BOOT] window error', {
+          message: event.message,
+          source: event.filename,
+          line: event.lineno,
+          column: event.colno,
+          error: event.error ? event.error.stack || event.error.message : null
+        });
+      });
+
+      window.addEventListener('unhandledrejection', function (event) {
+        var reason = event.reason || {};
+        console.error('[DAKSH_DASHBOARD_BOOT] unhandled promise rejection', reason.stack || reason.message || reason);
+      });
+
+      mark('Daksh.html inline diagnostics ready', {
+        href: window.location.href,
+        readyState: document.readyState,
+        tokenPresent: Boolean(safeStorage('dakshToken')),
+        userPresent: Boolean(safeStorage('dakshUser'))
+      });
+
+      document.addEventListener('DOMContentLoaded', function () {
+        mark('DOMContentLoaded fired', {
+          appShell: Boolean(document.querySelector('.app')),
+          dashboardView: Boolean(document.getElementById('dashboard')),
+          uiScriptPresent: Boolean(document.querySelector('script[src*="/ui.js"]')),
+          styleSheets: document.styleSheets ? document.styleSheets.length : 0
+        });
+      });
+
+      window.addEventListener('load', function () {
+        mark('window load fired', {
+          bodyChildren: document.body ? document.body.children.length : 0,
+          activeView: document.querySelector('.view.active') ? document.querySelector('.view.active').id : ''
+        });
+      });
+    })();
+  </script>
 </head>
 <body>
   <div class="app">
@@ -1163,7 +1229,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260513-enterprise-compact"></script>
+  <script src="/ui.js?v=20260513-enterprise-compact" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {
