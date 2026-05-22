@@ -58,10 +58,10 @@ class LocalDatabase {
         conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
-  Future<void> updateStatus(String localId, String status,
+  Future<int> updateStatus(String localId, String status,
       {String serverSyncId = '', String errorMessage = ''}) async {
     final db = await database;
-    await db.update(
+    return db.update(
       'scans',
       {
         'status': status,

@@ -181,9 +181,13 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     final result = await _syncService.syncPending();
     await _refreshLocalState();
     await _registerDevice();
-    if (!mounted || silent) return;
+    if (!mounted) return;
     setState(() {
-      _statusText = result.success ? result.message : 'Sync failed';
+      if (result.serverReached) _serverConnected = true;
+      if (silent) return;
+      _statusText = result.success
+          ? result.message
+          : (result.message.trim().isEmpty ? 'Sync failed' : result.message);
       _statusColor = result.success ? Colors.green : Colors.red;
     });
   }
@@ -268,6 +272,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       final result = await _syncService.syncPending();
       await _refreshLocalState();
       await _registerDevice();
+      if (mounted && result.serverReached) {
+        setState(() => _serverConnected = true);
+      }
       if (result.success) {
         _setStatus(
             result.message.toLowerCase().contains('duplicate')
@@ -275,7 +282,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                 : 'Success',
             Colors.green);
       } else {
-        _setStatus('Sync failed', Colors.red);
+        _setStatus(
+            result.message.trim().isEmpty ? 'Sync failed' : result.message,
+            Colors.red);
       }
     } catch (error) {
       _setStatus('Sync failed', Colors.red);

@@ -240,6 +240,8 @@ function scanPublicDebug(scan = {}) {
     id: scan._id,
     uniqueScanId: scan.uniqueScanId,
     scanId: scan.scanId,
+    clientScanId: scan.clientScanId,
+    clientSyncKey: scan.clientSyncKey,
     qrFingerprint: scan.qrFingerprint,
     partNumber: scan.partNumber || scan.part,
     dealerCode: scan.dealerCode,
@@ -314,6 +316,56 @@ function makeScanId(item = {}, timestamp = new Date()) {
   return `${deviceId}-${time}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function ackMetaFromScan(scan = {}, row = 0) {
+  const source = scan.source && typeof scan.source === 'object' ? scan.source : {};
+  const clientScanId = clean(scan.clientScanId || source.clientScanId || source.localId || source.mobileScanId || source.scanId || source.uniqueScanId);
+  const clientSyncKey = clean(scan.clientSyncKey || source.clientSyncKey || source.localSyncKey || source.syncKey || clientScanId);
+  const scanId = clean(scan.uniqueScanId || scan.scanId || clientScanId);
+  return {
+    row,
+    scanId,
+    uniqueScanId: scanId,
+    clientScanId,
+    clientSyncKey,
+    localId: clientScanId,
+    mobileScanId: clientScanId,
+    syncKey: clean(scan.syncKey || clientSyncKey),
+    partNumber: clean(scan.partNumber || scan.part),
+    upiId: clean(scan.upiId || scan.upiNo),
+    dealer: clean(scan.dealerCode)
+  };
+}
+
+function ackList(meta = {}) {
+  const list = Array.isArray(meta.acks) && meta.acks.length ? meta.acks : [meta];
+  return list.map((item) => ({
+    ...item,
+    clientScanId: clean(item.clientScanId || item.localId || item.mobileScanId),
+    clientSyncKey: clean(item.clientSyncKey || item.localSyncKey || item.syncKey || item.clientScanId || item.localId)
+  }));
+}
+
+function syncLogFromAck(scan = {}, meta = {}, status = 'inserted', errorMessage = '') {
+  const uniqueScanId = clean(scan.uniqueScanId || scan.scanId || meta.uniqueScanId || meta.scanId);
+  const clientScanId = clean(meta.clientScanId || meta.localId || meta.mobileScanId || scan.clientScanId);
+  const clientSyncKey = clean(meta.clientSyncKey || scan.clientSyncKey || clientScanId);
+  return {
+    time: new Date(),
+    partNumber: clean(scan.partNumber || scan.part || meta.partNumber),
+    upiId: clean(scan.upiId || scan.upiNo || meta.upiId),
+    dealer: clean(scan.dealerCode || meta.dealer),
+    syncKey: clean(scan.syncKey || meta.syncKey || clientSyncKey || uniqueScanId),
+    scanId: clean(meta.scanId || uniqueScanId),
+    uniqueScanId,
+    clientScanId,
+    clientSyncKey,
+    localId: clientScanId,
+    mobileScanId: clientScanId,
+    status,
+    errorMessage
+  };
+}
+
 function scanTimestamp(item = {}) {
   const raw = firstValue(item, [
     'timestamp',
@@ -336,6 +388,8 @@ function liveCutoff() {
 
 function normalizeScan(item = {}) {
   const explicitScanId = clean(item.scanId || item.uniqueScanId || item.mobileScanId || item.localId);
+  const clientScanId = clean(item.clientScanId || item.localId || item.mobileScanId || explicitScanId);
+  const clientSyncKey = clean(item.clientSyncKey || item.localSyncKey || item.syncKey || clientScanId);
   const rawScan = clean(firstValue(item, [
     'rawScanString',
     'rawScan',
@@ -372,6 +426,8 @@ function normalizeScan(item = {}) {
     source: item,
     scanSource,
     parsed,
+    clientScanId,
+    clientSyncKey,
     syncKey,
     uniqueScanId,
     scanId: uniqueScanId,
@@ -704,6 +760,8 @@ async function saveNormalizedScan(scan, req) {
     timestamp: scan.timestamp,
     synced: true,
     isSynced: true,
+    clientScanId: scan.clientScanId,
+    clientSyncKey: scan.clientSyncKey,
     syncKey: scan.syncKey,
     syncStatus: 'synced',
     scanStatus: scan.scanType === 'OUTWARD' ? 'OUTWARD_DONE' : 'ACCEPTED',
@@ -987,14 +1045,12 @@ async function pushHandler(req, res) {
         };
         if (isInvalidLocalRecord) invalidCleanedCount += 1;
         failedRows.push(failed);
-        logs.push({
-          time: new Date(),
-          partNumber: scan.partNumber,
-          dealer: scan.dealerCode,
-          syncKey: scan.syncKey,
-          status: isInvalidLocalRecord ? 'invalid' : 'failed',
-          errorMessage: !master && scan.partNumber ? 'Part not found in master. Scan rejected.' : (isInvalidLocalRecord ? 'Invalid record cleaned' : failed.reason)
-        });
+        logs.push(syncLogFromAck(
+          scan,
+          ackMetaFromScan(scan, index + 1),
+          isInvalidLocalRecord ? 'invalid' : 'failed',
+          !master && scan.partNumber ? 'Part not found in master. Scan rejected.' : (isInvalidLocalRecord ? 'Invalid record cleaned' : failed.reason)
+        ));
         logSync('row validation failed', {
           row: index + 1,
           rawScanReceived: scan.rawScanString,
@@ -1031,7 +1087,7 @@ async function pushHandler(req, res) {
           dealerCode: scan.dealerCode,
           existing: existingIdentity || 'same request batch'
         });
-        logs.push({ time: new Date(), partNumber: scan.partNumber, upiId: scan.upiId, dealer: scan.dealerCode, syncKey: scan.syncKey, status: 'duplicate', errorMessage: 'Duplicate scanId skipped' });
+        logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'duplicate', 'Duplicate scanId skipped'));
         return;
       }
       duplicateScanIds.add(scan.uniqueScanId);
@@ -1086,6 +1142,8 @@ async function pushHandler(req, res) {
         timestamp: scan.timestamp,
         synced: true,
         isSynced: true,
+        clientScanId: scan.clientScanId,
+        clientSyncKey: scan.clientSyncKey,
         syncKey: scan.syncKey,
         syncStatus: 'synced',
         syncError: '',
@@ -1096,8 +1154,9 @@ async function pushHandler(req, res) {
         masterMatch: Boolean(master),
         isMasterMatched: Boolean(master)
       };
+      const ack = ackMetaFromScan(scan, index + 1);
       insertDocs.push(doc);
-      insertMeta.push({ row: index + 1, scanId: doc.uniqueScanId, partNumber: doc.partNumber });
+      insertMeta.push({ ...ack, scanId: doc.uniqueScanId, uniqueScanId: doc.uniqueScanId, acks: [ack] });
       operations.push({ insertOne: { document: doc } });
       console.log('SAVED_VALID_SCAN', { scanId: doc.uniqueScanId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'sync' });
     });
@@ -1115,6 +1174,7 @@ async function pushHandler(req, res) {
       const existing = manualBatch.get(key);
       if (existing) {
         const addQty = Number(doc.qty || doc.quantity || 0);
+        existing.meta.acks = ackList(existing.meta).concat(ackList(insertMeta[index]));
         existing.doc.qty = Number(existing.doc.qty || 0) + addQty;
         existing.doc.quantity = Number(existing.doc.quantity || 0) + addQty;
         existing.doc.rawScan = [existing.doc.rawScan, doc.rawScan].filter(Boolean).join(' | ');
@@ -1144,6 +1204,7 @@ async function pushHandler(req, res) {
           remainingMeta.push(insertMeta[index]);
           continue;
         }
+        const meta = insertMeta[index] || {};
         const existing = await Inventory.findOneAndUpdate(
           {
             dealerCode: doc.dealerCode,
@@ -1160,22 +1221,16 @@ async function pushHandler(req, res) {
               lastManualMergedAt: new Date(),
               syncStatus: 'synced',
               synced: true,
-              isSynced: true
+              isSynced: true,
+              clientScanId: doc.clientScanId || '',
+              clientSyncKey: doc.clientSyncKey || ''
             }
           },
           { sort: { timestamp: -1, createdAt: -1 }, new: true }
         ).lean();
         if (existing) {
           manualUpdatedScans.push(existing);
-          logs.push({
-            time: new Date(),
-            partNumber: existing.partNumber || existing.part,
-            upiId: existing.upiId,
-            dealer: existing.dealerCode,
-            syncKey: existing.syncKey,
-            status: 'inserted',
-            errorMessage: ''
-          });
+          ackList(meta).forEach((ack) => logs.push(syncLogFromAck(existing, ack, 'inserted', '')));
           continue;
         }
         remainingDocs.push(doc);
@@ -1209,6 +1264,7 @@ async function pushHandler(req, res) {
           failedOperationIndexes.add(opIndex);
           const doc = insertDocs[opIndex] || {};
           const meta = insertMeta[opIndex] || {};
+          const metaAcks = ackList(meta);
           const isDuplicate = writeError.code === 11000;
           const failed = {
             row: meta.row || opIndex + 1,
@@ -1227,7 +1283,7 @@ async function pushHandler(req, res) {
               dealerCode: doc.dealerCode,
               reason: failed.reason
             });
-            logs.push({ time: new Date(), partNumber: doc.partNumber, dealer: doc.dealerCode, syncKey: doc.syncKey, status: 'duplicate', errorMessage: failed.reason });
+            metaAcks.forEach((ack) => logs.push(syncLogFromAck(doc, ack, 'duplicate', failed.reason)));
           } else {
             logSync('DB insert failure', {
               row: failed.row,
@@ -1238,7 +1294,7 @@ async function pushHandler(req, res) {
             });
             failedRows.push(failed);
             errors.push(failed.reason);
-            logs.push({ time: new Date(), partNumber: doc.partNumber, dealer: doc.dealerCode, syncKey: doc.syncKey, status: 'failed', errorMessage: failed.reason });
+            metaAcks.forEach((ack) => logs.push(syncLogFromAck(doc, ack, 'failed', failed.reason)));
           }
         });
         insertedCount = error.result?.insertedCount || error.result?.result?.nInserted || (operations.length - failedOperationIndexes.size);
@@ -1263,18 +1319,12 @@ async function pushHandler(req, res) {
       insertedCount = verifiedInsertedCount;
     }
 
+    const metaByScanId = new Map(insertMeta.map((meta) => [clean(meta.scanId || meta.uniqueScanId), meta]));
     savedScans.forEach((scan) => {
       console.log("Matched category:", scan.category || '');
       console.log("Matched partDescription:", scan.partDescription || scan.partName || '');
-      logs.push({
-        time: new Date(),
-        partNumber: scan.partNumber || scan.part,
-        upiId: scan.upiId,
-        dealer: scan.dealerCode,
-        syncKey: scan.syncKey,
-        status: 'inserted',
-        errorMessage: ''
-      });
+      const meta = metaByScanId.get(clean(scan.uniqueScanId || scan.scanId)) || ackMetaFromScan(scan);
+      ackList(meta).forEach((ack) => logs.push(syncLogFromAck(scan, ack, 'inserted', '')));
     });
 
     const duplicateCount = logs.filter((log) => log.status === 'duplicate').length;

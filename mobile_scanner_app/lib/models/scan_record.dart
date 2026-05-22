@@ -94,6 +94,11 @@ class ScanRecord {
   }
 
   Map<String, dynamic> toApiPayload() => {
+        'localId': localId,
+        'mobileScanId': localId,
+        'clientScanId': localId,
+        'clientSyncKey': localId,
+        'localSyncKey': localId,
         'uniqueScanId': localId,
         'scanId': localId,
         'serverSyncId': serverSyncId,

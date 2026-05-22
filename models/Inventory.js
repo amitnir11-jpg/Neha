@@ -254,6 +254,16 @@ const inventorySchema = new mongoose.Schema(
       trim: true,
       default: ''
     },
+    clientScanId: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    clientSyncKey: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     syncStatus: {
       type: String,
       enum: ['pending', 'synced', 'failed', 'duplicate', 'rejected'],

@@ -8,9 +8,10 @@ import '../models/session.dart';
 import 'settings_store.dart';
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode});
+  ApiException(this.message, {this.statusCode, this.data = const {}});
   final String message;
   final int? statusCode;
+  final Map<String, dynamic> data;
 
   @override
   String toString() => message;
@@ -49,7 +50,7 @@ class ApiClient {
         response.statusCode >= 300 ||
         data['success'] == false) {
       throw ApiException((data['message'] ?? 'Request failed').toString(),
-          statusCode: response.statusCode);
+          statusCode: response.statusCode, data: data);
     }
     return data;
   }
