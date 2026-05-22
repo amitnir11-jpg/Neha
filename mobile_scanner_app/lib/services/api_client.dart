@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
 import '../models/dealer.dart';
 import '../models/scan_record.dart';
@@ -21,6 +23,20 @@ class ApiException implements Exception {
 
 class ApiClient {
   ApiClient(this.settings);
+
+  static final http.Client _defaultClient = http.Client();
+  static final http.Client _railwayDnsFallbackClient = IOClient(
+    HttpClient()
+      ..connectionFactory = (uri, proxyHost, proxyPort) {
+        final isDirectRailwayRequest = proxyHost == null &&
+            uri.host.toLowerCase() == SettingsStore.productionHost;
+        final host = isDirectRailwayRequest
+            ? SettingsStore.productionPinnedIp
+            : (proxyHost ?? uri.host);
+        final port = proxyPort ?? uri.port;
+        return Socket.startConnect(host, port);
+      },
+  );
 
   final SettingsStore settings;
 
@@ -69,13 +85,8 @@ class ApiClient {
     final uri = Uri.parse('$baseUrl$path');
     final headers = <String, String>{'Content-Type': 'application/json'};
     if (auth && token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
-    final response = method == 'POST'
-        ? await http
-            .post(uri, headers: headers, body: jsonEncode(body ?? {}))
-            .timeout(const Duration(seconds: 20))
-        : await http
-            .get(uri, headers: headers)
-            .timeout(const Duration(seconds: 20));
+    final response =
+        await _send(uri, method: method, headers: headers, body: body);
     final text = response.body.trim();
     dynamic decoded;
     try {
@@ -97,6 +108,49 @@ class ApiClient {
           statusCode: response.statusCode, data: data, retryable: retryable);
     }
     return data;
+  }
+
+  Future<http.Response> _send(
+    Uri uri, {
+    required String method,
+    required Map<String, String> headers,
+    Map<String, dynamic>? body,
+  }) async {
+    try {
+      return await _sendWithClient(_defaultClient, uri,
+              method: method, headers: headers, body: body)
+          .timeout(const Duration(seconds: 20));
+    } catch (error) {
+      if (!_shouldRetryWithRailwayDnsFallback(error, uri)) rethrow;
+      return _sendWithClient(_railwayDnsFallbackClient, uri,
+              method: method, headers: headers, body: body)
+          .timeout(const Duration(seconds: 25));
+    }
+  }
+
+  Future<http.Response> _sendWithClient(
+    http.Client client,
+    Uri uri, {
+    required String method,
+    required Map<String, String> headers,
+    Map<String, dynamic>? body,
+  }) {
+    if (method == 'POST') {
+      return client.post(uri, headers: headers, body: jsonEncode(body ?? {}));
+    }
+    return client.get(uri, headers: headers);
+  }
+
+  bool _shouldRetryWithRailwayDnsFallback(Object error, Uri uri) {
+    if (uri.scheme != 'https' ||
+        uri.host.toLowerCase() != SettingsStore.productionHost) {
+      return false;
+    }
+    final message = error.toString().toLowerCase();
+    return message.contains('failed host lookup') ||
+        message.contains('nodename nor servname') ||
+        message.contains('name or service not known') ||
+        message.contains('no address associated with hostname');
   }
 
   Future<Map<String, dynamic>> health() => _request('/api/health', auth: false);
@@ -124,7 +178,7 @@ class ApiClient {
         'pin': pin,
         'dealerCode': dealerCode,
         'deviceId': deviceId,
-        'appVersion': 'Daksh Mobile Scanner v1.0.1',
+        'appVersion': 'Daksh Mobile Scanner v1.0.2',
       },
     );
     return UserSession.fromLogin(data);
@@ -156,7 +210,7 @@ class ApiClient {
         'deviceId': deviceId,
         'deviceName': 'Daksh Android Scanner',
         'model': 'Android',
-        'appVersion': 'Daksh Mobile Scanner v1.0.1',
+        'appVersion': 'Daksh Mobile Scanner v1.0.2',
         'dealerCode': dealerCode,
         'pendingCount': pendingCount,
         'failedCount': failedCount,
@@ -177,7 +231,7 @@ class ApiClient {
       body: {
         'deviceId': deviceId,
         'dealerCode': dealerCode,
-        'appVersion': 'Daksh Mobile Scanner v1.0.1',
+        'appVersion': 'Daksh Mobile Scanner v1.0.2',
         'serverUrl': serverUrl,
         ...session,
         'scans': scans.map((scan) => scan.toApiPayload()).toList(),

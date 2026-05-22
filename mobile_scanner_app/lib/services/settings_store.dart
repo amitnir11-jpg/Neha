@@ -7,8 +7,9 @@ import 'package:uuid/uuid.dart';
 import '../models/session.dart';
 
 class SettingsStore {
-  static const productionServerUrl =
-      'https://daksh-inventory-v2-production.up.railway.app';
+  static const productionHost = 'daksh-inventory-v2-production.up.railway.app';
+  static const productionPinnedIp = '66.33.22.158';
+  static const productionServerUrl = 'https://$productionHost';
   static const _secure = FlutterSecureStorage();
   static const _tokenKey = 'daksh_token';
   static const _serverUrlKey = 'server_url';
