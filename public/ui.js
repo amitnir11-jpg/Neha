@@ -3179,6 +3179,19 @@
     const key = reportColumnKey(column, index);
     const saved = Number(reportColumnPrefs()[key] || 0);
     if (saved >= 70) return saved;
+    if (reportType === 'category-wise-variance-summary') {
+      const categoryVarianceWidths = {
+        productCategory: 230,
+        action: 180,
+        totalScannedParts: 150,
+        totalScannedQuantity: 175,
+        sumPhysicalValueOnMRP: 220,
+        sumPhysicalValueOnDLC: 220,
+        sumVarianceOnMRP: 190,
+        sumVarianceOnDLC: 190
+      };
+      if (categoryVarianceWidths[key]) return categoryVarianceWidths[key];
+    }
     if (/^select$/i.test(key)) return 44;
     if (/raw.*scan|rawScannedValue/i.test(key)) return 320;
     if (/scanDetails/i.test(key)) return 360;
@@ -3279,7 +3292,10 @@
   function renderReportHeader(keys, reportType = activeReportType()) {
     const widths = keys.map((column, index) => reportColumnWidth(column, index, reportType));
     const table = $('#reportTable');
+    const wrap = $('#reportTableWrap');
     const sort = activeReportSort(reportType);
+    if (table) table.dataset.reportType = reportType || '';
+    if (wrap) wrap.dataset.reportType = reportType || '';
     let colgroup = $('colgroup', table);
     if (!colgroup) {
       colgroup = document.createElement('colgroup');
