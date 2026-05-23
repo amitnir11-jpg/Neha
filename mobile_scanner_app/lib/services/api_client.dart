@@ -57,16 +57,21 @@ class ApiClient {
     Object? lastError;
 
     for (final baseUrl in candidates) {
-      try {
-        final data = await _requestOnce(baseUrl, path,
-            method: method, body: body, auth: auth);
-        if (baseUrl != savedBaseUrl) await settings.saveServerUrl(baseUrl);
-        return data;
-      } on ApiException catch (error) {
-        lastApiError = error;
-        if (!error.retryable) rethrow;
-      } catch (error) {
-        lastError = error;
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          final data = await _requestOnce(baseUrl, path,
+              method: method, body: body, auth: auth);
+          if (baseUrl != savedBaseUrl) await settings.saveServerUrl(baseUrl);
+          return data;
+        } on ApiException catch (error) {
+          lastApiError = error;
+          if (!error.retryable || attempt == 1) break;
+          await Future.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+        } catch (error) {
+          lastError = error;
+          if (attempt == 1) break;
+          await Future.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+        }
       }
     }
 
@@ -120,13 +125,13 @@ class ApiClient {
     try {
       return await _sendWithClient(_defaultClient, uri,
               method: method, headers: headers, body: body)
-          .timeout(const Duration(seconds: 45));
+          .timeout(const Duration(seconds: 8));
     } catch (error) {
       if (!_shouldRetryWithRailwayDnsFallback(error, uri)) rethrow;
       try {
         return await _sendWithClient(_railwayDnsFallbackClient, uri,
                 method: method, headers: headers, body: body)
-            .timeout(const Duration(seconds: 45));
+            .timeout(const Duration(seconds: 8));
       } on TimeoutException {
         throw ApiException(
           'Cloud server is reachable from web, but this phone network timed out. Turn mobile data/Wi-Fi off and on, then press Test before login.',

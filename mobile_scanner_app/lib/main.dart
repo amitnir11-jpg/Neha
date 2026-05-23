@@ -83,8 +83,14 @@ class _AppGateState extends State<AppGate> {
 
   Future<void> _load() async {
     final settings = SettingsStore();
-    final token = await settings.token;
-    final dealer = await settings.dealerCode;
+    String token = '';
+    String dealer = '';
+    try {
+      token = await settings.token.timeout(const Duration(seconds: 6));
+      dealer = await settings.dealerCode.timeout(const Duration(seconds: 6));
+    } catch (_) {
+      // Local storage read failed or timed out; continue without blocking startup.
+    }
     if (!mounted) return;
     setState(() {
       _loggedIn = token.isNotEmpty && dealer.isNotEmpty;

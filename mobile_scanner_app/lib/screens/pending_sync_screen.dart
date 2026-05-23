@@ -30,17 +30,30 @@ class _PendingSyncScreenState extends State<PendingSyncScreen> {
   }
 
   Future<void> _sync() async {
+    if (_busy) return;
     setState(() {
       _busy = true;
-      _message = '';
+      _message = 'Syncing pending records...';
     });
-    final result = await SyncService().syncPending();
-    await _load();
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _message = result.message;
-    });
+    try {
+      final result = await SyncService().syncPending();
+      await _load();
+      if (!mounted) return;
+      setState(() {
+        _message = result.message.trim().isEmpty
+            ? (result.success ? 'Sync completed' : 'Sync failed')
+            : result.message;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _message = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      } else {
+        _busy = false;
+      }
+    }
   }
 
   Future<void> _export() async {
@@ -109,8 +122,16 @@ class _PendingSyncScreenState extends State<PendingSyncScreen> {
                     icon: const Icon(Icons.backup)),
                 FilledButton.icon(
                     onPressed: _busy ? null : _sync,
-                    icon: const Icon(Icons.sync),
-                    label: const Text('Manual Sync')),
+                    icon: _busy
+                        ? SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Theme.of(context).colorScheme.primary),
+                          )
+                        : const Icon(Icons.sync),
+                    label: Text(_busy ? 'Syncing' : 'Manual Sync')),
               ],
             ),
           ),

@@ -27,8 +27,9 @@ class ScannerHomeScreen extends StatefulWidget {
 
 class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     with WidgetsBindingObserver {
-  static const _duplicateWindow = Duration(milliseconds: 1400);
   static const _backgroundSyncInterval = Duration(minutes: 2);
+  static const _noQrClearTimeout = Duration(milliseconds: 450);
+  static const _healthCheckInterval = Duration(seconds: 60);
 
   final _settings = SettingsStore();
   final _database = LocalDatabase.instance;
@@ -57,6 +58,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   );
 
   Timer? _foregroundSyncTimer;
+  Timer? _qrIdleTimer;
   StreamSubscription<ConnectivityResult>? _connectivitySub;
   List<ScanRecord> _lastScans = [];
   String _scanType = 'INWARD';
@@ -66,10 +68,10 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   String _userId = '';
   String _userName = '';
   String _role = '';
-  String _lastRaw = '';
-  DateTime _lastRawAt = DateTime.fromMillisecondsSinceEpoch(0);
+  String _lastScannedCode = '';
+  String _currentlyVisibleCode = '';
+  DateTime _lastHealthCheckAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastSyncAt = DateTime.fromMillisecondsSinceEpoch(0);
-  final Map<String, DateTime> _recentScanCache = {};
   bool _online = false;
   bool _serverConnected = false;
   bool _savingScan = false;
@@ -103,6 +105,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _foregroundSyncTimer?.cancel();
+    _qrIdleTimer?.cancel();
     _connectivitySub?.cancel();
     _defaultBinController.dispose();
     _cameraController.dispose();
@@ -136,10 +139,14 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _userId = session['loginId'] ?? session['userId'] ?? '';
       _userName = session['userName'] ?? session['loginId'] ?? '';
       _role = session['role'] ?? '';
+      _statusText = _online ? 'Checking server...' : 'Offline mode';
+      _statusColor = _online ? Colors.blue : Colors.orange;
     });
     await _refreshLocalState();
-    await _testServer(silent: true);
-    await _registerDevice();
+    if (_online) {
+      await _testServer(silent: true);
+      await _registerDevice();
+    }
   }
 
   Future<void> _refreshLocalState() async {
@@ -169,7 +176,18 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     }
   }
 
-  Future<void> _testServer({bool silent = false}) async {
+  Future<void> _testServer({bool silent = false, bool force = false}) async {
+    final now = DateTime.now();
+    if (!force && now.difference(_lastHealthCheckAt) < _healthCheckInterval) {
+      return;
+    }
+    _lastHealthCheckAt = now;
+    if (!silent && mounted) {
+      setState(() {
+        _statusText = 'Checking server...';
+        _statusColor = Colors.blue;
+      });
+    }
     try {
       await ApiClient(_settings).health();
       if (!mounted) return;
@@ -195,7 +213,13 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
 
   Future<void> _syncPending({bool silent = false}) async {
     if (_syncInFlight) return;
-    setState(() => _syncInFlight = true);
+    setState(() {
+      _syncInFlight = true;
+      if (!silent) {
+        _statusText = 'Syncing pending records...';
+        _statusColor = Colors.blue;
+      }
+    });
     try {
       final result = await _syncService.syncPending();
       final syncedAt = DateTime.now();
@@ -211,9 +235,18 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
             : (result.message.trim().isEmpty ? 'Sync failed' : result.message);
         _statusColor = result.success ? Colors.green : Colors.red;
       });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _statusText = error.toString();
+        _statusColor = Colors.red;
+      });
     } finally {
-      _syncInFlight = false;
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() => _syncInFlight = false);
+      } else {
+        _syncInFlight = false;
+      }
     }
   }
 
@@ -225,18 +258,22 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         .firstWhere((value) => value.isNotEmpty, orElse: () => '');
     if (raw.isEmpty) return;
 
-    final now = DateTime.now();
-    _recentScanCache.removeWhere(
-        (_, seenAt) => now.difference(seenAt) > _duplicateWindow);
-    if ((_lastRaw == raw && now.difference(_lastRawAt) < _duplicateWindow) ||
-        (_recentScanCache[raw] != null &&
-            now.difference(_recentScanCache[raw]!) < _duplicateWindow)) {
+    _qrIdleTimer?.cancel();
+    _qrIdleTimer = Timer(_noQrClearTimeout, () {
+      _currentlyVisibleCode = '';
+      _lastScannedCode = '';
+    });
+
+    if (_currentlyVisibleCode != raw) {
+      _currentlyVisibleCode = raw;
+    }
+
+    if (raw == _lastScannedCode) {
       _setStatus('Duplicate skipped', Colors.orange);
       return;
     }
-    _lastRaw = raw;
-    _lastRawAt = now;
-    _recentScanCache[raw] = now;
+
+    _lastScannedCode = raw;
     unawaited(_handleDraft(
         _ScanDraft.fromRaw(raw, fallbackBin: _defaultBinController.text),
         source: 'mobile'));
@@ -315,6 +352,15 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     });
   }
 
+  void _resetScanLock({String message = 'Ready to rescan'}) {
+    _qrIdleTimer?.cancel();
+    _currentlyVisibleCode = '';
+    _lastScannedCode = '';
+    if (mounted) {
+      _setStatus(message, Colors.blue);
+    }
+  }
+
   Future<void> _openManualEntry() async {
     final draft = await showDialog<_ScanDraft>(
       context: context,
@@ -334,6 +380,18 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => const SettingsScreen()));
     await _loadState();
+  }
+
+  Future<void> _refreshConnection() async {
+    if (!_online) {
+      _setStatus('Offline mode, retrying when network returns', Colors.orange);
+      return;
+    }
+    await _testServer(silent: false, force: true);
+    if (_serverConnected) {
+      await _refreshLocalState();
+      await _registerDevice();
+    }
   }
 
   Future<void> _verifyLastScan() async {
@@ -384,10 +442,17 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
+    final cameraHeight = (screenHeight * 0.32).clamp(240.0, 340.0).toDouble();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Daksh Scanner'),
         actions: [
+          IconButton(
+              onPressed: _refreshConnection,
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Retry server'),
           IconButton(onPressed: _openPendingSync, icon: const Icon(Icons.sync)),
           IconButton(
               onPressed: _openSettings, icon: const Icon(Icons.settings)),
@@ -395,179 +460,203 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         ],
       ),
       body: SafeArea(
-        child: Column(
-          children: [
-            _StatusHeader(
-              dealerCode: _dealerCode,
-              dealerName: _dealerName,
-              userName: _userName,
-              role: _role,
-              online: _online,
-              serverConnected: _serverConnected,
-              pendingCount: _pendingCount,
-              failedCount: _failedCount,
-              syncRunning: _syncInFlight,
-              lastSyncAt: _lastSyncAt,
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                      child: _ModeButton(
-                          label: 'Inward',
-                          selected: _scanType == 'INWARD',
-                          onTap: () => setState(() => _scanType = 'INWARD'))),
-                  const SizedBox(width: 8),
-                  Expanded(
-                      child: _ModeButton(
-                          label: 'Outward',
-                          selected: _scanType == 'OUTWARD',
-                          onTap: () => setState(() => _scanType = 'OUTWARD'))),
-                  const SizedBox(width: 8),
-                  Expanded(
-                      child: _ModeButton(
-                          label: 'Verify',
-                          selected: _scanType == 'VERIFICATION',
-                          onTap: () =>
-                              setState(() => _scanType = 'VERIFICATION'))),
-                ],
+        child: SingleChildScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Column(
+            children: [
+              _StatusHeader(
+                dealerCode: _dealerCode,
+                dealerName: _dealerName,
+                userName: _userName,
+                role: _role,
+                online: _online,
+                serverConnected: _serverConnected,
+                pendingCount: _pendingCount,
+                failedCount: _failedCount,
+                syncRunning: _syncInFlight,
+                lastSyncAt: _lastSyncAt,
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: TextField(
-                controller: _defaultBinController,
-                textCapitalization: TextCapitalization.characters,
-                decoration: const InputDecoration(
-                  labelText: 'Default Bin Location',
-                  prefixIcon: Icon(Icons.inventory_2),
-                  isDense: true,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                        child: _ModeButton(
+                            label: 'Inward',
+                            selected: _scanType == 'INWARD',
+                            onTap: () => setState(() => _scanType = 'INWARD'))),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: _ModeButton(
+                            label: 'Outward',
+                            selected: _scanType == 'OUTWARD',
+                            onTap: () =>
+                                setState(() => _scanType = 'OUTWARD'))),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: _ModeButton(
+                            label: 'Verify',
+                            selected: _scanType == 'VERIFICATION',
+                            onTap: () =>
+                                setState(() => _scanType = 'VERIFICATION'))),
+                  ],
                 ),
-                onChanged: (value) {
-                  final upper = value.toUpperCase();
-                  if (value != upper) {
-                    _defaultBinController.value = TextEditingValue(
-                        text: upper,
-                        selection:
-                            TextSelection.collapsed(offset: upper.length));
-                  }
-                },
               ),
-            ),
-            Container(
-              height: MediaQuery.of(context).size.height * 0.38,
-              margin: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(
-                  color: Colors.black, borderRadius: BorderRadius.circular(8)),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  MobileScanner(
-                      controller: _cameraController, onDetect: _onDetect),
-                  AnimatedOpacity(
-                    opacity: _savingScan ? 1 : 0,
-                    duration: const Duration(milliseconds: 120),
-                    child: Container(color: Colors.green.withOpacity(0.22)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: TextField(
+                  controller: _defaultBinController,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: 'Default Bin Location',
+                    prefixIcon: Icon(Icons.inventory_2),
+                    isDense: true,
                   ),
-                  Center(
-                    child: Container(
-                      width: 220,
-                      height: 150,
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                            color: Colors.white.withOpacity(0.85), width: 2),
-                        borderRadius: BorderRadius.circular(8),
+                  onChanged: (value) {
+                    final upper = value.toUpperCase();
+                    if (value != upper) {
+                      _defaultBinController.value = TextEditingValue(
+                          text: upper,
+                          selection:
+                              TextSelection.collapsed(offset: upper.length));
+                    }
+                  },
+                ),
+              ),
+              Container(
+                height: cameraHeight,
+                margin: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.circular(8)),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    MobileScanner(
+                        controller: _cameraController, onDetect: _onDetect),
+                    AnimatedOpacity(
+                      opacity: _savingScan ? 1 : 0,
+                      duration: const Duration(milliseconds: 120),
+                      child: Container(color: Colors.green.withOpacity(0.22)),
+                    ),
+                    Center(
+                      child: Container(
+                        width: 220,
+                        height: 150,
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.85), width: 2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
-                  ),
-                  Positioned(
-                    left: 12,
-                    right: 12,
-                    bottom: 12,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
-                      decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.72),
-                          borderRadius: BorderRadius.circular(8)),
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: 12,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.72),
+                            borderRadius: BorderRadius.circular(8)),
+                        child: Row(
+                          children: [
+                            Icon(
+                                _statusColor == Colors.green
+                                    ? Icons.check_circle
+                                    : _statusColor == Colors.red
+                                        ? Icons.error
+                                        : Icons.info,
+                                color: _statusColor),
+                            const SizedBox(width: 8),
+                            Expanded(
+                                child: Text(_statusText,
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w900))),
+                            if (_savingScan)
+                              const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.white)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 10,
+                      right: 10,
                       child: Row(
                         children: [
-                          Icon(
-                              _statusColor == Colors.green
-                                  ? Icons.check_circle
-                                  : _statusColor == Colors.red
-                                      ? Icons.error
-                                      : Icons.info,
-                              color: _statusColor),
+                          IconButton.filledTonal(
+                              onPressed: () => _cameraController.toggleTorch(),
+                              icon: const Icon(Icons.flash_on)),
                           const SizedBox(width: 8),
-                          Expanded(
-                              child: Text(_statusText,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w900))),
-                          if (_savingScan)
-                            const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white)),
+                          IconButton.filledTonal(
+                              onPressed: () => _cameraController.switchCamera(),
+                              icon: const Icon(Icons.cameraswitch)),
                         ],
                       ),
                     ),
-                  ),
-                  Positioned(
-                    top: 10,
-                    right: 10,
-                    child: Row(
-                      children: [
-                        IconButton.filledTonal(
-                            onPressed: () => _cameraController.toggleTorch(),
-                            icon: const Icon(Icons.flash_on)),
-                        const SizedBox(width: 8),
-                        IconButton.filledTonal(
-                            onPressed: () => _cameraController.switchCamera(),
-                            icon: const Icon(Icons.cameraswitch)),
-                      ],
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                      child: OutlinedButton.icon(
-                          onPressed: _openManualEntry,
-                          icon: const Icon(Icons.keyboard),
-                          label: const Text('Manual Entry'))),
-                  const SizedBox(width: 8),
-                  Expanded(
-                      child: OutlinedButton.icon(
-                          onPressed: _verifyLastScan,
-                          icon: const Icon(Icons.fact_check),
-                          label: const Text('Last Verify'))),
-                  const SizedBox(width: 8),
-                  Expanded(
-                      child: FilledButton.icon(
-                          onPressed: _syncInFlight ? null : () => _syncPending(),
-                          icon: const Icon(Icons.sync),
-                          label: Text(_syncInFlight ? 'Syncing' : 'Manual Sync'))),
-                ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                        child: OutlinedButton.icon(
+                            onPressed: _openManualEntry,
+                            icon: const Icon(Icons.keyboard),
+                            label: const FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text('Manual Entry')))),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: OutlinedButton.icon(
+                            onPressed: _verifyLastScan,
+                            icon: const Icon(Icons.fact_check),
+                            label: const FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text('Last Verify')))),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: OutlinedButton.icon(
+                            onPressed: _resetScanLock,
+                            icon: const Icon(Icons.replay),
+                            label: const FittedBox(
+                                fit: BoxFit.scaleDown, child: Text('Rescan')))),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: FilledButton.icon(
+                            onPressed:
+                                _syncInFlight ? null : () => _syncPending(),
+                            icon: const Icon(Icons.sync),
+                            label: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(_syncInFlight
+                                    ? 'Syncing'
+                                    : 'Manual Sync')))),
+                  ],
+                ),
               ),
-            ),
-            Expanded(
-              child: Container(
+              Container(
                 width: double.infinity,
                 color: Colors.white,
                 child: _lastScans.isEmpty
-                    ? const Center(
-                        child: Text('No scans yet',
-                            style: TextStyle(fontWeight: FontWeight.w800)))
+                    ? const SizedBox(
+                        height: 120,
+                        child: Center(
+                            child: Text('No scans yet',
+                                style: TextStyle(fontWeight: FontWeight.w800))))
                     : ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
                         itemCount: _lastScans.length,
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (_, index) {
@@ -594,8 +683,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                         },
                       ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -653,19 +742,28 @@ class _StatusHeader extends StatelessWidget {
             children: [
               StatusChip(
                   label: online ? 'Online' : 'Offline',
-                  color: online ? Colors.green : Colors.orange,
+                  color: online ? Colors.green : Colors.red,
                   icon: online ? Icons.wifi : Icons.wifi_off),
               StatusChip(
-                  label:
-                      serverConnected ? 'Server connected' : 'Server pending',
-                  color: serverConnected ? Colors.green : Colors.orange,
-                  icon: Icons.cloud_done),
+                  label: serverConnected
+                      ? 'Server connected'
+                      : online
+                          ? 'Server pending'
+                          : 'Offline mode',
+                  color: serverConnected
+                      ? Colors.green
+                      : online
+                          ? Colors.orange
+                          : Colors.red,
+                  icon: serverConnected ? Icons.cloud_done : Icons.cloud_off),
               StatusChip(
                   label: 'Login verified',
                   color: userName.isEmpty ? Colors.red : Colors.green,
                   icon: Icons.verified_user),
               StatusChip(
-                  label: 'Pending $pendingCount',
+                  label: pendingCount == 0
+                      ? 'All synced'
+                      : 'Pending $pendingCount',
                   color: pendingCount == 0 ? Colors.green : Colors.orange,
                   icon: Icons.sync_problem),
               StatusChip(
