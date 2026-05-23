@@ -10,6 +10,8 @@ import '../models/scan_record.dart';
 import '../models/session.dart';
 import 'settings_store.dart';
 
+const mobileAppVersionName = 'Daksh Mobile Scanner v1.0.5';
+
 class ApiException implements Exception {
   ApiException(this.message,
       {this.statusCode, this.data = const {}, this.retryable = false});
@@ -87,10 +89,12 @@ class ApiClient {
     Map<String, dynamic>? body,
     required bool auth,
   }) async {
-    final token = await settings.token;
     final uri = Uri.parse('$baseUrl$path');
     final headers = <String, String>{'Content-Type': 'application/json'};
-    if (auth && token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
+    if (auth) {
+      final token = await settings.token;
+      if (token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
+    }
     final response =
         await _send(uri, method: method, headers: headers, body: body);
     final text = response.body.trim();
@@ -194,7 +198,7 @@ class ApiClient {
         'pin': pin,
         'dealerCode': dealerCode,
         'deviceId': deviceId,
-        'appVersion': 'Daksh Mobile Scanner v1.0.4',
+        'appVersion': mobileAppVersionName,
       },
     );
     return UserSession.fromLogin(data);
@@ -226,7 +230,7 @@ class ApiClient {
         'deviceId': deviceId,
         'deviceName': 'Daksh Android Scanner',
         'model': 'Android',
-        'appVersion': 'Daksh Mobile Scanner v1.0.4',
+        'appVersion': mobileAppVersionName,
         'dealerCode': dealerCode,
         'pendingCount': pendingCount,
         'failedCount': failedCount,
@@ -247,7 +251,7 @@ class ApiClient {
       body: {
         'deviceId': deviceId,
         'dealerCode': dealerCode,
-        'appVersion': 'Daksh Mobile Scanner v1.0.4',
+        'appVersion': mobileAppVersionName,
         'serverUrl': serverUrl,
         ...session,
         'scans': scans.map((scan) => scan.toApiPayload()).toList(),

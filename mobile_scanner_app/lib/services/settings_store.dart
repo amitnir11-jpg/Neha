@@ -12,13 +12,57 @@ class SettingsStore {
   static const productionServerUrl = 'https://$productionHost';
   static const _secure = FlutterSecureStorage();
   static const _tokenKey = 'daksh_token';
+  static const _tokenClearedKey = 'daksh_token_cleared';
   static const _serverUrlKey = 'server_url';
   static const _deviceIdKey = 'device_id';
   static const _sessionKey = 'session';
   static const _dealerCodeKey = 'dealer_code';
   static const _dealerNameKey = 'dealer_name';
 
-  Future<String> get token async => await _secure.read(key: _tokenKey) ?? '';
+  Future<String> get token async {
+    try {
+      return await _secure.read(key: _tokenKey) ?? '';
+    } catch (err) {
+      // Decryption/read failure (e.g. BadPaddingException on Android) —
+      // clear the stored token so app can continue and force login.
+      try {
+        await _secure.delete(key: _tokenKey);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(_tokenClearedKey, true);
+      } catch (_) {}
+      return '';
+    }
+  }
+
+  Future<void> _deleteTokenAfterSecureStorageError() async {
+    try {
+      await _secure.delete(key: _tokenKey);
+    } catch (_) {}
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_tokenClearedKey, true);
+    } catch (_) {}
+  }
+
+  /// Returns true if the token was cleared due to decryption failure and clears the flag.
+  Future<bool> consumeTokenClearedFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getBool(_tokenClearedKey) ?? false;
+    if (v) await prefs.remove(_tokenClearedKey);
+    return v;
+  }
+
+  /// Clear all session-related data to force re-login without reinstall.
+  Future<void> clearAllData() async {
+    final prefs = await SharedPreferences.getInstance();
+    try {
+      await _secure.delete(key: _tokenKey);
+    } catch (_) {}
+    // remove known keys
+    await prefs.remove(_sessionKey);
+    await prefs.remove(_dealerCodeKey);
+    await prefs.remove(_dealerNameKey);
+  }
 
   Future<String> get serverUrl async {
     final prefs = await SharedPreferences.getInstance();
@@ -52,8 +96,13 @@ class SettingsStore {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_sessionKey);
     if (raw == null || raw.isEmpty) return {};
-    final data = jsonDecode(raw) as Map<String, dynamic>;
-    return data.map((key, value) => MapEntry(key, value.toString()));
+    try {
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      return data.map((key, value) => MapEntry(key, value.toString()));
+    } catch (_) {
+      await prefs.remove(_sessionKey);
+      return {};
+    }
   }
 
   Future<void> saveServerUrl(String value) async {
@@ -66,7 +115,12 @@ class SettingsStore {
 
   Future<void> saveSession(UserSession session) async {
     final prefs = await SharedPreferences.getInstance();
-    await _secure.write(key: _tokenKey, value: session.token);
+    try {
+      await _secure.write(key: _tokenKey, value: session.token);
+    } catch (_) {
+      await _deleteTokenAfterSecureStorageError();
+      await _secure.write(key: _tokenKey, value: session.token);
+    }
     await prefs.setString(_sessionKey, jsonEncode(session.toPrefs()));
     await prefs.setString(_dealerCodeKey, session.dealerCode);
     await prefs.setString(_dealerNameKey, session.dealerName);
@@ -80,7 +134,9 @@ class SettingsStore {
 
   Future<void> clearSession() async {
     final prefs = await SharedPreferences.getInstance();
-    await _secure.delete(key: _tokenKey);
+    try {
+      await _secure.delete(key: _tokenKey);
+    } catch (_) {}
     await prefs.remove(_sessionKey);
     await prefs.remove(_dealerCodeKey);
     await prefs.remove(_dealerNameKey);

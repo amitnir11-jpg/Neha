@@ -5,6 +5,8 @@ import '../services/api_client.dart';
 import '../services/settings_store.dart';
 import '../widgets/status_chip.dart';
 import 'server_qr_screen.dart';
+import 'login_screen.dart';
+import 'scanner_home_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -161,6 +163,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onPressed: _save,
               icon: const Icon(Icons.save),
               label: const Text('Save Settings')),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (_) => AlertDialog(
+                    title: const Text('Clear storage?'),
+                    content: const Text(
+                      'This will clear local session and require re-login. Continue?'),
+                    actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      child: const Text('Cancel')),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(true),
+                      child: const Text('Clear'))
+                    ],
+                  ));
+              if (ok != true) return;
+              await _settings.clearAllData();
+              // Navigate to fresh login screen
+              if (!mounted) return;
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(
+                  builder: (_) => LoginScreen(onLoggedIn: () {
+                      Navigator.of(context).pushReplacement(MaterialPageRoute(
+                        builder: (_) => ScannerHomeScreen(onLogout: () {})));
+                    })),
+                (route) => false);
+              },
+              icon: const Icon(Icons.exit_to_app),
+              label: const Text('Clear Storage / Re-login')),
           if (_message.isNotEmpty)
             Padding(
                 padding: const EdgeInsets.only(top: 14),

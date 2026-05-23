@@ -58,6 +58,9 @@
 
   function dateTime(value) {
     if (!value) return '';
+    if (typeof value === 'string' && /^\d{2}-[A-Za-z]{3}-\d{4}\s+\d{2}:\d{2}:\d{2}\s+(AM|PM)$/i.test(value.trim())) {
+      return value.trim().replace(/\s+(am|pm)$/i, (match) => match.toUpperCase());
+    }
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
     const parts = new Intl.DateTimeFormat('en-IN', {

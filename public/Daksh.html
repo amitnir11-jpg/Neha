@@ -1162,6 +1162,44 @@
           <p class="muted">Use a Gmail App Password only. The password is saved encrypted, hidden after setup, and never returned to the browser.</p>
         </section>
 
+        <section class="card admin-only">
+          <div class="card-head">
+            <h2>Clock Skew Monitoring</h2>
+            <div class="actions">
+              <button id="loadClockSkewBtn" class="btn primary" type="button">Reload</button>
+              <button id="notifyClockSkewBtn" class="btn light" type="button">Notify Selected</button>
+            </div>
+          </div>
+          <form id="clockSkewFilters" class="grid-form">
+            <label>Dealer Code<input name="dealerCode" id="clockSkewDealerCode" type="text" placeholder="Dealer Code"></label>
+            <label>Device ID<input name="deviceId" id="clockSkewDeviceId" type="text" placeholder="Device ID"></label>
+            <label>User ID<input name="userId" id="clockSkewUserId" type="text" placeholder="User ID"></label>
+            <label>Threshold Minutes<input name="thresholdMinutes" id="clockSkewThreshold" type="number" min="1" value="5"></label>
+            <label>Last Days<input name="sinceDays" id="clockSkewSinceDays" type="number" min="1" value="7"></label>
+            <div class="actions span-3">
+              <button id="loadClockSkewFiltersBtn" class="btn primary" type="button">Apply</button>
+              <span id="clockSkewMessage" class="form-message"></span>
+            </div>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th><input id="clockSkewSelectAll" type="checkbox" aria-label="Select all skewed devices"></th>
+                  <th>Device</th>
+                  <th>Dealer</th>
+                  <th>User</th>
+                  <th>Batch</th>
+                  <th>Server Time</th>
+                  <th>Device Time</th>
+                  <th>Skew ms</th>
+                </tr>
+              </thead>
+              <tbody id="clockSkewRows"><tr><td colspan="8" class="muted">Use filter and click Reload to view skewed devices.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
         <section class="card admin-only admin-delete-card">
           <div class="card-head"><h2>Admin Delete Manager</h2><span id="adminDeleteMessage" class="form-message"></span></div>
           <div class="admin-delete-tabs" role="tablist" aria-label="Admin delete tools">

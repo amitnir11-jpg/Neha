@@ -6,6 +6,7 @@ const MasterPart = require('../models/MasterPart');
 const Dealer = require('../models/Dealer');
 const Device = require('../models/Device');
 const SyncLog = require('../models/SyncLog');
+const SkewEvent = require('../models/SkewEvent');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const VerificationLog = require('../models/VerificationLog');
 const User = require('../models/User');
@@ -726,6 +727,66 @@ async function saveNormalizedScan(scan, req) {
   const finalQty = Number(scan.quantity || 1);
   const finalBin = scan.binLocation;
 
+  // Ensure final saved scan time is server time (serverReceivedAt)
+  const finalSavedTime = scan.serverReceivedAt instanceof Date && !Number.isNaN(scan.serverReceivedAt.getTime()) ? scan.serverReceivedAt : new Date();
+  // compute mobile time and skew for diagnostics
+  const mobileTime = validDate(mobileTimestamp(scan)) || null;
+  const skewMs = mobileTime ? Math.abs(finalSavedTime.getTime() - mobileTime.getTime()) : 0;
+  // Log detailed debug info per-scan
+  try {
+    const batchId = scan.syncBatchId || (req && req.body && req.body.syncBatchId) || '';
+    const tz = scan.serverTimeZone || (Intl && Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'UTC';
+    logSync('sync debug', {
+      batchId,
+      dealerCode: scan.dealerCode,
+      userId: scan.userId || scan.loginId || '',
+      serverTime: finalSavedTime.toISOString(),
+      mobileTime: mobileTime ? mobileTime.toISOString() : '',
+      receivedScanTime: scan.timestamp instanceof Date && !Number.isNaN(scan.timestamp.getTime()) ? scan.timestamp.toISOString() : '',
+      savedScanTime: finalSavedTime.toISOString(),
+      timeZone: tz,
+      syncKey: scan.syncKey || '',
+      qrFingerprint: scan.qrFingerprint || '',
+      skewMs
+    });
+
+    // Emit realtime socket event if skew exceeds threshold
+    try {
+      const io = req && (req.io || req.app.get('io'));
+      const thresholdMs = Number(process.env.CLOCK_SKEW_THRESHOLD_MS || 300000);
+      if (io && skewMs > thresholdMs) {
+        io.emit('sync:clockSkew', {
+          batchId,
+          dealerCode: scan.dealerCode,
+          userId: scan.userId || scan.loginId || '',
+          deviceId: scan.deviceId || '',
+          mobileTime: mobileTime ? mobileTime.toISOString() : '',
+          serverTime: finalSavedTime.toISOString(),
+          skewMs,
+          timeZone: tz,
+          lastSyncStatus: 'skew_detected'
+        });
+        try {
+          await SkewEvent.create({
+            deviceId: scan.deviceId || '',
+            dealerCode: scan.dealerCode || '',
+            userId: scan.userId || scan.loginId || '',
+            batchId,
+            serverTime: finalSavedTime,
+            deviceTime: mobileTime || undefined,
+            mobileReceivedTimeUtc: mobileTime ? mobileTime.toISOString() : '',
+            skewMs,
+            status: 'skew_detected',
+            eventType: 'sync_detected',
+            message: `Detected clock skew of ${skewMs} ms for device ${scan.deviceId || ''}`
+          });
+        } catch (eventError) {
+          logSync('skew event save failed', { message: eventError.message, batchId, deviceId: scan.deviceId || '', skewMs });
+        }
+      }
+    } catch (e) {}
+  } catch (e) {}
+
   let doc;
   try {
     doc = await Inventory.create({
@@ -769,9 +830,15 @@ async function saveNormalizedScan(scan, req) {
     staffName: scan.staffName || (req.user ? req.user.name : ''),
     userName: scanUserName(req, scan),
     role,
-    timestamp: scan.timestamp,
+    timestamp: finalSavedTime,
     synced: true,
     isSynced: true,
+    scanTime: finalSavedTime,
+    serverReceivedAt: scan.serverReceivedAt || finalSavedTime,
+    mobileReceivedTime: scan.mobileReceivedTime || mobileTimestamp(scan) || '',
+    mobileReceivedTimeUtc: scan.mobileReceivedTimeUtc || (mobileTime ? mobileTime.toISOString() : ''),
+    syncBatchId: scan.syncBatchId || '',
+    serverTimeZone: scan.serverTimeZone || '',
     clientScanId: scan.clientScanId,
     clientSyncKey: scan.clientSyncKey,
     syncKey: scan.syncKey,
@@ -834,6 +901,8 @@ async function syncSummary(activePort) {
 async function pushHandler(req, res) {
   const io = req.io || req.app.get('io');
   const startedAt = new Date();
+  const syncBatchId = (randomUUID && randomUUID()) || `batch-${Date.now()}`;
+  const serverTimeZone = (Intl && Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'UTC';
   try {
     const body = Array.isArray(req.body) ? { scans: req.body } : req.body || {};
     if (isLocalhostUrl(body.serverUrl)) {
@@ -844,6 +913,7 @@ async function pushHandler(req, res) {
     logSync('server request received', {
       route: req.originalUrl,
       method: req.method,
+      batchId: syncBatchId,
       deviceId: clean(body.deviceId || (incomingRaw[0] && incomingRaw[0].deviceId)),
       receivedCount: incomingRaw.length,
       ...dateDebugPayload({
@@ -859,7 +929,8 @@ async function pushHandler(req, res) {
         qty: clean(item.qty || item.quantity),
         rawBarcode: clean(item.rawBarcode || item.rawScanValue || item.rawScan || item.rawScanString),
         upiId: clean(item.upiId || item.upiSequence || item.id),
-        mobileReceivedTime: mobileTimestamp(item)
+        mobileReceivedTime: mobileTimestamp(item),
+        batchId: syncBatchId
       }))
     });
     if (!incomingRaw.length) {
@@ -922,6 +993,8 @@ async function pushHandler(req, res) {
     const incoming = incomingRaw.map((item) => ({
       ...item,
       serverReceivedAt: new Date(),
+      syncBatchId,
+      serverTimeZone,
       dealerCode: activeAudit.dealerCode,
       dealerName: activeAudit.dealerName,
       auditId: activeAudit.auditId,
@@ -944,6 +1017,9 @@ async function pushHandler(req, res) {
     const normalized = incoming.map((item, index) => {
       const scan = applyActiveAudit(normalizeScan({ ...item, deviceId: item.deviceId || deviceId }), activeAudit);
       applyUserContext(scan, requestUserContext);
+      // persist batch identifiers and server timezone info on each scan
+      scan.syncBatchId = item.syncBatchId || syncBatchId;
+      scan.serverTimeZone = item.serverTimeZone || serverTimeZone;
       return { index, scan };
     });
     normalized.forEach(({ scan }) => {
@@ -1469,12 +1545,15 @@ async function pushHandler(req, res) {
             ? 'Some records failed. Review failedRows and retry failed queue from Sync Center.'
             : 'Sync workflow healthy.'
       },
+      syncBatchId: syncBatchId,
+      dateDiagnostics: dateDebugPayload({ serverTime: startedAt, mobileTime: incomingRaw[0] ? mobileTimestamp(incomingRaw[0]) : '', savedTime: completedAt }),
       ...summary
     };
 
     await SyncLog.create({
       deviceId,
       dealerCode,
+      batchId: syncBatchId,
       auditId: activeAuditPayload.auditId,
       route: req.originalUrl,
       status: allRowsRejected ? 'failed' : failedCount ? 'partial' : 'success',

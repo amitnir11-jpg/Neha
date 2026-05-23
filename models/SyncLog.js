@@ -6,6 +6,7 @@ const syncLogSchema = new mongoose.Schema(
     dealerCode: { type: String, trim: true, uppercase: true, index: true },
     auditId: { type: String, trim: true, index: true },
     route: { type: String, trim: true },
+    batchId: { type: String, trim: true, default: '' },
     status: { type: String, enum: ['success', 'failed', 'partial', 'rejected'], index: true },
     receivedCount: { type: Number, default: 0 },
     insertedCount: { type: Number, default: 0 },

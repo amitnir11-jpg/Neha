@@ -118,6 +118,8 @@
     adminDeleteRows: [],
     adminDeleteSelectedIds: new Set(),
     adminDeleteLastPreview: null,
+    clockSkewRows: [],
+    clockSkewSelectedIds: new Set(),
     locationDeleteLastCount: null,
     syncInProgress: false,
     deviceId: storageGet('dakshDeviceId') || '',
@@ -499,6 +501,7 @@
     second: '2-digit',
     hour12: true
   });
+  const DISPLAY_IST_DATE_TIME_RE = /^\d{2}-[A-Za-z]{3}-\d{4}\s+\d{2}:\d{2}:\d{2}\s+(AM|PM)$/i;
 
   function istDateTimeParts(value) {
     if (!value) return '';
@@ -511,6 +514,9 @@
   }
 
   function dateTime(value) {
+    if (typeof value === 'string' && DISPLAY_IST_DATE_TIME_RE.test(value.trim())) {
+      return value.trim().replace(/\s+(am|pm)$/i, (match) => match.toUpperCase());
+    }
     const parts = istDateTimeParts(value);
     if (!parts) return value ? String(value) : '';
     return `${parts.day}-${parts.month}-${parts.year} ${parts.hour}:${parts.minute}:${parts.second} ${String(parts.dayPeriod || '').toUpperCase()}`;
@@ -4985,6 +4991,100 @@
     setSmtpMessage('#smtpSettingsMessage', settings.passwordSaved ? 'Password Saved Securely' : 'Change Password Required', settings.passwordSaved ? 'success' : 'error');
   }
 
+  function clockSkewCriteria() {
+    const form = $('#clockSkewFilters');
+    return {
+      dealerCode: cleanDealerCode($('[name="dealerCode"]', form)?.value || ''),
+      deviceId: String($('[name="deviceId"]', form)?.value || '').trim(),
+      userId: String($('[name="userId"]', form)?.value || '').trim(),
+      thresholdMinutes: Number($('[name="thresholdMinutes"]', form)?.value || 5),
+      sinceDays: Number($('[name="sinceDays"]', form)?.value || 7)
+    };
+  }
+
+  function setClockSkewMessage(message, type = 'success') {
+    const node = $('#clockSkewMessage');
+    if (!node) return;
+    node.className = `form-message ${type}`;
+    node.textContent = message || '';
+  }
+
+  function selectedClockSkewDeviceIds() {
+    return Array.from(state.clockSkewSelectedIds || []);
+  }
+
+  function renderClockSkewRows(rows = []) {
+    state.clockSkewRows = rows;
+    state.clockSkewSelectedIds = new Set();
+    const body = $('#clockSkewRows');
+    if (!body) return;
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="8" class="muted">No skewed device records found. Use Load or adjust filters.</td></tr>';
+      const selectAll = $('#clockSkewSelectAll');
+      if (selectAll) selectAll.checked = false;
+      return;
+    }
+    body.innerHTML = rows.map((item) => `
+      <tr>
+        <td><input class="clock-skew-select" type="checkbox" data-id="${escapeHtml(item.deviceId || '')}" ${state.clockSkewSelectedIds.has(item.deviceId) ? 'checked' : ''}></td>
+        <td>${deviceLink(item.deviceId)}</td>
+        <td>${escapeHtml(item.dealerCode || '')}</td>
+        <td>${escapeHtml(item.userId || '')}</td>
+        <td>${escapeHtml(item.batchId || '')}</td>
+        <td>${escapeHtml(item.serverTime || '')}</td>
+        <td>${escapeHtml(item.deviceTime || '')}</td>
+        <td>${escapeHtml(String(item.skewMs || 0))}</td>
+      </tr>
+    `).join('');
+    $('#clockSkewSelectAll')?.addEventListener('change', (event) => {
+      const checked = event.target.checked;
+      $$('.clock-skew-select').forEach((box) => {
+        box.checked = checked;
+        const id = String(box.dataset.id || '').trim();
+        if (id) {
+          if (checked) state.clockSkewSelectedIds.add(id);
+          else state.clockSkewSelectedIds.delete(id);
+        }
+      });
+    });
+    $$('.clock-skew-select').forEach((box) => {
+      box.addEventListener('change', (event) => {
+        const id = String(event.target.dataset.id || '').trim();
+        if (!id) return;
+        if (event.target.checked) state.clockSkewSelectedIds.add(id);
+        else state.clockSkewSelectedIds.delete(id);
+      });
+    });
+  }
+
+  async function loadClockSkewDevices() {
+    const criteria = clockSkewCriteria();
+    const params = new URLSearchParams();
+    if (criteria.dealerCode) params.set('dealerCode', criteria.dealerCode);
+    if (criteria.deviceId) params.set('deviceId', criteria.deviceId);
+    if (criteria.userId) params.set('userId', criteria.userId);
+    params.set('thresholdMinutes', String(criteria.thresholdMinutes || 5));
+    params.set('sinceDays', String(criteria.sinceDays || 7));
+    setClockSkewMessage('Loading skewed devices...', 'success');
+    const data = await api(`/api/admin/clock-skew?${params.toString()}`);
+    renderClockSkewRows(data.list || []);
+    setClockSkewMessage(`Loaded ${data.count || 0} skewed device(s).`, 'success');
+  }
+
+  async function notifySelectedClockSkewDevices() {
+    const deviceIds = selectedClockSkewDeviceIds();
+    if (!deviceIds.length) {
+      setClockSkewMessage('Select at least one device to notify.', 'error');
+      return;
+    }
+    setClockSkewMessage('Sending notify event to selected devices...', 'success');
+    const data = await api('/api/admin/clock-skew/notify', {
+      method: 'POST',
+      body: { deviceIds }
+    });
+    setClockSkewMessage(data.message || 'Notification queued.', data.success ? 'success' : 'error');
+  }
+
   async function loadMasterScanValidator() {
     const panel = $('#validatorStats');
     if (!panel) return;
@@ -6205,6 +6305,9 @@
       setLivePill('barcodeReadyStatus', 'Enter Bin Location', false);
       $('#barcodeBinLocation').focus();
     });
+    $('#loadClockSkewBtn')?.addEventListener('click', () => loadClockSkewDevices().catch((error) => toast(error.message, 'error')));
+    $('#loadClockSkewFiltersBtn')?.addEventListener('click', () => loadClockSkewDevices().catch((error) => toast(error.message, 'error')));
+    $('#notifyClockSkewBtn')?.addEventListener('click', () => notifySelectedClockSkewDevices().catch((error) => toast(error.message, 'error')));
     $('#binManagementDealer')?.addEventListener('change', () => {
       $('#binMasterRows').innerHTML = '<tr><td colspan="5" class="muted">Loading BIN locations...</td></tr>';
       loadBins().catch((error) => toast(error.message, 'error'));

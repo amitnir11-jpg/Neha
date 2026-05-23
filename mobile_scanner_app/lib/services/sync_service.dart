@@ -125,6 +125,27 @@ class SyncService {
 
     try {
       final data = await ApiClient(settings).syncBulk(pending);
+      // Check for server-provided date diagnostics and warn if device clock is skewed
+      var hasClockSkew = false;
+      try {
+        final diag = data['dateDiagnostics'];
+        if (diag is Map) {
+          final serverUtc = diag['serverUtcTime'] ?? '';
+          final mobileUtc = diag['mobileReceivedTimeUtc'] ?? '';
+          if (serverUtc is String && serverUtc.isNotEmpty && mobileUtc is String && mobileUtc.isNotEmpty) {
+            final serverTime = DateTime.tryParse(serverUtc);
+            final mobileTime = DateTime.tryParse(mobileUtc);
+            if (serverTime != null && mobileTime != null) {
+              final skew = serverTime.difference(mobileTime).inMilliseconds.abs();
+              if (skew > 5 * 60 * 1000) {
+                hasClockSkew = true;
+                final warn = 'Warning: device clock differs from server by ${(skew / 60000).toStringAsFixed(1)} minutes. Server time used.';
+                data['message'] = '${data['message'] ?? ''} \n$warn';
+              }
+            }
+          }
+        }
+      } catch (_) {}
       final logs = (data['logs'] ?? []) as List<dynamic>;
       var synced = 0;
       final completedKeys = <String>{};
@@ -196,7 +217,7 @@ class SyncService {
       }
 
       return SyncResult(true, (data['message'] ?? 'Sync completed').toString(),
-          synced: synced, serverReached: true);
+          synced: synced, serverReached: true, hasClockSkew: hasClockSkew);
     } on ApiException catch (error) {
       final statusCode = error.statusCode ?? 0;
       final shouldMarkFailed =
@@ -215,10 +236,11 @@ class SyncService {
 
 class SyncResult {
   SyncResult(this.success, this.message,
-      {required this.synced, this.serverReached = false});
+      {required this.synced, this.serverReached = false, this.hasClockSkew = false});
 
   final bool success;
   final String message;
   final int synced;
   final bool serverReached;
+  final bool hasClockSkew;
 }

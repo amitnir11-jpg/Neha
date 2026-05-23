@@ -8,6 +8,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/scan_record.dart';
+import '../services/socket_service.dart';
 import '../services/api_client.dart';
 import '../services/local_database.dart';
 import '../services/settings_store.dart';
@@ -78,6 +79,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   bool _syncInFlight = false;
   int _pendingCount = 0;
   int _failedCount = 0;
+  String _clockSkewWarning = '';
+  final _socket = SocketService();
   String _statusText = 'Ready';
   Color _statusColor = Colors.blue;
 
@@ -85,7 +88,46 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _loadState();
+    _loadState().then((_) async {
+      try {
+        await _socket.connect(_settings);
+        _socket.on('sync:clockSkew', (data) {
+          try {
+            if (data is Map) {
+              final device = (data['deviceId'] ?? '').toString();
+              final skew = (data['skewMs'] ?? 0) is int
+                  ? (data['skewMs'] as int)
+                  : int.tryParse((data['skewMs'] ?? '0').toString()) ?? 0;
+              if (device.isEmpty || device == _deviceId) {
+                final minutes = (skew / 60000).toStringAsFixed(1);
+                if (mounted) {
+                  setState(() => _clockSkewWarning =
+                      'Device clock differs from server by $minutes minutes. Server time used. Please open Date/Time Settings.');
+                }
+              }
+            }
+          } catch (_) {}
+        });
+        _socket.on('sync:clockSkewNotify', (data) {
+          try {
+            if (data is Map) {
+              final deviceIds = (data['deviceIds'] as List<dynamic>?)
+                      ?.map((value) => value.toString().trim())
+                      .where((value) => value.isNotEmpty)
+                      .toList() ??
+                  [];
+              if (deviceIds.contains(_deviceId)) {
+                final message = (data['message'] ??
+                        'Please correct device date/time settings.')
+                    .toString();
+                if (mounted) setState(() => _clockSkewWarning = message);
+              }
+            }
+          } catch (_) {}
+        });
+      } catch (_) {}
+    });
+
     _connectivitySub = Connectivity().onConnectivityChanged.listen((result) {
       final hasNetwork = result != ConnectivityResult.none;
       if (mounted) setState(() => _online = hasNetwork);
@@ -109,6 +151,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     _connectivitySub?.cancel();
     _defaultBinController.dispose();
     _cameraController.dispose();
+    try {
+      _socket.off('sync:clockSkew');
+      _socket.off('sync:clockSkewNotify');
+      _socket.dispose();
+    } catch (_) {}
     super.dispose();
   }
 
@@ -229,6 +276,10 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       setState(() {
         _lastSyncAt = syncedAt;
         if (result.serverReached) _serverConnected = true;
+        if (!_clockSkewWarning.isNotEmpty || !result.hasClockSkew) {
+          _clockSkewWarning =
+              result.hasClockSkew ? result.message : _clockSkewWarning;
+        }
         if (silent) return;
         _statusText = result.success
             ? result.message
@@ -477,6 +528,26 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                 syncRunning: _syncInFlight,
                 lastSyncAt: _lastSyncAt,
               ),
+              if (_clockSkewWarning.isNotEmpty)
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade700,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      _clockSkewWarning,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                 child: Row(

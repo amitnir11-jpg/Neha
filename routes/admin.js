@@ -6,6 +6,7 @@ const Bin = require('../models/Bin');
 const Dealer = require('../models/Dealer');
 const VerificationLog = require('../models/VerificationLog');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
+const SkewEvent = require('../models/SkewEvent');
 const auth = require('./auth');
 const inventory = require('./inventory');
 const smtpConfig = require('../utils/smtpConfig');
@@ -310,6 +311,79 @@ async function reprocessScans(req, res) {
 
 router.post('/reprocess-scans', auth.requireAuth, auth.requireAdmin, reprocessScans);
 router.post('/reprocess-master-lookup', auth.requireAuth, auth.requireAdmin, reprocessScans);
+
+async function clockSkewList(req, res) {
+  try {
+    const thresholdMs = Number(req.query.thresholdMs || req.query.thresholdMinutes ? Number(req.query.thresholdMinutes) * 60000 : 300000);
+    const sinceDays = Number(req.query.sinceDays || 7);
+    const sinceDate = new Date(Date.now() - Math.max(0, sinceDays) * 24 * 60 * 60 * 1000);
+    const filter = { eventType: 'sync_detected', skewMs: { $gte: thresholdMs }, createdAt: { $gte: sinceDate } };
+    if (req.query.dealerCode) filter.dealerCode = inventory.normalizeDealerCode(req.query.dealerCode);
+    if (req.query.deviceId) filter.deviceId = String(req.query.deviceId).trim();
+    if (req.query.userId) filter.userId = String(req.query.userId).trim();
+
+    const records = await SkewEvent.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(5000)
+      .lean();
+
+    const byDevice = new Map();
+    for (const doc of records) {
+      const deviceId = (doc.deviceId || 'unknown').toString();
+      const existing = byDevice.get(deviceId);
+      if (!existing || new Date(doc.createdAt).getTime() > new Date(existing.createdAt).getTime()) {
+        byDevice.set(deviceId, {
+          deviceId,
+          batchId: doc.batchId || '',
+          dealerCode: doc.dealerCode || '',
+          userId: doc.userId || '',
+          serverTime: doc.serverTime ? new Date(doc.serverTime).toISOString() : '',
+          deviceTime: doc.deviceTime ? new Date(doc.deviceTime).toISOString() : doc.mobileReceivedTimeUtc || '',
+          skewMs: doc.skewMs || 0,
+          lastSeen: doc.createdAt || doc.serverTime,
+          message: doc.message || ''
+        });
+      }
+    }
+
+    const list = Array.from(byDevice.values()).sort((a, b) => b.skewMs - a.skewMs);
+    res.json({ success: true, count: list.length, thresholdMs, list });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function notifyClockSkewDevices(req, res) {
+  try {
+    const deviceIds = Array.isArray(req.body.deviceIds) ? req.body.deviceIds.map(String).map((id) => id.trim()).filter(Boolean) : [];
+    const message = String(req.body.message || 'Device date/time is skewed. Please open Date/Time Settings and correct it.');
+    if (!deviceIds.length) return res.status(400).json({ success: false, message: 'No deviceIds provided.' });
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('sync:clockSkewNotify', { deviceIds, message, sentAt: new Date().toISOString() });
+    }
+
+    await SkewEvent.insertMany(deviceIds.map((deviceId) => ({
+      deviceId,
+      dealerCode: String(req.body.dealerCode || '').trim().toUpperCase(),
+      userId: String(req.body.userId || '').trim(),
+      batchId: String(req.body.batchId || '').trim(),
+      serverTime: new Date(),
+      skewMs: 0,
+      status: 'admin_notified',
+      eventType: 'admin_notification',
+      message
+    })));
+
+    res.json({ success: true, deviceIds: deviceIds.length, message: 'Notification queued to devices.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+router.get('/clock-skew', auth.requireAuth, auth.requireAdmin, clockSkewList);
+router.post('/clock-skew/notify', auth.requireAuth, auth.requireAdmin, notifyClockSkewDevices);
 
 router.get('/smtp-status', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {

@@ -263,6 +263,16 @@ const inventorySchema = new mongoose.Schema(
       trim: true,
       default: ''
     },
+    syncBatchId: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    serverTimeZone: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     synced: {
       type: Boolean,
       default: false,

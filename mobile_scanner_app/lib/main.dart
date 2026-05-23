@@ -74,6 +74,7 @@ class AppGate extends StatefulWidget {
 class _AppGateState extends State<AppGate> {
   bool _loading = true;
   bool _loggedIn = false;
+  bool _tokenCleared = false;
 
   @override
   void initState() {
@@ -88,6 +89,7 @@ class _AppGateState extends State<AppGate> {
     try {
       token = await settings.token.timeout(const Duration(seconds: 6));
       dealer = await settings.dealerCode.timeout(const Duration(seconds: 6));
+      _tokenCleared = await settings.consumeTokenClearedFlag().timeout(const Duration(seconds: 2));
     } catch (_) {
       // Local storage read failed or timed out; continue without blocking startup.
     }
@@ -96,6 +98,21 @@ class _AppGateState extends State<AppGate> {
       _loggedIn = token.isNotEmpty && dealer.isNotEmpty;
       _loading = false;
     });
+    if (_tokenCleared && !_loggedIn && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        showDialog(
+            context: context,
+            builder: (_) => AlertDialog(
+                  title: const Text('Session Reset'),
+                  content: const Text('Your secure session was cleared due to storage corruption. Please login again.'),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('OK'))
+                  ],
+                ));
+      });
+    }
   }
 
   @override

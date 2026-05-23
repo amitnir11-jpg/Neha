@@ -22,7 +22,7 @@ const { formatDateLikeFields } = require('../utils/time');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
-const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.0.2';
+const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.0.5';
 
 function clean(value) {
   return String(value || '').trim();
