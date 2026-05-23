@@ -18,6 +18,7 @@ const MasterCatalogue = require('../models/MasterCatalogue');
 const { cataloguePayload } = require('../utils/catalogue');
 const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentity');
 const masterValidation = require('../utils/masterValidation');
+const { dateDebugPayload, formatIstDateTime, validDate: validTimestamp } = require('../utils/time');
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
@@ -253,6 +254,7 @@ function scanPublicDebug(scan = {}) {
     syncStatus: scan.syncStatus,
     deviceId: scan.deviceId,
     timestamp: scan.timestamp,
+    scanTime: scan.scanTime || scan.timestamp,
     createdAt: scan.createdAt,
     warnings: scan.warnings || [],
     masterFound: Boolean(scan.masterFound || scan.masterMatch || scan.isMasterMatched)
@@ -366,8 +368,8 @@ function syncLogFromAck(scan = {}, meta = {}, status = 'inserted', errorMessage 
   };
 }
 
-function scanTimestamp(item = {}) {
-  const raw = firstValue(item, [
+function mobileTimestamp(item = {}) {
+  return firstValue(item, [
     'timestamp',
     'scanTime',
     'scannedAt',
@@ -377,9 +379,12 @@ function scanTimestamp(item = {}) {
     'localCreatedAt',
     'localTimestamp'
   ]);
-  if (!raw) return new Date();
-  const parsed = raw instanceof Date ? raw : new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function scanTimestamp(item = {}) {
+  return item.serverReceivedAt instanceof Date && !Number.isNaN(item.serverReceivedAt.getTime())
+    ? item.serverReceivedAt
+    : new Date();
 }
 
 function liveCutoff() {
@@ -387,6 +392,10 @@ function liveCutoff() {
 }
 
 function normalizeScan(item = {}) {
+  const serverReceivedAt = item.serverReceivedAt instanceof Date && !Number.isNaN(item.serverReceivedAt.getTime())
+    ? item.serverReceivedAt
+    : new Date();
+  const receivedMobileTimestamp = mobileTimestamp(item);
   const explicitScanId = clean(item.scanId || item.uniqueScanId || item.mobileScanId || item.localId);
   const clientScanId = clean(item.clientScanId || item.localId || item.mobileScanId || explicitScanId);
   const clientSyncKey = clean(item.clientSyncKey || item.localSyncKey || item.syncKey || clientScanId);
@@ -402,7 +411,7 @@ function normalizeScan(item = {}) {
     'raw'
   ]));
   const parsed = inventory.parseRawScan(rawScan);
-  const timestamp = scanTimestamp(item);
+  const timestamp = scanTimestamp({ ...item, serverReceivedAt });
   const dealerCode = upper(item.dealerCode || item.dealer || item.dealerId || parsed.dealerCode);
   const partNumber = normalizePartNumber(parsed.part || firstValue(item, ['partNumber', 'partNo', 'part', 'sku', 'itemCode']));
   const scanType = normalizeScanType(item.scanType || item.action || item.type || item.movement || parsed.type || 'INWARD');
@@ -424,6 +433,9 @@ function normalizeScan(item = {}) {
 
   return {
     source: item,
+    serverReceivedAt,
+    mobileReceivedTime: receivedMobileTimestamp,
+    mobileReceivedTimeUtc: validTimestamp(receivedMobileTimestamp)?.toISOString() || '',
     scanSource,
     parsed,
     clientScanId,
@@ -613,7 +625,7 @@ async function scanPolicyResult(scan = {}) {
   }
   const duplicate = await Inventory.findOne(duplicateQuery(scan)).sort({ timestamp: 1, createdAt: 1 }).lean();
   if (duplicate) {
-    return { ok: false, status: 'duplicate', existing: duplicate, reason: 'Duplicate QR/UPI', message: `Duplicate QR already scanned. First scanned by ${duplicate.userName || duplicate.staffName || duplicate.loginId || 'Unknown'}, at ${duplicate.timestamp ? new Date(duplicate.timestamp).toLocaleString() : '-'}, Bin ${duplicate.binLocation || duplicate.bin || '-'}.` };
+    return { ok: false, status: 'duplicate', existing: duplicate, reason: 'Duplicate QR/UPI', message: `Duplicate QR already scanned. First scanned by ${duplicate.userName || duplicate.staffName || duplicate.loginId || 'Unknown'}, at ${formatIstDateTime(duplicate.timestamp) || '-'}, Bin ${duplicate.binLocation || duplicate.bin || '-'}.` };
   }
   return { ok: true };
 }
@@ -834,6 +846,10 @@ async function pushHandler(req, res) {
       method: req.method,
       deviceId: clean(body.deviceId || (incomingRaw[0] && incomingRaw[0].deviceId)),
       receivedCount: incomingRaw.length,
+      ...dateDebugPayload({
+        serverTime: startedAt,
+        mobileTime: incomingRaw[0] ? mobileTimestamp(incomingRaw[0]) : ''
+      }),
       bodyKeys: Object.keys(body).slice(0, 30),
       sample: incomingRaw.map((item) => ({
         scanId: clean(item.scanId || item.uniqueScanId || item.mobileScanId || item.localId),
@@ -842,7 +858,8 @@ async function pushHandler(req, res) {
         scanType: clean(item.scanType || item.action || item.type),
         qty: clean(item.qty || item.quantity),
         rawBarcode: clean(item.rawBarcode || item.rawScanValue || item.rawScan || item.rawScanString),
-        upiId: clean(item.upiId || item.upiSequence || item.id)
+        upiId: clean(item.upiId || item.upiSequence || item.id),
+        mobileReceivedTime: mobileTimestamp(item)
       }))
     });
     if (!incomingRaw.length) {
@@ -904,6 +921,7 @@ async function pushHandler(req, res) {
     }
     const incoming = incomingRaw.map((item) => ({
       ...item,
+      serverReceivedAt: new Date(),
       dealerCode: activeAudit.dealerCode,
       dealerName: activeAudit.dealerName,
       auditId: activeAudit.auditId,
@@ -1140,6 +1158,10 @@ async function pushHandler(req, res) {
         userName: scanUserName(req, scan),
         role: scanRole(req, scan),
         timestamp: scan.timestamp,
+        scanTime: scan.timestamp,
+        serverReceivedAt: scan.serverReceivedAt || scan.timestamp,
+        mobileReceivedTime: scan.mobileReceivedTime || '',
+        mobileReceivedTimeUtc: scan.mobileReceivedTimeUtc || '',
         synced: true,
         isSynced: true,
         clientScanId: scan.clientScanId,
@@ -1158,6 +1180,16 @@ async function pushHandler(req, res) {
       insertDocs.push(doc);
       insertMeta.push({ ...ack, scanId: doc.uniqueScanId, uniqueScanId: doc.uniqueScanId, acks: [ack] });
       operations.push({ insertOne: { document: doc } });
+      logSync('scan timestamp normalized', {
+        scanId: doc.uniqueScanId,
+        partNumber: doc.partNumber,
+        dealerCode: doc.dealerCode,
+        ...dateDebugPayload({
+          serverTime: scan.serverReceivedAt || doc.timestamp,
+          mobileTime: scan.mobileReceivedTime,
+          savedTime: doc.timestamp
+        })
+      });
       console.log('SAVED_VALID_SCAN', { scanId: doc.uniqueScanId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'sync' });
     });
 
@@ -1218,6 +1250,10 @@ async function pushHandler(req, res) {
             $inc: { qty: Number(doc.qty || 0), quantity: Number(doc.quantity || doc.qty || 0) },
             $set: {
               timestamp: doc.timestamp,
+              scanTime: doc.scanTime || doc.timestamp,
+              serverReceivedAt: doc.serverReceivedAt || doc.timestamp,
+              mobileReceivedTime: doc.mobileReceivedTime || '',
+              mobileReceivedTimeUtc: doc.mobileReceivedTimeUtc || '',
               lastManualMergedAt: new Date(),
               syncStatus: 'synced',
               synced: true,
@@ -1323,6 +1359,15 @@ async function pushHandler(req, res) {
     savedScans.forEach((scan) => {
       console.log("Matched category:", scan.category || '');
       console.log("Matched partDescription:", scan.partDescription || scan.partName || '');
+      logSync('saved MongoDB timestamp verified', {
+        scanId: scan.uniqueScanId || scan.scanId,
+        partNumber: scan.partNumber || scan.part,
+        ...dateDebugPayload({
+          serverTime: scan.serverReceivedAt || scan.timestamp || scan.createdAt,
+          mobileTime: scan.mobileReceivedTime,
+          savedTime: scan.timestamp || scan.createdAt
+        })
+      });
       const meta = metaByScanId.get(clean(scan.uniqueScanId || scan.scanId)) || ackMetaFromScan(scan);
       ackList(meta).forEach((ack) => logs.push(syncLogFromAck(scan, ack, 'inserted', '')));
     });

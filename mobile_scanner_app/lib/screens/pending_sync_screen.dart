@@ -68,6 +68,28 @@ class _PendingSyncScreenState extends State<PendingSyncScreen> {
     return Colors.orange;
   }
 
+  String _istDateTime(DateTime value) {
+    final ist = value.toUtc().add(const Duration(hours: 5, minutes: 30));
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
+    final hour12 = ist.hour % 12 == 0 ? 12 : ist.hour % 12;
+    final suffix = ist.hour >= 12 ? 'PM' : 'AM';
+    String two(int number) => number.toString().padLeft(2, '0');
+    return '${two(ist.day)}-${months[ist.month - 1]}-${ist.year} ${two(hour12)}:${two(ist.minute)}:${two(ist.second)} $suffix';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -112,7 +134,7 @@ class _PendingSyncScreenState extends State<PendingSyncScreen> {
                             style:
                                 const TextStyle(fontWeight: FontWeight.w900)),
                         subtitle: Text(
-                            '${scan.scanType} | ${scan.binLocation} | ${scan.createdAt.toLocal()}${scan.errorMessage.isEmpty ? '' : '\n${scan.errorMessage}'}'),
+                            '${scan.scanType} | ${scan.binLocation} | ${_istDateTime(scan.createdAt)}${scan.errorMessage.isEmpty ? '' : '\n${scan.errorMessage}'}'),
                         trailing: Text(scan.status,
                             style: TextStyle(
                                 color: _color(scan.status),

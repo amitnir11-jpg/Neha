@@ -757,7 +757,8 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     Navigator.pop(
       context,
       _ScanDraft(
-        rawValue: 'MANUAL:$part:$bin:${DateTime.now().toIso8601String()}',
+        rawValue:
+            'MANUAL:$part:$bin:${DateTime.now().toUtc().toIso8601String()}',
         partNumber: part,
         quantity: qty,
         binLocation: bin,

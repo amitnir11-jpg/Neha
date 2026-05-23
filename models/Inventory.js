@@ -244,6 +244,25 @@ const inventorySchema = new mongoose.Schema(
       default: Date.now,
       index: true
     },
+    scanTime: {
+      type: Date,
+      default: Date.now,
+      index: true
+    },
+    serverReceivedAt: {
+      type: Date,
+      default: Date.now
+    },
+    mobileReceivedTime: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    mobileReceivedTimeUtc: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     synced: {
       type: Boolean,
       default: false,
@@ -416,6 +435,8 @@ inventorySchema.pre('save', function syncInventoryAliases(next) {
   this.masterMatch = Boolean(this.masterMatch || this.isMasterMatched);
   this.isMasterMatched = Boolean(this.isMasterMatched || this.masterMatch);
   this.masterFound = Boolean(this.masterFound || this.masterMatch || this.isMasterMatched);
+  if (!this.timestamp && this.scanTime) this.timestamp = this.scanTime;
+  if (!this.scanTime && this.timestamp) this.scanTime = this.timestamp;
   if (!this.rawUpi && (this.rawScan || this.rawScanString)) this.rawUpi = this.rawScan || this.rawScanString;
   if (!this.rawBarcode && (this.rawScan || this.rawScanString)) this.rawBarcode = this.rawScan || this.rawScanString;
   if (!this.rawQR && (this.rawScan || this.rawScanString)) this.rawQR = this.rawScan || this.rawScanString;

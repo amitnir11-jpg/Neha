@@ -65,7 +65,7 @@ class ScanRecord {
         'userId': userId,
         'userName': userName,
         'deviceId': deviceId,
-        'createdAt': createdAt.toIso8601String(),
+        'createdAt': createdAt.toUtc().toIso8601String(),
         'status': status,
         'source': source,
         'serverSyncId': serverSyncId,
@@ -120,7 +120,7 @@ class ScanRecord {
         'rawScan': rawValue,
         'rawScanString': rawValue,
         'rawUpi': rawValue,
-        'timestamp': createdAt.toIso8601String(),
+        'timestamp': createdAt.toUtc().toIso8601String(),
         'source': source,
         'scanMode':
             source == 'manual' ? 'Mobile Manual Entry' : 'Mobile Scanner',

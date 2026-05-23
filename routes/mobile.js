@@ -18,6 +18,7 @@ const sync = require('./sync');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
 const { serverInfo } = require('../utils/network');
 const { normalizePartNumber } = require('../utils/normalize');
+const { formatDateLikeFields } = require('../utils/time');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
@@ -186,7 +187,7 @@ async function scanReport(req, res, scanType) {
 }
 
 function mobileItem(scan) {
-  const timestamp = scan.timestamp ? new Date(scan.timestamp).getTime() : Date.now();
+  const timestamp = scan.timestamp || scan.scanTime || scan.createdAt || Date.now();
   return {
     id: scan.rawScan || scan.rawScanString || scan.uniqueScanId || String(scan._id),
     type: scan.type || scan.scanType || 'INWARD',
@@ -216,8 +217,8 @@ function mobileItem(scan) {
     rawUpi: scan.rawUpi || scan.rawScan || scan.rawScanString || '',
     rawScan: scan.rawScan || scan.rawScanString || scan.rawUpi || '',
     rawScanString: scan.rawScanString || scan.rawScan || '',
-    timestamp: scan.timestamp || timestamp,
-    scanTime: scan.timestamp || timestamp,
+    timestamp,
+    scanTime: scan.scanTime || scan.timestamp || timestamp,
     syncStatus: scan.syncStatus || (scan.synced || scan.isSynced ? 'synced' : 'pending'),
     isSynced: true,
     isDuplicate: false
@@ -726,7 +727,7 @@ router.get('/reports/export-excel', auth.optionalAuth, async (req, res) => {
     const sheet = workbook.addWorksheet(`${type} report`.slice(0, 31));
     const keys = Object.keys(rows[0] || { time: '', dealerCode: '', partNumber: '', qty: '', mrp: '', binLocation: '', scanType: '', deviceId: '', syncStatus: '' });
     sheet.columns = keys.map((key) => ({ header: key, key, width: 18 }));
-    rows.forEach((row) => sheet.addRow(row));
+    rows.forEach((row) => sheet.addRow(formatDateLikeFields(row)));
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="Daksh_${type}_report.xlsx"`);
     await workbook.xlsx.write(res);

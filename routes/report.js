@@ -15,6 +15,7 @@ const auth = require('./auth');
 const inventoryRoute = require('./inventory');
 const { normalizePartNumber: normalizePartNo, cleanText: normalizedCleanText, numberValue } = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
+const { formatDateLikeFields, formatIstDateTime, isDateLikeKey } = require('../utils/time');
 
 const router = express.Router();
 const autoTable = autoTableModule.default || autoTableModule;
@@ -352,7 +353,15 @@ function addSheet(workbook, name, columns, rows) {
     key: column.key,
     width: column.width || 18
   }));
-  rows.forEach((row) => sheet.addRow(row));
+  rows.forEach((row) => {
+    const formatted = { ...row };
+    columns.forEach((column) => {
+      if (isDateLikeKey(column.key) && formatted[column.key]) {
+        formatted[column.key] = formatIstDateTime(formatted[column.key]) || formatted[column.key];
+      }
+    });
+    sheet.addRow(formatDateLikeFields(formatted));
+  });
   applyHeaderStyle(sheet);
   sheet.eachRow((row) => {
     row.eachCell((cell) => {
@@ -592,7 +601,7 @@ async function buildLegacyReportData(query = {}) {
     ? audits.find((audit) => audit.auditId === String(query.auditId).trim())
     : (selectedDealer && selectedDealer.currentAuditId ? audits.find((audit) => audit.auditId === selectedDealer.currentAuditId) : null);
   const summary = [{
-    generatedAt: now.toLocaleString(),
+    generatedAt: formatIstDateTime(now),
     dealerName: query.dealerName || (selectedDealer ? selectedDealer.dealerName : 'All'),
     dealerCode: query.dealerCode || 'All',
     auditId: query.auditId || 'All',
@@ -1692,7 +1701,7 @@ async function buildReportData(query = {}) {
   });
   const selectedDealer = query.dealerCode ? dealers.find((dealer) => dealer.dealerCode === String(query.dealerCode).trim().toUpperCase()) : null;
   const selectedAudit = query.auditId ? audits.find((audit) => audit.auditId === String(query.auditId).trim()) : null;
-  const summary = [{ generatedAt: new Date().toLocaleString(), dealerName: query.dealerName || (selectedDealer ? selectedDealer.dealerName : 'All'), dealerCode: query.dealerCode || 'All', auditId: query.auditId || 'All', fromDate: query.from || '', toDate: query.to || '', category: query.category || 'All', partNumber: query.partNumber || 'All', binLocation: query.bin || 'All', varianceType: query.varianceType || 'All', scanType: query.type || 'All', totalMasterParts: masters.length, totalScans: scans.length, totalSystemQty: finalRows.reduce((sum, row) => sum + row.systemQty, 0), totalPhysicalQty: finalRows.reduce((sum, row) => sum + row.physicalQty, 0), totalSystemMrpValue: money(finalRows.reduce((sum, row) => sum + row.systemMrpValue, 0)), totalPhysicalMrpValue: money(finalRows.reduce((sum, row) => sum + row.physicalMrpValue, 0)), matched: finalRows.filter((row) => row.status === 'Matched').length, short: finalRows.filter((row) => row.status === 'Short').length, excess: finalRows.filter((row) => row.status === 'Excess' || row.status === 'Extra Part').length, notScanned: 0 }];
+  const summary = [{ generatedAt: formatIstDateTime(new Date()), dealerName: query.dealerName || (selectedDealer ? selectedDealer.dealerName : 'All'), dealerCode: query.dealerCode || 'All', auditId: query.auditId || 'All', fromDate: query.from || '', toDate: query.to || '', category: query.category || 'All', partNumber: query.partNumber || 'All', binLocation: query.bin || 'All', varianceType: query.varianceType || 'All', scanType: query.type || 'All', totalMasterParts: masters.length, totalScans: scans.length, totalSystemQty: finalRows.reduce((sum, row) => sum + row.systemQty, 0), totalPhysicalQty: finalRows.reduce((sum, row) => sum + row.physicalQty, 0), totalSystemMrpValue: money(finalRows.reduce((sum, row) => sum + row.systemMrpValue, 0)), totalPhysicalMrpValue: money(finalRows.reduce((sum, row) => sum + row.physicalMrpValue, 0)), matched: finalRows.filter((row) => row.status === 'Matched').length, short: finalRows.filter((row) => row.status === 'Short').length, excess: finalRows.filter((row) => row.status === 'Excess' || row.status === 'Extra Part').length, notScanned: 0 }];
 
   return { filters: query, summary, selectedDealer, selectedAudit, allFinalRows, finalRows, categoryRows: Array.from(categoryMap.values()).sort((a, b) => sortText(a.category, b.category)), scans, damageRows: scans.filter((scan) => scan.type === 'DAMAGE' || scan.scanType === 'DAMAGE'), openingRows: finalRows, oilRows: finalRows.filter((row) => /oil|lube|lubricant/i.test(row.category || row.partDescription || row.partName)), accessoryRows: finalRows.filter((row) => /accessor/i.test(row.category || row.partDescription || row.partName)), nonMovingRows: [], highValueNonMovingRows: [], binRows: binWiseRowsFromScans(scans, finalRows), rawLogRows: scans.map((scan) => ({ time: scan.timestamp, rawScan: scan.rawScan || scan.rawScanString || scan.rawUpi || '', partNumber: scan.partNumber || scan.part, partDescription: scan.partDescription || scan.partName, qty: scan.qty, type: scan.scanType || scan.type, bin: scan.binLocation || scan.bin, dealerCode: scan.dealerCode, auditId: scan.auditId, userId: scan.userId || scan.loginId || '', userName: scan.userName || scan.staffName || scan.loginId || '', role: scan.role || '', deviceId: scan.deviceId, entryMode: scan.entryMode, entryChannel: scan.entryChannel, scanSourceLabel: scan.scanSourceLabel, staffName: scan.staffName, warnings: (scan.warnings || []).join(', ') })), dealerBackupRows: dealers.map((dealer) => ({ dealerName: dealer.dealerName, dealerCode: dealer.dealerCode, brand: dealer.brand, location: dealer.location, currentAuditId: dealer.currentAuditId, auditName: dealer.auditName, auditorName: dealer.auditorName, generalManager: dealer.generalManager, spmName: dealer.spmName })), dealers, audits };
 }
@@ -1761,7 +1770,7 @@ function scanDetailsForPartwise(scans = []) {
     const device = firstPresent(scan.deviceName, scan.deviceId);
     const raw = cleanText(scan.rawUpi || scan.rawScan || scan.rawScanString);
     const time = scan.timestamp ? new Date(scan.timestamp) : null;
-    const timeText = time && !Number.isNaN(time.getTime()) ? time.toLocaleString('en-IN') : cleanText(scan.timestamp);
+    const timeText = time && !Number.isNaN(time.getTime()) ? formatIstDateTime(time) : cleanText(scan.timestamp);
     const parts = [`${type} Qty ${qty}`];
     if (bin) parts.push(`Bin ${bin}`);
     if (user) parts.push(`User ${user}`);
@@ -2014,7 +2023,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   const selectedDealer = query.dealerCode ? dealers.find((dealer) => dealer.dealerCode === String(query.dealerCode).trim().toUpperCase()) : null;
   const selectedAudit = query.auditId ? audits.find((audit) => audit.auditId === String(query.auditId).trim()) : null;
   const summary = {
-    generatedAt: new Date().toLocaleString(),
+    generatedAt: formatIstDateTime(new Date()),
     dealerName: query.dealerName || (selectedDealer ? selectedDealer.dealerName : 'All'),
     dealerCode: query.dealerCode || 'All',
     auditId: query.auditId || 'All',
@@ -2334,7 +2343,7 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
   const selectedDealer = query.dealerCode ? dealers.find((dealer) => dealer.dealerCode === String(query.dealerCode).trim().toUpperCase()) : null;
   const selectedAudit = query.auditId ? audits.find((audit) => audit.auditId === String(query.auditId).trim()) : null;
   const summary = {
-    generatedAt: new Date().toLocaleString(),
+    generatedAt: formatIstDateTime(new Date()),
     dealerName: query.dealerName || (selectedDealer ? selectedDealer.dealerName : 'All'),
     dealerCode: query.dealerCode || 'All',
     auditId: query.auditId || 'All',
@@ -2702,7 +2711,7 @@ async function buildStockSummaryReport(query = {}) {
     varianceAsOn: { title: `Variance as on ${auditDateLabel}` }
   };
   const summary = {
-    generatedAt: new Date().toLocaleString(),
+    generatedAt: formatIstDateTime(new Date()),
     dealerName: query.dealerName || (selectedDealer ? selectedDealer.dealerName : ''),
     dealerCode,
     auditDate: auditDateLabel,
@@ -3289,7 +3298,7 @@ router.get('/pdf', auth.requireAuth, async (req, res) => {
     doc.setFontSize(15);
     doc.text('Daksh Inventory v2 - Inventory Audit Report', 14, 15);
     doc.setFontSize(9);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 22);
+    doc.text(`Generated: ${formatIstDateTime(new Date())}`, 14, 22);
     const body = data.finalRows.slice(0, 80).map((row) => [
       row.partNumber || row.partNo,
       row.partDescription || row.partName,

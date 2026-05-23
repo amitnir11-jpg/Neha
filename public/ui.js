@@ -488,12 +488,32 @@
     });
   }
 
-  function dateTime(value) {
+  const IST_TIME_ZONE = 'Asia/Kolkata';
+  const IST_DATE_TIME_FORMAT = new Intl.DateTimeFormat('en-IN', {
+    timeZone: IST_TIME_ZONE,
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+
+  function istDateTimeParts(value) {
     if (!value) return '';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
-    const pad = (number, size = 2) => String(number).padStart(size, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} T ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+    return IST_DATE_TIME_FORMAT.formatToParts(date).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+  }
+
+  function dateTime(value) {
+    const parts = istDateTimeParts(value);
+    if (!parts) return value ? String(value) : '';
+    return `${parts.day}-${parts.month}-${parts.year} ${parts.hour}:${parts.minute}:${parts.second} ${String(parts.dayPeriod || '').toUpperCase()}`;
   }
 
   function wholeNumber(value) {
@@ -501,33 +521,14 @@
   }
 
   function compactDateTime(value, separator = ' ') {
-    if (!value) return '';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = months[date.getMonth()];
-    const year = date.getFullYear();
-    let hour = date.getHours();
-    const suffix = hour >= 12 ? 'PM' : 'AM';
-    hour = hour % 12 || 12;
-    const time = `${String(hour).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')} ${suffix}`;
-    return `${day}-${month}-${year}${separator}${time}`;
+    const formatted = dateTime(value);
+    return separator === ' ' ? formatted : formatted.replace(' ', separator);
   }
 
   function dashboardScanTime(value) {
-    if (!value) return '';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = months[date.getMonth()];
-    const year = date.getFullYear();
-    let hour = date.getHours();
-    const suffix = hour >= 12 ? 'PM' : 'AM';
-    hour = hour % 12 || 12;
-    const time = `${String(hour).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')} ${suffix}`;
-    return `${day}-${month}-${year}\n${time}`;
+    const formatted = dateTime(value);
+    const match = formatted.match(/^(\d{2}-[A-Za-z]{3}-\d{4})\s+(\d{2}:\d{2}):\d{2}\s+(AM|PM)$/);
+    return match ? `${match[1]}\n${match[2]} ${match[3]}` : formatted;
   }
 
   function money(value) {

@@ -8,6 +8,7 @@ const BinTransferHistory = require('../models/BinTransferHistory');
 const BinLabelPrintLog = require('../models/BinLabelPrintLog');
 const auth = require('./auth');
 const { validScanClause } = require('../utils/masterValidation');
+const { formatIstDateTime } = require('../utils/time');
 
 const router = express.Router();
 
@@ -595,7 +596,7 @@ router.get('/labels/logs', auth.requireAuth, async (req, res) => {
         { header: 'Printed By', key: 'printedBy', width: 22 },
         { header: 'Copies', key: 'copies', width: 10 }
       ];
-      logs.forEach((row) => sheet.addRow({ ...row, printedAt: row.printedAt ? new Date(row.printedAt).toLocaleString('en-IN') : '' }));
+      logs.forEach((row) => sheet.addRow({ ...row, printedAt: formatIstDateTime(row.printedAt) }));
       sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
       sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
       const buffer = await workbook.xlsx.writeBuffer();
@@ -691,7 +692,7 @@ router.get('/history', auth.requireAuth, async (req, res) => {
       ];
       history.forEach((row) => sheet.addRow({
         ...row,
-        transferredAt: row.transferredAt ? new Date(row.transferredAt).toLocaleString('en-IN') : ''
+        transferredAt: formatIstDateTime(row.transferredAt)
       }));
       sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
       sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };

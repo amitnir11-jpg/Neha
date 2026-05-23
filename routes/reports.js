@@ -7,6 +7,7 @@ const reportModule = require('./report');
 const auth = require('./auth');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const RejectedScan = require('../models/RejectedScan');
+const { formatDateLikeFields } = require('../utils/time');
 
 const autoTable = autoTableModule.default || autoTableModule;
 
@@ -497,7 +498,7 @@ async function sendExcel(res, title, rows, type) {
   const sheet = workbook.addWorksheet(title.slice(0, 31));
   const columns = columnsForReport(type, rows);
   sheet.columns = columns.length ? columns : [{ header: 'Message', key: 'message', width: 30 }];
-  (rows.length ? rows : [{ message: 'No data found' }]).forEach((row) => sheet.addRow(row));
+  (rows.length ? rows : [{ message: 'No data found' }]).forEach((row) => sheet.addRow(formatDateLikeFields(row)));
   sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
@@ -512,7 +513,7 @@ async function buildExcelBuffer(title, rows, type) {
   const sheet = workbook.addWorksheet(title.slice(0, 31));
   const columns = columnsForReport(type, rows);
   sheet.columns = columns.length ? columns : [{ header: 'Message', key: 'message', width: 30 }];
-  (rows.length ? rows : [{ message: 'No data found' }]).forEach((row) => sheet.addRow(row));
+  (rows.length ? rows : [{ message: 'No data found' }]).forEach((row) => sheet.addRow(formatDateLikeFields(row)));
   sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
   sheet.eachRow((row) => row.eachCell((cell) => {
@@ -536,7 +537,10 @@ function sendPdf(res, title, rows, type) {
   autoTable(doc, {
     startY: 24,
     head: [columns.length ? columns.map((column) => column.header) : ['Message']],
-    body: bodyRows.map((row) => columns.length ? columns.map((column) => String(row[column.key] ?? '')) : ['No data found']),
+    body: bodyRows.map((row) => {
+      const formatted = formatDateLikeFields(row);
+      return columns.length ? columns.map((column) => String(formatted[column.key] ?? '')) : ['No data found'];
+    }),
     styles: { fontSize: 7, cellPadding: 2 },
     headStyles: { fillColor: [21, 58, 91] }
   });
@@ -555,7 +559,10 @@ function buildPdfBuffer(title, rows, type) {
   autoTable(doc, {
     startY: 38,
     head: [columns.length ? columns.map((column) => column.header) : ['Message']],
-    body: bodyRows.map((row) => columns.length ? columns.map((column) => String(row[column.key] ?? '')) : ['No data found']),
+    body: bodyRows.map((row) => {
+      const formatted = formatDateLikeFields(row);
+      return columns.length ? columns.map((column) => String(formatted[column.key] ?? '')) : ['No data found'];
+    }),
     styles: { fontSize: 7, cellPadding: 2 },
     headStyles: { fillColor: [21, 58, 91] }
   });

@@ -16,6 +16,7 @@ const { findCataloguePart, reprocessScansWithCatalogue } = require('../utils/cat
 const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentity');
 const masterValidation = require('../utils/masterValidation');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
+const { dateDebugPayload, formatIstDateTime, validDate } = require('../utils/time');
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
@@ -726,7 +727,9 @@ function publicScan(scan = {}) {
     syncStatus,
     synced: syncStatus === 'synced' || scan.synced === true,
     isSynced: syncStatus === 'synced' || scan.isSynced === true,
-    timestamp: scan.timestamp,
+    timestamp: scan.timestamp || scan.scanTime || scan.createdAt,
+    scanTime: scan.scanTime || scan.timestamp || scan.createdAt,
+    createdAt: scan.createdAt,
     source: scan.source || 'server',
     entryMode: labels.entryMode,
     entryChannel: labels.entryChannel,
@@ -1055,6 +1058,18 @@ async function saveScanRequest(req, res) {
     const auditId = String(req.body.auditId || (dealer ? dealer.currentAuditId : '') || '').trim();
     const type = normalizeScanType(req.body.type || req.body.scanType || req.body.action || parsed.type || 'INWARD');
     const timestamp = new Date();
+    const mobileTime = firstValue(req.body, ['timestamp', 'scanTime', 'scannedAt', 'scanDateTime', 'dateTime', 'createdAt', 'localCreatedAt', 'localTimestamp']);
+    console.log('[SCAN TIME] web/server scan received', {
+      deviceId: req.body.deviceId || '',
+      partNumber: part,
+      dealerCode,
+      scanType: type,
+      ...dateDebugPayload({
+        serverTime: timestamp,
+        mobileTime,
+        savedTime: timestamp
+      })
+    });
     const binLocation = String(firstValue(req.body, ['binLocation', 'bin', 'location']) || parsed.bin || '').trim().toUpperCase();
     const upiId = extractUpiId(req.body, parsed);
     const upiNo = upiId;
@@ -1115,7 +1130,7 @@ async function saveScanRequest(req, res) {
         success: true,
         skipped: true,
         duplicate: true,
-        message: `Duplicate QR already scanned. First scanned by ${existing.userName || existing.staffName || existing.loginId || 'Unknown'}, at ${existing.timestamp ? new Date(existing.timestamp).toLocaleString() : '-'}, Bin ${existing.binLocation || existing.bin || '-'}.`,
+        message: `Duplicate QR already scanned. First scanned by ${existing.userName || existing.staffName || existing.loginId || 'Unknown'}, at ${formatIstDateTime(existing.timestamp) || '-'}, Bin ${existing.binLocation || existing.bin || '-'}.`,
         scan: existing
       });
     }
@@ -1256,6 +1271,10 @@ async function saveScanRequest(req, res) {
       userName: String(req.body.userName || req.body.staffName || (req.user ? req.user.name || req.user.username : '') || ''),
       role,
       timestamp,
+      scanTime: timestamp,
+      serverReceivedAt: timestamp,
+      mobileReceivedTime: mobileTime || '',
+      mobileReceivedTimeUtc: validDate(mobileTime)?.toISOString() || '',
       synced: serverSavedSynced,
       isSynced: serverSavedSynced,
       syncStatus: serverSavedStatus,
@@ -1299,6 +1318,18 @@ async function saveScanRequest(req, res) {
       throw error;
     }
 
+    console.log('[SCAN TIME] saved MongoDB timestamp verified', {
+      id: scan._id,
+      partNumber: scan.partNumber,
+      dealerCode: scan.dealerCode,
+      scanType: scan.scanType,
+      deviceId: scan.deviceId,
+      ...dateDebugPayload({
+        serverTime: timestamp,
+        mobileTime,
+        savedTime: scan.timestamp || scan.createdAt
+      })
+    });
     scanDebug('[MANUAL SCAN] DB insert success', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode, scanType: scan.scanType, deviceId: scan.deviceId });
     scanDebug('SAVED_VALID_SCAN', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode });
     scanDebug("Matched category:", scan.category || '');
@@ -2033,7 +2064,7 @@ async function showTabRows(req, res, format = '') {
     const [totalRecords, recordsForPage, allForSummary] = await Promise.all([
       Inventory.countDocuments(filter),
       Inventory.find(filter).sort({ timestamp: -1, createdAt: -1 }).skip(skip).limit(limit).lean(),
-      Inventory.find(filter).select('qty quantity mrp scanType type rawScan rawScanString rawUpi part partNumber normalizedPartNumber').lean()
+      Inventory.find(filter).select('timestamp scanTime createdAt qty quantity mrp scanType type rawScan rawScanString rawUpi part partNumber normalizedPartNumber dealerCode dealerName binLocation bin deviceId syncStatus synced isSynced source staffName userName loginId').lean()
     ]);
     await repairParsedFields(allForSummary);
     const rows = recordsForPage.map(publicScan);
@@ -2053,7 +2084,7 @@ async function showTabRows(req, res, format = '') {
     if (format === 'csv') {
       const headers = ['Scan Time', 'Dealer Code', 'Dealer Name', 'Part Number', 'Raw Scan', 'Qty', 'MRP', 'Scan Type', 'Bin Location', 'Device ID', 'Sync Status'];
       const csvRows = [headers].concat(exportRows.map((row) => [
-        row.timestamp ? new Date(row.timestamp).toISOString() : '',
+        formatIstDateTime(row.timestamp),
         row.dealerCode,
         row.dealerName,
         row.partNumber,
@@ -2088,7 +2119,7 @@ async function showTabRows(req, res, format = '') {
         { header: 'Sync Status', key: 'syncStatus', width: 14 }
       ];
       exportRows.forEach((row) => sheet.addRow({
-        timestamp: row.timestamp ? new Date(row.timestamp).toLocaleString('en-IN') : '',
+        timestamp: formatIstDateTime(row.timestamp),
         dealerCode: row.dealerCode,
         dealerName: row.dealerName,
         partNumber: row.partNumber,
