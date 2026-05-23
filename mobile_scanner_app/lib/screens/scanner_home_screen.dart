@@ -27,14 +27,17 @@ class ScannerHomeScreen extends StatefulWidget {
 
 class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     with WidgetsBindingObserver {
-  static const _cooldown = Duration(seconds: 4);
+  static const _duplicateWindow = Duration(milliseconds: 1400);
+  static const _backgroundSyncInterval = Duration(minutes: 2);
 
   final _settings = SettingsStore();
   final _database = LocalDatabase.instance;
   final _syncService = SyncService();
   final _defaultBinController = TextEditingController();
   final _cameraController = MobileScannerController(
+    cameraResolution: const Size(640, 480),
     detectionSpeed: DetectionSpeed.normal,
+    detectionTimeoutMs: 80,
     facing: CameraFacing.back,
     formats: const [
       BarcodeFormat.qrCode,
@@ -65,9 +68,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   String _role = '';
   String _lastRaw = '';
   DateTime _lastRawAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastSyncAt = DateTime.fromMillisecondsSinceEpoch(0);
+  final Map<String, DateTime> _recentScanCache = {};
   bool _online = false;
   bool _serverConnected = false;
-  bool _processing = false;
+  bool _savingScan = false;
   bool _syncInFlight = false;
   int _pendingCount = 0;
   int _failedCount = 0;
@@ -82,10 +87,10 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     _connectivitySub = Connectivity().onConnectivityChanged.listen((result) {
       final hasNetwork = result != ConnectivityResult.none;
       if (mounted) setState(() => _online = hasNetwork);
-      if (hasNetwork) _syncPending(silent: true);
+      if (hasNetwork) _setStatus('Online - background sync ready', Colors.blue);
     });
-    _foregroundSyncTimer = Timer.periodic(const Duration(seconds: 20), (_) {
-      if (!_online || _syncInFlight || _processing) return;
+    _foregroundSyncTimer = Timer.periodic(_backgroundSyncInterval, (_) {
+      if (!_online || _syncInFlight) return;
       if (_pendingCount > 0 || _failedCount > 0) {
         unawaited(_syncPending(silent: true));
       } else {
@@ -112,7 +117,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       unawaited(_cameraController.stop());
     } else if (state == AppLifecycleState.resumed) {
       unawaited(_cameraController.start());
-      _syncPending(silent: true);
+      _testServer(silent: true);
     }
   }
 
@@ -135,7 +140,6 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     await _refreshLocalState();
     await _testServer(silent: true);
     await _registerDevice();
-    if (_online) await _syncPending(silent: true);
   }
 
   Future<void> _refreshLocalState() async {
@@ -191,13 +195,15 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
 
   Future<void> _syncPending({bool silent = false}) async {
     if (_syncInFlight) return;
-    _syncInFlight = true;
+    setState(() => _syncInFlight = true);
     try {
       final result = await _syncService.syncPending();
+      final syncedAt = DateTime.now();
       await _refreshLocalState();
       await _registerDevice();
       if (!mounted) return;
       setState(() {
+        _lastSyncAt = syncedAt;
         if (result.serverReached) _serverConnected = true;
         if (silent) return;
         _statusText = result.success
@@ -207,11 +213,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       });
     } finally {
       _syncInFlight = false;
+      if (mounted) setState(() {});
     }
   }
 
   Future<void> _onDetect(BarcodeCapture capture) async {
-    if (_processing) return;
     final raw = capture.barcodes
         .map((barcode) => barcode.rawValue)
         .whereType<String>()
@@ -220,19 +226,23 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     if (raw.isEmpty) return;
 
     final now = DateTime.now();
-    if (_lastRaw == raw && now.difference(_lastRawAt) < _cooldown) {
-      _setStatus('Duplicate ignored', Colors.orange);
+    _recentScanCache.removeWhere(
+        (_, seenAt) => now.difference(seenAt) > _duplicateWindow);
+    if ((_lastRaw == raw && now.difference(_lastRawAt) < _duplicateWindow) ||
+        (_recentScanCache[raw] != null &&
+            now.difference(_recentScanCache[raw]!) < _duplicateWindow)) {
+      _setStatus('Duplicate skipped', Colors.orange);
       return;
     }
     _lastRaw = raw;
     _lastRawAt = now;
-    await _handleDraft(
+    _recentScanCache[raw] = now;
+    unawaited(_handleDraft(
         _ScanDraft.fromRaw(raw, fallbackBin: _defaultBinController.text),
-        source: 'mobile');
+        source: 'mobile'));
   }
 
   Future<void> _handleDraft(_ScanDraft draft, {required String source}) async {
-    if (_processing) return;
     if (_dealerCode.isEmpty) {
       _setStatus('Dealer code required', Colors.red);
       return;
@@ -246,21 +256,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       return;
     }
 
-    setState(() => _processing = true);
     try {
       final now = DateTime.now();
-      final duplicate = await _database.hasRecentDuplicate(
-        rawValue: draft.rawValue,
-        scanType: _scanType,
-        dealerCode: _dealerCode,
-        userId: _userId,
-        since: now.subtract(_cooldown),
-      );
-      if (duplicate) {
-        _setStatus('Duplicate ignored', Colors.orange);
-        return;
-      }
-
       final record = ScanRecord(
         localId: 'MOB-${const Uuid().v4()}',
         rawValue: draft.rawValue,
@@ -277,21 +274,36 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         source: source,
       );
 
-      await _database.insertScan(record);
-      await SystemSound.play(SystemSoundType.click);
-      await HapticFeedback.mediumImpact();
-      await _refreshLocalState();
-
-      if (!await _syncService.hasNetwork) {
-        _setStatus('Offline saved', Colors.orange);
-        return;
-      }
-
-      await _syncPending();
+      _showInstantScan(record);
+      unawaited(SystemSound.play(SystemSoundType.click));
+      unawaited(HapticFeedback.mediumImpact());
+      unawaited(_saveScanLocally(record));
     } catch (error) {
       _setStatus(error.toString(), Colors.red);
-    } finally {
-      if (mounted) setState(() => _processing = false);
+    }
+  }
+
+  void _showInstantScan(ScanRecord record) {
+    if (!mounted) return;
+    setState(() {
+      _savingScan = true;
+      _statusText = 'Saved locally';
+      _statusColor = Colors.green;
+      _pendingCount += 1;
+      _lastScans = [record, ..._lastScans].take(10).toList();
+    });
+    Future.delayed(const Duration(milliseconds: 180), () {
+      if (mounted) setState(() => _savingScan = false);
+    });
+  }
+
+  Future<void> _saveScanLocally(ScanRecord record) async {
+    try {
+      await _database.insertScan(record);
+      await _refreshLocalState();
+      if (!_online && mounted) _setStatus('Offline saved', Colors.orange);
+    } catch (error) {
+      if (mounted) _setStatus('Local save failed', Colors.red);
     }
   }
 
@@ -394,6 +406,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
               serverConnected: _serverConnected,
               pendingCount: _pendingCount,
               failedCount: _failedCount,
+              syncRunning: _syncInFlight,
+              lastSyncAt: _lastSyncAt,
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -452,6 +466,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                 children: [
                   MobileScanner(
                       controller: _cameraController, onDetect: _onDetect),
+                  AnimatedOpacity(
+                    opacity: _savingScan ? 1 : 0,
+                    duration: const Duration(milliseconds: 120),
+                    child: Container(color: Colors.green.withOpacity(0.22)),
+                  ),
                   Center(
                     child: Container(
                       width: 220,
@@ -488,7 +507,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                                   style: const TextStyle(
                                       color: Colors.white,
                                       fontWeight: FontWeight.w900))),
-                          if (_processing)
+                          if (_savingScan)
                             const SizedBox(
                                 width: 18,
                                 height: 18,
@@ -534,9 +553,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                   const SizedBox(width: 8),
                   Expanded(
                       child: FilledButton.icon(
-                          onPressed: () => _syncPending(),
+                          onPressed: _syncInFlight ? null : () => _syncPending(),
                           icon: const Icon(Icons.sync),
-                          label: const Text('Sync'))),
+                          label: Text(_syncInFlight ? 'Syncing' : 'Manual Sync'))),
                 ],
               ),
             ),
@@ -593,6 +612,8 @@ class _StatusHeader extends StatelessWidget {
     required this.serverConnected,
     required this.pendingCount,
     required this.failedCount,
+    required this.syncRunning,
+    required this.lastSyncAt,
   });
 
   final String dealerCode;
@@ -603,6 +624,8 @@ class _StatusHeader extends StatelessWidget {
   final bool serverConnected;
   final int pendingCount;
   final int failedCount;
+  final bool syncRunning;
+  final DateTime lastSyncAt;
 
   @override
   Widget build(BuildContext context) {
@@ -645,6 +668,16 @@ class _StatusHeader extends StatelessWidget {
                   label: 'Pending $pendingCount',
                   color: pendingCount == 0 ? Colors.green : Colors.orange,
                   icon: Icons.sync_problem),
+              StatusChip(
+                  label: syncRunning ? 'Sync running' : 'Fast mode',
+                  color: syncRunning ? Colors.blue : Colors.green,
+                  icon: syncRunning ? Icons.sync : Icons.flash_on),
+              StatusChip(
+                  label: lastSyncAt.millisecondsSinceEpoch == 0
+                      ? 'Last sync: Never'
+                      : 'Last sync: ${TimeOfDay.fromDateTime(lastSyncAt).format(context)}',
+                  color: Colors.blueGrey,
+                  icon: Icons.schedule),
               if (failedCount > 0)
                 StatusChip(
                     label: 'Failed $failedCount',

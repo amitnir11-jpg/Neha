@@ -1,6 +1,6 @@
 # Daksh Mobile Scanner
 
-Daksh Mobile Scanner v1.0.2 is the production Android scanner app for the Daksh Inventory web portal.
+Daksh Mobile Scanner v1.0.4 is the production Android scanner app for the Daksh Inventory web portal.
 
 ## Production Flow
 

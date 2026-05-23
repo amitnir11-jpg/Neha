@@ -137,7 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Daksh Scanner v1.0.2')),
+      appBar: AppBar(title: const Text('Daksh Scanner v1.0.4')),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(18),

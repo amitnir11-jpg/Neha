@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -119,12 +120,19 @@ class ApiClient {
     try {
       return await _sendWithClient(_defaultClient, uri,
               method: method, headers: headers, body: body)
-          .timeout(const Duration(seconds: 20));
+          .timeout(const Duration(seconds: 45));
     } catch (error) {
       if (!_shouldRetryWithRailwayDnsFallback(error, uri)) rethrow;
-      return _sendWithClient(_railwayDnsFallbackClient, uri,
-              method: method, headers: headers, body: body)
-          .timeout(const Duration(seconds: 25));
+      try {
+        return await _sendWithClient(_railwayDnsFallbackClient, uri,
+                method: method, headers: headers, body: body)
+            .timeout(const Duration(seconds: 45));
+      } on TimeoutException {
+        throw ApiException(
+          'Cloud server is reachable from web, but this phone network timed out. Turn mobile data/Wi-Fi off and on, then press Test before login.',
+          retryable: true,
+        );
+      }
     }
   }
 
@@ -150,7 +158,10 @@ class ApiClient {
     return message.contains('failed host lookup') ||
         message.contains('nodename nor servname') ||
         message.contains('name or service not known') ||
-        message.contains('no address associated with hostname');
+        message.contains('no address associated with hostname') ||
+        error is TimeoutException ||
+        message.contains('connection timed out') ||
+        message.contains('timed out');
   }
 
   Future<Map<String, dynamic>> health() => _request('/api/health', auth: false);
@@ -178,7 +189,7 @@ class ApiClient {
         'pin': pin,
         'dealerCode': dealerCode,
         'deviceId': deviceId,
-        'appVersion': 'Daksh Mobile Scanner v1.0.2',
+        'appVersion': 'Daksh Mobile Scanner v1.0.4',
       },
     );
     return UserSession.fromLogin(data);
@@ -210,7 +221,7 @@ class ApiClient {
         'deviceId': deviceId,
         'deviceName': 'Daksh Android Scanner',
         'model': 'Android',
-        'appVersion': 'Daksh Mobile Scanner v1.0.2',
+        'appVersion': 'Daksh Mobile Scanner v1.0.4',
         'dealerCode': dealerCode,
         'pendingCount': pendingCount,
         'failedCount': failedCount,
@@ -231,7 +242,7 @@ class ApiClient {
       body: {
         'deviceId': deviceId,
         'dealerCode': dealerCode,
-        'appVersion': 'Daksh Mobile Scanner v1.0.2',
+        'appVersion': 'Daksh Mobile Scanner v1.0.4',
         'serverUrl': serverUrl,
         ...session,
         'scans': scans.map((scan) => scan.toApiPayload()).toList(),

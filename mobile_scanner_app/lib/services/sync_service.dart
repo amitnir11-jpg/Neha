@@ -10,6 +10,8 @@ class SyncService {
       : settings = settings ?? SettingsStore(),
         database = database ?? LocalDatabase.instance;
 
+  static bool _globalSyncInFlight = false;
+
   final SettingsStore settings;
   final LocalDatabase database;
 
@@ -86,6 +88,19 @@ class SyncService {
   }
 
   Future<SyncResult> syncPending() async {
+    if (_globalSyncInFlight) {
+      return SyncResult(false, 'Sync already running',
+          synced: 0, serverReached: false);
+    }
+    _globalSyncInFlight = true;
+    try {
+      return await _syncPendingBatch();
+    } finally {
+      _globalSyncInFlight = false;
+    }
+  }
+
+  Future<SyncResult> _syncPendingBatch() async {
     if (!await hasNetwork) {
       return SyncResult(false, 'Offline', synced: 0, serverReached: false);
     }
@@ -183,7 +198,12 @@ class SyncService {
       return SyncResult(true, (data['message'] ?? 'Sync completed').toString(),
           synced: synced, serverReached: true);
     } on ApiException catch (error) {
-      await _markFailuresFromResponse(pending, error.data, error.message);
+      final statusCode = error.statusCode ?? 0;
+      final shouldMarkFailed =
+          statusCode >= 400 && statusCode < 500 && statusCode != 408;
+      if (shouldMarkFailed) {
+        await _markFailuresFromResponse(pending, error.data, error.message);
+      }
       return SyncResult(false, error.message,
           synced: 0, serverReached: error.statusCode != null);
     } catch (error) {
