@@ -130,6 +130,10 @@
     reportHasRun: false,
     reportLoading: false,
     reportLoadRequestId: 0,
+    reportAbortController: null,
+    reportCache: new Map(),
+    reportSearchTimer: null,
+    reportStaleNoticeAt: 0,
     reportTableRows: [],
     reportTableColumns: [],
     reportTableTotalRows: 0,
@@ -1456,19 +1460,19 @@
   async function refreshAfterSync(payload = {}) {
     renderSyncApiResponse(payload);
     localStorage.removeItem('dakshReportPreviewCache');
+    state.reportCache.clear();
     const jobs = [loadDashboard(), loadScanHistory(), loadSyncStatus(), loadDevices()];
-    if (state.reportHasRun && activeReportType()) jobs.push(loadReport());
     await Promise.all(jobs);
   }
 
   function queueRealtimeReportRefresh(reason = 'realtime scan') {
     if (!state.reportHasRun || !activeReportType()) return;
-    clearTimeout(state.reportRealtimeTimer);
-    state.reportRealtimeTimer = setTimeout(() => {
-      loadReport()
-        .then(() => addConnectionLog(`Reports refreshed from ${reason}`, 'success'))
-        .catch((error) => toast(error.message, 'error'));
-    }, 500);
+    state.reportCache.clear();
+    const now = Date.now();
+    if (now - Number(state.reportStaleNoticeAt || 0) > 15000) {
+      state.reportStaleNoticeAt = now;
+      addConnectionLog(`Report data changed from ${reason}. Use Refresh Report to reload table.`, 'warning');
+    }
   }
 
   async function loadLatestSyncDebug() {
@@ -2146,7 +2150,6 @@
     setDashboardKpiValue('dashLastScannedPart', scan.partNumber || scan.part || '-');
     setStatusPill('topRealtimeStatus', 'Realtime: Scan Received', 'blue');
     setDashboardKpiValue('dashRealtimeActivity', compactDateTime(scan.timestamp || new Date()), { time: true });
-    queueRealtimeReportRefresh('scan update');
     queueScanRefresh(1200);
   }
 
@@ -2422,8 +2425,7 @@
       loadDashboard(),
       loadScanHistory(),
       loadShowTab(state.showTabPage || 1),
-      loadSyncStatus(),
-      state.reportHasRun && activeReportType() ? loadReport() : Promise.resolve()
+      loadSyncStatus()
     ]);
   }
 
@@ -2927,6 +2929,43 @@
     return url;
   }
 
+  function reportCacheKey(url, reportType = activeReportType()) {
+    return `${reportType || ''}|${url}`;
+  }
+
+  function rememberReportCache(key, data) {
+    if (!key || !data) return;
+    state.reportCache.set(key, {
+      data,
+      savedAt: Date.now()
+    });
+    if (state.reportCache.size > 12) {
+      const oldestKey = state.reportCache.keys().next().value;
+      state.reportCache.delete(oldestKey);
+    }
+  }
+
+  function cachedReport(key) {
+    const entry = state.reportCache.get(key);
+    if (!entry) return null;
+    return entry.data || null;
+  }
+
+  function applyReportData(data, reportType = activeReportType()) {
+    $('#reportTitle').textContent = data.title || REPORT_TITLES[reportType];
+    const rows = data.rows || [];
+    console.log("Rows received:", rows.length);
+    console.log("First row:", rows[0]);
+    renderReportTable(data.columns || [], rows, data.totalRows, data.grandTotal, reportType);
+    const message = $('#reportMessage');
+    if (message) {
+      message.className = rows.length ? 'form-message success' : 'form-message error';
+      message.textContent = rows.length ? '' : (data.message || 'No report data found for selected filter');
+    }
+    state.reportLoaded = true;
+    state.reportHasRun = true;
+  }
+
   function partsRefreshTemplatePath() {
     const paramsObject = reportParams();
     const params = new URLSearchParams();
@@ -3286,15 +3325,16 @@
     }
     const keys = applyReportColumnOrder((columns && columns.length ? columns : columnsForRows(rows)).slice(0, 18), reportType);
     const visibleRows = reportRowsForDisplay(rows, keys, reportType);
+    const pageRows = visibleRows.slice(0, 500);
     renderReportHeader(keys, reportType);
-    $('#reportRows').innerHTML = visibleRows.slice(0, 500).map((row) => `
+    $('#reportRows').innerHTML = pageRows.map((row) => `
       <tr>${keys.map((column) => {
         const value = formatReportCellValue(column, row[column.key]);
         const isNumber = reportCellClass(column, row[column.key]).includes('numeric-cell');
         return `<td class="${reportCellClass(column, row[column.key])}" data-type="${isNumber ? 'number' : 'text'}" title="${escapeHtml(value)}">${reportCellContent(column, row, value)}</td>`;
       }).join('')}</tr>
     `).join('');
-    setText('reportCount', visibleRows.length === rows.length ? `${totalRows || rows.length} rows` : `${visibleRows.length} of ${rows.length} rows`);
+    setText('reportCount', `${pageRows.length} shown${visibleRows.length !== pageRows.length ? ` of ${visibleRows.length}` : ''}${totalRows ? ` | ${totalRows} total` : ''}`);
     refreshReportTableLayout();
     enhanceCoreTables();
   }
@@ -3314,8 +3354,9 @@
   function renderPartwiseInventoryAuditTable(columns, rows, totalRows, reportType = activeReportType()) {
     const keys = applyReportColumnOrder(columns && columns.length ? columns : columnsForRows(rows), reportType);
     const visibleRows = reportRowsForDisplay(rows, keys, reportType);
+    const pageRows = visibleRows.slice(0, 500);
     renderReportHeader(keys, reportType);
-    $('#reportRows').innerHTML = visibleRows.slice(0, 500).map((row) => `
+    $('#reportRows').innerHTML = pageRows.map((row) => `
       <tr>${keys.map((column) => {
         const value = row[column.key];
         const isNumber = typeof value === 'number' || (isNumericReportColumn(column.key) && value !== '' && value !== null && !Number.isNaN(Number(value)));
@@ -3324,8 +3365,7 @@
         return `<td class="${reportCellClass(column, value)}" data-type="${isNumber ? 'number' : 'text'}" title="${escapeHtml(text)}">${cell}</td>`;
       }).join('')}</tr>
     `).join('');
-    const countLabel = visibleRows.length === rows.length ? `${totalRows || rows.length} rows` : `${visibleRows.length} of ${rows.length} rows`;
-    setText('reportCount', countLabel);
+    setText('reportCount', `${pageRows.length} shown${visibleRows.length !== pageRows.length ? ` of ${visibleRows.length}` : ''}${totalRows ? ` | ${totalRows} total` : ''}`);
     refreshReportTableLayout();
     enhanceCoreTables();
   }
@@ -3344,7 +3384,8 @@
     const filteredRows = reportRowsForDisplay(rows, keys, reportType);
     renderReportHeader(keys, reportType);
     let lastCategory = '';
-    const bodyRows = filteredRows.slice(0, 500).map((row) => {
+    const pageRows = filteredRows.slice(0, 500);
+    const bodyRows = pageRows.map((row) => {
       const isSubtotal = row.rowType === 'subtotal';
       const category = String(row.productCategory || '');
       const baseCategory = category.replace(/\s+TOTAL$/i, '');
@@ -3382,7 +3423,7 @@
         }).join('')}
       </tr>
     `;
-    setText('reportCount', filteredRows.length === rows.length ? `${totalRows || rows.length} rows` : `${filteredRows.length} of ${rows.length} rows`);
+    setText('reportCount', `${pageRows.length} shown${filteredRows.length !== pageRows.length ? ` of ${filteredRows.length}` : ''}${totalRows ? ` | ${totalRows} total` : ''}`);
     refreshReportTableLayout();
     enhanceCoreTables();
   }
@@ -3399,7 +3440,8 @@
     ];
     const filteredRows = reportRowsForDisplay(rows, keys, reportType);
     renderReportHeader(keys, reportType);
-    $('#reportRows').innerHTML = filteredRows.map((row) => {
+    const pageRows = filteredRows.slice(0, 500);
+    $('#reportRows').innerHTML = pageRows.map((row) => {
       if (row.rowType === 'gap') return `<tr class="stock-summary-gap-row"><td colspan="${keys.length}"></td></tr>`;
       if (row.rowType === 'note') return `<tr class="stock-summary-note-row"><td colspan="${keys.length}">${escapeHtml(row.note || row.section || '')}</td></tr>`;
       const cls = row.rowType === 'section' ? 'stock-summary-section-row' : row.rowType === 'total' || row.rowType === 'net' ? 'stock-summary-total-row' : '';
@@ -3416,14 +3458,16 @@
         </tr>
       `;
     }).join('');
-    setText('reportCount', filteredRows.length === rows.length ? `${totalRows || rows.length} rows` : `${filteredRows.length} of ${rows.length} rows`);
+    setText('reportCount', `${pageRows.length} shown${filteredRows.length !== pageRows.length ? ` of ${filteredRows.length}` : ''}${totalRows ? ` | ${totalRows} total` : ''}`);
     refreshReportTableLayout();
     enhanceCoreTables();
   }
 
-  async function loadReport() {
+  async function loadReport(options = {}) {
+    const useCache = options.useCache !== false;
+    const forceRefresh = options.forceRefresh === true;
+    const showLoading = options.showLoading !== false;
     const reportType = activeReportType();
-    if (state.reportLoading) return;
     if (!reportType) {
       resetReportPreview('Select report type, choose filters and click Show Report.');
       return;
@@ -3439,47 +3483,61 @@
     }
     console.log("Selected report:", reportType);
     const url = CSV_REPORT_TYPES.has(reportType) ? partsRefreshTemplatePreviewPath() : reportPath();
+    const cacheKey = reportCacheKey(url, reportType);
+    const cached = !forceRefresh && useCache ? cachedReport(cacheKey) : null;
+    if (cached) {
+      if (state.reportAbortController) state.reportAbortController.abort();
+      state.reportLoading = false;
+      state.reportAbortController = null;
+      state.lastReportType = reportType;
+      saveReportState(true);
+      applyReportData(cached, reportType);
+      updateReportButtons();
+      return;
+    }
     const message = $('#reportMessage');
     const requestId = Date.now();
     state.reportLoadRequestId = requestId;
+    if (state.reportAbortController) state.reportAbortController.abort();
+    state.reportAbortController = new AbortController();
     state.reportLoading = true;
-    state.reportLoaded = false;
     state.lastReportType = reportType;
     saveReportState(true);
     $('#reportTitle').textContent = REPORT_TITLES[reportType];
-    if (message) {
+    if (showLoading && message) {
       message.className = 'form-message loading';
       message.textContent = 'Loading report...';
     }
-    $('#reportHead').innerHTML = '';
-    $('#reportRows').innerHTML = '<tr><td class="muted" colspan="12">Loading report...</td></tr>';
-    setText('reportCount', 'Loading...');
+    if (showLoading && !state.reportLoaded) {
+      $('#reportHead').innerHTML = '';
+      $('#reportRows').innerHTML = '<tr><td class="muted" colspan="12">Loading report...</td></tr>';
+      setText('reportCount', 'Loading...');
+    }
     $('#reportShow').disabled = true;
     try {
-      const data = await api(url);
+      const data = await api(url, { signal: state.reportAbortController.signal });
       if (state.reportLoadRequestId !== requestId) return;
-      $('#reportTitle').textContent = data.title || REPORT_TITLES[reportType];
-      const rows = data.rows || [];
-      console.log("Rows received:", rows.length);
-      console.log("First row:", rows[0]);
-      renderReportTable(data.columns || [], rows, data.totalRows, data.grandTotal, reportType);
-      message.className = rows.length ? 'form-message success' : 'form-message error';
-      message.textContent = rows.length ? '' : (data.message || 'No report data found for selected filter');
-      state.reportLoaded = true;
-      state.reportHasRun = true;
+      rememberReportCache(cacheKey, data);
+      applyReportData(data, reportType);
     } catch (error) {
       if (state.reportLoadRequestId !== requestId) return;
-      state.reportLoaded = false;
-      state.reportHasRun = false;
-      $('#reportRows').innerHTML = `<tr><td class="muted" colspan="12">${escapeHtml(error.message || 'Report API failed')}</td></tr>`;
-      setText('reportCount', '0 rows');
+      if (error.name === 'AbortError') return;
+      state.reportLoaded = Boolean(state.reportTableRows.length);
+      state.reportHasRun = Boolean(state.reportTableRows.length);
+      if (!state.reportTableRows.length) {
+        $('#reportRows').innerHTML = `<tr><td class="muted" colspan="12">${escapeHtml(error.message || 'Report API failed')}</td></tr>`;
+        setText('reportCount', '0 rows');
+      }
       if (message) {
         message.className = 'form-message error';
         message.textContent = error.message || 'Report API failed';
       }
       toast(error.message || 'Report API failed', 'error');
     } finally {
-      if (state.reportLoadRequestId === requestId) state.reportLoading = false;
+      if (state.reportLoadRequestId === requestId) {
+        state.reportLoading = false;
+        state.reportAbortController = null;
+      }
       updateReportButtons();
     }
   }
@@ -4385,7 +4443,6 @@
     await Promise.all([
       loadBinTransferParts(activeBinTransferForm()).catch(() => null),
       loadBinTransferHistory().catch(() => null),
-      (state.reportHasRun ? loadReport() : Promise.resolve()).catch(() => null),
       loadScanHistory().catch(() => null),
       loadDashboard().catch(() => null)
     ]);
@@ -6319,7 +6376,6 @@
           const dealerCode = cleanDealerCode(select.value || '');
           syncScanDealerScope(dealerCode, select);
           loadScanHistory().catch((error) => toast(error.message, 'error'));
-          if (state.reportHasRun && activeReportType()) loadReport().catch((error) => toast(error.message, 'error'));
         }
         if (select.closest('#barcodeScanForm')) {
           loadBarcodeBins().catch((error) => toast(error.message, 'error'));
@@ -6476,7 +6532,6 @@
         resetReportPreview('Select dealer code first to view report.');
         return;
       }
-      if (state.reportHasRun && activeReportType()) loadReport().catch((error) => toast(error.message, 'error'));
     });
     $('[name="showScannedPartsOnly"]', $('#reportFilters'))?.addEventListener('change', (event) => {
       if (event.target.checked) $('[name="showFullMasterWithZeroScan"]', $('#reportFilters')).checked = false;
@@ -6490,8 +6545,9 @@
       });
     });
     $('#reportShow').addEventListener('click', () => loadReport().catch((error) => toast(error.message, 'error')));
-    $('#reportRefresh')?.addEventListener('click', () => loadReport().catch((error) => toast(error.message, 'error')));
+    $('#reportRefresh')?.addEventListener('click', () => loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error')));
     $('#reportReset').addEventListener('click', () => {
+      if (state.reportAbortController) state.reportAbortController.abort();
       $('#reportFilters').reset();
       applyReportScanModeDefaults();
       resetReportPreview('Please select filters and click Show Report.');
@@ -6501,16 +6557,20 @@
       try {
         const data = await api('/api/scans/move-not-in-master-to-rejected', { method: 'POST', body: {} });
         toast(`Moved ${data.movedCount || 0}; removed ${data.deletedCount || 0} from main scans`);
-        if (activeReportType()) await loadReport();
+        state.reportCache.clear();
+        if (activeReportType()) await loadReport({ forceRefresh: true });
         await loadDashboard();
       } catch (error) {
         toast(error.message, 'error');
       }
     });
     $('#reportTableSearch')?.addEventListener('input', () => {
-      if (state.reportTableRows.length || state.reportTableColumns.length) {
-        renderReportTable(state.reportTableColumns, state.reportTableRows, state.reportTableTotalRows, state.reportTableGrandTotal, activeReportType());
-      }
+      clearTimeout(state.reportSearchTimer);
+      state.reportSearchTimer = setTimeout(() => {
+        if (state.reportTableRows.length || state.reportTableColumns.length) {
+          renderReportTable(state.reportTableColumns, state.reportTableRows, state.reportTableTotalRows, state.reportTableGrandTotal, activeReportType());
+        }
+      }, 500);
     });
     $('#reportExcel').addEventListener('click', () => downloadGet(reportPath('excel'), reportDownloadName('xlsx')).catch((error) => toast(error.message, 'error')));
     $('#reportPdf').addEventListener('click', () => downloadGet(reportPath('pdf'), reportDownloadName('pdf')).catch((error) => toast(error.message, 'error')));
