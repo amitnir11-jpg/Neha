@@ -23,6 +23,28 @@ function upper(value) {
   return clean(value).toUpperCase();
 }
 
+function regex(value) {
+  return { $regex: clean(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+}
+
+function appendAnd(filter, clause) {
+  filter.$and = (filter.$and || []).concat([clause]);
+}
+
+function applyCommonMetadataFilters(filter, query = {}, options = {}) {
+  const raw = clean(query.upiRawQr || query.rawUpi || query.rawQR || query.rawScan);
+  if (query.userName) appendAnd(filter, { $or: [{ userName: regex(query.userName) }, { loginId: regex(query.userName) }, { userId: regex(query.userName) }, { duplicateScannedBy: regex(query.userName) }] });
+  if (query.role) filter.role = regex(query.role);
+  if (query.deviceName) filter.deviceName = regex(query.deviceName);
+  if (query.deviceId) filter.deviceId = regex(query.deviceId);
+  if (query.scanStatus) filter.scanStatus = upper(query.scanStatus);
+  if (query.syncStatus) filter.syncStatus = clean(query.syncStatus).toLowerCase();
+  if (query.entryMode) appendAnd(filter, { $or: [{ entryMode: regex(query.entryMode) }, { scanMode: regex(query.entryMode) }, { source: regex(query.entryMode) }] });
+  if (query.entryChannel) appendAnd(filter, { $or: [{ entryChannel: regex(query.entryChannel) }, { source: regex(query.entryChannel) }, { deviceId: regex(query.entryChannel) }] });
+  if (query.entrySource) appendAnd(filter, { $or: [{ scanSourceLabel: regex(query.entrySource) }, { source: regex(query.entrySource) }, { scanMode: regex(query.entrySource) }] });
+  if (raw) appendAnd(filter, { $or: (options.rawFields || ['rawUpi', 'rawQR', 'rawScan', 'rawScanString', 'rawBarcode', 'rawScannedValue']).map((field) => ({ [field]: regex(raw) })) });
+}
+
 function parseFilterDate(value, endOfDay = false) {
   const text = clean(value);
   if (!text) return null;
@@ -45,6 +67,9 @@ function duplicateReportFilter(query = {}) {
   if (query.auditId) filter.auditId = clean(query.auditId);
   if (query.partNumber) filter.partNumber = { $regex: clean(query.partNumber), $options: 'i' };
   if (query.deviceId) filter.deviceId = clean(query.deviceId);
+  if (query.scanType) filter.scanType = upper(query.scanType);
+  if (query.bin || query.binLocation) filter.binLocation = regex(query.bin || query.binLocation);
+  applyCommonMetadataFilters(filter, query, { rawFields: ['rawUpi', 'rawQR', 'rawScan', 'rawBarcode'] });
   if (query.fromDate || query.dateFrom || query.from || query.toDate || query.dateTo || query.to) {
     filter.timestamp = {};
     const from = parseFilterDate(query.fromDate || query.dateFrom || query.from || '');
@@ -97,6 +122,7 @@ function rejectedReportFilter(query = {}) {
   if (query.partNumber) filter.extractedPartNumber = { $regex: clean(query.partNumber), $options: 'i' };
   if (query.scanType) filter.scanType = upper(query.scanType);
   if (query.bin) filter.binLocation = { $regex: clean(query.bin), $options: 'i' };
+  applyCommonMetadataFilters(filter, query, { rawFields: ['rawScannedValue', 'rawUpi', 'rawQR', 'rawScan'] });
   if (query.fromDate || query.dateFrom || query.from || query.toDate || query.dateTo || query.to) {
     filter.dateTime = {};
     const from = parseFilterDate(query.fromDate || query.dateFrom || query.from || '');

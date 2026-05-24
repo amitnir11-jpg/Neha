@@ -1866,6 +1866,72 @@ textarea:focus {
   box-shadow: 0 22px 70px rgba(15, 23, 42, 0.28);
 }
 
+.modal-head,
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.modal-actions {
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+.icon-btn,
+.icon-button {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
+}
+
+.report-filter-settings-card {
+  width: min(560px, 94vw);
+}
+
+.report-filter-settings-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  max-height: min(520px, 62vh);
+  overflow: auto;
+  padding: 16px;
+}
+
+.report-filter-settings-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-weight: 800;
+}
+
+.report-filter-settings-list input {
+  width: 16px;
+  height: 16px;
+}
+
+[data-report-filter-key].hidden {
+  display: none !important;
+}
+
 .validator-detail-card {
   padding: 16px;
 }

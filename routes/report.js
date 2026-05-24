@@ -110,6 +110,16 @@ function normalizeReportQuery(query = {}) {
     year: reportQueryValue(query.year || query.manufacturingYear),
     action: reportQueryValue(query.action),
     status: reportQueryValue(query.status),
+    scanStatus: reportQueryValue(query.scanStatus),
+    userName: reportQueryValue(query.userName || query.staffName || query.loginId),
+    syncStatus: reportQueryValue(query.syncStatus),
+    upiRawQr: reportQueryValue(query.upiRawQr || query.rawUpi || query.rawQR || query.rawScan),
+    role: reportQueryValue(query.role),
+    deviceName: reportQueryValue(query.deviceName),
+    deviceId: reportQueryValue(query.deviceId),
+    entryMode: reportQueryValue(query.entryMode),
+    entryChannel: reportQueryValue(query.entryChannel),
+    entrySource: reportQueryValue(query.entrySource || query.scanSourceLabel || query.source),
     dealerName: reportQueryValue(query.dealerName),
     varianceType: reportQueryValue(query.varianceType).toLowerCase()
   };
@@ -215,7 +225,34 @@ function reportFilter(query = {}) {
   const partNumber = query.partNumber || query.partNo || query.part;
   if (partNumber) filter.part = { $regex: String(partNumber).trim(), $options: 'i' };
   if (query.dealerName) filter.dealerName = { $regex: escapeRegExp(query.dealerName), $options: 'i' };
+  applyReportMetadataFilters(filter, query);
   return filter;
+}
+
+function appendAnd(filter, clause) {
+  filter.$and = (filter.$and || []).concat([clause]);
+}
+
+function regexClause(fields, value) {
+  const text = reportQueryValue(value);
+  if (!text) return null;
+  const regex = { $regex: escapeRegExp(text), $options: 'i' };
+  return { $or: fields.map((field) => ({ [field]: regex })) };
+}
+
+function applyReportMetadataFilters(filter, query = {}) {
+  const userClause = regexClause(['userName', 'staffName', 'loginId', 'userId'], query.userName);
+  if (userClause) appendAnd(filter, userClause);
+  if (query.syncStatus) filter.syncStatus = String(query.syncStatus).trim().toLowerCase();
+  const rawClause = regexClause(['rawUpi', 'rawQR', 'rawScan', 'rawScanString', 'rawBarcode', 'upiNo', 'upiId'], query.upiRawQr);
+  if (rawClause) appendAnd(filter, rawClause);
+  if (query.role) filter.role = { $regex: escapeRegExp(String(query.role).trim()), $options: 'i' };
+  if (query.deviceName) filter.deviceName = { $regex: escapeRegExp(query.deviceName), $options: 'i' };
+  if (query.deviceId) filter.deviceId = { $regex: escapeRegExp(query.deviceId), $options: 'i' };
+  if (query.entryMode) appendAnd(filter, { $or: [{ entryMode: { $regex: escapeRegExp(query.entryMode), $options: 'i' } }, { scanMode: { $regex: escapeRegExp(query.entryMode), $options: 'i' } }, { source: { $regex: escapeRegExp(query.entryMode), $options: 'i' } }] });
+  if (query.entryChannel) appendAnd(filter, { $or: [{ entryChannel: { $regex: escapeRegExp(query.entryChannel), $options: 'i' } }, { source: { $regex: escapeRegExp(query.entryChannel), $options: 'i' } }, { deviceId: { $regex: escapeRegExp(query.entryChannel), $options: 'i' } }] });
+  if (query.entrySource) appendAnd(filter, { $or: [{ scanSourceLabel: { $regex: escapeRegExp(query.entrySource), $options: 'i' } }, { source: { $regex: escapeRegExp(query.entrySource), $options: 'i' } }, { scanMode: { $regex: escapeRegExp(query.entrySource), $options: 'i' } }] });
+  if (query.scanStatus) filter.scanStatus = String(query.scanStatus).trim().toUpperCase();
 }
 
 function sortText(a, b) {
@@ -1313,14 +1350,16 @@ function scanBasedFilter(query = {}) {
   console.log("Report dealerCode:", query.dealerCode || 'All');
   const filter = inventoryRoute.buildListQuery(query);
   inventoryRoute.applyTestScanMode(filter, 'real');
-  filter.$and = (filter.$and || []).concat([{
-    $or: [
-      { scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] } },
-      { scanStatus: { $exists: false } },
-      { scanStatus: '' },
-      { scanStatus: null }
-    ]
-  }]);
+  if (!query.scanStatus) {
+    filter.$and = (filter.$and || []).concat([{
+      $or: [
+        { scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] } },
+        { scanStatus: { $exists: false } },
+        { scanStatus: '' },
+        { scanStatus: null }
+      ]
+    }]);
+  }
   delete filter.category;
   if (query.type) filter.$or = [{ type: String(query.type).trim().toUpperCase() }, { scanType: String(query.type).trim().toUpperCase() }];
   if (query.partNumber) {
@@ -1338,6 +1377,7 @@ function scanBasedFilter(query = {}) {
   if (query.productGroup) filter.productGroup = { $regex: escapeRegExp(query.productGroup), $options: 'i' };
   if (query.partSubGroup || query.productSubGroup) filter.partSubGroup = { $regex: escapeRegExp(query.partSubGroup || query.productSubGroup), $options: 'i' };
   if (query.dealerName) filter.dealerName = { $regex: escapeRegExp(query.dealerName), $options: 'i' };
+  applyReportMetadataFilters(filter, query);
   return filter;
 }
 

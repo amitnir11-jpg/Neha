@@ -971,6 +971,7 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/scans', require('./routes/inventory'));
 app.use('/api/reports', require('./routes/reports'));
+app.use('/api/report-filter-settings', require('./routes/reportFilterSettings'));
 app.use('/api/dealers', require('./routes/dealer'));
 app.use('/api/devices', require('./routes/devices'));
 app.use('/api/master', require('./routes/master'));

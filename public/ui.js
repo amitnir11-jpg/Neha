@@ -140,6 +140,8 @@
     reportTableColumns: [],
     reportTableTotalRows: 0,
     reportTableGrandTotal: null,
+    reportFilterSettings: {},
+    reportFilterSettingsLoaded: new Set(),
     reportSort: { reportType: '', key: '', direction: 'asc' },
     dashboardDealerCode: '',
     reconLoaded: false,
@@ -173,6 +175,26 @@
   const ACTIVE_VIEW_KEY = 'dakshActiveView';
   const REPORT_STATE_KEY = 'dakshLastReportState';
   const REPORT_SCAN_MODE_DEFAULT_VERSION = 4;
+  const REPORT_FILTER_DEFAULTS = ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'syncStatus'];
+  const REPORT_FILTER_OPTIONS = [
+    ['dealer', 'Dealer'],
+    ['dateRange', 'Date / Scan Time Range'],
+    ['scanType', 'Scan Type'],
+    ['scanStatus', 'Scan Status'],
+    ['userName', 'User Name'],
+    ['syncStatus', 'Sync Status'],
+    ['upiRawQr', 'UPI Raw / QR'],
+    ['role', 'Role'],
+    ['deviceName', 'Device Name'],
+    ['deviceId', 'Device ID'],
+    ['entryMode', 'Entry Mode'],
+    ['entryChannel', 'Entry Channel'],
+    ['entrySource', 'Entry Source'],
+    ['binLocation', 'Bin Location'],
+    ['partNumber', 'Part Number'],
+    ['productCategory', 'Product Category'],
+    ['model', 'Model']
+  ];
   const DATA_VERSION_KEY = 'dakshDataVersion';
   const BARCODE_LAST_BIN_KEY = 'dakshBarcodeLastBin';
   const SIDEBAR_WIDTH_KEY = 'dakshSidebarWidth';
@@ -2880,6 +2902,86 @@
     return REPORT_TITLES[selected] ? selected : '';
   }
 
+  function selectedReportFilterKeys(reportType = activeReportType()) {
+    const saved = state.reportFilterSettings[reportType];
+    return new Set((Array.isArray(saved) && saved.length ? saved : REPORT_FILTER_DEFAULTS).filter(Boolean));
+  }
+
+  function applyReportFilterVisibility(reportType = activeReportType()) {
+    const selected = selectedReportFilterKeys(reportType);
+    $$('[data-report-filter-key]', $('#reportFilters')).forEach((node) => {
+      const key = node.dataset.reportFilterKey;
+      const visible = selected.has(key);
+      node.classList.toggle('hidden', !visible);
+      if (!visible) {
+        $$('input, select, textarea', node).forEach((field) => {
+          if (field.type === 'checkbox' || field.type === 'radio') field.checked = false;
+          else field.value = '';
+        });
+      }
+    });
+    updateReportButtons();
+  }
+
+  function renderReportFilterSettingsList() {
+    const list = $('#reportFilterSettingsList');
+    if (!list) return;
+    const selected = selectedReportFilterKeys();
+    list.innerHTML = REPORT_FILTER_OPTIONS.map(([key, label]) => `
+      <label>
+        <input type="checkbox" value="${escapeHtml(key)}" ${selected.has(key) ? 'checked' : ''}>
+        <span>${escapeHtml(label)}</span>
+      </label>
+    `).join('');
+  }
+
+  async function loadReportFilterSettings(reportType = activeReportType(), options = {}) {
+    if (!reportType) return;
+    if (!options.force && state.reportFilterSettingsLoaded.has(reportType)) {
+      applyReportFilterVisibility(reportType);
+      return;
+    }
+    try {
+      const data = await api(`/api/report-filter-settings/${encodeURIComponent(reportType)}`);
+      state.reportFilterSettings[reportType] = Array.isArray(data.selectedFilters) ? data.selectedFilters : REPORT_FILTER_DEFAULTS;
+      state.reportFilterSettingsLoaded.add(reportType);
+    } catch (error) {
+      state.reportFilterSettings[reportType] = REPORT_FILTER_DEFAULTS;
+      console.warn('Report filter settings load failed', error);
+    }
+    applyReportFilterVisibility(reportType);
+  }
+
+  async function saveReportFilterSettings(selectedFilters) {
+    const reportType = activeReportType();
+    if (!reportType) {
+      toast('Select report type first', 'error');
+      return;
+    }
+    const data = await api(`/api/report-filter-settings/${encodeURIComponent(reportType)}`, {
+      method: 'POST',
+      body: { selectedFilters }
+    });
+    state.reportFilterSettings[reportType] = Array.isArray(data.selectedFilters) ? data.selectedFilters : selectedFilters;
+    state.reportFilterSettingsLoaded.add(reportType);
+    applyReportFilterVisibility(reportType);
+    saveReportState(false);
+    toast('Report filter settings saved');
+  }
+
+  function openReportFilterSettings() {
+    if (!activeReportType()) {
+      toast('Select report type first', 'error');
+      return;
+    }
+    renderReportFilterSettingsList();
+    $('#reportFilterSettingsModal')?.classList.remove('hidden');
+  }
+
+  function closeReportFilterSettings() {
+    $('#reportFilterSettingsModal')?.classList.add('hidden');
+  }
+
   function compactParams(params) {
     return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== ''));
   }
@@ -2912,6 +3014,16 @@
       partSubGroup: reportFilterValue(formData.partSubGroup),
       binLocation: reportFilterValue(formData.binLocation || formData.bin),
       scanType: reportFilterValue(formData.scanType),
+      scanStatus: reportFilterValue(formData.scanStatus),
+      userName: reportFilterValue(formData.userName),
+      syncStatus: reportFilterValue(formData.syncStatus),
+      upiRawQr: reportFilterValue(formData.upiRawQr),
+      role: reportFilterValue(formData.role),
+      deviceName: reportFilterValue(formData.deviceName),
+      deviceId: reportFilterValue(formData.deviceId),
+      entryMode: reportFilterValue(formData.entryMode),
+      entryChannel: reportFilterValue(formData.entryChannel),
+      entrySource: reportFilterValue(formData.entrySource),
       action: reportFilterValue(formData.action),
       status: reportFilterValue(formData.status),
       varianceType: reportFilterValue(formData.varianceType),
@@ -3572,6 +3684,7 @@
     $$('.report-tab').forEach((button) => button.classList.toggle('active', button.dataset.reportType === type));
     $('#reportTitle').textContent = REPORT_TITLES[type];
     applyReportScanModeDefaults();
+    loadReportFilterSettings(type).catch((error) => console.warn('Report filter settings failed', error));
     resetReportPreview(CSV_REPORT_TYPES.has(type) ? 'Click Show Report to view rows. Use Download CSV Template to export CSV.' : 'Please select filters and click Show Report.');
     if (options.persist !== false) saveReportState(false);
   }
@@ -6165,18 +6278,17 @@
     const savedView = requestedView || localStorage.getItem(ACTIVE_VIEW_KEY) || 'dashboard';
     const viewId = $(`#${savedView}`) ? savedView : 'dashboard';
     openView(viewId, VIEW_TITLES[viewId]);
-    let shouldReloadReport = false;
     if (viewId === 'reports') {
-      shouldReloadReport = restoreReportState();
+      restoreReportState();
       const reportType = params.get('reportType');
       if (reportType && REPORT_TITLES[reportType]) setReportTab(reportType, { persist: false });
     }
-    return { viewId, shouldReloadReport };
+    return { viewId };
   }
 
   async function finishRestoredViewLoad(restored = {}) {
-    if (restored.viewId === 'reports' && restored.shouldReloadReport) {
-      await loadReport().catch((error) => toast(error.message, 'error'));
+    if (restored.viewId === 'reports') {
+      resetReportPreview('Saved report filters loaded. Click Submit to fetch report data.');
     }
   }
 
@@ -6666,6 +6778,26 @@
     });
     $('#reportShow').addEventListener('click', () => loadReport().catch((error) => toast(error.message, 'error')));
     $('#reportRefresh')?.addEventListener('click', () => loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error')));
+    $('#reportFilterSettingsOpen')?.addEventListener('click', openReportFilterSettings);
+    $('#reportFilterSettingsClose')?.addEventListener('click', closeReportFilterSettings);
+    $('#reportFilterSettingsModal')?.addEventListener('click', (event) => {
+      if (event.target.id === 'reportFilterSettingsModal') closeReportFilterSettings();
+    });
+    $('#reportFilterSettingsDefault')?.addEventListener('click', () => {
+      $$('#reportFilterSettingsList input[type="checkbox"]').forEach((box) => {
+        box.checked = REPORT_FILTER_DEFAULTS.includes(box.value);
+      });
+    });
+    $('#reportFilterSettingsSave')?.addEventListener('click', async () => {
+      const selected = $$('#reportFilterSettingsList input[type="checkbox"]:checked').map((box) => box.value);
+      try {
+        await saveReportFilterSettings(selected);
+        closeReportFilterSettings();
+        resetReportPreview('Report filters updated. Click Submit to fetch report data.');
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    });
     $('#reportReset').addEventListener('click', () => {
       if (state.reportAbortController) state.reportAbortController.abort();
       $('#reportFilters').reset();

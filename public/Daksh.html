@@ -378,7 +378,7 @@
 
       <section id="reports" class="view">
         <section class="card">
-          <div class="card-head"><h2>Reports</h2><div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Refresh</button><button id="reportReset" class="btn light" type="button">Reset Filter</button><button id="moveNotInMasterScansBtn" class="btn danger-soft" type="button">Move Not-In-Master Scans To Rejected Report</button><button id="reportExcel" class="btn primary" type="button" disabled>Export Excel</button><button id="reportPdf" class="btn light" type="button" disabled>Export PDF</button><button id="partsRefreshTemplateCsv" class="btn light" type="button">Download CSV Template</button><button id="reportEmail" class="btn light" type="button" disabled>Send Email</button></div></div>
+          <div class="card-head"><h2>Reports</h2><div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Manual Refresh</button><button id="reportReset" class="btn light" type="button">Reset Filter</button><button id="moveNotInMasterScansBtn" class="btn danger-soft" type="button">Move Not-In-Master Scans To Rejected Report</button><button id="reportExcel" class="btn primary" type="button" disabled>Export Excel</button><button id="reportPdf" class="btn light" type="button" disabled>Export PDF</button><button id="partsRefreshTemplateCsv" class="btn light" type="button">Download CSV Template</button><button id="reportEmail" class="btn light" type="button" disabled>Send Email</button></div></div>
           <form id="reportFilters" class="filter-grid">
             <label>Report Type<select name="reportType" id="reportTypeSelect" required>
               <option value="">Select report</option>
@@ -399,23 +399,32 @@
               <option value="partwise-inventory-audit">Partwise Inventory Audit Report</option>
               <option value="parts-inventory-refresh-template">Part Inventory Refresh Template CSV</option>
             </select></label>
-            <label>Dealer Name<input name="dealerName" placeholder="Dealer Name"></label>
-            <label>Dealer Code<select name="dealerCode" class="dealerSelect"></select></label>
+            <label data-report-filter-key="dealer">Dealer Name<input name="dealerName" placeholder="Dealer Name"></label>
+            <label data-report-filter-key="dealer">Dealer Code<select name="dealerCode" class="dealerSelect"></select></label>
             <label>Audit<input name="auditId" placeholder="Audit ID"></label>
             <label>Audit Date<input name="auditDate" type="date"></label>
-            <label>From Date<input name="fromDate" type="date"></label>
-            <label>To Date<input name="toDate" type="date"></label>
-            <label>Category<select name="category" id="reportCategoryFilter"><option value="">All Categories</option></select></label>
-            <label>Model<input name="model" placeholder="Model"></label>
+            <label data-report-filter-key="dateRange">From Date<input name="fromDate" type="date"></label>
+            <label data-report-filter-key="dateRange">To Date<input name="toDate" type="date"></label>
+            <label data-report-filter-key="productCategory">Category<select name="category" id="reportCategoryFilter"><option value="">All Categories</option></select></label>
+            <label data-report-filter-key="model">Model<input name="model" placeholder="Model"></label>
             <label>Year<input name="year" placeholder="Year"></label>
-            <label>Part Number<input name="partNumber" placeholder="Part Number"></label>
+            <label data-report-filter-key="partNumber">Part Number<input name="partNumber" placeholder="Part Number"></label>
             <label>Product Group<select name="productGroup" id="reportProductGroupFilter"><option value="">All Product Groups</option></select></label>
             <label>Product SubGroup<select name="partSubGroup" id="reportProductSubGroupFilter"><option value="">All Product SubGroups</option></select></label>
-            <label>Bin Location<input name="bin" placeholder="Bin Location"></label>
-            <label>Scan Type<select name="scanType"><option value="">All Types</option><option>AUDIT</option><option>INWARD</option><option>OUTWARD</option><option>DAMAGE</option></select></label>
+            <label data-report-filter-key="binLocation">Bin Location<input name="bin" placeholder="Bin Location"></label>
+            <label data-report-filter-key="scanType">Scan Type<select name="scanType"><option value="">All Types</option><option>AUDIT</option><option>INWARD</option><option>OUTWARD</option><option>DAMAGE</option></select></label>
             <label>Action<select name="action"><option value="">All Actions</option><option>Inventory Addition</option><option>Inventory Matched</option><option>Inward</option><option>Outward</option><option>Fitted</option><option>Damage</option></select></label>
             <label>Variance Type<select name="varianceType"><option value="">All Variance</option><option value="matched">Matched</option><option value="short">Short</option><option value="excess">Excess</option><option value="inventory-addition">Inventory Addition</option><option value="not-scanned">Not Scanned</option><option value="damage">Damage</option><option value="non-moving">Non Moving</option></select></label>
-            <label>Status<select name="status"><option value="">All Status</option><option>MATCHED</option><option>EXCESS</option><option>SHORT</option><option>MASTER NOT FOUND</option><option>EXTRA PHYSICAL STOCK</option></select></label>
+            <label data-report-filter-key="scanStatus">Scan Status<select name="scanStatus"><option value="">All Status</option><option>ACCEPTED</option><option>SUPERVISOR_APPROVED</option><option>OUTWARD_DONE</option><option>FAILED</option><option>DUPLICATE_BLOCKED</option></select></label>
+            <label data-report-filter-key="userName">User Name<input name="userName" placeholder="User Name"></label>
+            <label data-report-filter-key="syncStatus">Sync Status<select name="syncStatus"><option value="">All Sync Status</option><option value="pending">Pending</option><option value="synced">Synced</option><option value="failed">Failed</option><option value="duplicate">Duplicate</option><option value="rejected">Rejected</option></select></label>
+            <label data-report-filter-key="upiRawQr">UPI Raw / QR<input name="upiRawQr" placeholder="UPI, raw value, QR"></label>
+            <label data-report-filter-key="role">Role<input name="role" placeholder="Role"></label>
+            <label data-report-filter-key="deviceName">Device Name<input name="deviceName" placeholder="Device Name"></label>
+            <label data-report-filter-key="deviceId">Device ID<input name="deviceId" placeholder="Device ID"></label>
+            <label data-report-filter-key="entryMode">Entry Mode<input name="entryMode" placeholder="Manual / Camera / Scanner"></label>
+            <label data-report-filter-key="entryChannel">Entry Channel<input name="entryChannel" placeholder="Mobile / Web / Scanner"></label>
+            <label data-report-filter-key="entrySource">Entry Source<input name="entrySource" placeholder="Source"></label>
             <label class="toggle"><input name="showScannedPartsOnly" type="checkbox">Show Scanned Parts Only</label>
             <label class="toggle"><input name="showFullMasterWithZeroScan" type="checkbox">Show Full Master With Zero Scan</label>
           </form>
@@ -1264,6 +1273,19 @@
   </div>
 
   <div id="scanPopup" class="scan-popup" aria-live="polite"></div>
+  <div id="reportFilterSettingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="reportFilterSettingsTitle">
+    <div class="modal-card report-filter-settings-card">
+      <div class="modal-head">
+        <h2 id="reportFilterSettingsTitle">Select Report Filters</h2>
+        <button id="reportFilterSettingsClose" class="btn icon-btn" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div id="reportFilterSettingsList" class="report-filter-settings-list"></div>
+      <div class="modal-actions">
+        <button id="reportFilterSettingsDefault" class="btn light" type="button">Reset Default</button>
+        <button id="reportFilterSettingsSave" class="btn primary" type="button">Save</button>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>

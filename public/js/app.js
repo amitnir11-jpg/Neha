@@ -42,11 +42,32 @@
     dealers: [],
     audits: [],
     deleteAction: null,
-    lastReportRows: []
+    lastReportRows: [],
+    reportFilterSettings: {}
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+  const REPORT_FILTER_DEFAULTS = ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'syncStatus'];
+  const REPORT_FILTER_OPTIONS = [
+    ['dealer', 'Dealer'],
+    ['dateRange', 'Date / Scan Time Range'],
+    ['scanType', 'Scan Type'],
+    ['scanStatus', 'Scan Status'],
+    ['userName', 'User Name'],
+    ['syncStatus', 'Sync Status'],
+    ['upiRawQr', 'UPI Raw / QR'],
+    ['role', 'Role'],
+    ['deviceName', 'Device Name'],
+    ['deviceId', 'Device ID'],
+    ['entryMode', 'Entry Mode'],
+    ['entryChannel', 'Entry Channel'],
+    ['entrySource', 'Entry Source'],
+    ['binLocation', 'Bin Location'],
+    ['partNumber', 'Part Number'],
+    ['productCategory', 'Product Category'],
+    ['model', 'Model']
+  ];
 
   function page() {
     return document.body.dataset.page;
@@ -86,6 +107,57 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  function selectedLegacyReportFilterKeys() {
+    return new Set((state.reportFilterSettings['legacy-final-report'] || REPORT_FILTER_DEFAULTS).filter(Boolean));
+  }
+
+  function applyLegacyReportFilterVisibility() {
+    const selected = selectedLegacyReportFilterKeys();
+    $$('[data-report-filter-key]', $('#reportFilterForm')).forEach((node) => {
+      const visible = selected.has(node.dataset.reportFilterKey);
+      node.classList.toggle('hidden', !visible);
+      if (!visible) {
+        $$('input, select, textarea', node).forEach((field) => {
+          if (field.type === 'checkbox' || field.type === 'radio') field.checked = false;
+          else field.value = '';
+        });
+      }
+    });
+  }
+
+  function renderLegacyReportFilterSettingsList() {
+    const list = $('#legacyReportFilterSettingsList');
+    if (!list) return;
+    const selected = selectedLegacyReportFilterKeys();
+    list.innerHTML = REPORT_FILTER_OPTIONS.map(([key, label]) => `
+      <label>
+        <input type="checkbox" value="${escapeHtml(key)}" ${selected.has(key) ? 'checked' : ''}>
+        <span>${escapeHtml(label)}</span>
+      </label>
+    `).join('');
+  }
+
+  async function loadLegacyReportFilterSettings() {
+    try {
+      const data = await api('/api/report-filter-settings/legacy-final-report');
+      state.reportFilterSettings['legacy-final-report'] = Array.isArray(data.selectedFilters) ? data.selectedFilters : REPORT_FILTER_DEFAULTS;
+    } catch (error) {
+      state.reportFilterSettings['legacy-final-report'] = REPORT_FILTER_DEFAULTS;
+      console.warn('Report filter settings load failed', error);
+    }
+    applyLegacyReportFilterVisibility();
+  }
+
+  async function saveLegacyReportFilterSettings(selectedFilters) {
+    const data = await api('/api/report-filter-settings/legacy-final-report', {
+      method: 'POST',
+      body: { selectedFilters }
+    });
+    state.reportFilterSettings['legacy-final-report'] = Array.isArray(data.selectedFilters) ? data.selectedFilters : selectedFilters;
+    applyLegacyReportFilterVisibility();
+    toast('Report filter settings saved');
   }
 
   function dashboardHref(params = {}) {
@@ -1113,6 +1185,34 @@
         message.textContent = 'Please select filters and click Show Report.';
       }
     });
+    $('#legacyReportFilterSettingsOpen')?.addEventListener('click', () => {
+      renderLegacyReportFilterSettingsList();
+      $('#legacyReportFilterSettingsModal')?.classList.remove('hidden');
+    });
+    $('#legacyReportFilterSettingsClose')?.addEventListener('click', () => $('#legacyReportFilterSettingsModal')?.classList.add('hidden'));
+    $('#legacyReportFilterSettingsModal')?.addEventListener('click', (event) => {
+      if (event.target.id === 'legacyReportFilterSettingsModal') $('#legacyReportFilterSettingsModal')?.classList.add('hidden');
+    });
+    $('#legacyReportFilterSettingsDefault')?.addEventListener('click', () => {
+      $$('#legacyReportFilterSettingsList input[type="checkbox"]').forEach((box) => {
+        box.checked = REPORT_FILTER_DEFAULTS.includes(box.value);
+      });
+    });
+    $('#legacyReportFilterSettingsSave')?.addEventListener('click', async () => {
+      const selected = $$('#legacyReportFilterSettingsList input[type="checkbox"]:checked').map((box) => box.value);
+      try {
+        await saveLegacyReportFilterSettings(selected);
+        $('#legacyReportFilterSettingsModal')?.classList.add('hidden');
+        renderReport({ summary: {}, finalRows: [] });
+        const message = $('#legacyReportMessage');
+        if (message) {
+          message.className = 'form-message';
+          message.textContent = 'Report filters updated. Click Show Report to fetch data.';
+        }
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    });
 
     $('#downloadFullReportButton').addEventListener('click', () => {
       const query = queryFromForm($('#reportFilterForm'));
@@ -1154,6 +1254,7 @@
     setUserChrome();
     initReportEvents();
     await loadReportDealers();
+    await loadLegacyReportFilterSettings();
     if (window.io) {
       const socket = window.io();
       socket.on('scan:new', () => {});
