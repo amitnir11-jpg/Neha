@@ -68,6 +68,8 @@ const Inventory = require('./models/Inventory');
 const SyncLog = require('./models/SyncLog');
 const { serverInfo } = require('./utils/network');
 const { getActiveAudit, publicAudit } = require('./utils/audit');
+const authRoutes = require('./routes/auth');
+const reportsRouter = require('./routes/reports');
 const syncRoutes = require('./routes/sync');
 const ScannerManager = require('./services/ScannerManager');
 const DeviceDiscoveryService = require('./services/DeviceDiscoveryService');
@@ -870,6 +872,7 @@ app.get('/api/health', async (req, res) => {
     message: 'Daksh Inventory Backend Running',
     success: true,
     server: 'online',
+    reportRoutesVersion: req.app.locals.reportRoutesVersion || '',
     mongodb: dbStatus === 'connected' ? 'online' : 'offline',
     serverStatus: 'online',
     mongoStatus: dbStatus === 'connected' ? 'online' : 'offline',
@@ -947,6 +950,19 @@ app.get('/api/discovery', (req, res) => {
   });
 });
 
+function directScanRegisterReport(scanStatus = '') {
+  return (req, res) => {
+    req.query = { ...(req.query || {}) };
+    if (scanStatus) req.query.scanStatus = scanStatus;
+    return reportsRouter.handleReport(req, res, 'scan-register', 'Scan Register Report');
+  };
+}
+
+app.get('/api/reports/scan-register', authRoutes.requireAuth, directScanRegisterReport(''));
+app.get('/api/reports/valid-scans', authRoutes.requireAuth, directScanRegisterReport('Accepted'));
+app.get('/api/reports/device-wise', authRoutes.requireAuth, directScanRegisterReport(''));
+app.get('/api/reports/duplicate-scans', authRoutes.requireAuth, directScanRegisterReport('Duplicate'));
+
 app.use('/api', (req, res, next) => {
   if (mongoose.connection.readyState === 1) return next();
   return res.status(503).json({
@@ -961,7 +977,7 @@ app.use('/api', (req, res, next) => {
   });
 });
 
-app.use('/api/auth', require('./routes/auth'));
+app.use('/api/auth', authRoutes);
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/admin-delete', require('./routes/adminDelete'));
 app.use('/api/users', require('./routes/users'));
@@ -971,7 +987,19 @@ app.use('/api/bin-transfer', require('./routes/binTransfer'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/scans', require('./routes/inventory'));
-app.use('/api/reports', require('./routes/reports'));
+function legacyScanReportAlias(scanStatus = '') {
+  return (req, res, next) => {
+    req.query = { ...(req.query || {}) };
+    if (scanStatus) req.query.scanStatus = scanStatus;
+    const query = new URLSearchParams(req.query).toString();
+    req.url = `/scan-register${query ? `?${query}` : ''}`;
+    return reportsRouter(req, res, next);
+  };
+}
+app.use('/api/reports/valid-scans', legacyScanReportAlias('Accepted'));
+app.use('/api/reports/device-wise', legacyScanReportAlias(''));
+app.use('/api/reports/duplicate-scans', legacyScanReportAlias('Duplicate'));
+app.use('/api/reports', reportsRouter);
 app.use('/api/report-filter-settings', require('./routes/reportFilterSettings'));
 app.use('/api/dealers', require('./routes/dealer'));
 app.use('/api/devices', require('./routes/devices'));

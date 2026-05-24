@@ -924,3 +924,5 @@ router.post('/valid-scans/email', auth.requireAuth, auth.requireAdmin, (req, res
 router.post('/device-wise/email', auth.requireAuth, auth.requireAdmin, (req, res) => emailScanRegisterAlias(req, res, ''));
 
 module.exports = router;
+module.exports.handleReport = handleReport;
+module.exports.emailReport = emailReport;
