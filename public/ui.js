@@ -5041,7 +5041,7 @@
     const rows = $('#validatorMissingRows');
     if (rows) {
       rows.innerHTML = state.validatorInvalidRows.map((row, index) => `
-        <tr>
+        <tr class="app-table-row">
           <td><button class="link-button validator-detail-btn" type="button" data-index="${index}">${escapeHtml(row.invalidPart || row.rawScannedValue || '-')}</button></td>
           <td><span class="validator-status-badge duplicate">${escapeHtml(row.scanCount || 0)}</span></td>
           <td>${escapeHtml(row.dealerCode || '-')}</td>
@@ -5050,7 +5050,15 @@
           <td>${escapeHtml(row.lastScanTime ? dateTime(row.lastScanTime) : '-')}</td>
           <td title="${escapeHtml(row.reason || 'Not Found In Master')}">${escapeHtml(row.reason || 'Not Found In Master')}</td>
           <td><span class="validator-status-badge ${row.status === 'mapped' || row.status === 'corrected' ? 'matched' : row.scanCount > 1 ? 'duplicate' : 'invalid'}">${escapeHtml(row.status === 'mapped' || row.status === 'corrected' ? row.status : row.scanCount > 1 ? 'Duplicate' : 'Invalid')}</span></td>
-          <td><div class="row-actions"><button class="btn light validator-map-btn" data-index="${index}" type="button">Map</button><button class="btn light validator-correct-btn" data-index="${index}" type="button">Corrected</button><button class="btn light validator-ignore-btn" data-index="${index}" type="button">Ignore</button><button class="btn danger-soft validator-delete-btn" data-index="${index}" type="button">Delete</button></div></td>
+          <td>
+            <select class="app-action-dropdown validator-action-dropdown" data-index="${index}" aria-label="Validation action">
+              <option value="">Action</option>
+              <option value="map">Correct / Map</option>
+              <option value="corrected">Mark Corrected</option>
+              <option value="ignore">Ignore</option>
+              <option value="delete">Delete</option>
+            </select>
+          </td>
         </tr>
       `).join('') || '<tr><td colspan="9" class="muted">No invalid unmatched scans found.</td></tr>';
       bindValidatorRowActions();
@@ -5108,10 +5116,12 @@
 
   function bindValidatorRowActions() {
     $$('.validator-detail-btn').forEach((button) => button.addEventListener('click', () => showValidatorDetails(button.dataset.index)));
-    $$('.validator-map-btn').forEach((button) => button.addEventListener('click', () => validatorCorrectionAction('map', button.dataset.index).catch((error) => toast(error.message, 'error'))));
-    $$('.validator-correct-btn').forEach((button) => button.addEventListener('click', () => validatorCorrectionAction('corrected', button.dataset.index).catch((error) => toast(error.message, 'error'))));
-    $$('.validator-ignore-btn').forEach((button) => button.addEventListener('click', () => validatorCorrectionAction('ignore', button.dataset.index).catch((error) => toast(error.message, 'error'))));
-    $$('.validator-delete-btn').forEach((button) => button.addEventListener('click', () => validatorCorrectionAction('delete', button.dataset.index).catch((error) => toast(error.message, 'error'))));
+    $$('.validator-action-dropdown').forEach((select) => select.addEventListener('change', () => {
+      const action = select.value;
+      select.value = '';
+      if (!action) return;
+      validatorCorrectionAction(action, select.dataset.index).catch((error) => toast(error.message, 'error'));
+    }));
   }
 
   function confirmPermanentDelete() {

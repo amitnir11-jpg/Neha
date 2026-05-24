@@ -1778,15 +1778,16 @@ textarea:focus {
 
 .validator-summary-table {
   width: 100%;
-  min-width: 1160px;
+  min-width: 1250px;
   border-collapse: collapse;
   table-layout: fixed;
 }
 
 .validator-summary-table th,
 .validator-summary-table td {
-  border: 1px solid #222;
-  padding: 7px 9px;
+  border: 0;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0 10px;
   background: #fff;
   font-size: 12.5px;
   line-height: 1.25;
@@ -1797,16 +1798,25 @@ textarea:focus {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: #f1f3f5;
-  font-weight: 900;
+  height: 38px;
+  background: #f7f9fb;
+  color: #344054;
+  font-weight: 700;
   text-align: left;
   white-space: nowrap;
 }
 
 .validator-summary-table td {
+  height: 40px;
+  max-height: 40px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.validator-summary-table td:nth-child(7) {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .validator-status-badge {
@@ -1832,6 +1842,31 @@ textarea:focus {
 .validator-status-badge.matched {
   background: #ecfdf3;
   color: #087443;
+}
+
+.app-action-dropdown,
+.validator-action-dropdown {
+  width: 100%;
+  min-width: 104px;
+  max-width: 118px;
+  height: var(--app-control-height, 36px);
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--app-control-border, #8e99a8);
+  border-radius: var(--app-radius, 4px);
+  background-color: var(--app-control-bg, #f8fafc);
+  color: #111827;
+  font-size: var(--app-font-size, 12.5px);
+  font-weight: 650;
+  line-height: 1.2;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #005f86 50%),
+    linear-gradient(135deg, #005f86 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) 50%,
+    calc(100% - 10px) 50%;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
 }
 
 .link-button {
@@ -3975,6 +4010,7 @@ button[type="reset"] {
 
 .app-input,
 .app-select,
+.app-action-dropdown,
 input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
@@ -4009,7 +4045,8 @@ textarea[disabled] {
 }
 
 select,
-.app-select {
+.app-select,
+.app-action-dropdown {
   appearance: none !important;
   padding-right: 30px !important;
   background-image: linear-gradient(45deg, transparent 50%, #075985 50%), linear-gradient(135deg, #075985 50%, transparent 50%) !important;

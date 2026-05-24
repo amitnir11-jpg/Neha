@@ -302,6 +302,7 @@ function isValidPartNumber(value) {
 
 function normalizeSource(value, fallback = 'mobile') {
   const source = clean(value || fallback).toLowerCase();
+  if (/manual/.test(source)) return 'manual';
   if (/ocr|ai/.test(source)) return 'ocr_label';
   if (/^qr$|qr[_\s-]*scan/.test(source)) return 'qr';
   if (/barcode/.test(source)) return 'barcode';
@@ -668,6 +669,7 @@ async function saveNormalizedScan(scan, req) {
   }
 
   const dealer = scan.dealerCode ? await Dealer.findOne({ dealerCode: scan.dealerCode }).lean() : null;
+  const manualEntry = isManualEntry(scan);
 
   const errors = [];
   if (!scan.partNumber) errors.push('Part number missing');
@@ -676,7 +678,7 @@ async function saveNormalizedScan(scan, req) {
   if (!scan.dealerCode) errors.push('Dealer code missing');
   if (!VALID_TYPES.includes(scan.scanType)) errors.push('Invalid scan type');
   if (!scan.syncKey) errors.push('Sync key missing');
-  if (!master) errors.push(`Part number not found in master: ${scan.partNumber}`);
+  if (!master && manualEntry) errors.push(`Part number not found in master: ${scan.partNumber}`);
   const role = scanRole(req, scan);
   const roleError = roleScanError(role, scan.scanType);
   if (roleError) errors.push(roleError);
@@ -695,7 +697,7 @@ async function saveNormalizedScan(scan, req) {
     }
   });
   if (errors.length) {
-    if (!master && scan.partNumber) {
+    if (!master && scan.partNumber && manualEntry) {
       await logMasterValidationFailure(scan, 'Not Found In Master');
       await masterValidation.rejectNotInMasterScan({
         ...scan,
@@ -708,10 +710,9 @@ async function saveNormalizedScan(scan, req) {
       }, console);
     }
     logSync('scan validation failed', { deviceId: scan.deviceId, scanId: scan.uniqueScanId, errors });
-    return { status: 'failed', scan, error: !master && scan.partNumber ? 'Part not found in master. Scan rejected.' : errors.join(', ') };
+    return { status: 'failed', scan, error: !master && scan.partNumber && manualEntry ? 'Part not found in master. Scan rejected.' : errors.join(', ') };
   }
 
-  const manualEntry = isManualEntry(scan);
   scan.qrFingerprint = manualEntry ? '' : makeQrFingerprint(scan);
   if (scan.scanType === 'OUTWARD' && scan.qrFingerprint) scan.qrFingerprint = `OUTWARD:${scan.qrFingerprint}`;
   const policy = manualEntry ? { ok: true } : await scanPolicyResult(scan);
@@ -1100,6 +1101,7 @@ async function pushHandler(req, res) {
 
     normalized.forEach(({ index, scan }) => {
       const master = masterByDealer.get(`${scan.normalizedPartNumber || scan.partNumber}::${upper(scan.dealerCode)}`) || masterByPart.get(scan.normalizedPartNumber || scan.partNumber);
+      const manualEntry = isManualEntry(scan);
       console.log('RAW_SCAN_RECEIVED', scan.rawScanString || scan.partNumber || '');
       console.log('EXTRACTED_PART_NUMBER', scan.partNumber || '');
       console.log('MASTER_MATCH_FOUND', Boolean(master));
@@ -1114,11 +1116,11 @@ async function pushHandler(req, res) {
       if (!VALID_TYPES.includes(scan.scanType)) rowErrors.push('invalid scanType');
       if (!(scan.timestamp instanceof Date) || Number.isNaN(scan.timestamp.getTime())) rowErrors.push('invalid timestamp');
       if (scan.quantity === undefined || scan.quantity === null || Number.isNaN(Number(scan.quantity))) rowErrors.push('qty missing or invalid');
-      if (!master) rowErrors.push(`Part number not found in master: ${scan.partNumber}`);
+      if (!master && manualEntry) rowErrors.push(`Part number not found in master: ${scan.partNumber}`);
 
       if (rowErrors.length) {
         const isInvalidLocalRecord = rowErrors.some((reason) => /scanId missing|partNumber missing/.test(reason));
-        if (!master && scan.partNumber) {
+        if (!master && scan.partNumber && manualEntry) {
           logMasterValidationFailure(scan, 'Not Found In Master').catch(() => undefined);
           masterValidation.rejectNotInMasterScan({
             ...scan,
@@ -1143,7 +1145,7 @@ async function pushHandler(req, res) {
           scan,
           ackMetaFromScan(scan, index + 1),
           isInvalidLocalRecord ? 'invalid' : 'failed',
-          !master && scan.partNumber ? 'Part not found in master. Scan rejected.' : (isInvalidLocalRecord ? 'Invalid record cleaned' : failed.reason)
+          !master && scan.partNumber && manualEntry ? 'Part not found in master. Scan rejected.' : (isInvalidLocalRecord ? 'Invalid record cleaned' : failed.reason)
         ));
         logSync('row validation failed', {
           row: index + 1,
@@ -1161,7 +1163,6 @@ async function pushHandler(req, res) {
         return;
       }
 
-      const manualEntry = isManualEntry(scan);
       const identityBin = upper(scan.binLocation || scan.bin);
       const identityType = upper(scan.scanType || scan.type);
       const rawIdentityKey = !manualEntry && clean(scan.rawScanString) ? `${upper(scan.dealerCode)}::${identityType}::${identityBin}::RAW::${clean(scan.rawScanString)}` : '';

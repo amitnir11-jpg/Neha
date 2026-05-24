@@ -321,6 +321,7 @@ function isValidPartNumber(value) {
 
 function normalizeSource(value, fallback = 'manual') {
   const source = String(value || fallback).trim().toLowerCase();
+  if (/manual/.test(source)) return 'manual';
   if (/bluetooth/.test(source)) return 'bluetooth_scanner';
   if (/ocr|ai/.test(source)) return 'ocr_label';
   if (/^qr$|qr[_\s-]*scan/.test(source)) return 'qr';
@@ -328,6 +329,12 @@ function normalizeSource(value, fallback = 'manual') {
   if (/camera|mobile/.test(source)) return 'mobile';
   if (['manual', 'scanner', 'bluetooth_scanner', 'import', 'api', 'ocr_label', 'qr'].includes(source)) return source;
   return fallback;
+}
+
+function isManualEntryMode(input = {}, rawScanText = '', upiId = '', defaultSource = 'manual') {
+  const sourceText = firstValue(input, ['entryMode', 'scanMode', 'scanSource', 'source']);
+  const fallback = rawScanText || upiId ? 'barcode' : defaultSource;
+  return normalizeSource(sourceText, fallback) === 'manual';
 }
 
 function sourceLabels(scan = {}) {
@@ -1034,11 +1041,16 @@ async function saveScanRequest(req, res) {
       && explicitPartInput
       && normalizePartNumber(rawScanInput) === normalizePartNumber(explicitPartInput);
     const rawScanText = rawPartOnlyManualEntry ? '' : String(rawScanInput || parsed.rawScan || '');
+    const entrySource = normalizeSource(
+      firstValue(req.body, ['entryMode', 'scanMode', 'scanSource', 'source']),
+      rawScanText || upiId ? 'barcode' : 'manual'
+    );
+    const manualEntryMode = isManualEntryMode(req.body, rawScanText, upiId);
     const duplicateIdentityRaw = rawScanText || upiNo;
     const serverSavedStatus = normalizedSyncStatus({
       ...req.body,
-      source: req.body.source || (String(req.body.deviceId || '').toUpperCase().startsWith('WEB-') ? 'barcode' : 'manual'),
-      scanMode: req.body.scanMode || (String(req.body.deviceId || '').toUpperCase().startsWith('WEB-') ? 'Barcode/Web Scan' : 'Manual')
+      source: entrySource,
+      scanMode: req.body.scanMode || (entrySource === 'manual' ? 'Manual' : 'Barcode/Web Scan')
     });
     const serverSavedSynced = serverSavedStatus === 'synced';
     const syncKey = String(req.body.syncKey || buildSyncKey({ dealerCode, upiId, partNumber: part, scanType: type, timestamp })).trim();
@@ -1137,7 +1149,7 @@ async function saveScanRequest(req, res) {
     };
 
     const warnings = await validateScan(candidate, master, timestamp);
-    if (!master) {
+    if (!master && manualEntryMode) {
       await logValidationFailure({
         ...req.body,
         partNumber: part,
@@ -1151,7 +1163,7 @@ async function saveScanRequest(req, res) {
         loginId: String(req.body.loginId || req.body.userId || (req.user ? req.user.username || req.user.email : '') || ''),
         userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || ''),
         staffName: String(req.body.staffName || (req.user ? req.user.name : '') || ''),
-        source: req.body.source || 'manual',
+        source: entrySource,
         deviceId: String(req.body.deviceId || '')
       }, 'Not Found In Master', timestamp);
       await masterValidation.rejectNotInMasterScan({
@@ -1164,7 +1176,7 @@ async function saveScanRequest(req, res) {
         rawScannedValue: rawScanText,
         rawScan: rawScanText,
         originalScanId: uniqueScanId,
-        source: req.body.source || 'manual',
+        source: entrySource,
         sourceRoute: req.originalUrl,
         userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || ''),
         loginId: String(req.body.loginId || req.body.userId || (req.user ? req.user.username || req.user.email : '') || '')
@@ -1217,8 +1229,8 @@ async function saveScanRequest(req, res) {
       rawBarcode: candidate.rawScan,
       rawQR: candidate.rawScan,
       rawUpi: candidate.rawScan,
-      source: normalizeSource(req.body.source || (serverSavedSynced ? 'barcode' : 'manual'), 'manual'),
-      scanMode: req.body.scanMode || (String(req.body.deviceId || '').toUpperCase().startsWith('WEB-') ? 'Barcode/Web Scan' : 'Manual'),
+      source: entrySource,
+      scanMode: req.body.scanMode || (entrySource === 'manual' ? 'Manual' : 'Barcode/Web Scan'),
       deviceId: String(req.body.deviceId || ''),
       deviceName: String(req.body.deviceName || req.body.device || ''),
       userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || ''),
@@ -1573,6 +1585,11 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
         const upiId = extractUpiId(item, parsed);
         const upiNo = upiId;
         const rawScanText = String(rawScanInput || parsed.rawScan || part);
+        const entrySource = normalizeSource(
+          firstValue(item, ['entryMode', 'scanMode', 'scanSource', 'source']),
+          rawScanText || upiId ? 'barcode' : 'mobile'
+        );
+        const manualEntryMode = isManualEntryMode(item, rawScanText, upiId, 'mobile');
         const syncKey = String(item.syncKey || buildSyncKey({ dealerCode, upiId, partNumber: part, scanType: type, timestamp })).trim();
         const uniqueScanId = scanIdentity({ ...item, syncKey }, parsed);
         const dealer = dealerCode ? await Dealer.findOne({ dealerCode }).lean() : null;
@@ -1625,8 +1642,8 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
         if (master && mrpProvided && approxMismatch(scannedMrp, master.mrp)) warnings.push('MRP mismatch');
         if (master && dlcProvided && approxMismatch(scannedDlc, master.dlc)) warnings.push('DLC mismatch');
 
-        if (!part || !isValidPartNumber(part) || !binLocation || !dealerCode || !VALID_TYPES.includes(type) || !master) {
-          if (!master && part) {
+        if (!part || !isValidPartNumber(part) || !binLocation || !dealerCode || !VALID_TYPES.includes(type) || (!master && manualEntryMode)) {
+          if (!master && part && manualEntryMode) {
             await logValidationFailure({
               ...item,
               partNumber: part,
@@ -1640,7 +1657,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
               loginId: String(item.loginId || item.userId || (req.user ? req.user.username || req.user.email : '') || ''),
               userId: String(item.userId || item.loginId || (req.user ? req.user.id : '') || ''),
               staffName: String(item.staffName || (req.user ? req.user.name : '') || ''),
-              source: item.source || 'manual',
+              source: entrySource,
               deviceId: String(item.deviceId || req.body.deviceId || '')
             }, 'Not Found In Master', timestamp);
             await masterValidation.rejectNotInMasterScan({
@@ -1653,14 +1670,14 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
               rawScannedValue: rawScanText,
               rawScan: rawScanText,
               originalScanId: uniqueScanId,
-              source: item.source || 'sync',
+              source: entrySource,
               sourceRoute: req.originalUrl,
               userId: String(item.userId || item.loginId || (req.user ? req.user.id : '') || ''),
               loginId: String(item.loginId || item.userId || (req.user ? req.user.username || req.user.email : '') || ''),
               defaultScanMode: 'Sync'
             }, console);
           }
-          failed.push({ uniqueScanId, message: !master && part ? 'Part not found in master. Scan rejected.' : warnings.join(', ') });
+          failed.push({ uniqueScanId, message: !master && part && manualEntryMode ? 'Part not found in master. Scan rejected.' : warnings.join(', ') });
           continue;
         }
 
@@ -1700,7 +1717,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           rawScan: rawScanText,
           rawScanString: rawScanText,
           rawUpi: String(item.rawUpi || rawScanText),
-          source: normalizeSource(item.source, 'manual'),
+          source: entrySource,
           deviceId: String(item.deviceId || req.body.deviceId || ''),
           userId: String(item.userId || item.loginId || (req.user ? req.user.id : '') || ''),
           loginId: String(item.loginId || item.userId || (req.user ? req.user.username || req.user.email : '') || ''),

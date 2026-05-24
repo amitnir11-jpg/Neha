@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAKSH INVENTORY SYSTEM</title>
-  <link rel="stylesheet" href="/style.css?v=20260524-ui-standard" onload="console.log('[DAKSH_DASHBOARD_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/style.css?v=20260524-validator-fix" onload="console.log('[DAKSH_DASHBOARD_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -723,7 +723,7 @@
       <section id="validator" class="view">
         <section class="card admin-only">
           <div class="card-head"><h2>Master Scan Validator</h2><div class="actions"><button id="validatorRefreshBtn" class="btn light" type="button">Refresh Report</button><button id="reprocessMasterLookupBtn" class="btn primary" type="button">Fix Master Matching</button><button id="recheckInvalidPartsBtn" class="btn light" type="button">Recheck Invalid Parts</button><button id="exportMissingMasterBtn" class="btn light" type="button">Export Invalid Parts</button></div></div>
-          <form id="validatorFilters" class="filter-grid validator-filters">
+          <form id="validatorFilters" class="filter-grid validator-filters app-filter-bar">
             <label>Dealer<select name="dealerCode" class="cleanupDealerSelect"><option value="">All Dealers</option></select></label>
             <label>Part Number<input name="partNumber" placeholder="Invalid / extracted part"></label>
             <label>Raw Scan<input name="rawScan" placeholder="Raw scan value"></label>
@@ -738,7 +738,20 @@
         <section class="card admin-only">
           <div class="card-head"><h2>Invalid / Unmatched Scan Summary</h2></div>
           <div class="table-wrap validator-table-wrap">
-            <table class="validator-summary-table"><thead><tr><th>Invalid Part</th><th>Scan Count</th><th>Dealer</th><th>Device</th><th>User</th><th>Last Scan</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead><tbody id="validatorMissingRows"></tbody></table>
+            <table class="validator-summary-table app-table">
+              <colgroup>
+                <col style="width: 150px;">
+                <col style="width: 88px;">
+                <col style="width: 130px;">
+                <col style="width: 170px;">
+                <col style="width: 150px;">
+                <col style="width: 150px;">
+                <col style="width: 190px;">
+                <col style="width: 105px;">
+                <col style="width: 120px;">
+              </colgroup>
+              <thead class="app-table-header"><tr><th>Invalid Part</th><th>Scan Count</th><th>Dealer</th><th>Device</th><th>User</th><th>Last Scan</th><th>Reason</th><th>Status</th><th>Action</th></tr></thead><tbody id="validatorMissingRows"></tbody>
+            </table>
           </div>
         </section>
       </section>
@@ -747,7 +760,7 @@
         <div class="modal-card validator-detail-card">
           <div class="card-head"><h2 id="validatorDetailTitle">Invalid Scan Details</h2><button id="validatorDetailClose" class="btn light" type="button">Close</button></div>
           <div class="table-wrap validator-detail-wrap">
-            <table class="validator-summary-table"><thead><tr><th>Scan Time</th><th>Raw Scan Value</th><th>Device ID</th><th>User</th><th>Scan Type</th><th>Bin</th></tr></thead><tbody id="validatorDetailRows"></tbody></table>
+            <table class="validator-summary-table app-table"><thead class="app-table-header"><tr><th>Scan Time</th><th>Raw Scan Value</th><th>Device ID</th><th>User</th><th>Scan Type</th><th>Bin</th></tr></thead><tbody id="validatorDetailRows"></tbody></table>
           </div>
         </div>
       </div>
@@ -1298,7 +1311,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260524-ui-standard" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260524-validator-fix" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {

@@ -294,6 +294,9 @@ function validatorTextRegex(value) {
 
 function validatorFilter(query = {}) {
   const filter = { found: false, status: { $ne: 'ignored' } };
+  filter.$and = [
+    { $or: [{ source: 'manual' }, { source: '' }, { source: { $exists: false } }] }
+  ];
   const dealerCode = normalizePart(query.dealerCode);
   if (dealerCode && dealerCode !== 'ALL') filter.dealerCode = dealerCode;
   const part = validatorTextRegex(query.partNumber);

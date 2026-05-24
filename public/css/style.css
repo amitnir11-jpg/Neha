@@ -156,6 +156,7 @@ button[type="reset"] {
 
 .app-input,
 .app-select,
+.app-action-dropdown,
 input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
@@ -190,7 +191,8 @@ textarea[disabled] {
 }
 
 select,
-.app-select {
+.app-select,
+.app-action-dropdown {
   appearance: none !important;
   padding-right: 30px !important;
   background-image: linear-gradient(45deg, transparent 50%, #075985 50%), linear-gradient(135deg, #075985 50%, transparent 50%) !important;
