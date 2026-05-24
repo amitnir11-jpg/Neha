@@ -178,6 +178,9 @@
   const REPORT_STATE_KEY = 'dakshLastReportState';
   const REPORT_SCAN_MODE_DEFAULT_VERSION = 4;
   const REPORT_FILTER_DEFAULTS = ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'syncStatus'];
+  const REPORT_FILTER_DEFAULTS_BY_TYPE = {
+    'scan-register': ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'deviceName', 'syncStatus', 'entryMode']
+  };
   const REPORT_FILTER_OPTIONS = [
     ['dealer', 'Dealer'],
     ['dealerName', 'Dealer Name'],
@@ -226,9 +229,7 @@
     'user-dealer-wise': 'User & Dealer Wise Report',
     'movement-scans': 'Movement Scan Report',
     'raw-upi': 'Raw UPI Report',
-    'valid-scans': 'Valid Scan Report',
-    'device-wise': 'Device Wise Scan Report',
-    'duplicate-scans': 'Duplicate Scan Report',
+    'scan-register': 'Scan Register Report',
     'wrong-not-found-master': 'Rejected Report',
     'main-inventory-audit': 'Main Inventory Audit Report',
     'compile-audit': 'Compile Audit Report',
@@ -2713,7 +2714,8 @@
 
   function selectedReportFilterKeys(reportType = activeReportType()) {
     const saved = state.reportFilterSettings[reportType];
-    return new Set((Array.isArray(saved) && saved.length ? saved : REPORT_FILTER_DEFAULTS).filter(Boolean));
+    const defaults = REPORT_FILTER_DEFAULTS_BY_TYPE[reportType] || REPORT_FILTER_DEFAULTS;
+    return new Set((Array.isArray(saved) && saved.length ? saved : defaults).filter(Boolean));
   }
 
   function applyReportFilterVisibility(reportType = activeReportType()) {
@@ -2752,10 +2754,10 @@
     }
     try {
       const data = await api(`/api/report-filter-settings/${encodeURIComponent(reportType)}`);
-      state.reportFilterSettings[reportType] = Array.isArray(data.selectedFilters) ? data.selectedFilters : REPORT_FILTER_DEFAULTS;
+      state.reportFilterSettings[reportType] = Array.isArray(data.selectedFilters) ? data.selectedFilters : (REPORT_FILTER_DEFAULTS_BY_TYPE[reportType] || REPORT_FILTER_DEFAULTS);
       state.reportFilterSettingsLoaded.add(reportType);
     } catch (error) {
-      state.reportFilterSettings[reportType] = REPORT_FILTER_DEFAULTS;
+      state.reportFilterSettings[reportType] = REPORT_FILTER_DEFAULTS_BY_TYPE[reportType] || REPORT_FILTER_DEFAULTS;
       console.warn('Report filter settings load failed', error);
     }
     applyReportFilterVisibility(reportType);

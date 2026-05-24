@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAKSH INVENTORY SYSTEM</title>
-  <link rel="stylesheet" href="/style.css?v=20260524-validator-fix" onload="console.log('[DAKSH_DASHBOARD_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/style.css?v=20260524-scan-register" onload="console.log('[DAKSH_DASHBOARD_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -340,9 +340,7 @@
               <option value="user-dealer-wise">User & Dealer Wise Report</option>
               <option value="movement-scans">Movement Scan Report</option>
               <option value="raw-upi">Raw UPI Report</option>
-              <option value="valid-scans">Valid Scan Report</option>
-              <option value="device-wise">Device Wise Scan Report</option>
-              <option value="duplicate-scans">Duplicate Scan Report</option>
+              <option value="scan-register">Scan Register Report</option>
               <option value="wrong-not-found-master">Rejected Report</option>
               <option value="main-inventory-audit">Main Inventory Audit Report</option>
               <option value="compile-audit">Compile Audit Report</option>
@@ -368,14 +366,14 @@
             <label data-report-filter-key="scanType">Scan Type<select name="scanType"><option value="">All Types</option><option>AUDIT</option><option>INWARD</option><option>OUTWARD</option><option>DAMAGE</option></select></label>
             <label class="hidden" data-report-filter-key="action">Action<select name="action"><option value="">All Actions</option><option>Inventory Addition</option><option>Inventory Matched</option><option>Inward</option><option>Outward</option><option>Fitted</option><option>Damage</option></select></label>
             <label class="hidden" data-report-filter-key="varianceType">Variance Type<select name="varianceType"><option value="">All Variance</option><option value="matched">Matched</option><option value="short">Short</option><option value="excess">Excess</option><option value="inventory-addition">Inventory Addition</option><option value="not-scanned">Not Scanned</option><option value="damage">Damage</option><option value="non-moving">Non Moving</option></select></label>
-            <label data-report-filter-key="scanStatus">Scan Status<select name="scanStatus"><option value="">All Status</option><option>ACCEPTED</option><option>SUPERVISOR_APPROVED</option><option>OUTWARD_DONE</option><option>FAILED</option><option>DUPLICATE_BLOCKED</option></select></label>
+            <label data-report-filter-key="scanStatus">Scan Status<select name="scanStatus"><option value="">All Status</option><option value="Accepted">Accepted</option><option value="Duplicate">Duplicate</option><option value="Rejected">Rejected</option><option value="Failed Sync">Failed Sync</option><option value="Deleted">Deleted</option></select></label>
             <label data-report-filter-key="userName">User Name<input name="userName" placeholder="User Name"></label>
             <label data-report-filter-key="syncStatus">Sync Status<select name="syncStatus"><option value="">All Sync Status</option><option value="pending">Pending</option><option value="synced">Synced</option><option value="failed">Failed</option><option value="duplicate">Duplicate</option><option value="rejected">Rejected</option></select></label>
             <label class="hidden" data-report-filter-key="upiRawQr">UPI Raw / QR<input name="upiRawQr" placeholder="UPI, raw value, QR"></label>
             <label class="hidden" data-report-filter-key="role">Role<input name="role" placeholder="Role"></label>
-            <label class="hidden" data-report-filter-key="deviceName">Device Name<input name="deviceName" placeholder="Device Name"></label>
+            <label data-report-filter-key="deviceName">Device Name<input name="deviceName" placeholder="Device Name"></label>
             <label class="hidden" data-report-filter-key="deviceId">Device ID<input name="deviceId" placeholder="Device ID"></label>
-            <label class="hidden" data-report-filter-key="entryMode">Entry Mode<input name="entryMode" placeholder="Manual / Camera / Scanner"></label>
+            <label data-report-filter-key="entryMode">Entry Mode<input name="entryMode" placeholder="Mobile / Barcode / Manual / Web"></label>
             <label class="hidden" data-report-filter-key="entryChannel">Entry Channel<input name="entryChannel" placeholder="Mobile / Web / Scanner"></label>
             <label class="hidden" data-report-filter-key="entrySource">Entry Source<input name="entrySource" placeholder="Source"></label>
             <label class="toggle hidden" data-report-filter-key="scanModeOptions"><input name="showScannedPartsOnly" type="checkbox">Scanned Parts Only</label>
@@ -1311,7 +1309,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260524-validator-fix" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260524-scan-register" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {
