@@ -825,6 +825,17 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use('/api/reports', (req, res, next) => {
+  const pathName = String(req.path || '').toLowerCase();
+  const aliasStatus = {
+    '/valid-scans': 'Accepted',
+    '/duplicate-scans': 'Duplicate'
+  };
+  if (!['/scan-register', '/valid-scans', '/device-wise', '/duplicate-scans'].includes(pathName)) return next();
+  if (aliasStatus[pathName]) req.query = { ...(req.query || {}), scanStatus: aliasStatus[pathName] };
+  return authRoutes.requireAuth(req, res, () => reportsRouter.handleReport(req, res, 'scan-register', 'Scan Register Report'));
+});
+
 app.use(express.static(PUBLIC_DIR));
 
 app.get(['/apk', '/download-apk', '/api/apk/download'], (req, res) => {
@@ -958,10 +969,14 @@ function directScanRegisterReport(scanStatus = '') {
   };
 }
 
-app.get('/api/reports/scan-register', authRoutes.requireAuth, directScanRegisterReport(''));
-app.get('/api/reports/valid-scans', authRoutes.requireAuth, directScanRegisterReport('Accepted'));
-app.get('/api/reports/device-wise', authRoutes.requireAuth, directScanRegisterReport(''));
-app.get('/api/reports/duplicate-scans', authRoutes.requireAuth, directScanRegisterReport('Duplicate'));
+function directAuthenticatedReport(handler) {
+  return (req, res, next) => authRoutes.requireAuth(req, res, () => handler(req, res, next));
+}
+
+app.get('/api/reports/scan-register', directAuthenticatedReport(directScanRegisterReport('')));
+app.get('/api/reports/valid-scans', directAuthenticatedReport(directScanRegisterReport('Accepted')));
+app.get('/api/reports/device-wise', directAuthenticatedReport(directScanRegisterReport('')));
+app.get('/api/reports/duplicate-scans', directAuthenticatedReport(directScanRegisterReport('Duplicate')));
 
 app.use('/api', (req, res, next) => {
   if (mongoose.connection.readyState === 1) return next();
