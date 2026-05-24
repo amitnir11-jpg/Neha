@@ -766,12 +766,15 @@ function buildPdfBuffer(title, rows, type) {
 
 async function handleReport(req, res, type, title) {
   try {
-    if (!selectedDealerCode(req.query)) return requireDealerSelection(res);
-    console.log("REPORT API:", req.path, req.query);
+    const query = { ...req.query };
+    if (type === 'scan-register' && /\/valid-scans$/i.test(req.path)) query.scanStatus = 'Accepted';
+    if (type === 'scan-register' && /\/duplicate-scans$/i.test(req.path)) query.scanStatus = 'Duplicate';
+    if (!selectedDealerCode(query)) return requireDealerSelection(res);
+    console.log("REPORT API:", req.path, query);
     if (type === 'scan-register') {
-      const rows = await scanRegisterRows(req.query);
-      if (req.query.format === 'excel') return sendExcel(res, title, rows, type);
-      if (req.query.format === 'pdf') return sendPdf(res, title, rows, type);
+      const rows = await scanRegisterRows(query);
+      if (query.format === 'excel') return sendExcel(res, title, rows, type);
+      if (query.format === 'pdf') return sendPdf(res, title, rows, type);
       return res.json({
         success: true,
         type,
@@ -783,10 +786,10 @@ async function handleReport(req, res, type, title) {
         message: rows.length ? '' : 'No scan register data found for selected filter'
       });
     }
-    const data = await reportModule.buildReportData(req.query);
+    const data = await reportModule.buildReportData(query);
     const rows = selectRows(data, type);
-    if (req.query.format === 'excel') return sendExcel(res, title, rows, type);
-    if (req.query.format === 'pdf') return sendPdf(res, title, rows, type);
+    if (query.format === 'excel') return sendExcel(res, title, rows, type);
+    if (query.format === 'pdf') return sendPdf(res, title, rows, type);
     return res.json({
       success: true,
       type,
@@ -855,6 +858,9 @@ const REPORTS = {
   'movement-scans': ['movement-scans', 'Movement Scan Report'],
   'raw-upi': ['raw-upi', 'Raw UPI Report'],
   'scan-register': ['scan-register', 'Scan Register Report'],
+  'valid-scans': ['scan-register', 'Scan Register Report'],
+  'device-wise': ['scan-register', 'Scan Register Report'],
+  'duplicate-scans': ['scan-register', 'Scan Register Report'],
   'wrong-not-found-master': ['wrong-not-found-master', 'Rejected Report'],
   'main-inventory-audit': ['main-inventory-audit', 'Main Inventory Audit Report'],
   'compile-audit': ['compile-audit', 'Compile Audit Report'],
