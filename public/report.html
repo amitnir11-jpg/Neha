@@ -48,9 +48,9 @@
           </label>
           <label data-report-filter-key="dateRange">From Date<input name="from" type="date"></label>
           <label data-report-filter-key="dateRange">To Date<input name="to" type="date"></label>
-          <label data-report-filter-key="productCategory">Part Category<input name="category" placeholder="All categories"></label>
-          <label>Product Group<input name="productGroup" placeholder="All groups"></label>
-          <label>Product SubGroup<input name="partSubGroup" placeholder="All subgroups"></label>
+          <label class="hidden" data-report-filter-key="productCategory">Part Category<input name="category" placeholder="All categories"></label>
+          <label class="hidden" data-report-filter-key="productGroup">Product Group<input name="productGroup" placeholder="All groups"></label>
+          <label class="hidden" data-report-filter-key="productSubGroup">Product SubGroup<input name="partSubGroup" placeholder="All subgroups"></label>
           <label data-report-filter-key="scanType">
             Scan Type
             <select name="type">
@@ -61,22 +61,22 @@
               <option>DAMAGE</option>
             </select>
           </label>
-          <label>Audit ID<input name="auditId" placeholder="All audits"></label>
+          <label class="hidden" data-report-filter-key="audit">Audit ID<input name="auditId" placeholder="All audits"></label>
           <label data-report-filter-key="scanStatus">Scan Status<select name="scanStatus"><option value="">All status</option><option>ACCEPTED</option><option>SUPERVISOR_APPROVED</option><option>OUTWARD_DONE</option><option>FAILED</option><option>DUPLICATE_BLOCKED</option></select></label>
           <label data-report-filter-key="userName">User Name<input name="userName" placeholder="All users"></label>
           <label data-report-filter-key="syncStatus">Sync Status<select name="syncStatus"><option value="">All sync status</option><option value="pending">Pending</option><option value="synced">Synced</option><option value="failed">Failed</option><option value="duplicate">Duplicate</option><option value="rejected">Rejected</option></select></label>
-          <label data-report-filter-key="upiRawQr">UPI Raw / QR<input name="upiRawQr" placeholder="UPI, raw value, QR"></label>
-          <label data-report-filter-key="role">Role<input name="role" placeholder="All roles"></label>
-          <label data-report-filter-key="deviceName">Device Name<input name="deviceName" placeholder="All devices"></label>
-          <label data-report-filter-key="deviceId">Device ID<input name="deviceId" placeholder="All device IDs"></label>
-          <label data-report-filter-key="entryMode">Entry Mode<input name="entryMode" placeholder="Manual / Camera / Scanner"></label>
-          <label data-report-filter-key="entryChannel">Entry Channel<input name="entryChannel" placeholder="Mobile / Web / Scanner"></label>
-          <label data-report-filter-key="entrySource">Entry Source<input name="entrySource" placeholder="All sources"></label>
-          <label data-report-filter-key="binLocation">Bin Location<input name="bin" placeholder="All bins"></label>
-          <label data-report-filter-key="partNumber">Part Number<input name="partNumber" placeholder="All parts"></label>
-          <label data-report-filter-key="model">Model<input name="model" placeholder="All models"></label>
+          <label class="hidden" data-report-filter-key="upiRawQr">UPI Raw / QR<input name="upiRawQr" placeholder="UPI, raw value, QR"></label>
+          <label class="hidden" data-report-filter-key="role">Role<input name="role" placeholder="All roles"></label>
+          <label class="hidden" data-report-filter-key="deviceName">Device Name<input name="deviceName" placeholder="All devices"></label>
+          <label class="hidden" data-report-filter-key="deviceId">Device ID<input name="deviceId" placeholder="All device IDs"></label>
+          <label class="hidden" data-report-filter-key="entryMode">Entry Mode<input name="entryMode" placeholder="Manual / Camera / Scanner"></label>
+          <label class="hidden" data-report-filter-key="entryChannel">Entry Channel<input name="entryChannel" placeholder="Mobile / Web / Scanner"></label>
+          <label class="hidden" data-report-filter-key="entrySource">Entry Source<input name="entrySource" placeholder="All sources"></label>
+          <label class="hidden" data-report-filter-key="binLocation">Bin Location<input name="bin" placeholder="All bins"></label>
+          <label class="hidden" data-report-filter-key="partNumber">Part Number<input name="partNumber" placeholder="All parts"></label>
+          <label class="hidden" data-report-filter-key="model">Model<input name="model" placeholder="All models"></label>
           <div class="form-actions wide">
-            <button class="secondary-button" type="submit">Show Report</button>
+            <button class="secondary-button" type="submit">Submit</button>
             <button id="resetReportFilterButton" class="ghost-button" type="button">Reset Filter</button>
             <button id="downloadFullReportButton" class="primary-button" type="button">Download Full Report</button>
             <button id="downloadCsvReportButton" class="secondary-button" type="button">Export CSV</button>
@@ -96,7 +96,7 @@
         <div class="stat-card"><span>Excess</span><strong id="reportExcess">0</strong></div>
         <div class="stat-card"><span>Not scanned</span><strong id="reportNotScanned">0</strong></div>
       </section>
-      <div id="legacyReportMessage" class="form-message">Please select filters and click Show Report.</div>
+      <div id="legacyReportMessage" class="form-message">Please select filters and click Submit.</div>
 
       <section class="panel">
         <div class="panel-heading">

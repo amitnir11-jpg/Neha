@@ -122,6 +122,7 @@ function rejectedReportFilter(query = {}) {
   if (query.partNumber) filter.extractedPartNumber = { $regex: clean(query.partNumber), $options: 'i' };
   if (query.scanType) filter.scanType = upper(query.scanType);
   if (query.bin) filter.binLocation = { $regex: clean(query.bin), $options: 'i' };
+  if (query.dealerName) filter.dealerName = regex(query.dealerName);
   applyCommonMetadataFilters(filter, query, { rawFields: ['rawScannedValue', 'rawUpi', 'rawQR', 'rawScan'] });
   if (query.fromDate || query.dateFrom || query.from || query.toDate || query.dateTo || query.to) {
     filter.dateTime = {};
@@ -136,21 +137,31 @@ function rejectedReportFilter(query = {}) {
 async function rejectedReportRows(query = {}) {
   const rows = await RejectedScan.find(rejectedReportFilter(query)).sort({ dateTime: -1, createdAt: -1 }).limit(5000).lean();
   return rows.map((row) => ({
-    dateTime: row.dateTime || row.createdAt,
     dealerCode: row.dealerCode || '',
-    userId: row.userId || '',
+    dealerName: row.dealerName || '',
+    scanTime: row.dateTime || row.createdAt,
+    partNumber: row.extractedPartNumber || row.partNumber || '',
+    rawQrUpi: row.rawScannedValue || row.rawUpi || row.rawQR || row.rawScan || '',
+    reason: 'Part not found in master',
     userName: row.userName || row.loginId || '',
-    role: row.role || '',
-    deviceId: row.deviceId || '',
-    scanMode: row.scanMode || '',
+    deviceName: row.deviceName || '',
     scanType: row.scanType || '',
-    rawScannedValue: row.rawScannedValue || '',
-    extractedPartNumber: row.extractedPartNumber || '',
-    binLocation: row.binLocation || '',
-    reason: row.reason || 'Part Not Found In Master',
-    status: row.status || 'REJECTED'
+    syncStatus: row.syncStatus || 'rejected'
   }));
 }
+
+const REJECTED_COLUMNS = [
+  { header: 'DEALER CODE', key: 'dealerCode', width: 16 },
+  { header: 'DEALER NAME', key: 'dealerName', width: 28 },
+  { header: 'SCAN TIME', key: 'scanTime', width: 22 },
+  { header: 'PART NUMBER', key: 'partNumber', width: 18 },
+  { header: 'RAW QR / UPI', key: 'rawQrUpi', width: 42 },
+  { header: 'REASON', key: 'reason', width: 28 },
+  { header: 'USER NAME', key: 'userName', width: 22 },
+  { header: 'DEVICE NAME', key: 'deviceName', width: 24 },
+  { header: 'SCAN TYPE', key: 'scanType', width: 16 },
+  { header: 'SYNC STATUS', key: 'syncStatus', width: 16 }
+];
 
 function groupRows(rows, keyFn, seedFn, updateFn) {
   const map = new Map();
@@ -428,10 +439,6 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
 }
 
 function selectRows(data, type) {
-  if (type === 'full-audit') {
-    return data.finalRows.map(auditRow);
-  }
-
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') {
     return groupRows(
       data.scans,
@@ -510,12 +517,13 @@ function columnsForRows(rows) {
 }
 
 function columnsForReport(type, rows) {
-  if (['full-audit', 'main-inventory-audit', 'compile-audit', 'consolidated-final'].includes(type)) return AUDIT_COLUMNS;
+  if (['main-inventory-audit', 'compile-audit', 'consolidated-final'].includes(type)) return AUDIT_COLUMNS;
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') return BIN_COLUMNS;
   if (['valid-scans', 'movement-scans'].includes(type)) return SCAN_COLUMNS;
   if (type === 'user-dealer-wise') return USER_DEALER_COLUMNS;
   if (type === 'device-wise') return DEVICE_COLUMNS;
   if (type === 'duplicate-scans') return DUPLICATE_COLUMNS;
+  if (type === 'wrong-not-found-master') return REJECTED_COLUMNS;
   return columnsForRows(rows);
 }
 
@@ -665,7 +673,6 @@ async function emailReport(req, res, type, title) {
 }
 
 const REPORTS = {
-  'full-audit': ['full-audit', 'Full Audit Report'],
   'bin-wise-stock': ['bin-wise-stock', 'Bin Wise Stock Report'],
   'user-dealer-wise': ['user-dealer-wise', 'User & Dealer Wise Report'],
   'movement-scans': ['movement-scans', 'Movement Scan Report'],
@@ -673,7 +680,7 @@ const REPORTS = {
   'valid-scans': ['valid-scans', 'Valid Scan Report'],
   'device-wise': ['device-wise', 'Device Wise Scan Report'],
   'duplicate-scans': ['duplicate-scans', 'Duplicate Scan Report'],
-  'wrong-not-found-master': ['wrong-not-found-master', 'Wrong / Not Found In Master Scan Report'],
+  'wrong-not-found-master': ['wrong-not-found-master', 'Rejected Report'],
   'main-inventory-audit': ['main-inventory-audit', 'Main Inventory Audit Report'],
   'compile-audit': ['compile-audit', 'Compile Audit Report'],
   'consolidated-final': ['consolidated-final', 'Consolidated Final Report']
@@ -689,7 +696,7 @@ router.get('/wrong-not-found-master', auth.requireAuth, async (req, res) => {
   try {
     if (!selectedDealerCode(req.query)) return requireDealerSelection(res);
     const rows = await rejectedReportRows(req.query);
-    const title = 'Wrong / Not Found In Master Scan Report';
+    const title = 'Rejected Report';
     if (req.query.format === 'excel') return sendExcel(res, title, rows, 'wrong-not-found-master');
     if (req.query.format === 'pdf') return sendPdf(res, title, rows, 'wrong-not-found-master');
     return res.json({
@@ -697,21 +704,7 @@ router.get('/wrong-not-found-master', auth.requireAuth, async (req, res) => {
       type: 'wrong-not-found-master',
       title,
       summary: { rejectedCount: rows.length },
-      columns: [
-        { header: 'Date Time', key: 'dateTime' },
-        { header: 'Dealer Code', key: 'dealerCode' },
-        { header: 'User ID', key: 'userId' },
-        { header: 'User Name', key: 'userName' },
-        { header: 'Role', key: 'role' },
-        { header: 'Device ID', key: 'deviceId' },
-        { header: 'Scan Mode', key: 'scanMode' },
-        { header: 'Scan Type', key: 'scanType' },
-        { header: 'Raw Scanned Value', key: 'rawScannedValue' },
-        { header: 'Extracted Part Number', key: 'extractedPartNumber' },
-        { header: 'Bin Location', key: 'binLocation' },
-        { header: 'Reason', key: 'reason' },
-        { header: 'Status', key: 'status' }
-      ],
+      columns: REJECTED_COLUMNS.map(({ header, key }) => ({ header, key })),
       rows,
       totalRows: rows.length,
       message: rows.length ? '' : 'No rejected not-in-master scans found for selected filter'

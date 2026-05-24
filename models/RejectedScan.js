@@ -13,6 +13,11 @@ const rejectedScanSchema = new mongoose.Schema(
       uppercase: true,
       index: true
     },
+    dealerName: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     userId: {
       type: String,
       trim: true,
@@ -76,7 +81,7 @@ const rejectedScanSchema = new mongoose.Schema(
     reason: {
       type: String,
       trim: true,
-      default: 'Part Not Found In Master'
+      default: 'Part not found in master'
     },
     status: {
       type: String,
@@ -85,11 +90,17 @@ const rejectedScanSchema = new mongoose.Schema(
       default: 'REJECTED',
       index: true
     },
+    syncStatus: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: 'rejected',
+      index: true
+    },
     originalScanId: {
       type: String,
       trim: true,
-      default: '',
-      index: true
+      default: ''
     },
     originalInventoryId: {
       type: mongoose.Schema.Types.ObjectId,

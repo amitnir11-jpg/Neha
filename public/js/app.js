@@ -56,6 +56,9 @@
     ['scanStatus', 'Scan Status'],
     ['userName', 'User Name'],
     ['syncStatus', 'Sync Status'],
+    ['audit', 'Audit'],
+    ['productGroup', 'Product Group'],
+    ['productSubGroup', 'Product Sub Group'],
     ['upiRawQr', 'UPI Raw / QR'],
     ['role', 'Role'],
     ['deviceName', 'Device Name'],
@@ -810,7 +813,7 @@
       });
     });
 
-    $('#refreshButton').addEventListener('click', async () => {
+    $('#refreshButton')?.addEventListener('click', async () => {
       await Promise.all([loadDealers(), loadInventory(), loadDevices()]);
       toast('Dashboard refreshed');
     });
@@ -1137,7 +1140,7 @@
       const message = $('#legacyReportMessage');
       if (message) {
         message.className = 'form-message';
-        message.textContent = 'Please select filters and click Show Report.';
+        message.textContent = 'Please select filters and click Submit.';
       }
       return;
     }
@@ -1182,7 +1185,7 @@
       const message = $('#legacyReportMessage');
       if (message) {
         message.className = 'form-message';
-        message.textContent = 'Please select filters and click Show Report.';
+        message.textContent = 'Please select filters and click Submit.';
       }
     });
     $('#legacyReportFilterSettingsOpen')?.addEventListener('click', () => {
@@ -1207,7 +1210,7 @@
         const message = $('#legacyReportMessage');
         if (message) {
           message.className = 'form-message';
-          message.textContent = 'Report filters updated. Click Show Report to fetch data.';
+          message.textContent = 'Report filters updated. Click Submit to fetch data.';
         }
       } catch (error) {
         toast(error.message, 'error');

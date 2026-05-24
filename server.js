@@ -978,6 +978,7 @@ app.use('/api/master', require('./routes/master'));
 app.use('/api/master-parts', require('./routes/master'));
 app.use('/api/master-catalogue', require('./routes/masterCatalogue'));
 app.use('/api/backup', require('./routes/backup'));
+app.use('/api/audit-backup', require('./routes/auditBackup'));
 app.use('/api/reconciliation', require('./routes/reconciliation'));
 app.use('/api/qr', require('./routes/qr'));
 app.use('/api/audit', require('./routes/audit'));

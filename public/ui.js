@@ -121,6 +121,9 @@
     clockSkewRows: [],
     clockSkewSelectedIds: new Set(),
     locationDeleteLastCount: null,
+    auditBackups: [],
+    auditRestoreSessionId: '',
+    auditRestorePollTimer: null,
     syncInProgress: false,
     deviceId: storageGet('dakshDeviceId') || '',
     activeDeviceCount: 0,
@@ -142,6 +145,7 @@
     reportTableGrandTotal: null,
     reportFilterSettings: {},
     reportFilterSettingsLoaded: new Set(),
+    reportFilterDropdownsLoadedAt: 0,
     reportSort: { reportType: '', key: '', direction: 'asc' },
     dashboardDealerCode: '',
     reconLoaded: false,
@@ -157,8 +161,6 @@
     binLabelPreviewItems: [],
     binLabelSettings: null,
     binMasterRows: [],
-    showTabPage: 1,
-    showTabRows: [],
     barcodeAutoSaving: false,
     barcodeLastRaw: '',
     barcodeLastAt: 0
@@ -178,11 +180,16 @@
   const REPORT_FILTER_DEFAULTS = ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'syncStatus'];
   const REPORT_FILTER_OPTIONS = [
     ['dealer', 'Dealer'],
+    ['dealerName', 'Dealer Name'],
     ['dateRange', 'Date / Scan Time Range'],
     ['scanType', 'Scan Type'],
     ['scanStatus', 'Scan Status'],
     ['userName', 'User Name'],
     ['syncStatus', 'Sync Status'],
+    ['audit', 'Audit'],
+    ['auditDate', 'Audit Date'],
+    ['productGroup', 'Product Group'],
+    ['productSubGroup', 'Product Sub Group'],
     ['upiRawQr', 'UPI Raw / QR'],
     ['role', 'Role'],
     ['deviceName', 'Device Name'],
@@ -193,7 +200,11 @@
     ['binLocation', 'Bin Location'],
     ['partNumber', 'Part Number'],
     ['productCategory', 'Product Category'],
-    ['model', 'Model']
+    ['model', 'Model'],
+    ['year', 'Year'],
+    ['action', 'Action'],
+    ['varianceType', 'Variance Type'],
+    ['scanModeOptions', 'Inventory Audit Options']
   ];
   const DATA_VERSION_KEY = 'dakshDataVersion';
   const BARCODE_LAST_BIN_KEY = 'dakshBarcodeLastBin';
@@ -211,7 +222,6 @@
     storageSet(DATA_VERSION_KEY, CURRENT_DATA_VERSION);
   }
   const REPORT_TITLES = {
-    'full-audit': 'Full Audit Report',
     'bin-wise-stock': 'Bin Wise Stock Report',
     'user-dealer-wise': 'User & Dealer Wise Report',
     'movement-scans': 'Movement Scan Report',
@@ -219,7 +229,7 @@
     'valid-scans': 'Valid Scan Report',
     'device-wise': 'Device Wise Scan Report',
     'duplicate-scans': 'Duplicate Scan Report',
-    'wrong-not-found-master': 'Wrong / Not Found In Master Scan Report',
+    'wrong-not-found-master': 'Rejected Report',
     'main-inventory-audit': 'Main Inventory Audit Report',
     'compile-audit': 'Compile Audit Report',
     'consolidated-final': 'Consolidated Final Report',
@@ -250,8 +260,8 @@
     qr: 'QR / Barcode',
     devices: 'Device Control',
     syncCenter: 'Sync Report',
-    admin: 'Admin Settings',
-    showTab: 'SHOW TAB'
+    archiveRestore: 'Archive & Restore Center',
+    admin: 'Admin Settings'
   };
 
   function ensureDeviceId() {
@@ -1571,20 +1581,6 @@
       'total-mrp-value': 150,
       'total-dlc-value': 150
     };
-    const showTabWidths = {
-      select: 44,
-      'scan-time': 160,
-      'dealer-code': 100,
-      'dealer-name': 190,
-      'part-number': 150,
-      'raw-scan': 320,
-      qty: 70,
-      mrp: 100,
-      'scan-type': 110,
-      'bin-location': 110,
-      'device-id': 220,
-      'sync-status': 110
-    };
     const scanHistoryWidths = {
       select: 44,
       time: 160,
@@ -1606,7 +1602,6 @@
     };
     if (table.classList.contains('dashboard-stream-table')) return dashboardStreamWidths[key] || 130;
     if (table.classList.contains('product-group-summary-table')) return productSummaryWidths[key] || 130;
-    if (table.classList.contains('show-tab-table')) return showTabWidths[key] || 130;
     if (table.classList.contains('scan-history-table')) return scanHistoryWidths[key] || 130;
     if (key === 'select') return 44;
     return 130;
@@ -1772,7 +1767,6 @@
     enhanceDataTable($('#streamRows')?.closest('table'), 'daksh_table_realtime_stream');
     enhanceDataTable($('#productGroupSummaryRows')?.closest('table'), 'daksh_table_product_group_summary');
     enhanceDataTable($('#scanHistoryRows')?.closest('table'), 'daksh_table_scan_history');
-    enhanceDataTable($('#showTabRows')?.closest('table'), 'daksh_table_show_tab');
   }
 
   function setUserChrome() {
@@ -1889,11 +1883,15 @@
   }
 
   async function loadCategories() {
+    if (state.reportFilterDropdownsLoadedAt && Date.now() - state.reportFilterDropdownsLoadedAt < 5 * 60 * 1000) {
+      return;
+    }
     const data = await api('/api/master/filters');
     state.categories = data.categories || [];
     state.reportProductGroups = data.groups || [];
     state.reportProductSubGroups = data.subGroups || [];
     state.reportGroupSubGroups = data.groupSubGroups || {};
+    state.reportFilterDropdownsLoadedAt = Date.now();
     fillSelectOptions($('#reportCategoryFilter'), state.categories, 'All Categories');
     fillSelectOptions($('#reportProductGroupFilter'), state.reportProductGroups, 'All Product Groups');
     refreshReportSubGroupOptions();
@@ -2258,194 +2256,6 @@
     });
   }
 
-  function showTabFilterParams() {
-    const form = $('#showTabFilters');
-    const data = formObject(form);
-    const dealerText = cleanDealerCode(data.dealerText || '');
-    if (dealerText) data.dealerCode = dealerText;
-    delete data.dealerText;
-    Object.keys(data).forEach((key) => {
-      if (typeof data[key] === 'string') data[key] = key === 'partNumber' || key === 'rawScan' ? normalizePartText(data[key]) : data[key].trim();
-      if (!data[key]) delete data[key];
-    });
-    return data;
-  }
-
-  function showTabQuery(extra = {}) {
-    const params = new URLSearchParams();
-    const data = { ...showTabFilterParams(), ...extra };
-    delete data.dataSource;
-    Object.entries(data).forEach(([key, value]) => {
-      if (String(value || '').trim()) params.set(key, String(value).trim());
-    });
-    return params.toString();
-  }
-
-  function localShowTabRows() {
-    const filters = showTabFilterParams();
-    const source = filters.dataSource || 'both';
-    if (source === 'server') return [];
-    const dealerCode = cleanDealerCode(filters.dealerCode || '');
-    const partNeedle = normalizePartText(filters.partNumber || '');
-    const binNeedle = normalizePartText(filters.binLocation || '');
-    const scanType = normalizePartText(filters.scanType || '');
-    const from = filters.dateFrom ? new Date(filters.dateFrom) : null;
-    const to = filters.dateTo ? new Date(filters.dateTo) : null;
-    if (to && !Number.isNaN(to.getTime())) to.setHours(23, 59, 59, 999);
-    return getSyncQueue().map((item) => {
-      const parsed = parseRawScanText(item.rawScan || item.rawScanString || item.rawScanValue || item.partNumber || item.part || '');
-      const partNumber = normalizePartText(parsed.partNumber || item.partNumber || item.part);
-      return {
-        _id: item.localId || item.syncKey,
-        localOnly: true,
-        timestamp: item.timestamp || item.scanTime || item.createdAt || '',
-        dealerCode: cleanDealerCode(item.dealerCode || ''),
-        dealerName: item.dealerName || '',
-        partNumber,
-        rawScan: item.rawScan || item.rawScanString || parsed.rawScan || partNumber,
-        qty: Number(parsed.qty || item.qty || item.quantity || 0),
-        mrp: Number(parsed.mrp || item.mrp || 0),
-        scanType: normalizePartText(item.scanType || item.type || 'INWARD'),
-        binLocation: item.binLocation || item.bin || '',
-        deviceId: item.deviceId || '',
-        syncStatus: item.localStatus || item.status || 'pending'
-      };
-    }).filter((row) => {
-      const rowTime = row.timestamp ? new Date(row.timestamp) : null;
-      if (dealerCode && row.dealerCode !== dealerCode) return false;
-      if (scanType && row.scanType !== scanType) return false;
-      if (partNeedle && !`${row.partNumber} ${row.rawScan}`.toUpperCase().includes(partNeedle)) return false;
-      if (binNeedle && !normalizePartText(row.binLocation).includes(binNeedle)) return false;
-      if (from && rowTime && rowTime < from) return false;
-      if (to && rowTime && rowTime > to) return false;
-      return true;
-    });
-  }
-
-  function updateShowTabSummary(summary, rows) {
-    const localSummary = rows.reduce((acc, row) => {
-      const rowQty = Number(row.qty || 0);
-      acc.totalRecords += 1;
-      acc.totalQuantity += rowQty;
-      if (row.scanType === 'INWARD') acc.totalInward += rowQty;
-      if (row.scanType === 'OUTWARD') acc.totalOutward += rowQty;
-      if (row.scanType === 'FITTED') acc.totalFitted += rowQty;
-      if (row.scanType === 'DAMAGE') acc.totalDamage += rowQty;
-      return acc;
-    }, { totalRecords: 0, totalQuantity: 0, totalInward: 0, totalOutward: 0, totalFitted: 0, totalDamage: 0 });
-    const merged = {
-      totalRecords: Number(summary.totalRecords || 0) + localSummary.totalRecords,
-      totalQuantity: Number(summary.totalQuantity || 0) + localSummary.totalQuantity,
-      totalInward: Number(summary.totalInward || 0) + localSummary.totalInward,
-      totalOutward: Number(summary.totalOutward || 0) + localSummary.totalOutward,
-      totalFitted: Number(summary.totalFitted || 0) + localSummary.totalFitted,
-      totalDamage: Number(summary.totalDamage || 0) + localSummary.totalDamage
-    };
-    setText('showTabTotalRecords', merged.totalRecords);
-    setText('showTabTotalQty', merged.totalQuantity);
-    setText('showTabTotalInward', merged.totalInward);
-    setText('showTabTotalOutward', merged.totalOutward);
-    setText('showTabTotalFitted', merged.totalFitted);
-    setText('showTabTotalDamage', merged.totalDamage);
-  }
-
-  function renderShowTabRows(rows = []) {
-    state.showTabRows = rows;
-    $('#showTabRows').innerHTML = rows.map((row) => `
-      <tr>
-        <td class="select-cell"><input class="show-tab-checkbox" type="checkbox" value="${escapeHtml(row._id || '')}" ${row.localOnly ? 'disabled title="Local queued records sync before server delete"' : ''}></td>
-        <td>${escapeHtml(dateTime(row.timestamp))}</td>
-        <td>${escapeHtml(row.dealerCode)}</td>
-        <td>${escapeHtml(row.dealerName)}</td>
-        <td>${partLink(row.partNumber)}</td>
-        <td class="raw-cell" title="${escapeHtml(row.rawScan)}">${escapeHtml(row.rawScan)}</td>
-        <td>${escapeHtml(row.qty)}</td>
-        <td>${escapeHtml(money2(row.mrp))}</td>
-        <td>${escapeHtml(row.scanType)}</td>
-        <td>${escapeHtml(row.binLocation)}</td>
-        <td>${deviceLink(row.deviceId)}</td>
-        <td>${syncStatusBadge(normalizedDisplaySyncStatus(row) || 'pending')}</td>
-      </tr>
-    `).join('') || '<tr><td colspan="12" class="muted">No dealer scan records found</td></tr>';
-    enhanceCoreTables();
-  }
-
-  function showTabExportRows() {
-    const headers = ['Scan Time', 'Dealer Code', 'Dealer Name', 'Part Number', 'Raw Scan', 'Qty', 'MRP', 'Scan Type', 'Bin Location', 'Device ID', 'Sync Status'];
-    const rows = state.showTabRows.map((row) => [
-      dateTime(row.timestamp),
-      row.dealerCode,
-      row.dealerName,
-      row.partNumber,
-      row.rawScan,
-      row.qty,
-      money2(row.mrp),
-      row.scanType,
-      row.binLocation,
-      row.deviceId,
-      row.syncStatus
-    ]);
-    return { headers, rows };
-  }
-
-  function downloadShowTabClient(fileName, excel = false) {
-    const { headers, rows } = showTabExportRows();
-    if (excel) {
-      const html = `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-      triggerDownload(new Blob([html], { type: 'application/vnd.ms-excel' }), fileName);
-      return;
-    }
-    const csv = [headers].concat(rows).map((cols) => cols.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
-    triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8' }), fileName);
-  }
-
-  async function loadShowTab(page = state.showTabPage || 1) {
-    state.showTabPage = page;
-    const filters = showTabFilterParams();
-    const source = filters.dataSource || 'both';
-    const localRows = localShowTabRows();
-    let serverRows = [];
-    let summary = { totalRecords: 0, totalQuantity: 0, totalInward: 0, totalOutward: 0, totalFitted: 0, totalDamage: 0 };
-    let totalPages = 1;
-    if (source !== 'local') {
-      const data = await api(`/api/scans/show-tab?${showTabQuery({ page, limit: 50 })}`);
-      serverRows = data.records || [];
-      summary = data.summary || summary;
-      totalPages = data.totalPages || 1;
-    }
-    const rows = source === 'local' ? localRows : source === 'server' ? serverRows : serverRows.concat(localRows);
-    renderShowTabRows(rows);
-    updateShowTabSummary(summary, source === 'server' ? [] : localRows);
-    setText('showTabPageInfo', `Page ${page} of ${totalPages}`);
-    $('#showTabPrevBtn').disabled = page <= 1;
-    $('#showTabNextBtn').disabled = page >= totalPages || source === 'local';
-  }
-
-  function resetShowTabFilters() {
-    $('#showTabFilters').reset();
-    const code = currentDealerCode();
-    if (code) {
-      $('#showTabDealer').value = code;
-      $('#showTabDealerCode').value = code;
-    }
-    state.showTabPage = 1;
-  }
-
-  function openShowTab() {
-    openView('showTab', 'SHOW TAB');
-    if (!$('#showTabDealerCode').value) resetShowTabFilters();
-    loadShowTab(1).catch((error) => toast(error.message, 'error'));
-  }
-
-  async function deleteShowTabSelected() {
-    const ids = $$('.show-tab-checkbox:checked').map((box) => box.value).filter(Boolean);
-    if (!ids.length) return toast('Select records to delete', 'error');
-    if (!window.confirm('Are you sure you want to delete selected scan records?')) return;
-    await api('/api/scans/delete-selected', { method: 'POST', body: { ids, confirmText: 'DELETE' } });
-    toast('Selected SHOW TAB records deleted');
-    await Promise.all([loadShowTab(state.showTabPage || 1), loadScanHistory(), loadDashboard()]);
-  }
-
   async function repairSyncStatus() {
     if (!window.confirm('Repair WEB/server-saved pending scan records to synced?')) return;
     const data = await api('/api/scans/repair-sync-status', { method: 'POST', body: {} });
@@ -2453,7 +2263,6 @@
     await Promise.all([
       loadDashboard(),
       loadScanHistory(),
-      loadShowTab(state.showTabPage || 1),
       loadSyncStatus()
     ]);
   }
@@ -3123,7 +2932,7 @@
   }
 
   function reportDownloadName(extension) {
-    return `${REPORT_TITLES[activeReportType()].replace(/\s+/g, '_')}.${extension}`;
+    return `${(REPORT_TITLES[activeReportType()] || 'Report').replace(/\s+/g, '_')}.${extension}`;
   }
 
   function updateReportButtons() {
@@ -3133,9 +2942,9 @@
     const isExcelOnlyReport = EXCEL_ONLY_REPORT_TYPES.has(reportType);
     $('#reportShow').disabled = !canShow || state.reportLoading;
     $('#reportRefresh').disabled = !canShow || state.reportLoading;
-    $('#reportExcel').disabled = isCsvReport || !state.reportLoaded || state.reportLoading;
-    $('#reportPdf').disabled = isCsvReport || isExcelOnlyReport || !state.reportLoaded || state.reportLoading;
-    $('#reportEmail').disabled = isCsvReport || isExcelOnlyReport || !state.reportLoaded || state.reportLoading;
+    $('#reportExcel').disabled = isCsvReport || !canShow || state.reportLoading;
+    if ($('#reportPdf')) $('#reportPdf').disabled = isCsvReport || isExcelOnlyReport || !state.reportLoaded || state.reportLoading;
+    if ($('#reportEmail')) $('#reportEmail').disabled = isCsvReport || isExcelOnlyReport || !state.reportLoaded || state.reportLoading;
   }
 
   function hasReportCriteria() {
@@ -3191,7 +3000,7 @@
     if (fullMaster.checked) scannedOnly.checked = false;
   }
 
-  function resetReportPreview(message = 'Please select filters and click Show Report.') {
+  function resetReportPreview(message = 'Please select filters and click Submit.') {
     state.reportLoaded = false;
     state.reportHasRun = false;
     state.reportTableRows = [];
@@ -3604,7 +3413,7 @@
     const showLoading = options.showLoading !== false;
     const reportType = activeReportType();
     if (!reportType) {
-      resetReportPreview('Select report type, choose filters and click Show Report.');
+      resetReportPreview('Select report type, choose filters and click Submit.');
       return;
     }
     if (!validateReportSelection(true)) {
@@ -3612,7 +3421,7 @@
       return;
     }
     if (!hasReportCriteria()) {
-      resetReportPreview('Please select filters and click Show Report.');
+      resetReportPreview('Please select filters and click Submit.');
       state.reportHasRun = false;
       return;
     }
@@ -3685,7 +3494,7 @@
     $('#reportTitle').textContent = REPORT_TITLES[type];
     applyReportScanModeDefaults();
     loadReportFilterSettings(type).catch((error) => console.warn('Report filter settings failed', error));
-    resetReportPreview(CSV_REPORT_TYPES.has(type) ? 'Click Show Report to view rows. Use Download CSV Template to export CSV.' : 'Please select filters and click Show Report.');
+    resetReportPreview(CSV_REPORT_TYPES.has(type) ? 'Click Submit to view rows.' : 'Please select filters and click Submit.');
     if (options.persist !== false) saveReportState(false);
   }
 
@@ -3964,7 +3773,7 @@
       setReconciliationSummary({});
       if (message) {
         message.className = 'form-message';
-        message.textContent = 'Please select Dealer Code and click Show Report.';
+        message.textContent = 'Please select Dealer Code and click Submit.';
       }
       state.reconLoaded = false;
       return;
@@ -5351,6 +5160,176 @@
     toast('Local sync storage cleared');
   }
 
+  function formatBytes(value) {
+    const bytes = Number(value || 0);
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function auditBackupQuery() {
+    const params = new URLSearchParams();
+    const form = $('#auditBackupFilters');
+    if (!form) return params;
+    Object.entries(formObject(form)).forEach(([key, value]) => {
+      if (String(value || '').trim()) params.set(key, String(value).trim());
+    });
+    return params;
+  }
+
+  function setAuditBackupMessage(message = '', type = '') {
+    const box = $('#auditBackupMessage');
+    if (!box) return;
+    box.className = `form-message ${type}`.trim();
+    box.textContent = message;
+  }
+
+  function archiveStatusBadge(status) {
+    const normalized = String(status || '').toLowerCase();
+    const cls = normalized === 'valid' ? 'success' : 'error';
+    return `<span class="pill ${cls}">${escapeHtml(status || 'unknown')}</span>`;
+  }
+
+  function renderAuditBackups() {
+    const rows = state.auditBackups || [];
+    const tbody = $('#auditBackupRows');
+    if (!tbody) return;
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="muted">No backup archives found in Audit Data.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map((archive) => `
+      <tr>
+        <td>${escapeHtml(archive.dealerCode || '-')}</td>
+        <td>${escapeHtml(archive.dealerName || '-')}</td>
+        <td>${escapeHtml(archive.auditDate ? String(archive.auditDate).slice(0, 10) : '-')}</td>
+        <td>${escapeHtml(formatBytes(archive.backupSize))}</td>
+        <td>${escapeHtml(archive.createdBy || '-')}</td>
+        <td>${escapeHtml(archive.totalScans || 0)}</td>
+        <td>${archiveStatusBadge(archive.backupStatus)}${archive.existingDealer ? '<span class="pill">Dealer exists</span>' : ''}</td>
+        <td>
+          <div class="archive-row-actions">
+            <button class="btn light small preview-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button">Preview Backup</button>
+            <button class="btn primary small restore-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button" ${archive.backupStatus !== 'valid' ? 'disabled' : ''}>Restore Audit</button>
+            <button class="btn light small download-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button">Download Backup</button>
+            <button class="btn danger-soft small remove-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button">Delete Backup Permanently</button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  async function loadAuditBackups() {
+    const params = auditBackupQuery();
+    const data = await api(`/api/audit-backup/list${params.toString() ? `?${params}` : ''}`);
+    state.auditBackups = data.archives || [];
+    renderAuditBackups();
+    setAuditBackupMessage(`Loaded ${state.auditBackups.length} backup archive${state.auditBackups.length === 1 ? '' : 's'} from ${data.archiveDir || 'Audit Data'}.`, 'success');
+  }
+
+  function setAuditRestoreProgress(progress = {}) {
+    const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+    const bar = $('#auditRestoreProgressBar');
+    if (bar) bar.style.width = `${percent}%`;
+    setText('auditRestoreProgressText', `${progress.status || 'Idle'}${percent ? ` | ${percent}%` : ''}`);
+    const logs = $('#auditRestoreLogs');
+    if (logs) logs.textContent = (progress.logs || []).join('\n') || 'No restore running.';
+    const active = ['started', 'running', 'cancelling'].includes(String(progress.status || '').toLowerCase());
+    if ($('#cancelAuditRestoreBtn')) $('#cancelAuditRestoreBtn').disabled = !active || !state.auditRestoreSessionId;
+  }
+
+  function stopAuditRestorePoll() {
+    if (state.auditRestorePollTimer) clearInterval(state.auditRestorePollTimer);
+    state.auditRestorePollTimer = null;
+  }
+
+  function startAuditRestorePoll(sessionId) {
+    state.auditRestoreSessionId = sessionId;
+    stopAuditRestorePoll();
+    state.auditRestorePollTimer = setInterval(async () => {
+      try {
+        const data = await api(`/api/audit-backup/progress/${encodeURIComponent(sessionId)}`);
+        setAuditRestoreProgress(data.progress || {});
+        const status = String(data.progress?.status || '').toLowerCase();
+        if (['completed', 'failed', 'cancelled', 'unknown'].includes(status)) stopAuditRestorePoll();
+      } catch (error) {
+        console.warn('Restore progress poll failed', error);
+      }
+    }, 900);
+  }
+
+  async function previewAuditBackup(archiveId) {
+    const data = await api(`/api/audit-backup/preview?archiveId=${encodeURIComponent(archiveId)}`);
+    const archive = data.archive || {};
+    setAuditRestoreProgress({
+      status: 'preview',
+      percent: 0,
+      logs: [
+        `Archive: ${archive.archiveId}`,
+        `Dealer: ${archive.dealerCode || '-'} ${archive.dealerName || ''}`,
+        `Audit: ${archive.auditId || '-'} | Date: ${archive.auditDate || '-'}`,
+        `Backup size: ${formatBytes(archive.backupSize)} | Total scans: ${archive.totalScans || 0}`,
+        `Existing active scan duplicates: ${archive.duplicates?.existingScans || 0}`,
+        `Counts: ${JSON.stringify(archive.counts || {})}`
+      ]
+    });
+    toast('Backup preview loaded');
+  }
+
+  async function restoreAuditBackup(archiveId) {
+    const restoreType = $('#auditRestoreType')?.value || 'complete';
+    const restoreMode = $('#auditRestoreMode')?.value || 'merge';
+    if (!window.confirm('This will restore archived audit data back into active database.\nDo you want to continue?')) return;
+    const archive = state.auditBackups.find((item) => item.archiveId === archiveId);
+    if (archive?.existingDealer) {
+      const labels = { merge: 'Merge Data', replace: 'Replace Existing', 'new-audit-session': 'Create New Audit Session' };
+      if (!window.confirm(`Dealer ${archive.dealerCode} already exists.\nSelected action: ${labels[restoreMode] || restoreMode}.\nContinue?`)) return;
+    }
+    const sessionId = `RESTORE-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setAuditRestoreProgress({ status: 'started', percent: 1, logs: ['Restore request submitted...'] });
+    startAuditRestorePoll(sessionId);
+    try {
+      const data = await api('/api/audit-backup/restore', {
+        method: 'POST',
+        body: {
+          archiveId,
+          restoreType,
+          restoreMode,
+          restoreSessionId: sessionId
+        }
+      });
+      setAuditRestoreProgress({
+        status: 'completed',
+        percent: 100,
+        logs: [`Restore completed. Total records restored: ${data.totalRecordsRestored || 0}`, `Counts: ${JSON.stringify(data.restored || {})}`]
+      });
+      toast(data.message || 'Audit restored');
+      state.reportCache.clear();
+      if (activeReportType() && state.reportHasRun) await loadReport({ forceRefresh: true });
+      await refreshAll();
+      await loadAuditBackups();
+    } catch (error) {
+      setAuditRestoreProgress({ status: 'failed', percent: 100, logs: [error.message || 'Restore failed'] });
+      toast(error.message, 'error');
+    } finally {
+      stopAuditRestorePoll();
+      if ($('#cancelAuditRestoreBtn')) $('#cancelAuditRestoreBtn').disabled = true;
+    }
+  }
+
+  async function removeAuditBackup(archiveId) {
+    if (!window.confirm('Delete this backup permanently? This cannot be undone.')) return;
+    const data = await api(`/api/audit-backup/remove?archiveId=${encodeURIComponent(archiveId)}`, { method: 'DELETE', body: {} });
+    toast(data.message || 'Backup removed');
+    await loadAuditBackups();
+  }
+
+  async function cancelAuditRestore() {
+    if (!state.auditRestoreSessionId) return;
+    const data = await api(`/api/audit-backup/cancel/${encodeURIComponent(state.auditRestoreSessionId)}`, { method: 'POST', body: {} });
+    toast(data.message || 'Restore cancel requested');
+  }
+
   const DELETE_CONFIRM_TEXT = 'Are you sure you want to delete this data? This action cannot be undone.';
 
   function selectedScanIds() {
@@ -6270,6 +6249,9 @@
       if (dealerCode) loadBinTransferBins(dealerCode).then(() => loadBinTransferHistory()).catch((error) => toast(error.message, 'error'));
       else loadBinTransferHistory().catch((error) => toast(error.message, 'error'));
     }
+    if (viewId === 'archiveRestore') {
+      loadAuditBackups().catch((error) => toast(error.message, 'error'));
+    }
   }
 
   function restoreActiveViewShell() {
@@ -6372,7 +6354,6 @@
       if (event.key === 'Escape') setUserMenuOpen(false);
     });
     window.addEventListener('resize', () => fitDashboardDealerSelect());
-    $('#globalRefresh').addEventListener('click', () => refreshAll().then(() => toast('Refreshed')).catch((error) => toast(error.message, 'error')));
     $('#copyServerUrlBtn').addEventListener('click', () => copyServerUrl().catch((error) => toast(error.message, 'error')));
     $('#copyHealthUrlBtn')?.addEventListener('click', () => copyHealthUrl().catch((error) => toast(error.message, 'error')));
     $('#testConnectionBtn')?.addEventListener('click', () => testConnection().catch((error) => toast(error.message, 'error')));
@@ -6381,35 +6362,6 @@
     $('#autoDetectScannersBtn')?.addEventListener('click', () => autoDetectScanners().catch((error) => toast(error.message, 'error')));
     $('#manualIpConnectBtn')?.addEventListener('click', () => manualIpConnect().catch((error) => toast(error.message, 'error')));
     $('#networkTestBtn')?.addEventListener('click', () => runNetworkTest().catch((error) => toast(error.message, 'error')));
-    $$('.show-tab-open').forEach((button) => button.addEventListener('click', openShowTab));
-    $('#showTabDealer')?.addEventListener('change', (event) => {
-      $('#showTabDealerCode').value = cleanDealerCode(event.target.value || '');
-    });
-    $('#showTabSearchBtn')?.addEventListener('click', () => loadShowTab(1).catch((error) => toast(error.message, 'error')));
-    $('#showTabResetBtn')?.addEventListener('click', () => {
-      resetShowTabFilters();
-      loadShowTab(1).catch((error) => toast(error.message, 'error'));
-    });
-    $('#showTabPrevBtn')?.addEventListener('click', () => loadShowTab(Math.max((state.showTabPage || 1) - 1, 1)).catch((error) => toast(error.message, 'error')));
-    $('#showTabNextBtn')?.addEventListener('click', () => loadShowTab((state.showTabPage || 1) + 1).catch((error) => toast(error.message, 'error')));
-    $('#showTabResetColumnsBtn')?.addEventListener('click', () => {
-      resetEnhancedTableLayout($('#showTabRows')?.closest('table'), 'daksh_table_show_tab');
-      toast('SHOW TAB column layout reset');
-    });
-    $('#showTabSelectAll')?.addEventListener('change', (event) => {
-      $$('.show-tab-checkbox:not(:disabled)').forEach((box) => { box.checked = event.target.checked; });
-    });
-    $('#showTabDeleteBtn')?.addEventListener('click', () => deleteShowTabSelected().catch((error) => toast(error.message, 'error')));
-    $('#showTabCsvBtn')?.addEventListener('click', () => {
-      const source = showTabFilterParams().dataSource || 'both';
-      if (source === 'server') downloadGet(`/api/scans/show-tab/export.csv?${showTabQuery({ limit: 1000 })}`, 'Daksh_SHOW_TAB.csv').catch((error) => toast(error.message, 'error'));
-      else downloadShowTabClient('Daksh_SHOW_TAB.csv');
-    });
-    $('#showTabExcelBtn')?.addEventListener('click', () => {
-      const source = showTabFilterParams().dataSource || 'both';
-      if (source === 'server') downloadGet(`/api/scans/show-tab/export.xlsx?${showTabQuery({ limit: 1000 })}`, 'Daksh_SHOW_TAB.xlsx').catch((error) => toast(error.message, 'error'));
-      else downloadShowTabClient('Daksh_SHOW_TAB.xls', true);
-    });
     $('#productGroupSearch')?.addEventListener('input', () => renderProductGroupSummary());
     $('#productGroupExportBtn')?.addEventListener('click', () => exportProductGroupSummary().catch((error) => toast(error.message, 'error')));
     $('#productGroupSummaryRows')?.addEventListener('click', (event) => {
@@ -6798,23 +6750,11 @@
         toast(error.message, 'error');
       }
     });
-    $('#reportReset').addEventListener('click', () => {
+    $('#reportReset')?.addEventListener('click', () => {
       if (state.reportAbortController) state.reportAbortController.abort();
       $('#reportFilters').reset();
       applyReportScanModeDefaults();
-      resetReportPreview('Please select filters and click Show Report.');
-    });
-    $('#moveNotInMasterScansBtn')?.addEventListener('click', async () => {
-      if (!window.confirm('Move existing not-in-master scans out of main reports and into the rejected report?')) return;
-      try {
-        const data = await api('/api/scans/move-not-in-master-to-rejected', { method: 'POST', body: {} });
-        toast(`Moved ${data.movedCount || 0}; removed ${data.deletedCount || 0} from main scans`);
-        state.reportCache.clear();
-        if (activeReportType()) await loadReport({ forceRefresh: true });
-        await loadDashboard();
-      } catch (error) {
-        toast(error.message, 'error');
-      }
+      resetReportPreview('Please select filters and click Submit.');
     });
     $('#reportTableSearch')?.addEventListener('input', () => {
       clearTimeout(state.reportSearchTimer);
@@ -6825,9 +6765,9 @@
       }, 500);
     });
     $('#reportExcel').addEventListener('click', () => downloadGet(reportPath('excel'), reportDownloadName('xlsx')).catch((error) => toast(error.message, 'error')));
-    $('#reportPdf').addEventListener('click', () => downloadGet(reportPath('pdf'), reportDownloadName('pdf')).catch((error) => toast(error.message, 'error')));
+    $('#reportPdf')?.addEventListener('click', () => downloadGet(reportPath('pdf'), reportDownloadName('pdf')).catch((error) => toast(error.message, 'error')));
     $('#partsRefreshTemplateCsv')?.addEventListener('click', () => downloadGet(partsRefreshTemplatePath(), 'Parts_Inventory_Refresh_Template.csv').catch((error) => toast(error.message, 'error')));
-    $('#reportEmail').addEventListener('click', async () => {
+    $('#reportEmail')?.addEventListener('click', async () => {
       const to = window.prompt('To');
       if (!to) return;
       const cc = window.prompt('CC (optional)', '') || '';
@@ -7020,6 +6960,19 @@
     });
 
     $('#backupDbBtn').addEventListener('click', () => downloadGet('/api/backup/download', 'Daksh_Inventory_Backup.json').catch((error) => toast(error.message, 'error')));
+    $('#refreshAuditBackupsBtn')?.addEventListener('click', () => loadAuditBackups().catch((error) => toast(error.message, 'error')));
+    $('#applyAuditBackupFiltersBtn')?.addEventListener('click', () => loadAuditBackups().catch((error) => toast(error.message, 'error')));
+    $('#resetAuditBackupFiltersBtn')?.addEventListener('click', () => setTimeout(() => loadAuditBackups().catch((error) => toast(error.message, 'error')), 0));
+    $('#auditBackupRows')?.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-id]');
+      if (!button) return;
+      const archiveId = button.dataset.id;
+      if (button.classList.contains('preview-audit-backup')) previewAuditBackup(archiveId).catch((error) => toast(error.message, 'error'));
+      if (button.classList.contains('restore-audit-backup')) restoreAuditBackup(archiveId).catch((error) => toast(error.message, 'error'));
+      if (button.classList.contains('download-audit-backup')) downloadGet(`/api/audit-backup/download?archiveId=${encodeURIComponent(archiveId)}`, `${archiveId.replace(/\.(json|zip)$/i, '')}.zip`).catch((error) => toast(error.message, 'error'));
+      if (button.classList.contains('remove-audit-backup')) removeAuditBackup(archiveId).catch((error) => toast(error.message, 'error'));
+    });
+    $('#cancelAuditRestoreBtn')?.addEventListener('click', () => cancelAuditRestore().catch((error) => toast(error.message, 'error')));
     $('#dedupeBtn').addEventListener('click', async () => {
       if (!window.confirm('Run deduplication now?')) return;
       const data = await api('/api/scans/deduplicate', { method: 'POST', body: {} });
@@ -7322,6 +7275,7 @@
     });
     socket.on('dealers:update', () => loadDealers().catch(console.warn));
     socket.on('master:update', () => {
+      state.reportFilterDropdownsLoadedAt = 0;
       const jobs = [loadBins(), loadCategories()];
       if (hasPartSearchFilter()) jobs.push(loadParts(state.masterSearch.page || 1));
       Promise.all(jobs).catch(console.warn);
@@ -7366,7 +7320,8 @@
       renderSyncQueue();
       renderSyncLog();
       renderConnectionLog();
-      resetReportPreview('Please select filters and click Show Report.');
+      resetReportPreview('Please select filters and click Submit.');
+      applyReportFilterVisibility();
       restoredView = restoreActiveViewShell();
       bootLog('active view restored', restoredView);
       bootLog('socket bind start', {

@@ -93,6 +93,7 @@
         <button class="side-link" data-view="qr">QR / Barcode</button>
         <button class="side-link" data-view="devices">Device Control</button>
         <button class="side-link" data-view="syncCenter">Sync Report</button>
+        <button class="side-link admin-only" data-view="archiveRestore">Archive & Restore Center</button>
         <button class="side-link" data-view="admin">Admin Settings</button>
       </nav>
       <button id="sideResizeHandle" class="side-resize-handle" type="button" aria-label="Adjust menu width" title="Adjust menu width"></button>
@@ -113,7 +114,6 @@
           <span id="topOfflineStatus" class="live-pill green-dot">Offline: 0</span>
           <span id="topRealtimeStatus" class="live-pill red-dot">Realtime: Waiting</span>
           <span id="activeAuditBadge" class="live-pill red-dot">No active audit</span>
-          <button id="globalRefresh" class="btn light" type="button">Refresh</button>
           <div id="userMenu" class="user-menu">
             <button id="userMenuButton" class="user-menu-button" type="button" aria-haspopup="true" aria-expanded="false">
               <span id="userBadge">Administrator - admin</span>
@@ -161,7 +161,6 @@
             <h2>Sync Snapshot</h2>
             <div class="actions dashboard-sync-toolbar">
               <span id="homeSyncBadge" class="live-pill green-dot">Sync: Auto ON / Synced</span>
-              <button class="btn primary show-tab-open" type="button">Show Tab</button>
               <button id="homeManualSyncBtn" class="btn primary" type="button">Manual Sync</button>
               <button id="repairSyncStatusBtn" class="btn light admin-only" type="button">Repair Sync Status</button>
             </div>
@@ -246,51 +245,6 @@
         </section>
       </section>
 
-      <section id="showTab" class="view">
-        <section class="card show-tab-card">
-          <div class="card-head">
-            <h2>SHOW TAB</h2>
-            <div class="actions">
-              <button id="showTabSearchBtn" class="btn primary" type="button">Search</button>
-              <button id="showTabResetBtn" class="btn light" type="button">Reset</button>
-              <button id="showTabExcelBtn" class="btn primary" type="button">Download Excel</button>
-              <button id="showTabCsvBtn" class="btn light" type="button">Download CSV</button>
-              <button id="showTabDeleteBtn" class="btn danger-soft admin-only" type="button">Delete selected records</button>
-            </div>
-          </div>
-          <form id="showTabFilters" class="filter-grid show-tab-filters">
-            <label>Dealer<select name="dealerCode" id="showTabDealer" class="dealerSelect"></select></label>
-            <label>Dealer Code<input name="dealerText" id="showTabDealerCode" placeholder="Dealer Code"></label>
-            <label>Date From<input name="dateFrom" type="date"></label>
-            <label>Date To<input name="dateTo" type="date"></label>
-            <label>Part Number<input name="partNumber" placeholder="Part Number"></label>
-            <label>Bin Location<input name="binLocation" placeholder="Bin Location"></label>
-            <label>Scan Type<select name="scanType"><option value="">All Types</option><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
-            <label>Local / Server / Both<select name="dataSource"><option value="both">Both</option><option value="server">Server</option><option value="local">Local</option></select></label>
-          </form>
-          <div class="metric-grid six show-tab-summary">
-            <div class="metric mini"><span>Total records</span><strong id="showTabTotalRecords">0</strong></div>
-            <div class="metric mini"><span>Total quantity</span><strong id="showTabTotalQty">0</strong></div>
-            <div class="metric mini"><span>Total inward</span><strong id="showTabTotalInward">0</strong></div>
-            <div class="metric mini"><span>Total outward</span><strong id="showTabTotalOutward">0</strong></div>
-            <div class="metric mini"><span>Total fitted</span><strong id="showTabTotalFitted">0</strong></div>
-            <div class="metric mini"><span>Total damage</span><strong id="showTabTotalDamage">0</strong></div>
-          </div>
-          <div class="show-tab-toolbar">
-            <span id="showTabPageInfo" class="muted">Page 1</span>
-            <button id="showTabPrevBtn" class="btn light" type="button">Previous</button>
-            <button id="showTabNextBtn" class="btn light" type="button">Next</button>
-            <button id="showTabResetColumnsBtn" class="btn light" type="button">Reset Column Order</button>
-          </div>
-          <div class="table-wrap show-tab-table-wrap">
-            <table class="show-tab-table">
-              <thead><tr><th><input id="showTabSelectAll" type="checkbox"></th><th>Scan Time</th><th>Dealer Code</th><th>Dealer Name</th><th>Part Number</th><th>Raw Scan</th><th>Qty</th><th>MRP</th><th>Scan Type</th><th>Bin Location</th><th>Device ID</th><th>Sync Status</th></tr></thead>
-              <tbody id="showTabRows"></tbody>
-            </table>
-          </div>
-        </section>
-      </section>
-
       <section id="scan" class="view">
         <div class="card">
           <div class="subtabs">
@@ -353,7 +307,7 @@
         </div>
 
         <section class="card">
-          <div class="card-head"><h2>Scan History</h2><div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="scanHistorySearchBtn" class="btn light" type="button">Search</button><button id="scanHistoryDeleteSelectedBtn" class="btn danger-soft admin-only" type="button">Delete Selected</button><button id="scanHistoryDeleteUnknownBtn" class="btn danger-soft admin-only" type="button">Delete Unknown Parts</button><button id="scanHistoryDeleteDealerBtn" class="btn danger-soft admin-only" type="button">Delete by Dealer Code</button></div></div>
+          <div class="card-head"><h2>Scan History</h2><div class="actions"><button id="scanHistorySearchBtn" class="btn light" type="button">Search</button><button id="scanHistoryDeleteSelectedBtn" class="btn danger-soft admin-only" type="button">Delete Selected</button><button id="scanHistoryDeleteUnknownBtn" class="btn danger-soft admin-only" type="button">Delete Unknown Parts</button><button id="scanHistoryDeleteDealerBtn" class="btn danger-soft admin-only" type="button">Delete by Dealer Code</button></div></div>
           <form id="scanHistoryFilters" class="filter-grid">
             <input name="part" placeholder="Part">
             <input name="bin" placeholder="Bin">
@@ -378,11 +332,10 @@
 
       <section id="reports" class="view">
         <section class="card">
-          <div class="card-head"><h2>Reports</h2><div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Manual Refresh</button><button id="reportReset" class="btn light" type="button">Reset Filter</button><button id="moveNotInMasterScansBtn" class="btn danger-soft" type="button">Move Not-In-Master Scans To Rejected Report</button><button id="reportExcel" class="btn primary" type="button" disabled>Export Excel</button><button id="reportPdf" class="btn light" type="button" disabled>Export PDF</button><button id="partsRefreshTemplateCsv" class="btn light" type="button">Download CSV Template</button><button id="reportEmail" class="btn light" type="button" disabled>Send Email</button></div></div>
+          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Manual Refresh</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button></div></div>
           <form id="reportFilters" class="filter-grid">
             <label>Report Type<select name="reportType" id="reportTypeSelect" required>
               <option value="">Select report</option>
-              <option value="full-audit">Full Audit Report</option>
               <option value="bin-wise-stock">Bin Wise Stock Report</option>
               <option value="user-dealer-wise">User & Dealer Wise Report</option>
               <option value="movement-scans">Movement Scan Report</option>
@@ -390,7 +343,7 @@
               <option value="valid-scans">Valid Scan Report</option>
               <option value="device-wise">Device Wise Scan Report</option>
               <option value="duplicate-scans">Duplicate Scan Report</option>
-              <option value="wrong-not-found-master">Wrong / Not Found In Master Scan Report</option>
+              <option value="wrong-not-found-master">Rejected Report</option>
               <option value="main-inventory-audit">Main Inventory Audit Report</option>
               <option value="compile-audit">Compile Audit Report</option>
               <option value="consolidated-final">Consolidated Final Report</option>
@@ -399,34 +352,34 @@
               <option value="partwise-inventory-audit">Partwise Inventory Audit Report</option>
               <option value="parts-inventory-refresh-template">Part Inventory Refresh Template CSV</option>
             </select></label>
-            <label data-report-filter-key="dealer">Dealer Name<input name="dealerName" placeholder="Dealer Name"></label>
+            <label class="hidden" data-report-filter-key="dealerName">Dealer Name<input name="dealerName" placeholder="Dealer Name"></label>
             <label data-report-filter-key="dealer">Dealer Code<select name="dealerCode" class="dealerSelect"></select></label>
-            <label>Audit<input name="auditId" placeholder="Audit ID"></label>
-            <label>Audit Date<input name="auditDate" type="date"></label>
+            <label class="hidden" data-report-filter-key="audit">Audit<input name="auditId" placeholder="Audit ID"></label>
+            <label class="hidden" data-report-filter-key="auditDate">Audit Date<input name="auditDate" type="date"></label>
             <label data-report-filter-key="dateRange">From Date<input name="fromDate" type="date"></label>
             <label data-report-filter-key="dateRange">To Date<input name="toDate" type="date"></label>
-            <label data-report-filter-key="productCategory">Category<select name="category" id="reportCategoryFilter"><option value="">All Categories</option></select></label>
-            <label data-report-filter-key="model">Model<input name="model" placeholder="Model"></label>
-            <label>Year<input name="year" placeholder="Year"></label>
-            <label data-report-filter-key="partNumber">Part Number<input name="partNumber" placeholder="Part Number"></label>
-            <label>Product Group<select name="productGroup" id="reportProductGroupFilter"><option value="">All Product Groups</option></select></label>
-            <label>Product SubGroup<select name="partSubGroup" id="reportProductSubGroupFilter"><option value="">All Product SubGroups</option></select></label>
-            <label data-report-filter-key="binLocation">Bin Location<input name="bin" placeholder="Bin Location"></label>
+            <label class="hidden" data-report-filter-key="productCategory">Category<select name="category" id="reportCategoryFilter"><option value="">All Categories</option></select></label>
+            <label class="hidden" data-report-filter-key="model">Model<input name="model" placeholder="Model"></label>
+            <label class="hidden" data-report-filter-key="year">Year<input name="year" placeholder="Year"></label>
+            <label class="hidden" data-report-filter-key="partNumber">Part Number<input name="partNumber" placeholder="Part Number"></label>
+            <label class="hidden" data-report-filter-key="productGroup">Product Group<select name="productGroup" id="reportProductGroupFilter"><option value="">All Product Groups</option></select></label>
+            <label class="hidden" data-report-filter-key="productSubGroup">Product SubGroup<select name="partSubGroup" id="reportProductSubGroupFilter"><option value="">All Product SubGroups</option></select></label>
+            <label class="hidden" data-report-filter-key="binLocation">Bin Location<input name="bin" placeholder="Bin Location"></label>
             <label data-report-filter-key="scanType">Scan Type<select name="scanType"><option value="">All Types</option><option>AUDIT</option><option>INWARD</option><option>OUTWARD</option><option>DAMAGE</option></select></label>
-            <label>Action<select name="action"><option value="">All Actions</option><option>Inventory Addition</option><option>Inventory Matched</option><option>Inward</option><option>Outward</option><option>Fitted</option><option>Damage</option></select></label>
-            <label>Variance Type<select name="varianceType"><option value="">All Variance</option><option value="matched">Matched</option><option value="short">Short</option><option value="excess">Excess</option><option value="inventory-addition">Inventory Addition</option><option value="not-scanned">Not Scanned</option><option value="damage">Damage</option><option value="non-moving">Non Moving</option></select></label>
+            <label class="hidden" data-report-filter-key="action">Action<select name="action"><option value="">All Actions</option><option>Inventory Addition</option><option>Inventory Matched</option><option>Inward</option><option>Outward</option><option>Fitted</option><option>Damage</option></select></label>
+            <label class="hidden" data-report-filter-key="varianceType">Variance Type<select name="varianceType"><option value="">All Variance</option><option value="matched">Matched</option><option value="short">Short</option><option value="excess">Excess</option><option value="inventory-addition">Inventory Addition</option><option value="not-scanned">Not Scanned</option><option value="damage">Damage</option><option value="non-moving">Non Moving</option></select></label>
             <label data-report-filter-key="scanStatus">Scan Status<select name="scanStatus"><option value="">All Status</option><option>ACCEPTED</option><option>SUPERVISOR_APPROVED</option><option>OUTWARD_DONE</option><option>FAILED</option><option>DUPLICATE_BLOCKED</option></select></label>
             <label data-report-filter-key="userName">User Name<input name="userName" placeholder="User Name"></label>
             <label data-report-filter-key="syncStatus">Sync Status<select name="syncStatus"><option value="">All Sync Status</option><option value="pending">Pending</option><option value="synced">Synced</option><option value="failed">Failed</option><option value="duplicate">Duplicate</option><option value="rejected">Rejected</option></select></label>
-            <label data-report-filter-key="upiRawQr">UPI Raw / QR<input name="upiRawQr" placeholder="UPI, raw value, QR"></label>
-            <label data-report-filter-key="role">Role<input name="role" placeholder="Role"></label>
-            <label data-report-filter-key="deviceName">Device Name<input name="deviceName" placeholder="Device Name"></label>
-            <label data-report-filter-key="deviceId">Device ID<input name="deviceId" placeholder="Device ID"></label>
-            <label data-report-filter-key="entryMode">Entry Mode<input name="entryMode" placeholder="Manual / Camera / Scanner"></label>
-            <label data-report-filter-key="entryChannel">Entry Channel<input name="entryChannel" placeholder="Mobile / Web / Scanner"></label>
-            <label data-report-filter-key="entrySource">Entry Source<input name="entrySource" placeholder="Source"></label>
-            <label class="toggle"><input name="showScannedPartsOnly" type="checkbox">Show Scanned Parts Only</label>
-            <label class="toggle"><input name="showFullMasterWithZeroScan" type="checkbox">Show Full Master With Zero Scan</label>
+            <label class="hidden" data-report-filter-key="upiRawQr">UPI Raw / QR<input name="upiRawQr" placeholder="UPI, raw value, QR"></label>
+            <label class="hidden" data-report-filter-key="role">Role<input name="role" placeholder="Role"></label>
+            <label class="hidden" data-report-filter-key="deviceName">Device Name<input name="deviceName" placeholder="Device Name"></label>
+            <label class="hidden" data-report-filter-key="deviceId">Device ID<input name="deviceId" placeholder="Device ID"></label>
+            <label class="hidden" data-report-filter-key="entryMode">Entry Mode<input name="entryMode" placeholder="Manual / Camera / Scanner"></label>
+            <label class="hidden" data-report-filter-key="entryChannel">Entry Channel<input name="entryChannel" placeholder="Mobile / Web / Scanner"></label>
+            <label class="hidden" data-report-filter-key="entrySource">Entry Source<input name="entrySource" placeholder="Source"></label>
+            <label class="toggle hidden" data-report-filter-key="scanModeOptions"><input name="showScannedPartsOnly" type="checkbox">Scanned Parts Only</label>
+            <label class="toggle hidden" data-report-filter-key="scanModeOptions"><input name="showFullMasterWithZeroScan" type="checkbox">Full Master With Zero Scan</label>
           </form>
           <div id="reportMessage" class="form-message"></div>
         </section>
@@ -435,12 +388,6 @@
             <h2 id="reportTitle">Main Inventory Audit Report</h2>
             <div class="actions report-layout-actions">
               <input id="reportTableSearch" class="report-table-search" type="search" placeholder="Search within table">
-              <button class="btn light report-layout-btn" data-report-layout="full" type="button">Full Width</button>
-              <button class="btn light report-layout-btn" data-report-layout="compact" type="button">Compact View</button>
-              <button class="btn light report-layout-btn" data-report-layout="split" type="button">Split View</button>
-              <button class="btn light" id="reportSaveLayout" type="button">Save Layout</button>
-              <button class="btn light" id="reportResetSize" type="button">Reset Size</button>
-              <button class="btn light" id="reportResetColumns" type="button">Reset Column Order</button>
               <span id="reportCount" class="muted">0 rows</span>
             </div>
           </div>
@@ -668,15 +615,15 @@
 
         <section id="reconReportTab" class="recon-panel" role="tabpanel" hidden>
           <section class="card">
-            <div class="card-head"><h2>Dealer Reconciliation Report</h2><div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="reconReset" class="btn light" type="button">Reset Filter</button><button id="reconExcel" class="btn primary" type="button">Export Excel</button><button id="reconPdf" class="btn light" type="button">Export PDF</button><button id="reconFullReport" class="btn light" type="button">Download Full Report</button></div></div>
+            <div class="card-head"><h2>Dealer Reconciliation Report</h2><div class="actions"><button id="reconReset" class="btn light" type="button">Reset Filter</button><button id="reconExcel" class="btn primary" type="button">Export Excel</button><button id="reconPdf" class="btn light" type="button">Export PDF</button><button id="reconFullReport" class="btn light" type="button">Download Full Report</button></div></div>
             <form id="reconFilters" class="filter-grid">
               <label>Dealer Code<select name="dealerCode" id="reconDealer" class="dealerSelect"></select></label>
               <label>Category<input name="category" placeholder="Category"></label>
               <label>Part Number<input name="partNumber" placeholder="Part Number"></label>
               <label>Bin<input name="bin" placeholder="Bin"></label>
-              <button id="reconShow" class="btn primary" type="submit">Show Report</button>
+              <button id="reconShow" class="btn primary" type="submit">Submit</button>
             </form>
-            <div id="reconMessage" class="form-message">Please select filters and click Show Report.</div>
+            <div id="reconMessage" class="form-message">Please select filters and click Submit.</div>
             <div class="metric-grid five">
               <div class="metric mini"><span>DMS Stock</span><strong id="reconDms">0</strong></div>
               <div class="metric mini"><span>Physical</span><strong id="reconPhysical">0</strong></div>
@@ -776,7 +723,7 @@
       <section id="validator" class="view">
         <section class="card admin-only">
           <div class="card-head"><h2>Master Scan Validator</h2><div class="actions"><button id="validatorRefreshBtn" class="btn light" type="button">Refresh Report</button><button id="reprocessMasterLookupBtn" class="btn primary" type="button">Fix Master Matching</button><button id="recheckInvalidPartsBtn" class="btn light" type="button">Recheck Invalid Parts</button><button id="exportMissingMasterBtn" class="btn light" type="button">Export Invalid Parts</button></div></div>
-          <form id="validatorFilters" class="filter-grid show-tab-filters">
+          <form id="validatorFilters" class="filter-grid validator-filters">
             <label>Dealer<select name="dealerCode" class="cleanupDealerSelect"><option value="">All Dealers</option></select></label>
             <label>Part Number<input name="partNumber" placeholder="Invalid / extracted part"></label>
             <label>Raw Scan<input name="rawScan" placeholder="Raw scan value"></label>
@@ -909,7 +856,6 @@
             <div class="actions pairing-actions">
               <a class="btn primary" href="/api/apk/download">Download Fresh APK</a>
               <button id="testConnectionBtn" class="btn primary" type="button">Test Connection</button>
-              <button class="btn primary show-tab-open" type="button">SHOW TAB</button>
               <button id="refreshPairingQrBtn" class="btn light" type="button">Refresh QR</button>
               <button id="copyServerUrlBtn" class="btn light" type="button">Copy Server URL</button>
               <button id="copyHealthUrlBtn" class="btn light" type="button">Copy Health URL</button>
@@ -958,7 +904,7 @@
         <section class="card">
           <div class="card-head">
             <h2>Device Sync Center</h2>
-            <div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="syncCopyServerUrlBtn" class="btn light" type="button">Copy Server URL</button></div>
+            <div class="actions"><button id="syncCopyServerUrlBtn" class="btn light" type="button">Copy Server URL</button></div>
           </div>
           <div class="pairing-layout">
             <img id="syncPairingQrImage" class="qr-preview large" alt="">
@@ -976,7 +922,6 @@
             <h2>Device Sync / Data Sync Center</h2>
             <div class="actions">
               <button id="syncCenterManualBtn" class="btn primary" type="button">Manual Sync Now</button>
-              <button class="btn primary show-tab-open" type="button">SHOW TAB</button>
               <button id="syncCenterRetryBtn" class="btn light" type="button">Retry Failed</button>
             </div>
           </div>
@@ -1056,7 +1001,7 @@
         <section class="card admin-only">
           <div class="card-head">
             <h2>User Login Approval</h2>
-            <div class="actions"><button class="btn primary show-tab-open" type="button">SHOW TAB</button><button id="refreshUsersBtn" class="btn light" type="button">Refresh Users</button></div>
+            <div class="actions"><button id="refreshUsersBtn" class="btn light" type="button">Refresh Users</button></div>
           </div>
           <form id="createUserForm" class="grid-form">
             <label>Name<input name="name" required></label>
@@ -1267,6 +1212,70 @@
             <input name="file" type="file" accept=".json" required>
             <button class="btn danger-soft admin-only" type="submit">Restore Database</button>
           </form>
+        </section>
+      </section>
+
+      <section id="archiveRestore" class="view">
+        <section class="card admin-only archive-restore-card">
+          <div class="card-head">
+            <div>
+              <h2>Archive & Restore Center</h2>
+              <span class="muted">Reads audit backups from the local Audit Data folder.</span>
+            </div>
+            <div class="actions">
+              <button id="refreshAuditBackupsBtn" class="btn primary" type="button">Refresh Archives</button>
+              <button id="cancelAuditRestoreBtn" class="btn danger-soft" type="button" disabled>Cancel Restore</button>
+            </div>
+          </div>
+
+          <form id="auditBackupFilters" class="grid-form archive-filter-form">
+            <label>Dealer Code<input name="dealerCode" placeholder="Dealer code"></label>
+            <label>Dealer Name<input name="dealerName" placeholder="Dealer name"></label>
+            <label>Audit Date<input name="auditDate" type="date"></label>
+            <label>Created By<input name="createdBy" placeholder="Created by"></label>
+            <label>Restore Option<select id="auditRestoreType">
+              <option value="complete">Restore complete audit</option>
+              <option value="reports">Restore only reports</option>
+              <option value="scan-data">Restore only scan data</option>
+            </select></label>
+            <label>Existing Dealer Action<select id="auditRestoreMode">
+              <option value="merge">Merge Data</option>
+              <option value="replace">Replace Existing</option>
+              <option value="new-audit-session">Create New Audit Session</option>
+            </select></label>
+            <div class="actions span-3">
+              <button id="applyAuditBackupFiltersBtn" class="btn light" type="button">Apply Filter</button>
+              <button id="resetAuditBackupFiltersBtn" class="btn light" type="reset">Reset</button>
+              <span id="auditBackupMessage" class="form-message"></span>
+            </div>
+          </form>
+
+          <div class="table-wrap archive-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Dealer Code</th>
+                  <th>Dealer Name</th>
+                  <th>Audit Date</th>
+                  <th>Backup Size</th>
+                  <th>Created By</th>
+                  <th>Total Scans</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="auditBackupRows"><tr><td colspan="8" class="muted">Click Refresh Archives to load Audit Data backups.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card admin-only archive-progress-card">
+          <div class="card-head">
+            <h2>Restore Progress</h2>
+            <span id="auditRestoreProgressText" class="muted">Idle</span>
+          </div>
+          <div class="archive-progress-track"><div id="auditRestoreProgressBar" class="archive-progress-bar"></div></div>
+          <pre id="auditRestoreLogs" class="archive-restore-logs">No restore running.</pre>
         </section>
       </section>
     </main>

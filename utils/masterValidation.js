@@ -93,7 +93,7 @@ async function validatePartAgainstMaster({ partNumber, dealerCode, rawScannedVal
     valid: Boolean(master),
     master,
     extractedPartNumber,
-    reason: master ? '' : 'Part Not Found In Master'
+    reason: master ? '' : 'Part not found in master'
   };
 }
 
@@ -103,6 +103,7 @@ async function saveRejectedScan(input = {}) {
   const doc = {
     dateTime: input.dateTime || input.timestamp || new Date(),
     dealerCode: normalizeDealerCode(input.dealerCode || input.dealer || ''),
+    dealerName: clean(input.dealerName || input.dealer || ''),
     userId: clean(input.userId || input.loginId || input.username || ''),
     loginId: clean(input.loginId || input.username || input.userId || ''),
     userName: clean(input.userName || input.staffName || input.loginId || input.username || ''),
@@ -114,8 +115,9 @@ async function saveRejectedScan(input = {}) {
     rawScannedValue: clean(input.rawScannedValue || input.rawScan || input.rawScanString || input.rawUpi || input.upiNo || input.upiId || ''),
     extractedPartNumber,
     binLocation: upper(input.binLocation || input.bin || ''),
-    reason: input.reason || 'Part Not Found In Master',
+    reason: input.reason || 'Part not found in master',
     status: 'REJECTED',
+    syncStatus: 'rejected',
     originalScanId,
     originalInventoryId: input.originalInventoryId || input._id,
     sourceRoute: clean(input.sourceRoute || '')

@@ -601,7 +601,7 @@ async function buildLegacyReportData(query = {}) {
     });
   });
 
-  const allFinalRows = rows.concat(extraParts).sort((a, b) => sortText(a.partNo, b.partNo));
+  const allFinalRows = rows.sort((a, b) => sortText(a.partNo, b.partNo));
   let finalRows = applyVarianceFilter(allFinalRows, query.varianceType);
   if (query.category) finalRows = finalRows.filter((row) => new RegExp(escapeRegExp(query.category), 'i').test(row.category || ''));
   if (query.bin) finalRows = finalRows.filter((row) => new RegExp(escapeRegExp(query.bin), 'i').test(row.binLocation || row.bin || ''));
@@ -1708,6 +1708,7 @@ async function buildReportData(query = {}) {
   const matchedCount = scans.filter((scan) => scan.masterFound).length;
   console.log("Matched master:", matchedCount);
   console.log("[report-join] unmatched scan part numbers count:", partNumbers.length - new Set(scans.filter((scan) => scan.masterFound).map((scan) => scan.normalizedPartNumber)).size);
+  scans = scans.filter((scan) => scan.masterFound);
   if (query.category) scans = scans.filter((scan) => new RegExp(escapeRegExp(query.category), 'i').test(scan.category || ''));
 
   const groupMap = new Map();
@@ -2047,6 +2048,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     ? allParts.filter((partNo) => !scannedParts.includes(partNo)).map((partNo) => partwiseRowFrom(partNo, { partNo, scans: [], physicalQty: 0 }, catalogueByPart.get(partNo), systemByPart.get(partNo)))
     : [];
   const rows = applyPartwiseFilters(groupedRows.concat(zeroScanRows), query)
+    .filter((row) => row.status !== 'MASTER NOT FOUND')
     .sort(sortPartwiseInventoryRows);
 
   rows.forEach((row) => {
@@ -2321,7 +2323,10 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
     const dealerCode = cleanText(scan.dealerCode).toUpperCase();
     const master = masterByDealer.get(masterKey(partNo, dealerCode)) || masterByPart.get(partNo) || null;
-    if (!master) validationLog.unmatchedMasterRows += 1;
+    if (!master) {
+      validationLog.unmatchedMasterRows += 1;
+      return;
+    }
 
     const category = displayCategory(scan.productCategory || scan.category || (master ? master.productCategory || master.category : ''));
     const action = actionForScan(scan) || 'Inward';
@@ -2670,7 +2675,7 @@ async function buildStockSummaryReport(query = {}) {
   const allParts = Array.from(new Set([...stockByPart.keys(), ...physicalGroups.keys()]));
   const catalogueRows = allParts.length ? await MasterCatalogue.find({ normalizedPartNumber: { $in: allParts } }).lean() : [];
   const catalogueByPart = new Map(catalogueRows.map((row) => [masterPartNumber(row), cataloguePayload(row)]).filter(([partNo]) => partNo));
-  const rows = allParts.map((partNo) => {
+  const rows = allParts.filter((partNo) => stockByPart.has(partNo) || catalogueByPart.has(partNo)).map((partNo) => {
     const stock = stockByPart.get(partNo) || {};
     const physical = physicalGroups.get(partNo) || {};
     const firstScan = physical.firstScan || {};
