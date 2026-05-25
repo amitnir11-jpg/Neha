@@ -3679,7 +3679,10 @@
 
   function initReportTabs() {
     const scroller = $('#reportTabsScroller');
-    if (!scroller) return;
+    if (!scroller) {
+      setReportTab(activeReportType() || state.lastReportType || Object.keys(REPORT_TITLES)[0], { persist: false });
+      return;
+    }
     const widths = readReportTabWidths();
     scroller.innerHTML = Object.entries(REPORT_TITLES).map(([type, title]) => {
       const width = Number(widths[type] || 0);
@@ -7052,11 +7055,6 @@
     });
     $('[name="showFullMasterWithZeroScan"]', $('#reportFilters'))?.addEventListener('change', (event) => {
       if (event.target.checked) $('[name="showScannedPartsOnly"]', $('#reportFilters')).checked = false;
-    });
-    $$('.report-tab').forEach((button) => {
-      button.addEventListener('click', () => {
-        setReportTab(button.dataset.reportType);
-      });
     });
     $('#reportShow').addEventListener('click', () => loadReport().catch((error) => toast(error.message, 'error')));
     $('#reportRefresh')?.addEventListener('click', () => loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error')));

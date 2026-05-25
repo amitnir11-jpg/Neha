@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAKSH INVENTORY SYSTEM</title>
-  <link rel="stylesheet" href="/style.css?v=20260524-scan-register" onload="console.log('[DAKSH_DASHBOARD_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/style.css?v=20260525-report-tabs-removed" onload="console.log('[DAKSH_DASHBOARD_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -384,11 +384,6 @@
             <label class="toggle hidden" data-report-filter-key="scanModeOptions"><input name="showFullMasterWithZeroScan" type="checkbox">Full Master With Zero Scan</label>
           </form>
           <div id="reportMessage" class="form-message"></div>
-          <div class="report-tab-strip" aria-label="Report tabs">
-            <button id="reportTabsLeft" class="btn light icon-btn report-tab-arrow" type="button" aria-label="Move report tabs left">&lt;</button>
-            <div id="reportTabsScroller" class="report-tabs-scroller" role="tablist" aria-label="Report types"></div>
-            <button id="reportTabsRight" class="btn light icon-btn report-tab-arrow" type="button" aria-label="Move report tabs right">&gt;</button>
-          </div>
         </section>
         <section id="reportPreviewCard" class="card report-preview-card">
           <div class="card-head report-preview-head">
@@ -1328,7 +1323,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260524-scan-register" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260525-report-tabs-removed" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {
