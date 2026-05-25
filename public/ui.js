@@ -3091,6 +3091,59 @@
     saveReportLayoutPrefs({ columnWidths });
   }
 
+  function setReportColumnWidth(index, width) {
+    const table = $('#reportTable');
+    const th = $(`#reportHead th[data-col-index="${index}"]`);
+    const col = $(`col[data-col-index="${index}"]`, table);
+    const nextWidth = Math.max(70, Math.round(width));
+    if (th) th.style.width = `${nextWidth}px`;
+    if (col) {
+      col.style.width = `${nextWidth}px`;
+      col.style.minWidth = '70px';
+    }
+    const widths = $$('col', table).map((item) => Number.parseFloat(item.style.width) || 120);
+    if (table) table.style.minWidth = `${widths.reduce((sum, item) => sum + item, 0)}px`;
+    return nextWidth;
+  }
+
+  function measureReportColumnAutoWidth(index) {
+    const th = $(`#reportHead th[data-col-index="${index}"]`);
+    if (!th) return 120;
+    const measurer = document.createElement('span');
+    const headerStyle = window.getComputedStyle(th);
+    measurer.style.position = 'fixed';
+    measurer.style.left = '-9999px';
+    measurer.style.top = '-9999px';
+    measurer.style.visibility = 'hidden';
+    measurer.style.whiteSpace = 'nowrap';
+    measurer.style.font = headerStyle.font;
+    document.body.appendChild(measurer);
+    const measure = (text, font) => {
+      measurer.style.font = font;
+      measurer.textContent = String(text || '').trim();
+      return Math.ceil(measurer.getBoundingClientRect().width);
+    };
+    let width = measure(th.querySelector('.report-th-content')?.textContent || th.textContent || '', headerStyle.font);
+    $$('#reportRows tr').forEach((row) => {
+      const cell = row.children[index];
+      if (!cell || cell.colSpan > 1) return;
+      const style = window.getComputedStyle(cell);
+      width = Math.max(width, measure(cell.textContent || '', style.font));
+    });
+    measurer.remove();
+    const padding = 34;
+    const key = th.dataset.colKey || '';
+    const maxWidth = isDescriptionReportColumn(key) || /raw/i.test(key) ? 560 : 420;
+    return Math.max(70, Math.min(maxWidth, width + padding));
+  }
+
+  function autoFitReportColumn(index, key, reportType = activeReportType()) {
+    if (!Number.isFinite(index)) return;
+    const width = setReportColumnWidth(index, measureReportColumnAutoWidth(index));
+    if (key) saveReportColumnWidth(reportType, key, width);
+    refreshReportTableLayout();
+  }
+
   function reportColumnOrder() {
     const order = readReportLayoutPrefs().columnOrder;
     return Array.isArray(order) ? order : [];
@@ -3272,7 +3325,7 @@
       const isSorted = sort.key === key;
       const direction = isSorted ? (sort.direction === 'desc' ? 'descending' : 'ascending') : 'none';
       const sortLabel = isSorted ? (sort.direction === 'desc' ? 'Sorted high to low' : 'Sorted low to high') : 'Not sorted';
-      return `<th class="${reportColumnClass(column, index)} ${isSorted ? `sorted-${escapeHtml(sort.direction)}` : ''}" draggable="true" data-col-index="${index}" data-col-key="${escapeHtml(key)}" aria-sort="${escapeHtml(direction)}" style="width:${width}px"><button type="button" class="report-sort-button" title="Sort ${escapeHtml(column.header)}" aria-label="Sort ${escapeHtml(column.header)}"><span class="report-th-content">${escapeHtml(column.header)}</span><span class="report-sort-indicator" aria-hidden="true"></span><span class="sr-only">${escapeHtml(sortLabel)}</span></button><span class="column-resizer report-col-resize" role="separator" aria-label="Resize column"></span></th>`;
+      return `<th class="${reportColumnClass(column, index)} ${isSorted ? `sorted-${escapeHtml(sort.direction)}` : ''}" draggable="true" data-col-index="${index}" data-col-key="${escapeHtml(key)}" aria-sort="${escapeHtml(direction)}" style="width:${width}px"><button type="button" class="report-sort-button" title="Sort ${escapeHtml(column.header)}" aria-label="Sort ${escapeHtml(column.header)}"><span class="report-th-content">${escapeHtml(column.header)}</span><span class="sr-only">${escapeHtml(sortLabel)}</span></button><span class="column-resizer report-col-resize" role="separator" aria-label="Resize column. Double click to auto fit."></span></th>`;
     }).join('')}</tr>`;
   }
 
@@ -3282,7 +3335,8 @@
     if (!wrap || !table) return;
     table.style.tableLayout = 'fixed';
     requestAnimationFrame(() => {
-      wrap.scrollLeft = wrap.scrollLeft;
+      const maxLeft = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
+      wrap.scrollLeft = Math.min(maxLeft, Math.max(0, wrap.scrollLeft));
     });
   }
 
@@ -3758,6 +3812,26 @@
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
     });
+    $('#reportHead')?.addEventListener('dblclick', (event) => {
+      const grip = event.target.closest('.report-col-resize');
+      if (!grip) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const th = grip.closest('th');
+      autoFitReportColumn(Number(th?.dataset.colIndex), th?.dataset.colKey || '', activeReportType());
+    });
+    wrap.addEventListener('wheel', (event) => {
+      if (event.ctrlKey) return;
+      const horizontalIntent = Math.abs(event.deltaX) >= Math.abs(event.deltaY) || event.shiftKey;
+      if (!horizontalIntent) return;
+      const delta = event.deltaX || (event.shiftKey ? event.deltaY : 0);
+      if (!delta) return;
+      const maxLeft = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
+      const nextLeft = Math.min(maxLeft, Math.max(0, wrap.scrollLeft + delta));
+      if (nextLeft === wrap.scrollLeft) return;
+      event.preventDefault();
+      wrap.scrollLeft = nextLeft;
+    }, { passive: false });
     $('#reportHead')?.addEventListener('click', (event) => {
       if (event.target.closest('.report-col-resize')) return;
       const button = event.target.closest('.report-sort-button');

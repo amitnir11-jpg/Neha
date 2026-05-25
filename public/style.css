@@ -2828,8 +2828,9 @@ tr:hover td {
   height: calc(100vh - 360px);
   overflow-x: auto;
   overflow-y: auto;
-  resize: both;
   scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
 }
 
 .report-table-wrap table {
@@ -2862,13 +2863,13 @@ tr:hover td {
   top: 0;
   z-index: 4;
   resize: none;
-  overflow: visible;
+  overflow: hidden;
   text-align: left;
-  background: #eef5fb;
-  color: #0f172a;
+  background: #f7f9fb;
+  color: #344054;
   font-size: 12px;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-weight: 650;
+  text-transform: none;
   white-space: nowrap;
 }
 
@@ -2945,10 +2946,8 @@ td.numeric,
 }
 
 .report-sort-button {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: block;
   align-items: center;
-  gap: 6px;
   width: 100%;
   min-height: 24px;
   padding: 0 10px 0 0;
@@ -2966,61 +2965,10 @@ td.numeric,
   outline-offset: 2px;
 }
 
-.report-sort-indicator {
-  position: relative;
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
-  opacity: 1;
-}
-
-.report-sort-indicator::before {
-  content: '';
-  position: absolute;
-  left: 3px;
-  top: 3px;
-  width: 12px;
-  height: 12px;
-  border: 0;
-  border-radius: 1px;
-  background: #475569;
-  clip-path: polygon(5% 10%, 95% 10%, 64% 50%, 64% 88%, 36% 88%, 36% 50%);
-}
-
-.report-sort-indicator::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid #475569;
-  opacity: 0;
-}
-
-.report-table-wrap th.sorted-asc .report-sort-indicator::after {
-  border-top: 0;
-  border-bottom: 5px solid #1d4ed8;
-  opacity: 1;
-}
-
-.report-table-wrap th.sorted-desc .report-sort-indicator::after {
-  border-top-color: #1d4ed8;
-  opacity: 1;
-}
-
-.report-table-wrap th.sorted-asc .report-sort-indicator::before,
-.report-table-wrap th.sorted-desc .report-sort-indicator::before {
-  background: #1d4ed8;
-}
-
 .report-table-wrap th.sorted-asc,
 .report-table-wrap th.sorted-desc {
-  background: #e0f2fe;
-  color: #0f4c81;
+  background: #eef4ff;
+  color: #1f3763;
 }
 
 .sr-only {
@@ -3049,6 +2997,12 @@ td.numeric,
 
 .report-col-resize:hover {
   background: #2563eb;
+}
+
+.report-col-resize:active,
+.report-col-resize:focus-visible {
+  background: #2563eb;
+  outline: none;
 }
 
 .report-table-wrap th.dragging {
@@ -4846,10 +4800,6 @@ tr:hover td,
 .report-sort-button {
   min-height: 24px;
   font-weight: 600;
-}
-
-.report-sort-indicator::before {
-  background: #8a97a8;
 }
 
 .column-resizer::after,
