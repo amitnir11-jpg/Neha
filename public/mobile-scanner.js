@@ -643,7 +643,17 @@
     });
     $('#retryFailedBtn').addEventListener('click', async () => {
       const rows = await getAllScans();
-      await Promise.all(rows.filter((row) => row.status === 'failed').map((row) => putScan({ ...row, status: 'pending', syncStatus: 'pending' })));
+      const failedRows = rows.filter((row) => row.status === 'failed');
+      const missingBinRows = failedRows.filter((row) => requiresPresetBin(row.scanType || row.type) && !upper(row.binLocation || row.bin));
+      if (missingBinRows.length && !state.activeBinLocation) {
+        toast('Set bin location, then retry failed scans', 'error');
+        $('#activeBinLocation')?.focus();
+        return;
+      }
+      await Promise.all(failedRows.map((row) => {
+        const retryBin = upper(row.binLocation || row.bin || (requiresPresetBin(row.scanType || row.type) ? state.activeBinLocation : ''));
+        return putScan({ ...row, binLocation: retryBin, bin: retryBin, status: 'pending', syncStatus: 'pending', syncError: '' });
+      }));
       await syncPending();
     });
     $('#clearSyncedBtn').addEventListener('click', clearSynced);
