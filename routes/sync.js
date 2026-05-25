@@ -289,6 +289,11 @@ function logSync(stage, details = {}) {
 
 async function logMasterValidationFailure(scan = {}, reason = 'Not Found In Master') {
   try {
+    if (!masterValidation.isManualRejectedSource({
+      ...scan,
+      source: normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, 'mobile'),
+      defaultScanMode: 'Mobile'
+    })) return;
     const now = scan.timestamp instanceof Date && !Number.isNaN(scan.timestamp.getTime()) ? scan.timestamp : new Date();
     const rawScannedValue = clean(scan.rawScanString || scan.rawScan || scan.rawUpi || scan.upiNo || scan.upiId);
     const recent = rawScannedValue ? await VerificationLog.findOne({
@@ -604,8 +609,6 @@ function duplicateQuery(scan) {
     scanStatus: { $in: acceptedStatuses() },
     $or: terms.length ? terms : [{ uniqueScanId: '__missing__' }]
   };
-  const scanType = upper(scan.scanType || scan.type);
-  if (scanType) filter.scanType = scanType;
   return scanIdentityScope(filter, scan);
 }
 
@@ -1288,7 +1291,7 @@ async function pushHandler(req, res) {
             rawScannedValue: scan.rawScanString,
             extractedPartNumber: scan.partNumber,
             originalScanId: scan.uniqueScanId,
-            source: normalizeSource(scan.scanSource || scan.source.source || scan.source.scanSource, 'mobile'),
+            source: normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, 'mobile'),
             sourceRoute: req.originalUrl,
             defaultScanMode: 'Sync'
           }, console).catch(() => undefined);

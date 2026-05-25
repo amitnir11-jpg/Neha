@@ -27,6 +27,18 @@ function scanMode(value, fallback = 'Manual') {
   return 'Manual';
 }
 
+function isManualRejectedSource(input = {}) {
+  const sourceCandidates = [
+    input.entryMode,
+    input.scanSource,
+    input.source,
+    input.scanMode
+  ].map((value) => clean(value).toLowerCase()).filter(Boolean);
+  if (sourceCandidates.length) return sourceCandidates.some((value) => /\bmanual\b/.test(value));
+  const fallback = clean(input.defaultScanMode).toLowerCase();
+  return /\bmanual\b/.test(fallback);
+}
+
 function validScanClause() {
   return {
     $and: [
@@ -98,6 +110,7 @@ async function validatePartAgainstMaster({ partNumber, dealerCode, rawScannedVal
 }
 
 async function saveRejectedScan(input = {}) {
+  if (!isManualRejectedSource(input)) return null;
   const extractedPartNumber = normalizePartNumber(input.extractedPartNumber || input.partNumber || input.part || input.normalizedPartNumber || '');
   const originalScanId = clean(input.originalScanId || input.scanId || input.uniqueScanId || input.syncKey || '');
   const doc = {
@@ -130,6 +143,13 @@ async function saveRejectedScan(input = {}) {
 }
 
 async function rejectNotInMasterScan(input = {}, logger = console) {
+  if (!isManualRejectedSource(input)) {
+    if (logger && logger.log) logger.log('REJECTED_NOT_IN_MASTER_SKIPPED_NON_MANUAL', {
+      partNumber: input.extractedPartNumber || input.partNumber || input.part,
+      source: input.source || input.scanSource || input.scanMode || input.entryMode || input.defaultScanMode || ''
+    });
+    return null;
+  }
   if (logger && logger.log) logger.log('REJECTED_NOT_IN_MASTER', {
     partNumber: input.extractedPartNumber || input.partNumber || input.part,
     dealerCode: input.dealerCode,
@@ -146,5 +166,6 @@ module.exports = {
   validScanClause,
   notInMasterClause,
   normalizeDealerCode,
-  scanMode
+  scanMode,
+  isManualRejectedSource
 };

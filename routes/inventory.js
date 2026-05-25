@@ -1029,6 +1029,7 @@ async function validateScan(payload, master, timestamp) {
 
 async function logValidationFailure(payload = {}, reason = 'Not Found In Master', timestamp = new Date()) {
   try {
+    if (!masterValidation.isManualRejectedSource(payload)) return;
     const now = timestamp instanceof Date && !Number.isNaN(timestamp.getTime()) ? timestamp : new Date();
     const rawScannedValue = String(payload.rawScan || payload.rawScanString || payload.rawUpi || payload.upiNo || payload.upiId || '').trim();
     const dealerCode = normalizeDealerCode(payload.dealerCode || payload.dealer || '');
@@ -2092,7 +2093,7 @@ router.post('/move-not-in-master-to-rejected', auth.requireAuth, auth.requireAdm
       const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part || '');
       const master = await findMasterPart(partNumber, scan.dealerCode);
       if (master) continue;
-      await masterValidation.saveRejectedScan({
+      const rejected = await masterValidation.saveRejectedScan({
         ...scan,
         rawScannedValue: scan.rawScan || scan.rawScanString || scan.rawUpi || '',
         extractedPartNumber: partNumber,
@@ -2101,8 +2102,10 @@ router.post('/move-not-in-master-to-rejected', auth.requireAuth, auth.requireAdm
         sourceRoute: 'cleanup:move-not-in-master-to-rejected',
         defaultScanMode: scan.synced || scan.isSynced ? 'Sync' : 'Manual'
       });
-      movedCount += 1;
-      movedIds.push(scan._id);
+      if (rejected) {
+        movedCount += 1;
+        movedIds.push(scan._id);
+      }
     }
     const deleteResult = movedIds.length ? await Inventory.deleteMany({ _id: { $in: movedIds } }) : { deletedCount: 0 };
     req.io.emit('scan:deleted');

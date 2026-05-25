@@ -772,6 +772,16 @@
         </div>
       </div>
 
+      <div id="validatorMapModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="validatorMapTitle">
+        <div class="modal-card validator-map-card">
+          <div class="card-head"><h2 id="validatorMapTitle">Correct / Map Invalid Part</h2><button id="validatorMapCancel" class="btn light" type="button">Cancel</button></div>
+          <form id="validatorMapForm" class="grid-form">
+            <label>Existing Master Part<input id="validatorMapPartNumber" name="partNumber" autocomplete="off" required></label>
+            <div class="form-actions"><button class="btn primary" type="submit">Save Mapping</button></div>
+          </form>
+        </div>
+      </div>
+
       <section id="qr" class="view">
         <div class="qr-tool-tabs">
           <button class="qr-tool-tab active" data-qr-panel="qrClassicPanel" type="button">QR / Barcode Tools</button>

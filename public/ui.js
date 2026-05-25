@@ -150,6 +150,7 @@
     dashboardDealerCode: '',
     reconLoaded: false,
     validatorInvalidRows: [],
+    validatorMapIndex: null,
     masterSearch: { q: '', page: 1, limit: 25, total: 0 },
     masterSearchRows: [],
     activeAudit: null,
@@ -5232,6 +5233,36 @@
     $('#validatorDetailModal')?.classList.remove('hidden');
   }
 
+  function closeValidatorMapModal() {
+    state.validatorMapIndex = null;
+    $('#validatorMapForm')?.reset();
+    $('#validatorMapModal')?.classList.add('hidden');
+  }
+
+  function openValidatorMapModal(index) {
+    state.validatorMapIndex = Number(index);
+    const row = state.validatorInvalidRows[state.validatorMapIndex] || {};
+    const input = $('#validatorMapPartNumber');
+    if (input) {
+      input.value = row.invalidPart || '';
+      setTimeout(() => input.focus(), 0);
+    }
+    $('#validatorMapModal')?.classList.remove('hidden');
+  }
+
+  async function submitValidatorMap(event) {
+    event.preventDefault();
+    const index = state.validatorMapIndex;
+    const ids = validatorRowIds(index);
+    const partNumber = String($('#validatorMapPartNumber')?.value || '').trim();
+    if (!ids.length) throw new Error('No invalid scan details selected');
+    if (!partNumber) throw new Error('Existing master part number is required');
+    const data = await api('/api/master/scan-validator/map', { method: 'POST', body: { ids, partNumber } });
+    toast(data.message || 'Invalid scans mapped with existing part');
+    closeValidatorMapModal();
+    await loadMasterScanValidator();
+  }
+
   async function validatorCorrectionAction(action, index) {
     const ids = validatorRowIds(index);
     if (!ids.length) throw new Error('No invalid scan details selected');
@@ -5244,10 +5275,8 @@
       endpoint = '/api/master/scan-validator/delete-invalid';
     }
     if (action === 'map') {
-      const partNumber = window.prompt('Enter existing master part number to map with');
-      if (!partNumber) return;
-      endpoint = '/api/master/scan-validator/map';
-      body = { ids, partNumber };
+      openValidatorMapModal(index);
+      return;
     }
     const data = await api(endpoint, { method: 'POST', body });
     toast(data.message || 'Validator action complete');
@@ -6856,6 +6885,11 @@
     $('#validatorDetailClose')?.addEventListener('click', () => $('#validatorDetailModal')?.classList.add('hidden'));
     $('#validatorDetailModal')?.addEventListener('click', (event) => {
       if (event.target.id === 'validatorDetailModal') $('#validatorDetailModal')?.classList.add('hidden');
+    });
+    $('#validatorMapCancel')?.addEventListener('click', closeValidatorMapModal);
+    $('#validatorMapForm')?.addEventListener('submit', (event) => submitValidatorMap(event).catch((error) => toast(error.message, 'error')));
+    $('#validatorMapModal')?.addEventListener('click', (event) => {
+      if (event.target.id === 'validatorMapModal') closeValidatorMapModal();
     });
 
     $('#reportFilters').addEventListener('submit', (event) => {
