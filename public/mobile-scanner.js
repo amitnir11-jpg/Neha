@@ -564,6 +564,7 @@
   async function manualSubmit(event) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const partNumber = upper(form.get('partNumber'));
     const binLocation = upper(form.get('binLocation') || (requiresPresetBin() ? state.activeBinLocation : ''));
     if (requiresPresetBin() && !binLocation) {
       toast('Bin location is mandatory for manual inward/damage entry', 'error');
@@ -571,13 +572,13 @@
       return;
     }
     await saveLocalScan({
-      partNumber: upper(form.get('partNumber')),
+      partNumber,
       qty: Number(form.get('qty') || 1),
       binLocation,
       regdNo: upper(form.get('regdNo')),
       jobCardNo: upper(form.get('jobCardNo')),
       master: state.manualPart,
-      rawUPI: `MANUAL-${deviceId()}-${Date.now()}-${upper(form.get('partNumber'))}`
+      rawUPI: `MANUAL:${partNumber}:${binLocation || 'NO-BIN'}:${Date.now()}`
     }, 'manual');
     $('#manualDialog').close();
   }

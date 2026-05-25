@@ -510,7 +510,11 @@ function normalizeScan(item = {}) {
   const parsed = inventory.parseRawScan(rawScan);
   const timestamp = scanTimestamp({ ...item, serverReceivedAt });
   const dealerCode = upper(item.dealerCode || item.dealer || item.dealerId || parsed.dealerCode);
-  const partNumber = normalizePartNumber(parsed.part || firstValue(item, ['partNumber', 'partNo', 'part', 'sku', 'itemCode']));
+  const scanSource = normalizeSource(item.source?.source || item.source?.scanSource || item.scanSource || item.source, 'mobile');
+  const explicitPartNumber = firstValue(item, ['partNumber', 'partNo', 'part', 'sku', 'itemCode']);
+  const partNumber = normalizePartNumber(scanSource === 'manual'
+    ? (explicitPartNumber || parsed.part)
+    : (parsed.part || explicitPartNumber));
   const scanType = normalizeScanType(item.scanType || item.action || item.type || item.movement || parsed.type || 'INWARD');
   const binLocation = clean(item.binLocation || item.bin || item.location || parsed.bin);
   const regdNo = upper(item.regdNo || item.regNo || item.registrationNo || item.regdNumber || item.vehicleRegNo);
@@ -519,7 +523,6 @@ function normalizeScan(item = {}) {
   const upiNo = upiId;
   const syncKey = clean(item.syncKey || inventory.buildSyncKey({ dealerCode, upiId, partNumber, scanType, timestamp }));
   const quantity = inventory.numberValue(firstValue(item, ['quantity', 'qty', 'count']) || parsed.qty, 1);
-  const scanSource = normalizeSource(item.source?.source || item.source?.scanSource || item.scanSource || item.source, 'mobile');
   const idSource = scanSource === 'manual'
     ? { deviceId: item.deviceId }
     : { ...item, deviceId: item.deviceId };
