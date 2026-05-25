@@ -788,7 +788,9 @@ async function saveNormalizedScan(scan, req) {
   if (!scan.dealerCode) errors.push('Dealer code missing');
   if (!VALID_TYPES.includes(scan.scanType)) errors.push('Invalid scan type');
   if (!scan.syncKey) errors.push('Sync key missing');
-  if (!master && manualEntry) errors.push(`Part number not found in master: ${scan.partNumber}`);
+  if (!master && manualEntry) {
+    scan.manualMasterMissing = true;
+  }
   const role = scanRole(req, scan);
   const roleError = roleScanError(role, scan.scanType);
   if (roleError) errors.push(roleError);
@@ -820,7 +822,7 @@ async function saveNormalizedScan(scan, req) {
       }, console);
     }
     logSync('scan validation failed', { deviceId: scan.deviceId, scanId: scan.uniqueScanId, errors });
-    return { status: 'failed', scan, error: !master && scan.partNumber && manualEntry ? 'Part not found in master. Scan rejected.' : errors.join(', ') };
+    return { status: 'failed', scan, error: errors.join(', ') };
   }
 
   if (scan.scanType === 'OUTWARD') {
@@ -849,7 +851,7 @@ async function saveNormalizedScan(scan, req) {
   }
 
   const warnings = [];
-  if (!master) warnings.push(`Part not found in Master Catalogue: ${scan.partNumber}`);
+  if (!master) warnings.push(manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`);
   if (master && !master.activeStatus) warnings.push('Inactive part');
   const finalQty = Number(scan.quantity || 1);
   const finalBin = scan.binLocation;
@@ -1278,7 +1280,9 @@ async function pushHandler(req, res) {
       if (!VALID_TYPES.includes(scan.scanType)) rowErrors.push('invalid scanType');
       if (!(scan.timestamp instanceof Date) || Number.isNaN(scan.timestamp.getTime())) rowErrors.push('invalid timestamp');
       if (scan.quantity === undefined || scan.quantity === null || Number.isNaN(Number(scan.quantity))) rowErrors.push('qty missing or invalid');
-      if (!master && manualEntry) rowErrors.push(`Part number not found in master: ${scan.partNumber}`);
+      if (!master && manualEntry) {
+        scan.manualMasterMissing = true;
+      }
 
       if (rowErrors.length) {
         const isInvalidLocalRecord = rowErrors.some((reason) => /scanId missing|partNumber missing/.test(reason));
@@ -1307,7 +1311,7 @@ async function pushHandler(req, res) {
           scan,
           ackMetaFromScan(scan, index + 1),
           isInvalidLocalRecord ? 'invalid' : 'failed',
-          !master && scan.partNumber && manualEntry ? 'Part not found in master. Scan rejected.' : (isInvalidLocalRecord ? 'Invalid record cleaned' : failed.reason)
+          isInvalidLocalRecord ? 'Invalid record cleaned' : failed.reason
         ));
         logSync('row validation failed', {
           row: index + 1,
@@ -1416,8 +1420,8 @@ async function pushHandler(req, res) {
         syncStatus: 'synced',
         syncError: '',
         source: normalizeSource(scan.scanSource || scan.source.source || scan.source.scanSource, 'mobile'),
-        warnings: master ? [] : [`Part not found in Master Catalogue: ${scan.partNumber}`],
-        remarks: master ? '' : `Part not found in Master Catalogue: ${scan.partNumber}`,
+        warnings: master ? [] : [manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`],
+        remarks: master ? '' : (manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`),
         masterFound: Boolean(master),
         masterMatch: Boolean(master),
         isMasterMatched: Boolean(master)

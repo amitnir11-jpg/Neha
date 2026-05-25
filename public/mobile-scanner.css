@@ -32,7 +32,7 @@ button { border: 0; cursor: pointer; }
   padding: max(12px, env(safe-area-inset-top)) 12px max(14px, env(safe-area-inset-bottom));
 }
 
-.brand-panel, .mobile-topbar, .login-card, .sync-panel, .last-list {
+.brand-panel, .mobile-topbar, .login-card, .sync-panel, .last-list, .bin-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -161,6 +161,36 @@ input[name="password"], input[name="pin"] { text-transform: none; }
   background: #0f3f7a;
   color: #fff;
   border-color: #0f3f7a;
+}
+
+.bin-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin: 10px 0;
+  padding: 10px;
+}
+
+.bin-actions {
+  display: grid;
+  grid-template-columns: 92px 76px;
+  gap: 8px;
+}
+
+.bin-panel p {
+  grid-column: 1 / -1;
+  font-size: 12px;
+}
+
+.bin-panel.ready {
+  border-color: #9ed9bd;
+  background: #f3fcf7;
+}
+
+.bin-panel.blocked {
+  border-color: #f3b4ae;
+  background: #fff7f6;
 }
 
 .scan-stage {
@@ -330,4 +360,9 @@ menu {
 @media (min-width: 680px) {
   .mode-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .scan-stage { grid-template-columns: 1fr 1fr; grid-template-rows: minmax(300px, 52vh); }
+}
+
+@media (max-width: 520px) {
+  .bin-panel { grid-template-columns: 1fr; }
+  .bin-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

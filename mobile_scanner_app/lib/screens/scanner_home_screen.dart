@@ -302,6 +302,10 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   }
 
   Future<void> _onDetect(BarcodeCapture capture) async {
+    if (_requiresBinBeforeScan && _upper(_defaultBinController.text).isEmpty) {
+      _setStatus('Enter bin location before scanning', Colors.red);
+      return;
+    }
     final raw = capture.barcodes
         .map((barcode) => barcode.rawValue)
         .whereType<String>()
@@ -339,8 +343,12 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _setStatus('Login required', Colors.red);
       return;
     }
-    if (draft.partNumber.isEmpty || draft.binLocation.isEmpty) {
+    if (draft.partNumber.isEmpty) {
       _setStatus('Invalid QR', Colors.red);
+      return;
+    }
+    if (_requiresBinBeforeScan && draft.binLocation.isEmpty) {
+      _setStatus('Bin location required before scanning', Colors.red);
       return;
     }
 
@@ -402,6 +410,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _statusColor = color;
     });
   }
+
+  bool get _requiresBinBeforeScan =>
+      _scanType == 'INWARD' || _scanType == 'DAMAGE';
 
   void _resetScanLock({String message = 'Ready to rescan'}) {
     _qrIdleTimer?.cancel();
@@ -580,7 +591,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                   controller: _defaultBinController,
                   textCapitalization: TextCapitalization.characters,
                   decoration: const InputDecoration(
-                    labelText: 'Default Bin Location',
+                    labelText: 'Scan Bin Location *',
                     prefixIcon: Icon(Icons.inventory_2),
                     isDense: true,
                   ),

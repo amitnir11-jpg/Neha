@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Daksh Mobile Scanner</title>
-  <link rel="stylesheet" href="/mobile-scanner.css?v=20260525-mobile-web-portal">
+  <link rel="stylesheet" href="/mobile-scanner.css?v=20260525-bin-before-scan">
 </head>
 <body>
   <main class="mobile-shell">
@@ -49,6 +49,17 @@
         <button class="mode-btn" type="button" data-mode="DAMAGE">Damage</button>
         <button class="mode-btn" type="button" data-mode="VERIFICATION">Verification</button>
       </div>
+
+      <section id="binPanel" class="bin-panel">
+        <label>Bin Location *
+          <input id="activeBinLocation" autocapitalize="characters" autocomplete="off" placeholder="ENTER BIN BEFORE SCANNING">
+        </label>
+        <div class="bin-actions">
+          <button id="saveBinBtn" class="primary-action" type="button">Set Bin</button>
+          <button id="clearBinBtn" class="secondary-action" type="button">Clear</button>
+        </div>
+        <p id="binPanelMessage">Enter bin location before starting inward or damage scanning.</p>
+      </section>
 
       <section class="scan-stage">
         <div class="camera-pane">
@@ -105,7 +116,7 @@
       <label>Part Number<input name="partNumber" id="manualPartNumber" autocapitalize="characters" required></label>
       <div id="partSuggestions" class="suggestions"></div>
       <label>Quantity<input name="qty" inputmode="numeric" type="number" min="1" value="1" required></label>
-      <label id="manualBinLabel">Bin Location<input name="binLocation" autocapitalize="characters"></label>
+      <label id="manualBinLabel">Bin Location *<input name="binLocation" autocapitalize="characters"></label>
       <label id="manualRegLabel" class="hidden">Registration Number<input name="regdNo" autocapitalize="characters"></label>
       <label id="manualJobLabel" class="hidden">Job Card Number<input name="jobCardNo" autocapitalize="characters"></label>
       <div id="manualPartMeta" class="part-meta"></div>
@@ -117,6 +128,6 @@
   </dialog>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/mobile-scanner.js?v=20260525-mobile-web-portal"></script>
+  <script src="/mobile-scanner.js?v=20260525-bin-before-scan"></script>
 </body>
 </html>

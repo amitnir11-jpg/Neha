@@ -4,6 +4,7 @@
   const STORE = 'scans';
   const SESSION_KEY = 'dakshMobileSession';
   const DEVICE_KEY = 'dakshMobileDeviceId';
+  const ACTIVE_BIN_KEY = 'dakshMobileActiveBinLocation';
   const SYNC_INTERVAL_MS = 120000;
   const DUPLICATE_GUARD_MS = 1500;
   const BATCH_SIZE = 50;
@@ -23,7 +24,8 @@
     recentRaw: new Map(),
     lastScanAtByRaw: new Map(),
     socket: null,
-    manualPart: null
+    manualPart: null,
+    activeBinLocation: upper(localStorage.getItem(ACTIVE_BIN_KEY) || '')
   };
 
   function clean(value) { return String(value || '').trim(); }
@@ -159,6 +161,46 @@
     $('#networkState').textContent = online ? 'Online' : 'Offline';
   }
 
+  function requiresPresetBin(mode = state.mode) {
+    return mode === 'INWARD' || mode === 'DAMAGE';
+  }
+
+  function updateBinPanel() {
+    const panel = $('#binPanel');
+    const input = $('#activeBinLocation');
+    const message = $('#binPanelMessage');
+    if (!panel || !input || !message) return;
+    const required = requiresPresetBin();
+    panel.classList.toggle('hidden', !required);
+    input.required = required;
+    if (document.activeElement !== input) input.value = state.activeBinLocation;
+    const ready = !required || Boolean(state.activeBinLocation);
+    panel.classList.toggle('ready', ready && required);
+    panel.classList.toggle('blocked', !ready);
+    message.textContent = required
+      ? (ready ? `Scanning will save to bin ${state.activeBinLocation}.` : 'Enter bin location before starting inward or damage scanning.')
+      : 'Bin is not required for this mode.';
+  }
+
+  function setActiveBin(value) {
+    state.activeBinLocation = upper(value);
+    if (state.activeBinLocation) localStorage.setItem(ACTIVE_BIN_KEY, state.activeBinLocation);
+    else localStorage.removeItem(ACTIVE_BIN_KEY);
+    updateBinPanel();
+    return state.activeBinLocation;
+  }
+
+  function ensureScanCanStart() {
+    if (!requiresPresetBin()) return true;
+    if (state.activeBinLocation) return true;
+    stopCamera();
+    $('#cameraState').textContent = 'Enter bin location before scanning';
+    toast('Bin location is mandatory before inward scanning', 'error');
+    updateBinPanel();
+    $('#activeBinLocation')?.focus();
+    return false;
+  }
+
   async function updateSyncUi() {
     updateOnlineUi();
     const summary = await counts();
@@ -224,11 +266,10 @@
       if (!record.regdNo || !record.jobCardNo) throw new Error('Fitted scan requires registration and job card number');
     }
     if (record.scanType === 'INWARD' && !record.binLocation) {
-      record.binLocation = upper(window.prompt('Bin location') || '');
-      if (!record.binLocation) throw new Error('Inward scan requires bin location');
+      throw new Error('Inward scan requires bin location before scanning');
     }
     if (record.scanType === 'DAMAGE' && !record.binLocation) {
-      record.binLocation = upper(window.prompt('Damage bin location') || '');
+      throw new Error('Damage scan requires bin location before scanning');
     }
     if (record.scanType === 'OUTWARD') {
       record.binLocation = '';
@@ -272,7 +313,7 @@
       qty: Number(input.qty || parsed.qty || 1) || 1,
       scanType: state.mode,
       type: state.mode,
-      binLocation: upper(input.binLocation || parsed.binLocation),
+      binLocation: upper(input.binLocation || parsed.binLocation || (requiresPresetBin() ? state.activeBinLocation : '')),
       mobileCreatedAt: nowIso(),
       timestamp: '',
       deviceId: deviceId(),
@@ -379,6 +420,7 @@
 
   async function startCamera() {
     if (state.stream || state.paused) return;
+    if (!ensureScanCanStart()) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       $('#cameraState').textContent = 'Camera API unavailable. Use Manual Entry.';
       return;
@@ -434,6 +476,7 @@
     state.mode = mode;
     $$('.mode-btn').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
     configureManualFields();
+    updateBinPanel();
     state.paused = false;
     startCamera().catch((error) => {
       $('#cameraState').textContent = error.message;
@@ -442,7 +485,9 @@
   }
 
   function configureManualFields() {
-    $('#manualBinLabel').classList.toggle('hidden', state.mode === 'OUTWARD');
+    const needsBin = requiresPresetBin();
+    $('#manualBinLabel').classList.toggle('hidden', !needsBin);
+    $('#manualBinLabel input').required = needsBin;
     $('#manualRegLabel').classList.toggle('hidden', state.mode !== 'FITTED');
     $('#manualJobLabel').classList.toggle('hidden', state.mode !== 'FITTED');
   }
@@ -509,6 +554,7 @@
   async function openManual() {
     configureManualFields();
     $('#manualForm').reset();
+    $('#manualBinLabel input').value = requiresPresetBin() ? state.activeBinLocation : '';
     state.manualPart = null;
     $('#manualPartMeta').textContent = '';
     $('#partSuggestions').innerHTML = '';
@@ -518,10 +564,16 @@
   async function manualSubmit(event) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const binLocation = upper(form.get('binLocation') || (requiresPresetBin() ? state.activeBinLocation : ''));
+    if (requiresPresetBin() && !binLocation) {
+      toast('Bin location is mandatory for manual inward/damage entry', 'error');
+      $('#manualBinLabel input').focus();
+      return;
+    }
     await saveLocalScan({
       partNumber: upper(form.get('partNumber')),
       qty: Number(form.get('qty') || 1),
-      binLocation: upper(form.get('binLocation')),
+      binLocation,
       regdNo: upper(form.get('regdNo')),
       jobCardNo: upper(form.get('jobCardNo')),
       master: state.manualPart,
@@ -570,6 +622,24 @@
     $('#resumeBtn').addEventListener('click', () => { state.paused = false; startCamera().catch((error) => toast(error.message, 'error')); });
     $('#manualBtn').addEventListener('click', openManual);
     $('#syncNowBtn').addEventListener('click', () => syncPending().catch((error) => toast(error.message, 'error')));
+    $('#activeBinLocation').addEventListener('input', (event) => {
+      event.target.value = upper(event.target.value);
+    });
+    $('#saveBinBtn').addEventListener('click', () => {
+      const bin = setActiveBin($('#activeBinLocation').value);
+      if (bin) {
+        toast(`Bin ${bin} set for scanning`, 'success');
+        if (state.session?.token && !state.paused) startCamera().catch((error) => toast(error.message, 'error'));
+      } else {
+        toast('Enter bin location before scanning', 'error');
+      }
+    });
+    $('#clearBinBtn').addEventListener('click', () => {
+      setActiveBin('');
+      stopCamera();
+      $('#cameraState').textContent = 'Enter bin location before scanning';
+      $('#activeBinLocation').focus();
+    });
     $('#retryFailedBtn').addEventListener('click', async () => {
       const rows = await getAllScans();
       await Promise.all(rows.filter((row) => row.status === 'failed').map((row) => putScan({ ...row, status: 'pending', syncStatus: 'pending' })));
