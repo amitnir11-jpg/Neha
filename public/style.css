@@ -2705,6 +2705,46 @@ tr:hover td {
   background: #fff;
 }
 
+.report-tab-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.report-tabs-scroller {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
+  min-width: 0;
+  padding: 2px 0;
+}
+
+.report-tab {
+  flex: 0 0 150px;
+  width: 150px;
+  min-width: 88px;
+  max-width: 280px;
+  height: 36px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-tab.active {
+  background: #263244;
+  border-color: #263244;
+  color: #fff;
+}
+
+.report-tab-arrow {
+  width: 36px;
+  min-width: 36px;
+}
+
 #reports > .card:first-child {
   border-color: #d7e2ee;
 }
@@ -4821,4 +4861,16 @@ tr:hover td,
     padding-left: 14px;
     padding-right: 14px;
   }
+}
+
+.report-tabs-scroller[role="tablist"] {
+  border-bottom: 0 !important;
+  overflow-x: auto !important;
+}
+
+.report-tabs-scroller .report-tab[role="tab"] {
+  flex: 0 0 var(--report-tab-width, 150px) !important;
+  width: var(--report-tab-width, 150px);
+  max-width: 280px !important;
+  justify-content: center !important;
 }

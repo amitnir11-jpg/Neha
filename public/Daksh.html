@@ -263,6 +263,8 @@
               <label>Category<input name="category" data-fill="category"></label>
               <label>Quantity<input name="qty" type="number" min="0" value="1" required></label>
               <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
+              <label class="fitted-only hidden">Regd No<input name="regdNo" autocomplete="off"></label>
+              <label class="fitted-only hidden">Job Card No<input name="jobCardNo" autocomplete="off"></label>
               <label>Staff<input name="staffName" id="manualStaff"></label>
               <label class="span-3">Raw UPI / Barcode<input name="rawScan" placeholder="Optional raw scan text"></label>
               <div class="actions span-3">
@@ -280,6 +282,8 @@
               <label>Part Number<div class="suggest-wrap"><input name="part" class="partSuggestInput" autocomplete="off"><div class="suggest-menu"></div></div></label>
               <label>Quantity<input name="qty" type="number" min="0" value="1"></label>
               <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
+              <label class="fitted-only hidden">Regd No<input name="regdNo" autocomplete="off"></label>
+              <label class="fitted-only hidden">Job Card No<input name="jobCardNo" autocomplete="off"></label>
               <label>Device ID<input name="deviceId" id="barcodeDeviceId" readonly></label>
               <div class="actions span-3">
                 <span id="barcodeAutoSaveStatus" class="live-pill green-dot">Auto Save: ON</span>
@@ -363,7 +367,7 @@
             <label class="hidden" data-report-filter-key="productGroup">Product Group<select name="productGroup" id="reportProductGroupFilter"><option value="">All Product Groups</option></select></label>
             <label class="hidden" data-report-filter-key="productSubGroup">Product SubGroup<select name="partSubGroup" id="reportProductSubGroupFilter"><option value="">All Product SubGroups</option></select></label>
             <label class="hidden" data-report-filter-key="binLocation">Bin Location<input name="bin" placeholder="Bin Location"></label>
-            <label data-report-filter-key="scanType">Scan Type<select name="scanType"><option value="">All Types</option><option>AUDIT</option><option>INWARD</option><option>OUTWARD</option><option>DAMAGE</option></select></label>
+            <label data-report-filter-key="scanType">Scan Type<select name="scanType"><option value="">All Types</option><option>AUDIT</option><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
             <label class="hidden" data-report-filter-key="action">Action<select name="action"><option value="">All Actions</option><option>Inventory Addition</option><option>Inventory Matched</option><option>Inward</option><option>Outward</option><option>Fitted</option><option>Damage</option></select></label>
             <label class="hidden" data-report-filter-key="varianceType">Variance Type<select name="varianceType"><option value="">All Variance</option><option value="matched">Matched</option><option value="short">Short</option><option value="excess">Excess</option><option value="inventory-addition">Inventory Addition</option><option value="not-scanned">Not Scanned</option><option value="damage">Damage</option><option value="non-moving">Non Moving</option></select></label>
             <label data-report-filter-key="scanStatus">Scan Status<select name="scanStatus"><option value="">All Status</option><option value="Accepted">Accepted</option><option value="Duplicate">Duplicate</option><option value="Rejected">Rejected</option><option value="Failed Sync">Failed Sync</option><option value="Deleted">Deleted</option></select></label>
@@ -380,6 +384,11 @@
             <label class="toggle hidden" data-report-filter-key="scanModeOptions"><input name="showFullMasterWithZeroScan" type="checkbox">Full Master With Zero Scan</label>
           </form>
           <div id="reportMessage" class="form-message"></div>
+          <div class="report-tab-strip" aria-label="Report tabs">
+            <button id="reportTabsLeft" class="btn light icon-btn report-tab-arrow" type="button" aria-label="Move report tabs left">&lt;</button>
+            <div id="reportTabsScroller" class="report-tabs-scroller" role="tablist" aria-label="Report types"></div>
+            <button id="reportTabsRight" class="btn light icon-btn report-tab-arrow" type="button" aria-label="Move report tabs right">&gt;</button>
+          </div>
         </section>
         <section id="reportPreviewCard" class="card report-preview-card">
           <div class="card-head report-preview-head">
@@ -421,7 +430,7 @@
             </div>
             <form id="binTransferForm" class="filter-grid compact-filter">
               <label>Dealer Code<select name="dealerCode" id="binTransferDealer" class="dealerSelect bin-transfer-dealer" required></select></label>
-              <label>Source Bin<select name="sourceBin" id="binTransferFromBin" class="bin-transfer-from"></select></label>
+              <label>Source Bin<select name="sourceBin" id="binTransferFromBin" class="bin-transfer-from"><option value="ALL">All</option></select></label>
               <label>Destination Bin<select name="destinationBin" id="binTransferToBin" class="bin-transfer-to"></select></label>
               <label>Part Number Search<input name="partNumber" id="binTransferPartSearch" placeholder="Enter part number to find bin"></label>
               <button id="binTransferShowPartsBtn" class="btn primary" type="button">Show Parts</button>

@@ -193,6 +193,7 @@ const AUDIT_COLUMNS = [
   { header: 'PHYSICAL QTY', key: 'physicalQty', width: 14 },
   { header: 'INWARD QTY', key: 'inwardQty', width: 14 },
   { header: 'OUTWARD QTY', key: 'outwardQty', width: 14 },
+  { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
   { header: 'DAMAGE QTY', key: 'damageQty', width: 14 },
   { header: 'SHORT QTY', key: 'shortQty', width: 12 },
   { header: 'EXCESS QTY', key: 'excessQty', width: 12 },
@@ -214,6 +215,11 @@ const BIN_COLUMNS = [
   { header: 'QTY', key: 'qty', width: 12 },
   { header: 'MRP', key: 'mrp', width: 12 },
   { header: 'SCAN TYPE', key: 'scanType', width: 16 },
+  { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
+  { header: 'REGD NO', key: 'regdNo', width: 16 },
+  { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
+  { header: 'AUTO DETECTED BIN', key: 'autoDetectedBin', width: 20 },
+  { header: 'STOCK DEDUCTED FROM BIN', key: 'stockDeductedFromBin', width: 24 },
   { header: 'LAST SCAN TIME', key: 'lastScanTime', width: 22 },
   { header: 'DEVICE ID', key: 'deviceId', width: 24 }
 ];
@@ -227,6 +233,11 @@ const SCAN_COLUMNS = [
   { header: 'QTY', key: 'quantity', width: 10 },
   { header: 'RAW QR / UPI', key: 'rawBarcode', width: 34 },
   { header: 'BIN LOCATION', key: 'binLocation', width: 16 },
+  { header: 'REGD NO', key: 'regdNo', width: 16 },
+  { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
+  { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
+  { header: 'AUTO DETECTED BIN', key: 'autoDetectedBin', width: 20 },
+  { header: 'STOCK DEDUCTED FROM BIN', key: 'stockDeductedFromBin', width: 24 },
   { header: 'DEALER CODE', key: 'dealerCode', width: 16 },
   { header: 'USER NAME', key: 'userName', width: 20 },
   { header: 'ROLE', key: 'role', width: 16 },
@@ -248,6 +259,11 @@ const SCAN_REGISTER_COLUMNS = [
   { header: 'PART DESCRIPTION', key: 'partDescription', width: 34 },
   { header: 'QTY', key: 'quantity', width: 10 },
   { header: 'BIN LOCATION', key: 'binLocation', width: 16 },
+  { header: 'REGD NO', key: 'regdNo', width: 16 },
+  { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
+  { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
+  { header: 'AUTO DETECTED BIN', key: 'autoDetectedBin', width: 20 },
+  { header: 'STOCK DEDUCTED FROM BIN', key: 'stockDeductedFromBin', width: 24 },
   { header: 'RAW QR / UPI', key: 'rawQrUpi', width: 36 },
   { header: 'USER NAME', key: 'userName', width: 22 },
   { header: 'DEVICE NAME', key: 'deviceName', width: 24 },
@@ -325,6 +341,7 @@ function auditRow(row) {
     physicalQty: row.physicalQty,
     inwardQty: row.inwardQty || 0,
     outwardQty: row.outwardQty || 0,
+    fittedQty: row.fittedQty || 0,
     damageQty: row.damageQty || 0,
     shortQty: row.shortQty,
     excessQty: row.excessQty,
@@ -379,6 +396,11 @@ function validScanRow(scan) {
     quantity: Number(scan.qty || scan.quantity || 0),
     rawBarcode: scan.rawBarcode || scan.rawQR || scan.rawUpi || scan.rawScan || scan.rawScanString || '',
     binLocation: scan.binLocation || scan.bin || '',
+    regdNo: scan.regdNo || '',
+    jobCardNo: scan.jobCardNo || '',
+    fittedQty: Number(scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty || scan.quantity || 0 : 0)),
+    autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No',
+    stockDeductedFromBin: scan.stockDeductedFromBin || '',
     dealerCode: scan.dealerCode || '',
     userName: scan.userName || scan.staffName || scan.loginId || '',
     userId: scan.userId || scan.loginId || '',
@@ -436,6 +458,11 @@ function scanRegisterInventoryRow(scan) {
     partDescription: scan.partDescription || scan.partName || '',
     quantity: Number(scan.qty || scan.quantity || 0),
     binLocation: scan.binLocation || scan.bin || '',
+    regdNo: scan.regdNo || '',
+    jobCardNo: scan.jobCardNo || '',
+    fittedQty: Number(scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty || scan.quantity || 0 : 0)),
+    autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No',
+    stockDeductedFromBin: scan.stockDeductedFromBin || '',
     rawQrUpi: scan.rawBarcode || scan.rawQR || scan.rawUpi || scan.rawScan || scan.rawScanString || scan.upiNo || scan.upiId || '',
     userName: scan.userName || scan.staffName || scan.loginId || scan.userId || '',
     deviceName: scan.deviceName || '',
@@ -611,6 +638,11 @@ function selectRows(data, type) {
         productCategory: scan.productCategory || scan.category || '',
         mrp: scan.mrp,
         scanType: scan.scanType || scan.type || '',
+        fittedQty: 0,
+        regdNo: '',
+        jobCardNo: '',
+        autoDetectedBin: '',
+        stockDeductedFromBin: '',
         qty: 0,
         lastScanTime: scan.timestamp,
         deviceId: scan.deviceId || ''
@@ -620,6 +652,11 @@ function selectRows(data, type) {
         if (!target.partDescription) target.partDescription = scan.partDescription || scan.partName || '';
         if (!target.productCategory) target.productCategory = scan.productCategory || scan.category || '';
         if (!target.deviceId) target.deviceId = scan.deviceId || '';
+        if ((scan.scanType || scan.type) === 'FITTED') target.fittedQty += Number(scan.fittedQty || scan.qty || scan.quantity || 0);
+        if (!target.regdNo) target.regdNo = scan.regdNo || '';
+        if (!target.jobCardNo) target.jobCardNo = scan.jobCardNo || '';
+        if (!target.autoDetectedBin && scan.autoDetectedBin) target.autoDetectedBin = 'Yes';
+        if (!target.stockDeductedFromBin) target.stockDeductedFromBin = scan.stockDeductedFromBin || '';
         if (new Date(scan.timestamp) > new Date(target.lastScanTime || 0)) target.lastScanTime = scan.timestamp;
       }
     ).sort((a, b) => String(a.bin).localeCompare(String(b.bin)) || String(a.partNumber).localeCompare(String(b.partNumber)));

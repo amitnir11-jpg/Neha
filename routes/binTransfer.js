@@ -105,9 +105,15 @@ function stockQtyExpression() {
   };
   return {
     $cond: [
-      { $in: [scanType, ['OUTWARD', 'FITTED', 'DAMAGE']] },
+      { $in: [scanType, ['OUTWARD', 'DAMAGE']] },
       { $multiply: [qtyValue, -1] },
-      qtyValue
+      {
+        $cond: [
+          { $eq: [scanType, 'FITTED'] },
+          0,
+          qtyValue
+        ]
+      }
     ]
   };
 }
@@ -163,7 +169,8 @@ function publicPart(row) {
 }
 
 async function groupedParts(dealerCode, fromBin = '') {
-  const binMatch = clean(fromBin) ? [{ $match: { _btCurrentBin: binRegex(fromBin) } }] : [];
+  const sourceBin = /^all$/i.test(clean(fromBin)) ? '' : clean(fromBin);
+  const binMatch = sourceBin ? [{ $match: { _btCurrentBin: binRegex(sourceBin) } }] : [];
   const rows = await Inventory.aggregate([
     { $match: { dealerCode, ...validScanClause() } },
     {
@@ -466,13 +473,15 @@ router.get('/bins', auth.requireAuth, async (req, res) => {
 router.get('/parts', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = upper(req.query.dealerCode);
-    const fromBin = clean(req.query.binLocation || req.query.sourceBin || req.query.fromBin);
+    const fromBin = /^all$/i.test(clean(req.query.binLocation || req.query.sourceBin || req.query.fromBin)) ? '' : clean(req.query.binLocation || req.query.sourceBin || req.query.fromBin);
     console.log('BIN_TRANSFER_PARTS_API_CALLED');
     console.log('DEALER_RECEIVED', dealerCode);
     console.log('SOURCE_BIN_RECEIVED', fromBin);
     const partNumber = normalizePart(req.query.partNumber);
     if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer required' });
-    if (!fromBin && !partNumber) return res.status(400).json({ success: false, message: 'Source Bin or Part Number is required' });
+    if (!fromBin && !partNumber && !/^all$/i.test(clean(req.query.sourceBin || req.query.fromBin || req.query.binLocation))) {
+      return res.status(400).json({ success: false, message: 'Source Bin or Part Number is required' });
+    }
     const parts = (await groupedParts(dealerCode, fromBin)).filter((part) => {
       if (!partNumber) return true;
       return normalizePart(part.partNumber).includes(partNumber);
@@ -628,21 +637,23 @@ router.post('/transfer', auth.requireAuth, async (req, res) => {
       return {
         partNumber: item.partNumber || item.part || item.normalizedPartNumber,
         qty: item.qty ?? item.transferQty ?? item.quantity ?? item.availableQty ?? 1,
+        fromBin: clean(item.sourceBin || item.fromBin || item.currentBin || fromBin),
         toBin: clean(item.destinationBin || item.toBin || item.transferToBin || defaultToBin)
       };
     });
 
     for (const transfer of transfers) {
       if (!clean(transfer.partNumber)) return res.status(400).json({ success: false, message: 'partNumber required for every selected part' });
+      if (!transfer.fromBin || /^all$/i.test(transfer.fromBin)) return res.status(400).json({ success: false, message: `Source Bin required for ${transfer.partNumber}` });
       if (!transfer.toBin) return res.status(400).json({ success: false, message: `Transfer To Bin required for ${transfer.partNumber}` });
-      if (fromBin.toUpperCase() === transfer.toBin.toUpperCase()) return res.status(400).json({ success: false, message: `Source and destination bin cannot be same for ${transfer.partNumber}` });
+      if (transfer.fromBin.toUpperCase() === transfer.toBin.toUpperCase()) return res.status(400).json({ success: false, message: `Source and destination bin cannot be same for ${transfer.partNumber}` });
     }
 
     const history = [];
     for (const part of transfers) {
       history.push(await transferPart({
         dealerCode,
-        fromBin,
+        fromBin: part.fromBin,
         toBin: part.toBin,
         partNumber: part.partNumber,
         qty: part.qty,

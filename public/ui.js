@@ -154,6 +154,7 @@
     masterSearchRows: [],
     activeAudit: null,
     binTransferParts: [],
+    binTransferLoadedParts: [],
     binTransferDestinationBins: [],
     binLabelBins: [],
     binLabelParts: [],
@@ -174,6 +175,7 @@
   const LAST_SYNC_KEY = 'dakshLastSyncTime';
   const AUTO_SYNC_KEY = 'dakshAutoSyncEnabled';
   const REPORT_LAYOUT_KEY = 'dakshReportLayoutPrefs';
+  const REPORT_TAB_WIDTHS_KEY = 'dakshReportTabWidthsSession';
   const ACTIVE_VIEW_KEY = 'dakshActiveView';
   const REPORT_STATE_KEY = 'dakshLastReportState';
   const REPORT_SCAN_MODE_DEFAULT_VERSION = 4;
@@ -2461,6 +2463,35 @@
       menu.innerHTML = '';
       menu.style.display = 'none';
     });
+    updateScanTypeFields(form);
+  }
+
+  function updateScanTypeFields(form) {
+    if (!form) return;
+    const scanType = String($('[name="type"]', form)?.value || 'INWARD').trim().toUpperCase();
+    const isFitted = scanType === 'FITTED';
+    const needsManualBin = ['INWARD', 'DAMAGE'].includes(scanType);
+    $$('.fitted-only', form).forEach((label) => {
+      label.classList.toggle('hidden', !isFitted);
+      $$('input, select, textarea', label).forEach((field) => {
+        field.required = isFitted;
+        field.disabled = !isFitted;
+        if (!isFitted) field.value = '';
+      });
+    });
+    const binInput = $('[name="bin"], [name="binLocation"]', form);
+    const binLabel = binInput?.closest('label');
+    if (binInput) {
+      binInput.required = needsManualBin;
+      binInput.disabled = !needsManualBin;
+      if (!needsManualBin) binInput.value = '';
+    }
+    if (binLabel) {
+      binLabel.classList.toggle('hidden', !needsManualBin);
+    }
+    if (form.id === 'barcodeScanForm') {
+      setLivePill('barcodeReadyStatus', needsManualBin ? (binInput?.value ? 'Ready for Scan' : 'Enter Bin Location') : 'Ready for Scan', needsManualBin ? Boolean(binInput?.value) : true);
+    }
   }
 
   async function submitScan(form, options = {}) {
@@ -2470,6 +2501,8 @@
     if (!payload.staffName && state.user) payload.staffName = state.user.name || state.user.username;
     if (isBarcodeForm && !payload.rawScan) payload.rawScan = payload.part || '';
     const normalized = normalizeScanPayload(payload);
+    normalized.scanType = String(normalized.scanType || normalized.type || 'INWARD').trim().toUpperCase();
+    normalized.type = normalized.scanType;
     normalized.binLocation = normalizePartText(normalized.binLocation);
     normalized.bin = normalized.binLocation;
     normalized.source = isBarcodeForm ? 'barcode' : (normalized.source || 'manual');
@@ -2483,13 +2516,19 @@
     normalized.synced = true;
     normalized.isSynced = true;
     normalized.syncStatus = 'synced';
-    if (!normalized.binLocation) {
+    const needsManualBin = ['INWARD', 'DAMAGE'].includes(normalized.scanType);
+    if (needsManualBin && !normalized.binLocation) {
       playScanTone('error');
       toast(isBarcodeForm ? 'Please enter/select bin location before scanning.' : 'Please enter/select bin location first.', 'error');
       if (isBarcodeForm) {
         setLivePill('barcodeReadyStatus', 'Enter Bin Location', false);
         $('#barcodeBinLocation')?.focus();
       }
+      return;
+    }
+    if (normalized.scanType === 'FITTED' && (!String(normalized.regdNo || '').trim() || !String(normalized.jobCardNo || '').trim())) {
+      playScanTone('error');
+      toast('Regd No and Job Card No are mandatory for FITTED.', 'error');
       return;
     }
     if (!validPartText(normalized.partNumber)) {
@@ -3494,10 +3533,92 @@
     if ($('#reportTypeSelect')) $('#reportTypeSelect').value = type;
     $$('.report-tab').forEach((button) => button.classList.toggle('active', button.dataset.reportType === type));
     $('#reportTitle').textContent = REPORT_TITLES[type];
+    ensureActiveReportTabVisible();
     applyReportScanModeDefaults();
     loadReportFilterSettings(type).catch((error) => console.warn('Report filter settings failed', error));
     resetReportPreview(CSV_REPORT_TYPES.has(type) ? 'Click Submit to view rows.' : 'Please select filters and click Submit.');
     if (options.persist !== false) saveReportState(false);
+  }
+
+  function readReportTabWidths() {
+    try {
+      return JSON.parse(sessionStorage.getItem(REPORT_TAB_WIDTHS_KEY) || '{}') || {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  function saveReportTabWidth(type, width) {
+    try {
+      const widths = readReportTabWidths();
+      widths[type] = Math.max(88, Math.round(width));
+      sessionStorage.setItem(REPORT_TAB_WIDTHS_KEY, JSON.stringify(widths));
+    } catch (error) {
+      console.warn('Report tab width not saved', error.message);
+    }
+  }
+
+  function measureTabText(button) {
+    const measurer = document.createElement('span');
+    const style = window.getComputedStyle(button);
+    measurer.style.position = 'fixed';
+    measurer.style.left = '-9999px';
+    measurer.style.top = '-9999px';
+    measurer.style.visibility = 'hidden';
+    measurer.style.whiteSpace = 'nowrap';
+    measurer.style.font = style.font;
+    measurer.textContent = button.textContent || '';
+    document.body.appendChild(measurer);
+    const width = Math.ceil(measurer.getBoundingClientRect().width) + 34;
+    measurer.remove();
+    return Math.min(280, Math.max(88, width));
+  }
+
+  function autoFitReportTab(button) {
+    if (!button) return;
+    const width = measureTabText(button);
+    button.style.setProperty('--report-tab-width', `${width}px`);
+    saveReportTabWidth(button.dataset.reportType, width);
+    ensureTabVisible(button);
+  }
+
+  function ensureTabVisible(button) {
+    const scroller = $('#reportTabsScroller');
+    if (!scroller || !button) return;
+    const left = button.offsetLeft;
+    const right = left + button.offsetWidth;
+    if (left < scroller.scrollLeft) scroller.scrollLeft = left;
+    if (right > scroller.scrollLeft + scroller.clientWidth) scroller.scrollLeft = right - scroller.clientWidth;
+  }
+
+  function ensureActiveReportTabVisible() {
+    ensureTabVisible($('.report-tab.active'));
+  }
+
+  function scrollReportTabs(direction) {
+    const scroller = $('#reportTabsScroller');
+    if (!scroller) return;
+    const amount = Math.max(180, Math.floor(scroller.clientWidth * 0.75));
+    scroller.scrollBy({ left: direction * amount, behavior: 'smooth' });
+    setTimeout(ensureActiveReportTabVisible, 260);
+  }
+
+  function initReportTabs() {
+    const scroller = $('#reportTabsScroller');
+    if (!scroller) return;
+    const widths = readReportTabWidths();
+    scroller.innerHTML = Object.entries(REPORT_TITLES).map(([type, title]) => {
+      const width = Number(widths[type] || 0);
+      const style = width ? ` style="--report-tab-width:${width}px"` : '';
+      return `<button class="report-tab" type="button" role="tab" data-report-type="${escapeHtml(type)}" title="${escapeHtml(title)}"${style}>${escapeHtml(title)}</button>`;
+    }).join('');
+    $$('.report-tab', scroller).forEach((button) => {
+      button.addEventListener('click', () => setReportTab(button.dataset.reportType));
+      button.addEventListener('dblclick', () => autoFitReportTab(button));
+    });
+    $('#reportTabsLeft')?.addEventListener('click', () => scrollReportTabs(-1));
+    $('#reportTabsRight')?.addEventListener('click', () => scrollReportTabs(1));
+    setReportTab(activeReportType() || state.lastReportType || Object.keys(REPORT_TITLES)[0], { persist: false });
   }
 
   function readReportLayoutPrefs() {
@@ -4099,6 +4220,14 @@
     }).join('');
   }
 
+  function sourceBinOptionList(items) {
+    return '<option value="ALL">All</option>' + items.map((item) => {
+      const value = typeof item === 'string' ? item : item.binCode || item.binLocation || item.bin || '';
+      const label = typeof item === 'string' ? item : item.label || item.binName || item.binCode || item.binLocation || item.bin || '';
+      return value ? `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>` : '';
+    }).join('');
+  }
+
   function activeBinTransferForm() {
     const activeForms = $$('.bin-transfer-panel.active form');
     return activeForms.find((form) => $('.bin-transfer-dealer', form)) || $('#binTransferForm');
@@ -4239,6 +4368,7 @@
 
   function renderBinTransferParts(parts = [], message = 'No scanned parts found for selected dealer and source bin.') {
     state.binTransferParts = parts;
+    if (!parts.length && message) state.binTransferLoadedParts = state.binTransferLoadedParts || [];
     setText('binTransferPartsCount', `${parts.length} parts`);
     const rows = binTransferPartRows(parts);
     const tableBody = $('#binTransferPartsRows');
@@ -4264,6 +4394,7 @@
   }
 
   async function loadBinTransferBins(dealerCode) {
+    state.binTransferLoadedParts = [];
     if (!dealerCode) {
       state.binTransferDestinationBins = [];
       $$('.bin-transfer-from').forEach((select) => { select.innerHTML = '<option value="">Select Source Bin</option>'; });
@@ -4277,13 +4408,22 @@
       api(`/api/bin-transfer/source-bins?dealerCode=${encodeURIComponent(dealerCode)}`),
       api(`/api/bin-transfer/destination-bins?dealerCode=${encodeURIComponent(dealerCode)}`)
     ]);
-    const fromOptions = optionList(sourceData.bins || sourceData.fromBins || [], 'Select Source Bin');
+    const fromOptions = sourceBinOptionList(sourceData.bins || sourceData.fromBins || []);
     $$('.bin-transfer-from').forEach((select) => {
       select.innerHTML = fromOptions;
-      select.value = '';
+      select.value = 'ALL';
     });
     applyDestinationBinOptions(toData, '');
-    renderBinTransferParts([], sourceData.message || 'Select Source Bin, then click Show Parts.');
+    renderBinTransferParts([], sourceData.message || 'Source Bin All selected. Click Show Parts to load all available scanned parts.');
+  }
+
+  function filterRenderedBinTransferParts() {
+    const partFilter = String($('#binTransferPartSearch')?.value || '').trim().toUpperCase();
+    const source = state.binTransferLoadedParts && state.binTransferLoadedParts.length ? state.binTransferLoadedParts : state.binTransferParts;
+    const parts = partFilter
+      ? source.filter((part) => String(part.partNumber || '').toUpperCase().includes(partFilter))
+      : source;
+    renderBinTransferParts(parts, partFilter ? 'No parts match the search in the displayed list.' : 'No scanned parts found for selected dealer and source bin.');
   }
 
   async function loadBinTransferParts(form = activeBinTransferForm()) {
@@ -4292,7 +4432,7 @@
     console.log('SELECTED_DEALER', dealerCode);
     console.log('SELECTED_SOURCE_BIN', fromBin);
     if (!dealerCode || (!fromBin && !partNumber)) {
-      renderBinTransferParts([], 'Select Dealer Code and Source Bin, or enter Part Number to find available bin.');
+      renderBinTransferParts([], 'Select Dealer Code, or enter Part Number to find available bin.');
       return;
     }
     $('#binTransferPartsRows').innerHTML = '<tr><td colspan="10" class="muted">Loading parts...</td></tr>';
@@ -4305,12 +4445,9 @@
     if (partNumber) query.set('partNumber', partNumber);
     const data = await api(`/api/bin-transfer/parts?${query.toString()}`);
     console.log('API_RESPONSE', data);
-    const partFilter = String($('[name="partNumber"]', form)?.value || '').trim().toUpperCase();
     const responseParts = normalizeBinTransferPartsResponse(data);
-    const parts = partFilter
-      ? responseParts.filter((part) => String(part.partNumber || '').toUpperCase().includes(partFilter))
-      : responseParts;
-    renderBinTransferParts(parts, partNumber && !fromBin ? 'No bin found for entered part number.' : 'No scanned parts found for selected dealer and source bin.');
+    state.binTransferLoadedParts = responseParts;
+    filterRenderedBinTransferParts();
   }
 
   async function loadBinTransferHistory() {
@@ -4344,11 +4481,11 @@
     if (!fromBin) return toast('Source Bin required', 'error');
     if (!selectedParts.length) return toast('Select at least one part to transfer', 'error');
 
-    const sourceKey = fromBin.toUpperCase();
     for (const part of selectedParts) {
       const destinationBin = String(part.destinationBin || '').trim();
       const availableQty = partAvailableQty(part);
       const qty = Number(part.qty);
+      const sourceKey = String(part.currentBin || fromBin).toUpperCase();
       if (!destinationBin) return toast(`Transfer To Bin required for ${part.partNumber}`, 'error');
       if (destinationBin.toUpperCase() === sourceKey) return toast(`Destination cannot be same as Source Bin for ${part.partNumber}`, 'error');
       if (!Number.isFinite(qty) || qty <= 0) return toast(`Transfer Qty must be greater than 0 for ${part.partNumber}`, 'error');
@@ -4370,6 +4507,7 @@
           selectedParts: selectedParts.map((part) => ({
             partNumber: part.partNumber,
             qty: part.qty,
+            sourceBin: part.currentBin || fromBin,
             destinationBin: part.destinationBin
           }))
         }
@@ -4385,7 +4523,7 @@
     const criteria = binTransferCriteria(activeBinTransferForm());
     await loadBinTransferBins(criteria.dealerCode).catch(() => null);
     $$('.bin-transfer-dealer').forEach((select) => { select.value = criteria.dealerCode; });
-    $$('.bin-transfer-from').forEach((select) => { select.value = criteria.fromBin; });
+    $$('.bin-transfer-from').forEach((select) => { select.value = criteria.fromBin || 'ALL'; });
     await loadBinTransferDestinationBins(criteria.dealerCode, criteria.fromBin, criteria.toBin).catch(() => null);
     await Promise.all([
       loadBinTransferParts(activeBinTransferForm()).catch(() => null),
@@ -6123,8 +6261,8 @@
     $('[name="qty"]', form).value = $('[name="qty"]', form).value || 1;
     const savedBin = localStorage.getItem(BARCODE_LAST_BIN_KEY) || '';
     if (savedBin && !$('[name="binLocation"]', form).value) $('[name="binLocation"]', form).value = savedBin;
+    updateScanTypeFields(form);
     setLivePill('barcodeAutoSaveStatus', 'Auto Save: ON', true);
-    setLivePill('barcodeReadyStatus', $('[name="binLocation"]', form).value ? 'Ready for Scan' : 'Enter Bin Location', Boolean($('[name="binLocation"]', form).value));
   }
 
   function fillBarcodePartFromRaw() {
@@ -6146,8 +6284,10 @@
     } else {
       fillBarcodePartFromRaw();
     }
-    $('[name="binLocation"]', form).value = normalized.binLocation || $('[name="binLocation"]', form).value || '';
+    const scanType = String($('[name="type"]', form)?.value || normalized.scanType || normalized.type || '').toUpperCase();
+    if (['INWARD', 'DAMAGE'].includes(scanType)) $('[name="binLocation"]', form).value = normalized.binLocation || $('[name="binLocation"]', form).value || '';
     $('#barcodeDeviceId').value = ensureDeviceId();
+    updateScanTypeFields(form);
     return rawStillCurrent;
   }
 
@@ -6170,8 +6310,9 @@
     clearTimeout($('#barcodeRaw').autoSaveTimer);
     $('#barcodeRaw').autoSaveTimer = setTimeout(async () => {
       if (state.barcodeAutoSaving) return;
+      const scanType = String($('[name="type"]', form)?.value || 'INWARD').toUpperCase();
       const bin = normalizePartText($('[name="binLocation"]', form)?.value || '');
-      if (!bin) {
+      if (['INWARD', 'DAMAGE'].includes(scanType) && !bin) {
         playScanTone('error');
         toast('Please enter/select bin location before scanning.', 'error');
         setLivePill('barcodeReadyStatus', 'Enter Bin Location', false);
@@ -6514,6 +6655,13 @@
       }
     });
     $('#barcodeRaw').addEventListener('change', () => scheduleBarcodeAutosave(150));
+    $$('#manualScanForm [name="type"], #barcodeScanForm [name="type"]').forEach((select) => {
+      updateScanTypeFields(select.closest('form'));
+      select.addEventListener('change', () => {
+        updateScanTypeFields(select.closest('form'));
+        if (select.closest('#barcodeScanForm')) scheduleBarcodeAutosave(120);
+      });
+    });
     $('#manualSyncBtn').addEventListener('click', runSync);
     $('#homeManualSyncBtn').addEventListener('click', runSync);
     $('#repairSyncStatusBtn')?.addEventListener('click', () => repairSyncStatus().catch((error) => toast(error.message, 'error')));
@@ -6615,9 +6763,11 @@
       console.log('SHOW_PARTS_CLICKED');
       loadBinTransferParts($('#binTransferForm')).catch((error) => toast(error.message, 'error'));
     });
+    $('#binTransferPartSearch')?.addEventListener('input', () => filterRenderedBinTransferParts());
     $('#binTransferShowHistoryBtn')?.addEventListener('click', () => loadBinTransferHistory().catch((error) => toast(error.message, 'error')));
     $('#binTransferResetBtn')?.addEventListener('click', () => {
       $('#binTransferForm')?.reset();
+      state.binTransferLoadedParts = [];
       renderBinTransferParts([], 'Select Dealer Code and Source Bin, then click Show Parts.');
       loadBinTransferBins('').catch(() => null);
     });
@@ -7324,6 +7474,7 @@
       bindMasterSearchSuggestions();
       bindUppercaseInputs();
       secureNewTabLinks();
+      initReportTabs();
       initReportLayout();
       bootLog('binding dashboard UI complete', {
         sideLinks: $$('.side-link').length,

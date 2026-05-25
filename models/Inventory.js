@@ -135,6 +135,44 @@ const inventorySchema = new mongoose.Schema(
       trim: true,
       default: ''
     },
+    autoDetectedBin: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    binSelectionMode: {
+      type: String,
+      enum: ['MANUAL', 'AUTO', ''],
+      default: ''
+    },
+    stockDeductedFromBin: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: ''
+    },
+    regdNo: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: ''
+    },
+    jobCardNo: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: ''
+    },
+    isFitted: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    fittedQty: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
     type: {
       type: String,
       enum: ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'],
@@ -436,6 +474,9 @@ inventorySchema.pre('save', function syncInventoryAliases(next) {
     'gstCategory',
     'bin',
     'binLocation',
+    'stockDeductedFromBin',
+    'regdNo',
+    'jobCardNo',
     'dealerCode',
     'dealerName',
     'staffName'
