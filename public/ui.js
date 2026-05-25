@@ -3091,6 +3091,21 @@
     saveReportLayoutPrefs({ columnWidths });
   }
 
+  function reportTableTotalWidth(table = $('#reportTable')) {
+    if (!table) return 0;
+    return $$('col', table).reduce((sum, item) => sum + (Number.parseFloat(item.style.width) || 120), 0);
+  }
+
+  function applyReportTableWidth(table = $('#reportTable')) {
+    if (!table) return 0;
+    const total = reportTableTotalWidth(table);
+    if (total) {
+      table.style.minWidth = `${Math.round(total)}px`;
+      table.style.setProperty('--report-table-width', `${Math.round(total)}px`);
+    }
+    return total;
+  }
+
   function setReportColumnWidth(index, width) {
     const table = $('#reportTable');
     const th = $(`#reportHead th[data-col-index="${index}"]`);
@@ -3101,8 +3116,7 @@
       col.style.width = `${nextWidth}px`;
       col.style.minWidth = '70px';
     }
-    const widths = $$('col', table).map((item) => Number.parseFloat(item.style.width) || 120);
-    if (table) table.style.minWidth = `${widths.reduce((sum, item) => sum + item, 0)}px`;
+    applyReportTableWidth(table);
     return nextWidth;
   }
 
@@ -3317,15 +3331,18 @@
       colgroup = document.createElement('colgroup');
       table.insertBefore(colgroup, table.firstChild);
     }
-    colgroup.innerHTML = widths.map((width, index) => `<col data-col-index="${index}" style="width:${width}px;min-width:70px">`).join('');
-    table.style.minWidth = `${widths.reduce((sum, width) => sum + width, 0)}px`;
+    colgroup.innerHTML = widths.map((width, index) => {
+      const key = reportColumnKey(keys[index], index);
+      return `<col data-col-index="${index}" data-col-key="${escapeHtml(key)}" style="width:${width}px;min-width:70px">`;
+    }).join('');
+    applyReportTableWidth(table);
     $('#reportHead').innerHTML = `<tr>${keys.map((column, index) => {
       const key = reportColumnKey(column, index);
       const width = widths[index];
       const isSorted = sort.key === key;
       const direction = isSorted ? (sort.direction === 'desc' ? 'descending' : 'ascending') : 'none';
       const sortLabel = isSorted ? (sort.direction === 'desc' ? 'Sorted high to low' : 'Sorted low to high') : 'Not sorted';
-      return `<th class="${reportColumnClass(column, index)} ${isSorted ? `sorted-${escapeHtml(sort.direction)}` : ''}" draggable="true" data-col-index="${index}" data-col-key="${escapeHtml(key)}" aria-sort="${escapeHtml(direction)}" style="width:${width}px"><button type="button" class="report-sort-button" title="Sort ${escapeHtml(column.header)}" aria-label="Sort ${escapeHtml(column.header)}"><span class="report-th-content">${escapeHtml(column.header)}</span><span class="sr-only">${escapeHtml(sortLabel)}</span></button><span class="column-resizer report-col-resize" role="separator" aria-label="Resize column. Double click to auto fit."></span></th>`;
+      return `<th class="${reportColumnClass(column, index)} ${isSorted ? `sorted-${escapeHtml(sort.direction)}` : ''}" draggable="true" data-col-index="${index}" data-col-key="${escapeHtml(key)}" aria-sort="${escapeHtml(direction)}" style="width:${width}px"><button type="button" class="report-sort-button" title="Sort ${escapeHtml(column.header)}" aria-label="Sort ${escapeHtml(column.header)}"><span class="report-th-content">${escapeHtml(column.header)}</span><span class="sr-only">${escapeHtml(sortLabel)}</span></button><span class="report-col-resize" role="separator" aria-label="Resize column. Double click to auto fit."></span></th>`;
     }).join('')}</tr>`;
   }
 
@@ -3334,6 +3351,7 @@
     const table = $('#reportTable');
     if (!wrap || !table) return;
     table.style.tableLayout = 'fixed';
+    applyReportTableWidth(table);
     requestAnimationFrame(() => {
       const maxLeft = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
       wrap.scrollLeft = Math.min(maxLeft, Math.max(0, wrap.scrollLeft));
@@ -3799,8 +3817,7 @@
         const width = Math.max(70, startWidth + moveEvent.clientX - startX);
         th.style.width = `${Math.round(width)}px`;
         if (col) col.style.width = `${Math.round(width)}px`;
-        const widths = $$('col', table).map((item) => Number.parseFloat(item.style.width) || 120);
-        table.style.minWidth = `${widths.reduce((sum, item) => sum + item, 0)}px`;
+        applyReportTableWidth(table);
       };
       const onUp = (upEvent) => {
         const width = Math.max(70, startWidth + upEvent.clientX - startX);
@@ -3832,6 +3849,37 @@
       event.preventDefault();
       wrap.scrollLeft = nextLeft;
     }, { passive: false });
+    let reportPan = null;
+    wrap.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.target.closest('button, input, select, textarea, a, .report-col-resize')) return;
+      if (wrap.scrollWidth <= wrap.clientWidth) return;
+      reportPan = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        scrollLeft: wrap.scrollLeft,
+        scrollTop: wrap.scrollTop,
+        moved: false
+      };
+      wrap.classList.add('report-table-panning');
+      if (wrap.setPointerCapture) wrap.setPointerCapture(event.pointerId);
+    });
+    wrap.addEventListener('pointermove', (event) => {
+      if (!reportPan || reportPan.pointerId !== event.pointerId) return;
+      const dx = event.clientX - reportPan.startX;
+      const dy = event.clientY - reportPan.startY;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) reportPan.moved = true;
+      wrap.scrollLeft = reportPan.scrollLeft - dx;
+      wrap.scrollTop = reportPan.scrollTop - dy;
+      event.preventDefault();
+    });
+    const stopReportPan = (event) => {
+      if (!reportPan || (event && reportPan.pointerId !== event.pointerId)) return;
+      reportPan = null;
+      wrap.classList.remove('report-table-panning');
+    };
+    wrap.addEventListener('pointerup', stopReportPan);
+    wrap.addEventListener('pointercancel', stopReportPan);
     $('#reportHead')?.addEventListener('click', (event) => {
       if (event.target.closest('.report-col-resize')) return;
       const button = event.target.closest('.report-sort-button');
