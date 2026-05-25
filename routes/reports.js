@@ -194,6 +194,9 @@ const AUDIT_COLUMNS = [
   { header: 'INWARD QTY', key: 'inwardQty', width: 14 },
   { header: 'OUTWARD QTY', key: 'outwardQty', width: 14 },
   { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
+  { header: 'REGD NO', key: 'regdNo', width: 16 },
+  { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
+  { header: 'FITTED STATUS', key: 'fittedStatus', width: 16 },
   { header: 'DAMAGE QTY', key: 'damageQty', width: 14 },
   { header: 'SHORT QTY', key: 'shortQty', width: 12 },
   { header: 'EXCESS QTY', key: 'excessQty', width: 12 },
@@ -216,6 +219,7 @@ const BIN_COLUMNS = [
   { header: 'MRP', key: 'mrp', width: 12 },
   { header: 'SCAN TYPE', key: 'scanType', width: 16 },
   { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
+  { header: 'FITTED STATUS', key: 'fittedStatus', width: 16 },
   { header: 'REGD NO', key: 'regdNo', width: 16 },
   { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
   { header: 'AUTO DETECTED BIN', key: 'autoDetectedBin', width: 20 },
@@ -236,6 +240,7 @@ const SCAN_COLUMNS = [
   { header: 'REGD NO', key: 'regdNo', width: 16 },
   { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
   { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
+  { header: 'FITTED STATUS', key: 'fittedStatus', width: 16 },
   { header: 'AUTO DETECTED BIN', key: 'autoDetectedBin', width: 20 },
   { header: 'STOCK DEDUCTED FROM BIN', key: 'stockDeductedFromBin', width: 24 },
   { header: 'DEALER CODE', key: 'dealerCode', width: 16 },
@@ -262,6 +267,7 @@ const SCAN_REGISTER_COLUMNS = [
   { header: 'REGD NO', key: 'regdNo', width: 16 },
   { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
   { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
+  { header: 'FITTED STATUS', key: 'fittedStatus', width: 16 },
   { header: 'AUTO DETECTED BIN', key: 'autoDetectedBin', width: 20 },
   { header: 'STOCK DEDUCTED FROM BIN', key: 'stockDeductedFromBin', width: 24 },
   { header: 'RAW QR / UPI', key: 'rawQrUpi', width: 36 },
@@ -342,6 +348,9 @@ function auditRow(row) {
     inwardQty: row.inwardQty || 0,
     outwardQty: row.outwardQty || 0,
     fittedQty: row.fittedQty || 0,
+    regdNo: row.regdNo || '',
+    jobCardNo: row.jobCardNo || '',
+    fittedStatus: Number(row.fittedQty || 0) > 0 ? 'Fitted' : 'Not Fitted',
     damageQty: row.damageQty || 0,
     shortQty: row.shortQty,
     excessQty: row.excessQty,
@@ -357,6 +366,7 @@ function auditRow(row) {
 
 function scanAuditRow(scan) {
   const physicalQty = Number(scan.qty || scan.quantity || 0);
+  const isFitted = (scan.scanType || scan.type) === 'FITTED' || scan.isFitted;
   return {
     partNumber: scan.partNumber || scan.part,
     partDescription: scan.partDescription || scan.partName,
@@ -374,6 +384,8 @@ function scanAuditRow(scan) {
     inwardQty: 0,
     outwardQty: 0,
     damageQty: (scan.scanType || scan.type) === 'DAMAGE' ? physicalQty : 0,
+    fittedQty: isFitted ? physicalQty : 0,
+    fittedStatus: isFitted ? 'Fitted' : 'Not Fitted',
     shortQty: 0,
     excessQty: 0,
     netDifference: physicalQty - Number(scan.dmsQty || 0),
@@ -399,6 +411,7 @@ function validScanRow(scan) {
     regdNo: scan.regdNo || '',
     jobCardNo: scan.jobCardNo || '',
     fittedQty: Number(scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty || scan.quantity || 0 : 0)),
+    fittedStatus: (scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'Fitted' : 'Not Fitted',
     autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No',
     stockDeductedFromBin: scan.stockDeductedFromBin || '',
     dealerCode: scan.dealerCode || '',
@@ -461,6 +474,7 @@ function scanRegisterInventoryRow(scan) {
     regdNo: scan.regdNo || '',
     jobCardNo: scan.jobCardNo || '',
     fittedQty: Number(scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty || scan.quantity || 0 : 0)),
+    fittedStatus: (scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'Fitted' : 'Not Fitted',
     autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No',
     stockDeductedFromBin: scan.stockDeductedFromBin || '',
     rawQrUpi: scan.rawBarcode || scan.rawQR || scan.rawUpi || scan.rawScan || scan.rawScanString || scan.upiNo || scan.upiId || '',
@@ -485,6 +499,7 @@ function scanRegisterDuplicateRow(row) {
     partDescription: row.partDescription || '',
     quantity: 0,
     binLocation: row.duplicateBin || row.binLocation || '',
+    fittedStatus: 'Not Fitted',
     rawQrUpi: row.duplicateRawBarcodeUpi || row.rawScan || '',
     userName: row.duplicateScannedBy || row.userName || row.userId || '',
     deviceName: row.duplicateDeviceName || row.deviceName || row.duplicateDevice || '',
@@ -507,6 +522,7 @@ function scanRegisterRejectedRow(row) {
     partDescription: '',
     quantity: 0,
     binLocation: row.binLocation || '',
+    fittedStatus: 'Not Fitted',
     rawQrUpi: row.rawQrUpi || '',
     userName: row.userName || '',
     deviceName: row.deviceName || '',
@@ -639,6 +655,7 @@ function selectRows(data, type) {
         mrp: scan.mrp,
         scanType: scan.scanType || scan.type || '',
         fittedQty: 0,
+        fittedStatus: '',
         regdNo: '',
         jobCardNo: '',
         autoDetectedBin: '',
@@ -653,6 +670,7 @@ function selectRows(data, type) {
         if (!target.productCategory) target.productCategory = scan.productCategory || scan.category || '';
         if (!target.deviceId) target.deviceId = scan.deviceId || '';
         if ((scan.scanType || scan.type) === 'FITTED') target.fittedQty += Number(scan.fittedQty || scan.qty || scan.quantity || 0);
+        target.fittedStatus = target.fittedQty > 0 ? 'Fitted' : 'Not Fitted';
         if (!target.regdNo) target.regdNo = scan.regdNo || '';
         if (!target.jobCardNo) target.jobCardNo = scan.jobCardNo || '';
         if (!target.autoDetectedBin && scan.autoDetectedBin) target.autoDetectedBin = 'Yes';

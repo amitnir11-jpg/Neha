@@ -903,6 +903,9 @@ function mainAuditColumns() {
     { header: 'DMS QTY', key: 'dmsQty', width: 12, numFmt: '#,##0.00' },
     { header: 'PHYSICAL QTY', key: 'physicalQty', width: 14, numFmt: '#,##0.00' },
     { header: 'FITTED QTY', key: 'fittedQty', width: 14, numFmt: '#,##0.00' },
+    { header: 'REGD NO', key: 'regdNo', width: 16 },
+    { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
+    { header: 'FITTED STATUS', key: 'fittedStatus', width: 16 },
     { header: 'SHORT QTY', key: 'shortQty', width: 12, numFmt: '#,##0.00' },
     { header: 'EXCESS QTY', key: 'excessQty', width: 12, numFmt: '#,##0.00' },
     { header: 'NET DIFFERENCE', key: 'netDifference', width: 16, numFmt: '#,##0.00' },
@@ -939,6 +942,9 @@ function mainAuditRows(data) {
     dmsQty: row.dmsQty,
     physicalQty: row.physicalQty,
     fittedQty: row.fittedQty || 0,
+    regdNo: row.regdNo || '',
+    jobCardNo: row.jobCardNo || '',
+    fittedStatus: row.fittedStatus || (Number(row.fittedQty || 0) > 0 ? 'Fitted' : 'Not Fitted'),
     shortQty: row.shortQty,
     excessQty: row.excessQty,
     netDifference: row.netDifference,
@@ -1465,6 +1471,10 @@ function finalReportCsv(rows = []) {
     ['Product SubGroup', (row) => row.partSubGroup || row.productSubGroup || ''],
     ['System Qty', (row) => row.systemQty || 0],
     ['Physical Qty', (row) => row.physicalQty || 0],
+    ['Fitted Qty', (row) => row.fittedQty || 0],
+    ['Regd No', (row) => row.regdNo || ''],
+    ['Job Card No', (row) => row.jobCardNo || ''],
+    ['Fitted Status', (row) => row.fittedStatus || (Number(row.fittedQty || 0) > 0 ? 'Fitted' : 'Not Fitted')],
     ['Difference', (row) => row.differenceQty || row.difference || 0],
     ['System MRP Value', (row) => row.systemMrpValue || 0],
     ['Physical MRP Value', (row) => row.physicalMrpValue || 0],
@@ -1518,6 +1528,7 @@ function buildAuditRow(group, master = {}) {
   const systemBins = splitBins(master.binLocation || master.bin || '');
   const partDescription = rowDescription(first, hasMaster ? master : {});
   const category = rowCategory(first, hasMaster ? master : {});
+  const fittedScans = group.scans.filter((scan) => String(scan.scanType || scan.type || '').toUpperCase() === 'FITTED' || scan.isFitted);
   const row = {
     partNo: group.partNo,
     partNumber: group.partNo,
@@ -1546,6 +1557,9 @@ function buildAuditRow(group, master = {}) {
     inwardQty: scanBreakdown.inwardQty,
     outwardQty: scanBreakdown.outwardQty,
     fittedQty: scanBreakdown.fittedQty,
+    regdNo: Array.from(new Set(fittedScans.map((scan) => cleanText(scan.regdNo)).filter(Boolean))).join(', '),
+    jobCardNo: Array.from(new Set(fittedScans.map((scan) => cleanText(scan.jobCardNo)).filter(Boolean))).join(', '),
+    fittedStatus: scanBreakdown.fittedQty > 0 ? 'Fitted' : 'Not Fitted',
     damageQty: scanBreakdown.damageQty,
     totalAuditQty: physicalQty,
     saleQtyLast12Months: 0,
@@ -1603,6 +1617,8 @@ function binWiseRowsFromScans(scans = [], finalRows = []) {
   return Array.from(groups.values()).map((group) => {
     const finalRow = finalByPartDealer.get(`${group.partNumber}::${group.dealerCode}`) || {};
     const first = group.scans[0] || {};
+    const fittedScans = group.scans.filter((scan) => String(scan.scanType || scan.type || '').toUpperCase() === 'FITTED' || scan.isFitted);
+    const fittedQty = fittedScans.reduce((sum, scan) => sum + Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0)), 0);
     return {
       bin: group.bin,
       binLocation: group.bin,
@@ -1619,6 +1635,10 @@ function binWiseRowsFromScans(scans = [], finalRows = []) {
       partSubGroup: finalRow.partSubGroup || first.partSubGroup || '',
       systemQty: finalRow.systemQty ?? finalRow.dmsQty ?? 0,
       physicalQty: group.physicalQty,
+      fittedQty,
+      regdNo: Array.from(new Set(fittedScans.map((scan) => cleanText(scan.regdNo)).filter(Boolean))).join(', '),
+      jobCardNo: Array.from(new Set(fittedScans.map((scan) => cleanText(scan.jobCardNo)).filter(Boolean))).join(', '),
+      fittedStatus: fittedQty > 0 ? 'Fitted' : 'Not Fitted',
       partLevelPhysicalQty: finalRow.physicalQty ?? group.physicalQty,
       differenceQty: finalRow.differenceQty ?? finalRow.netDifference ?? '',
       status: finalRow.status || '',
@@ -1766,7 +1786,7 @@ async function buildReportData(query = {}) {
   const selectedAudit = query.auditId ? audits.find((audit) => audit.auditId === String(query.auditId).trim()) : null;
   const summary = [{ generatedAt: formatIstDateTime(new Date()), dealerName: query.dealerName || (selectedDealer ? selectedDealer.dealerName : 'All'), dealerCode: query.dealerCode || 'All', auditId: query.auditId || 'All', fromDate: query.from || '', toDate: query.to || '', category: query.category || 'All', partNumber: query.partNumber || 'All', binLocation: query.bin || 'All', varianceType: query.varianceType || 'All', scanType: query.type || 'All', totalMasterParts: masters.length, totalScans: scans.length, totalSystemQty: finalRows.reduce((sum, row) => sum + row.systemQty, 0), totalPhysicalQty: finalRows.reduce((sum, row) => sum + row.physicalQty, 0), totalSystemMrpValue: money(finalRows.reduce((sum, row) => sum + row.systemMrpValue, 0)), totalPhysicalMrpValue: money(finalRows.reduce((sum, row) => sum + row.physicalMrpValue, 0)), matched: finalRows.filter((row) => row.status === 'Matched').length, short: finalRows.filter((row) => row.status === 'Short').length, excess: finalRows.filter((row) => row.status === 'Excess' || row.status === 'Extra Part').length, notScanned: 0 }];
 
-  return { filters: query, summary, selectedDealer, selectedAudit, allFinalRows, finalRows, categoryRows: Array.from(categoryMap.values()).sort((a, b) => sortText(a.category, b.category)), scans, damageRows: scans.filter((scan) => scan.type === 'DAMAGE' || scan.scanType === 'DAMAGE'), openingRows: finalRows, oilRows: finalRows.filter((row) => /oil|lube|lubricant/i.test(row.category || row.partDescription || row.partName)), accessoryRows: finalRows.filter((row) => /accessor/i.test(row.category || row.partDescription || row.partName)), nonMovingRows: [], highValueNonMovingRows: [], binRows: binWiseRowsFromScans(scans, finalRows), rawLogRows: scans.map((scan) => ({ time: scan.timestamp, rawScan: scan.rawScan || scan.rawScanString || scan.rawUpi || '', partNumber: scan.partNumber || scan.part, partDescription: scan.partDescription || scan.partName, qty: scan.qty, type: scan.scanType || scan.type, bin: scan.binLocation || scan.bin, dealerCode: scan.dealerCode, auditId: scan.auditId, userId: scan.userId || scan.loginId || '', userName: scan.userName || scan.staffName || scan.loginId || '', role: scan.role || '', deviceId: scan.deviceId, entryMode: scan.entryMode, entryChannel: scan.entryChannel, scanSourceLabel: scan.scanSourceLabel, staffName: scan.staffName, regdNo: scan.regdNo || '', jobCardNo: scan.jobCardNo || '', fittedQty: scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty : 0), autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No', stockDeductedFromBin: scan.stockDeductedFromBin || '', warnings: (scan.warnings || []).join(', ') })), dealerBackupRows: dealers.map((dealer) => ({ dealerName: dealer.dealerName, dealerCode: dealer.dealerCode, brand: dealer.brand, location: dealer.location, currentAuditId: dealer.currentAuditId, auditName: dealer.auditName, auditorName: dealer.auditorName, generalManager: dealer.generalManager, spmName: dealer.spmName })), dealers, audits };
+  return { filters: query, summary, selectedDealer, selectedAudit, allFinalRows, finalRows, categoryRows: Array.from(categoryMap.values()).sort((a, b) => sortText(a.category, b.category)), scans, damageRows: scans.filter((scan) => scan.type === 'DAMAGE' || scan.scanType === 'DAMAGE'), openingRows: finalRows, oilRows: finalRows.filter((row) => /oil|lube|lubricant/i.test(row.category || row.partDescription || row.partName)), accessoryRows: finalRows.filter((row) => /accessor/i.test(row.category || row.partDescription || row.partName)), nonMovingRows: [], highValueNonMovingRows: [], binRows: binWiseRowsFromScans(scans, finalRows), rawLogRows: scans.map((scan) => ({ time: scan.timestamp, rawScan: scan.rawScan || scan.rawScanString || scan.rawUpi || '', partNumber: scan.partNumber || scan.part, partDescription: scan.partDescription || scan.partName, qty: scan.qty, type: scan.scanType || scan.type, bin: scan.binLocation || scan.bin, dealerCode: scan.dealerCode, auditId: scan.auditId, userId: scan.userId || scan.loginId || '', userName: scan.userName || scan.staffName || scan.loginId || '', role: scan.role || '', deviceId: scan.deviceId, entryMode: scan.entryMode, entryChannel: scan.entryChannel, scanSourceLabel: scan.scanSourceLabel, staffName: scan.staffName, regdNo: scan.regdNo || '', jobCardNo: scan.jobCardNo || '', fittedQty: scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty : 0), fittedStatus: (scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'Fitted' : 'Not Fitted', autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No', stockDeductedFromBin: scan.stockDeductedFromBin || '', warnings: (scan.warnings || []).join(', ') })), dealerBackupRows: dealers.map((dealer) => ({ dealerName: dealer.dealerName, dealerCode: dealer.dealerCode, brand: dealer.brand, location: dealer.location, currentAuditId: dealer.currentAuditId, auditName: dealer.auditName, auditorName: dealer.auditorName, generalManager: dealer.generalManager, spmName: dealer.spmName })), dealers, audits };
 }
 
 function partwiseInventoryAuditColumns() {
@@ -1796,6 +1816,9 @@ function partwiseInventoryAuditColumns() {
     { header: 'Inward Quantity', key: 'inwardQty', width: 18, numFmt: '#,##0.00' },
     { header: 'Outward Quantity', key: 'outwardQty', width: 18, numFmt: '#,##0.00' },
     { header: 'Fitted Quantity', key: 'fittedQty', width: 18, numFmt: '#,##0.00' },
+    { header: 'Regd No', key: 'regdNo', width: 16 },
+    { header: 'Job Card No', key: 'jobCardNo', width: 18 },
+    { header: 'Fitted Status', key: 'fittedStatus', width: 16 },
     { header: 'Damage Quantity', key: 'damageQty', width: 18, numFmt: '#,##0.00' },
     { header: 'Final Available Quantity', key: 'finalAvailableQty', width: 24, numFmt: '#,##0.00' },
     { header: 'Short Quantity', key: 'shortQty', width: 18, numFmt: '#,##0.00' },
@@ -1928,6 +1951,9 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}) {
     inwardQty: breakdown.inwardQty,
     outwardQty: breakdown.outwardQty,
     fittedQty: breakdown.fittedQty,
+    regdNo: Array.from(new Set(scans.map((scan) => cleanText(scan.regdNo)).filter(Boolean))).join(', '),
+    jobCardNo: Array.from(new Set(scans.map((scan) => cleanText(scan.jobCardNo)).filter(Boolean))).join(', '),
+    fittedStatus: breakdown.fittedQty > 0 ? 'Fitted' : 'Not Fitted',
     damageQty: breakdown.damageQty,
     finalAvailableQty,
     shortQty,
@@ -2533,6 +2559,11 @@ function stockSummaryColumns() {
   return [
     { header: 'Report Section', key: 'section', width: 34 },
     { header: 'Mismatch Cases / Metric', key: 'metric', width: 48 },
+    { header: 'Scan Type', key: 'scanType', width: 16 },
+    { header: 'Fitted Qty', key: 'fittedQty', width: 14 },
+    { header: 'Regd No', key: 'regdNo', width: 16 },
+    { header: 'Job Card No', key: 'jobCardNo', width: 18 },
+    { header: 'Fitted Status', key: 'fittedStatus', width: 16 },
     { header: 'SKU Counts', key: 'skuCount', width: 14 },
     { header: 'Value On MRP', key: 'valueOnMrp', width: 18 },
     { header: 'Value On DLC', key: 'valueOnDlc', width: 18 },
@@ -2628,7 +2659,7 @@ function stockSummaryFlatRows(sections) {
   return [
     { rowType: 'section', section: 'Physical (Inventory Audit) Value', metric: 'Value On MRP / Value On DLC' },
     { section: 'Physical (Inventory Audit) Value', metric: 'Total', valueOnMrp: sections.physical.valueOnMrp, valueOnDlc: sections.physical.valueOnDlc },
-    { section: 'Physical (Inventory Audit) Value', metric: 'Fitted Qty', skuCount: sections.fitted.skuCount, valueOnMrp: sections.fitted.valueOnMrp, valueOnDlc: sections.fitted.valueOnDlc },
+    { section: 'Physical (Inventory Audit) Value', metric: 'Fitted Qty', scanType: 'FITTED', fittedQty: sections.fitted.fittedQty, fittedStatus: sections.fitted.fittedQty > 0 ? 'Fitted' : 'Not Fitted', skuCount: sections.fitted.skuCount, valueOnMrp: sections.fitted.valueOnMrp, valueOnDlc: sections.fitted.valueOnDlc },
     { rowType: 'note', note: STOCK_SUMMARY_NOTE },
     { rowType: 'section', section: sections.system.title, metric: 'Value On MRP / Value On DLC' },
     { section: sections.system.title, metric: 'Total', valueOnMrp: sections.system.valueOnMrp, valueOnDlc: sections.system.valueOnDlc },
@@ -2759,10 +2790,11 @@ async function buildStockSummaryReport(query = {}) {
   const fitted = fittedRows.reduce((total, row) => {
     const qty = Number(row.fittedQty || 0);
     total.skuCount += 1;
+    total.fittedQty += qty;
     total.valueOnMrp += qty * Number(row.mrp || 0);
     total.valueOnDlc += qty * Number(row.dlc || 0);
     return total;
-  }, { skuCount: 0, valueOnMrp: 0, valueOnDlc: 0 });
+  }, { skuCount: 0, fittedQty: 0, valueOnMrp: 0, valueOnDlc: 0 });
   const hhmlVida = summarizeStockRows(hhmlVidaRows);
   const accessories = summarizeStockRows(accessoryRows);
   const case1 = caseSummary(eligibleRows, 'case1');
@@ -2790,7 +2822,7 @@ async function buildStockSummaryReport(query = {}) {
   const selectedDealer = dealerCode ? dealers.find((dealer) => dealer.dealerCode === dealerCode) : null;
   const sections = {
     physical: { valueOnMrp: money(totals.physicalMrp), valueOnDlc: money(totals.physicalDlc) },
-    fitted: { skuCount: fitted.skuCount, valueOnMrp: money(fitted.valueOnMrp), valueOnDlc: money(fitted.valueOnDlc) },
+    fitted: { skuCount: fitted.skuCount, fittedQty: fitted.fittedQty, valueOnMrp: money(fitted.valueOnMrp), valueOnDlc: money(fitted.valueOnDlc) },
     system: { title: `System Value (Opening Stock ${auditDateLabel})`, valueOnMrp: money(totals.systemMrp), valueOnDlc: money(totals.systemDlc) },
     mismatch: { valueOnMrp: money(totals.physicalMrp - totals.systemMrp), valueOnDlc: money(totals.physicalDlc - totals.systemDlc) },
     hhmlVida: { physicalMrp: money(hhmlVida.physicalMrp), physicalDlc: money(hhmlVida.physicalDlc), systemMrp: money(hhmlVida.systemMrp), systemDlc: money(hhmlVida.systemDlc), varianceMrp: money(hhmlVida.varianceMrp), varianceDlc: money(hhmlVida.varianceDlc) },

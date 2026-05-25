@@ -2529,7 +2529,7 @@
     }
     if (normalized.scanType === 'FITTED' && (!String(normalized.regdNo || '').trim() || !String(normalized.jobCardNo || '').trim())) {
       playScanTone('error');
-      toast('Regd No and Job Card No are mandatory for FITTED.', 'error');
+      toast('Regd No and Job Card No are required for fitted parts.', 'error');
       return;
     }
     if (!validPartText(normalized.partNumber)) {
@@ -3600,8 +3600,9 @@
     const scroller = $('#reportTabsScroller');
     if (!scroller) return;
     const amount = Math.max(180, Math.floor(scroller.clientWidth * 0.75));
-    scroller.scrollBy({ left: direction * amount, behavior: 'smooth' });
-    setTimeout(ensureActiveReportTabVisible, 260);
+    const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    const nextLeft = Math.min(maxLeft, Math.max(0, scroller.scrollLeft + direction * amount));
+    scroller.scrollTo({ left: nextLeft, behavior: 'smooth' });
   }
 
   function initReportTabs() {
@@ -3619,6 +3620,13 @@
     });
     $('#reportTabsLeft')?.addEventListener('click', () => scrollReportTabs(-1));
     $('#reportTabsRight')?.addEventListener('click', () => scrollReportTabs(1));
+    scroller.addEventListener('wheel', (event) => {
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (!delta) return;
+      event.preventDefault();
+      const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+      scroller.scrollLeft = Math.min(maxLeft, Math.max(0, scroller.scrollLeft + delta));
+    }, { passive: false });
     setReportTab(activeReportType() || state.lastReportType || Object.keys(REPORT_TITLES)[0], { persist: false });
   }
 
@@ -4415,7 +4423,11 @@
       select.value = 'ALL';
     });
     applyDestinationBinOptions(toData, '');
-    renderBinTransferParts([], sourceData.message || 'Source Bin All selected. Click Show Parts to load all available scanned parts.');
+    renderBinTransferParts([], sourceData.message || 'Source Bin All selected. Loading all available scanned parts...');
+    await loadBinTransferParts(activeBinTransferForm()).catch((error) => {
+      console.warn('BIN_TRANSFER_AUTO_LOAD_FAILED', error);
+      renderBinTransferParts([], 'Click Show Parts to load available scanned parts.');
+    });
   }
 
   function filterRenderedBinTransferParts() {
@@ -6765,7 +6777,7 @@
         });
         const { dealerCode, fromBin, toBin } = binTransferCriteria(activeBinTransferForm());
         loadBinTransferDestinationBins(dealerCode, fromBin, toBin)
-          .then(() => renderBinTransferParts([], 'Click Show Parts to load available scanned parts.'))
+          .then(() => loadBinTransferParts(activeBinTransferForm()))
           .catch((error) => toast(error.message, 'error'));
       });
     });

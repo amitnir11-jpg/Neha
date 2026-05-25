@@ -1209,7 +1209,7 @@ async function saveScanRequest(req, res) {
       return res.status(400).json({ success: false, message: BIN_REQUIRED_MESSAGE });
     }
     if (type === 'FITTED' && (!regdNo || !jobCardNo)) {
-      const message = !regdNo ? 'Regd No is required for FITTED scan' : 'Job Card No is required for FITTED scan';
+      const message = 'Regd No and Job Card No are required for fitted parts.';
       console.log('[MANUAL SCAN] validation failed', { reason: message, part });
       return res.status(400).json({ success: false, message });
     }

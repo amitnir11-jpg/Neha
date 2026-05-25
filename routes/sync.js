@@ -783,8 +783,7 @@ async function saveNormalizedScan(scan, req) {
     scan.autoDetectedBin = false;
     scan.isFitted = true;
     scan.fittedQty = Number(scan.quantity || 1);
-    if (!scan.regdNo) errors.push('Regd No is required for FITTED scan');
-    if (!scan.jobCardNo) errors.push('Job Card No is required for FITTED scan');
+    if (!scan.regdNo || !scan.jobCardNo) errors.push('Regd No and Job Card No are required for fitted parts.');
   }
   if (!scan.dealerCode) errors.push('Dealer code missing');
   if (!VALID_TYPES.includes(scan.scanType)) errors.push('Invalid scan type');
@@ -1272,8 +1271,7 @@ async function pushHandler(req, res) {
       if (scan.partNumber && !isValidPartNumber(scan.partNumber)) rowErrors.push('invalid partNumber format');
       if (['INWARD', 'DAMAGE'].includes(scan.scanType) && !scan.binLocation) rowErrors.push(BIN_REQUIRED_MESSAGE);
       if (scan.scanType === 'FITTED') {
-        if (!scan.regdNo) rowErrors.push('Regd No is required for FITTED scan');
-        if (!scan.jobCardNo) rowErrors.push('Job Card No is required for FITTED scan');
+        if (!scan.regdNo || !scan.jobCardNo) rowErrors.push('Regd No and Job Card No are required for fitted parts.');
       }
       if (scan.scanType === 'OUTWARD' && scan._autoBinError) rowErrors.push(scan._autoBinError);
       if (!scan.dealerCode) rowErrors.push('dealerCode missing');
