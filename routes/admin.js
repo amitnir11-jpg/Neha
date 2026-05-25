@@ -4,6 +4,7 @@ const Inventory = require('../models/Inventory');
 const MasterPart = require('../models/MasterPart');
 const Bin = require('../models/Bin');
 const Dealer = require('../models/Dealer');
+const Device = require('../models/Device');
 const VerificationLog = require('../models/VerificationLog');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const SkewEvent = require('../models/SkewEvent');
@@ -14,6 +15,32 @@ const { cleanText, normalizePartNumber, normalizeCategory } = require('../utils/
 
 const router = express.Router();
 const DELETE_MESSAGE = 'Are you sure you want to delete this data? This action cannot be undone.';
+
+function publicMobileDevice(device = {}) {
+  return {
+    id: device._id,
+    deviceId: device.deviceId || '',
+    deviceName: device.deviceName || '',
+    userId: device.userId || '',
+    userName: device.userName || device.staffName || device.loginId || '',
+    dealerCode: device.dealerCode || '',
+    dealerName: device.dealerName || '',
+    lastActiveTime: device.lastSeen || device.lastActivity || '',
+    lastSeen: device.lastSeen || '',
+    appVersion: device.appVersion || '',
+    batteryStatus: device.batteryPercent === undefined || device.batteryPercent === null ? '' : `${device.batteryPercent}%`,
+    batteryPercent: device.batteryPercent,
+    onlineStatus: device.status || 'offline',
+    status: device.status || 'offline',
+    pendingSyncCount: Number(device.pendingCount || 0),
+    pendingCount: Number(device.pendingCount || 0),
+    failedCount: Number(device.failedCount || 0),
+    approved: device.approved !== false,
+    blocked: device.approved === false || device.scannerStatus === 'blocked' || device.syncStatus === 'blocked',
+    scannerStatus: device.scannerStatus || '',
+    syncStatus: device.syncStatus || ''
+  };
+}
 
 function normalizedPartNumber(value) {
   return normalizePartNumber(value);
@@ -311,6 +338,75 @@ async function reprocessScans(req, res) {
 
 router.post('/reprocess-scans', auth.requireAuth, auth.requireAdmin, reprocessScans);
 router.post('/reprocess-master-lookup', auth.requireAuth, auth.requireAdmin, reprocessScans);
+
+router.get('/mobile-devices', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const devices = await Device.find({ deviceType: 'mobile', removedAt: null }).sort({ lastSeen: -1, updatedAt: -1 }).limit(500).lean();
+    return res.json({ success: true, count: devices.length, devices: devices.map(publicMobileDevice) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/mobile-device/block', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const deviceId = cleanText(req.body.deviceId || req.body.id || '');
+    const block = req.body.block !== false && req.body.approved !== true;
+    if (!deviceId) return res.status(400).json({ success: false, message: 'Device ID is required' });
+    const device = await Device.findOneAndUpdate(
+      { deviceId },
+      {
+        approved: !block,
+        scannerStatus: block ? 'blocked' : 'ready',
+        syncStatus: block ? 'blocked' : 'idle',
+        lastError: block ? 'Blocked by admin' : '',
+        disconnectedBy: req.user.username || req.user.name || 'admin',
+        disconnectedAt: block ? new Date() : undefined
+      },
+      { new: true }
+    ).lean();
+    if (!device) return res.status(404).json({ success: false, message: 'Mobile device not found' });
+    req.io?.emit('devices:update');
+    req.io?.emit(block ? 'mobile:blocked' : 'mobile:approved', { deviceId, blocked: block });
+    return res.json({ success: true, blocked: block, device: publicMobileDevice(device) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/mobile-device/force-logout', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const deviceId = cleanText(req.body.deviceId || req.body.id || '');
+    if (!deviceId) return res.status(400).json({ success: false, message: 'Device ID is required' });
+    const device = await Device.findOneAndUpdate(
+      { deviceId },
+      {
+        status: 'offline',
+        scannerStatus: 'disconnected',
+        disconnectedAt: new Date(),
+        disconnectedBy: req.user.username || req.user.name || 'admin'
+      },
+      { new: true }
+    ).lean();
+    req.io?.emit('mobile:force-logout', { deviceId, message: 'Force logout requested by admin' });
+    req.io?.emit('devices:update');
+    return res.json({ success: true, message: 'Force logout sent', device: device ? publicMobileDevice(device) : { deviceId } });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/mobile-device/message', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const deviceId = cleanText(req.body.deviceId || '');
+    const message = cleanText(req.body.message || '');
+    if (!message) return res.status(400).json({ success: false, message: 'Message is required' });
+    req.io?.emit('mobile:message', { deviceId, message, sentAt: new Date(), sentBy: req.user.username || req.user.name || 'admin' });
+    return res.json({ success: true, message: 'Message sent' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 async function clockSkewList(req, res) {
   try {

@@ -5081,6 +5081,9 @@
           <button class="btn light viewScannerLogs" data-id="${escapeHtml(device.deviceId)}" type="button">Logs</button>
           <button class="btn light admin-only renameScanner ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" data-name="${escapeHtml(device.deviceName)}" type="button">Rename</button>
           <button class="btn light admin-only priorityScanner ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" data-priority="${escapeHtml(device.scannerPriority || 0)}" type="button">Priority</button>
+          <button class="btn light admin-only messageMobileDevice ${state.user && state.user.role === 'admin' && device.deviceType === 'mobile' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Message</button>
+          <button class="btn danger-soft admin-only blockMobileDevice ${state.user && state.user.role === 'admin' && device.deviceType === 'mobile' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" data-block="${device.approved === false ? 'false' : 'true'}" type="button">${device.approved === false ? 'Approve Device' : 'Block Device'}</button>
+          <button class="btn danger-soft admin-only forceLogoutMobileDevice ${state.user && state.user.role === 'admin' && device.deviceType === 'mobile' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Force Logout</button>
           <button class="btn danger-soft admin-only disconnectDevice ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Disconnect</button>
           <button class="btn light admin-only forceReconnectDevice ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Force Reconnect</button>
           <button class="btn danger-soft admin-only removeDevice ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Remove Device</button>
@@ -5161,6 +5164,29 @@
         await api('/api/scanner-network/priority', { method: 'POST', body: { deviceId: button.dataset.id, priority } });
         toast('Scanner priority updated');
         await loadDevices();
+      });
+    });
+    $$('.blockMobileDevice').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const block = button.dataset.block === 'true';
+        await api('/api/admin/mobile-device/block', { method: 'POST', body: { deviceId: button.dataset.id, block } });
+        toast(block ? 'Mobile device blocked' : 'Mobile device approved');
+        await loadDevices();
+      });
+    });
+    $$('.forceLogoutMobileDevice').forEach((button) => {
+      button.addEventListener('click', async () => {
+        await api('/api/admin/mobile-device/force-logout', { method: 'POST', body: { deviceId: button.dataset.id } });
+        toast('Force logout sent');
+        await loadDevices();
+      });
+    });
+    $$('.messageMobileDevice').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const message = window.prompt('Message to mobile device');
+        if (!message) return;
+        await api('/api/admin/mobile-device/message', { method: 'POST', body: { deviceId: button.dataset.id, message } });
+        toast('Message sent');
       });
     });
     $$('.viewScannerLogs').forEach((button) => {

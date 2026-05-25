@@ -277,7 +277,7 @@ function roleScanError(role, scanType) {
   if (!role) return '';
   if (role === 'admin' || role === 'supervisor') return '';
   if (role === 'outward_counter') return scanType === 'OUTWARD' ? '' : 'Outward Counter can only perform OUTWARD scans';
-  if (role === 'scanner' || role === 'staff' || role === 'mobile_user') return scanType === 'OUTWARD' ? 'Scanner users cannot perform OUTWARD scans' : '';
+  if (role === 'scanner') return scanType === 'OUTWARD' ? 'Scanner users cannot perform OUTWARD scans' : '';
   return '';
 }
 

@@ -668,6 +668,11 @@ async function heartbeatHandler(req, res) {
     if (!clean(req.body.deviceId)) {
       return res.status(400).json({ success: false, message: 'Device ID is required' });
     }
+    const existingDevice = await Device.findOne({ deviceId: clean(req.body.deviceId), removedAt: null }).lean();
+    if (existingDevice && existingDevice.approved === false) {
+      req.io.emit('devices:update');
+      return res.status(403).json({ success: false, approved: false, status: 'blocked', message: 'This mobile device is blocked by admin.' });
+    }
     const info = serverInfo(req.app.locals.activePort);
     const activeAudit = await getActiveAudit();
     const payload = cleanDevicePayload(req, {

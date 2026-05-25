@@ -260,6 +260,11 @@ router.post('/login', async (req, res) => {
     if (!valid && pin) valid = await compareSecret(user, pin, ['pinHash', 'pin']);
     if (!valid) return res.status(401).json({ success: false, message: 'Invalid username, password, or PIN' });
 
+    const existingDevice = deviceId ? await Device.findOne({ deviceId }).lean() : null;
+    if (existingDevice && existingDevice.approved === false) {
+      return res.status(403).json({ success: false, message: 'This mobile device is blocked by admin.' });
+    }
+
     const dealer = await Dealer.findOne({ dealerCode: access.requestedDealer }).lean();
     const publicUser = auth.publicUser(user);
     const token = signMobileToken(user);
@@ -402,6 +407,7 @@ router.post('/device-register', auth.requireAuth, async (req, res) => {
 
 router.post('/sync', auth.requireAuth, sync.pushHandler);
 router.post('/scan', auth.requireAuth, sync.pushHandler);
+router.post('/sync-batch', auth.requireAuth, sync.pushHandler);
 router.post('/sync-bulk', auth.requireAuth, sync.pushHandler);
 router.post('/realtime-scan', auth.requireAuth, sync.pushHandler);
 
@@ -449,6 +455,63 @@ router.get('/sync-status', auth.requireAuth, async (req, res) => {
       lastSyncTime: device?.lastSyncTime || lastLog?.createdAt || '',
       lastApiResponse: lastLog || null
     });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/master-search', auth.requireAuth, async (req, res) => {
+  try {
+    const q = upper(req.query.q || req.query.partNumber || req.query.part || '');
+    const dealerCode = upper(req.query.dealerCode || '');
+    const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 25);
+    if (!q || q.length < 2) return res.json({ success: true, count: 0, parts: [], suggestions: [] });
+    const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const dealerFilter = dealerCode ? { $or: [{ dealerCode }, { dealerCode: '' }, { dealerCode: { $exists: false } }] } : {};
+    const [dealerParts, catalogueParts] = await Promise.all([
+      MasterPart.find({
+        ...dealerFilter,
+        $or: [
+          { normalizedPartNumber: regex },
+          { partNumber: regex },
+          { partNo: regex },
+          { partDescription: regex },
+          { partName: regex }
+        ]
+      }).sort({ dealerCode: -1, partNumber: 1 }).limit(limit).lean(),
+      MasterCatalogue.find({
+        $or: [
+          { normalizedPartNumber: regex },
+          { partNumber: regex },
+          { partNo: regex },
+          { partDescription: regex },
+          { partName: regex }
+        ]
+      }).sort({ partNumber: 1 }).limit(limit).lean()
+    ]);
+    const byPart = new Map();
+    dealerParts.concat(catalogueParts).forEach((part) => {
+      const partNumber = normalizePartNumber(part.normalizedPartNumber || part.partNumber || part.partNo || part.part || '');
+      if (!partNumber || byPart.has(partNumber)) return;
+      byPart.set(partNumber, {
+        id: part._id,
+        partNumber,
+        partNo: partNumber,
+        partDescription: part.partDescription || part.partName || '',
+        partName: part.partName || part.partDescription || '',
+        productCategory: part.productCategory || part.category || '',
+        category: part.category || part.productCategory || '',
+        mrp: Number(part.mrp || 0),
+        dlc: Number(part.dlc || 0),
+        model: part.model || '',
+        year: part.year || part.manufacturingYear || '',
+        manufacturingYear: part.manufacturingYear || part.year || '',
+        binLocation: part.binLocation || part.bin || '',
+        bin: part.bin || part.binLocation || ''
+      });
+    });
+    const parts = Array.from(byPart.values()).slice(0, limit);
+    return res.json({ success: true, count: parts.length, parts, suggestions: parts });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

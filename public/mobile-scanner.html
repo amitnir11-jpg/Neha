@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Daksh Mobile Scanner</title>
+  <link rel="stylesheet" href="/mobile-scanner.css?v=20260525-mobile-web-portal">
+</head>
+<body>
+  <main class="mobile-shell">
+    <section id="loginView" class="login-view">
+      <div class="brand-panel">
+        <span class="brand-mark">DI</span>
+        <div>
+          <h1>Daksh Mobile Scanner</h1>
+          <p>Secure offline-first part scanning</p>
+        </div>
+      </div>
+      <form id="loginForm" class="login-card" autocomplete="on">
+        <label>Username or Email<input name="username" autocomplete="username" required></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password"></label>
+        <label>PIN<input name="pin" inputmode="numeric" maxlength="8" autocomplete="one-time-code"></label>
+        <label>Dealer Code<input name="dealerCode" autocapitalize="characters" required></label>
+        <label>Device Name<input name="deviceName" placeholder="Android Chrome"></label>
+        <button class="primary-action" type="submit">Login</button>
+        <p id="loginMessage" class="message"></p>
+      </form>
+    </section>
+
+    <section id="scannerView" class="scanner-view hidden">
+      <header class="mobile-topbar">
+        <div>
+          <strong id="dealerLabel">Dealer</strong>
+          <span id="userLabel">User</span>
+        </div>
+        <button id="logoutBtn" class="ghost-action" type="button">Logout</button>
+      </header>
+
+      <div class="sync-strip">
+        <span id="onlineBadge" class="status-pill">Offline</span>
+        <span id="pendingBadge" class="status-pill">Pending 0</span>
+        <span id="lastSyncLabel" class="sync-time">Never synced</span>
+      </div>
+
+      <div class="mode-grid" role="group" aria-label="Scan mode">
+        <button class="mode-btn active" type="button" data-mode="INWARD">Inward</button>
+        <button class="mode-btn" type="button" data-mode="OUTWARD">Outward</button>
+        <button class="mode-btn" type="button" data-mode="FITTED">Fitted</button>
+        <button class="mode-btn" type="button" data-mode="DAMAGE">Damage</button>
+        <button class="mode-btn" type="button" data-mode="VERIFICATION">Verification</button>
+      </div>
+
+      <section class="scan-stage">
+        <div class="camera-pane">
+          <video id="cameraPreview" playsinline muted></video>
+          <canvas id="scanCanvas" hidden></canvas>
+          <div id="cameraState" class="camera-state">Select a mode to start camera</div>
+        </div>
+        <div class="scan-info">
+          <article class="last-card">
+            <span>Last Scan</span>
+            <strong id="lastPart">-</strong>
+            <p id="lastMeta">No scans yet</p>
+          </article>
+          <div class="scan-actions">
+            <button id="pauseBtn" class="secondary-action" type="button">Pause</button>
+            <button id="resumeBtn" class="secondary-action" type="button">Resume</button>
+            <button id="manualBtn" class="secondary-action" type="button">Manual Entry</button>
+            <button id="syncNowBtn" class="primary-action" type="button">Sync Now</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="sync-panel">
+        <h2>Sync Status</h2>
+        <div class="sync-grid">
+          <span>Network <strong id="networkState">Offline</strong></span>
+          <span>Pending <strong id="pendingCount">0</strong></span>
+          <span>Failed <strong id="failedCount">0</strong></span>
+          <span>Last Sync <strong id="lastSyncTime">Never</strong></span>
+        </div>
+        <div class="scan-actions">
+          <button id="retryFailedBtn" class="secondary-action" type="button">Retry Failed</button>
+          <button id="clearSyncedBtn" class="danger-action" type="button">Clear Synced Cache</button>
+        </div>
+      </section>
+
+      <section class="last-list">
+        <h2>Last 10 Scans</h2>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Time</th><th>Part</th><th>Qty</th><th>Mode</th><th>Status</th></tr></thead>
+            <tbody id="lastScanRows"><tr><td colspan="5">No scans yet</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <dialog id="manualDialog">
+    <form id="manualForm" method="dialog" class="dialog-card">
+      <h2>Manual Entry</h2>
+      <label>Part Number<input name="partNumber" id="manualPartNumber" autocapitalize="characters" required></label>
+      <div id="partSuggestions" class="suggestions"></div>
+      <label>Quantity<input name="qty" inputmode="numeric" type="number" min="1" value="1" required></label>
+      <label id="manualBinLabel">Bin Location<input name="binLocation" autocapitalize="characters"></label>
+      <label id="manualRegLabel" class="hidden">Registration Number<input name="regdNo" autocapitalize="characters"></label>
+      <label id="manualJobLabel" class="hidden">Job Card Number<input name="jobCardNo" autocapitalize="characters"></label>
+      <div id="manualPartMeta" class="part-meta"></div>
+      <menu>
+        <button value="cancel" type="button" id="manualCancelBtn">Cancel</button>
+        <button class="primary-action" value="save" type="submit">Save</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/mobile-scanner.js?v=20260525-mobile-web-portal"></script>
+</body>
+</html>

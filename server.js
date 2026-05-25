@@ -1038,6 +1038,10 @@ app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'Daksh.html'));
 });
 
+app.get(['/mobile', '/mobile-scanner'], (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'mobile-scanner.html'));
+});
+
 app.get('/report', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'report.html'));
 });
