@@ -709,9 +709,33 @@
                 <label>Brand<input name="brand" placeholder="Brand"></label>
                 <label>Location<input name="location" placeholder="Location"></label>
                 <label>Audit Start Date<input name="auditStartDate" type="date" required></label>
-                <label>Status<select name="auditStatus"><option>Active</option><option>Closed</option></select></label>
+                <label>Status<select name="auditStatus"><option>Active</option></select></label>
                 <button class="btn primary admin-only form-action" type="submit">Start Audit</button>
               </form>
+            </section>
+
+            <section class="card">
+              <div class="card-head"><h2>Search & Manage Dealer Audit</h2></div>
+              <form id="dealerSearchForm" class="grid-form master-form">
+                <label>Dealer Code<input id="dealerSearchCode" name="dealerCode" placeholder="Enter dealer code" type="text"></label>
+                <button class="btn primary admin-only form-action" type="button" id="dealerSearchButton">Search</button>
+              </form>
+              <div id="dealerSearchResults" style="margin-top: 20px; display: none;">
+                <div class="table-wrap master-table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Dealer</th>
+                        <th>Code</th>
+                        <th>Start Date</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="dealerSearchResultsTable"></tbody>
+                  </table>
+                </div>
+              </div>
             </section>
 
             <section class="card">

@@ -875,6 +875,129 @@
       }
     });
 
+    // Dealer Search Functionality
+    $('#dealerSearchButton').addEventListener('click', async () => {
+      const dealerCode = $('#dealerSearchCode').value.trim();
+      if (!dealerCode) {
+        toast('Please enter dealer code', 'error');
+        return;
+      }
+
+      try {
+        const dealer = state.dealers.find(d => d.dealerCode === dealerCode);
+        if (!dealer) {
+          toast('Dealer not found', 'error');
+          return;
+        }
+
+        const audit = state.audits.find(a => a.dealerCode === dealerCode);
+        const startDate = audit?.auditStartDate ? new Date(audit.auditStartDate).toLocaleDateString() : 'N/A';
+        const status = audit?.status || 'No Active Audit';
+
+        const resultsDiv = $('#dealerSearchResults');
+        const table = $('#dealerSearchResultsTable');
+        table.innerHTML = `
+          <tr>
+            <td>${escapeHtml(dealer.dealerName)}</td>
+            <td>${escapeHtml(dealer.dealerCode)}</td>
+            <td>${startDate}</td>
+            <td>${escapeHtml(status)}</td>
+            <td>
+              <select id="auditAction_${escapeHtml(dealer.dealerCode)}" class="dealer-action-select" data-dealer-code="${escapeHtml(dealer.dealerCode)}">
+                <option value="">-- Select Action --</option>
+                <option value="close">Close Audit</option>
+                <option value="open">Open Audit</option>
+                <option value="reopen">Reopen Audit</option>
+                <option value="delete">Delete Dealer</option>
+              </select>
+            </td>
+          </tr>
+        `;
+        resultsDiv.style.display = 'block';
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    });
+
+    // Handle Dealer Action Selection
+    document.addEventListener('change', async (event) => {
+      if (event.target.classList.contains('dealer-action-select')) {
+        const action = event.target.value;
+        const dealerCode = event.target.dataset.dealerCode;
+
+        if (!action) return;
+
+        try {
+          if (action === 'close') {
+            const audit = state.audits.find(a => a.dealerCode === dealerCode);
+            if (!audit) {
+              toast('No active audit found', 'error');
+              return;
+            }
+            const response = await api(`/api/audit/${audit.auditId}/close`, { method: 'POST' });
+            toast('Audit closed successfully. Completed by: ' + (response.completedBy || 'Unknown'));
+            $('#dealerSearchCode').value = '';
+            $('#dealerSearchResults').style.display = 'none';
+            await loadDealers();
+          } else if (action === 'open') {
+            const dealer = state.dealers.find(d => d.dealerCode === dealerCode);
+            if (!dealer) return toast('Dealer not found', 'error');
+            await api('/api/dealers', {
+              method: 'POST',
+              body: {
+                dealerName: dealer.dealerName,
+                dealerCode: dealer.dealerCode,
+                brand: dealer.brand,
+                location: dealer.location,
+                auditStartDate: new Date().toISOString(),
+                auditStatus: 'Active'
+              }
+            });
+            toast('Audit opened successfully');
+            $('#dealerSearchCode').value = '';
+            $('#dealerSearchResults').style.display = 'none';
+            await loadDealers();
+          } else if (action === 'reopen') {
+            const audit = state.audits.find(a => a.dealerCode === dealerCode);
+            if (!audit) {
+              toast('No audit found', 'error');
+              return;
+            }
+            await api('/api/dealers', {
+              method: 'POST',
+              body: {
+                auditId: audit.auditId,
+                dealerName: audit.dealerName,
+                dealerCode: audit.dealerCode,
+                brand: audit.brand,
+                location: audit.location,
+                auditStartDate: audit.auditStartDate,
+                auditStatus: 'Active'
+              }
+            });
+            toast('Audit reopened successfully');
+            $('#dealerSearchCode').value = '';
+            $('#dealerSearchResults').style.display = 'none';
+            await loadDealers();
+          } else if (action === 'delete') {
+            if (confirm('Are you sure you want to delete this dealer? This action cannot be undone.')) {
+              await api(`/api/dealers/${dealerCode}`, { method: 'DELETE' });
+              toast('Dealer deleted successfully');
+              $('#dealerSearchCode').value = '';
+              $('#dealerSearchResults').style.display = 'none';
+              await loadDealers();
+            }
+          }
+
+          // Reset dropdown
+          event.target.value = '';
+        } catch (error) {
+          toast(error.message, 'error');
+          event.target.value = '';
+        }
+      }
+    });
+
     $('#masterUploadForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       try {
