@@ -150,7 +150,7 @@ function duplicateScanFilter(uniqueScanId, qrFingerprint, dealerCode = '', rawSc
   return filter;
 }
 
-function fittedIdentityFilter({ dealerCode, partNumber, regdNo, jobCardNo, auditId = '' } = {}) {
+function fittedIdentityFilter({ dealerCode, partNumber, regdNo, jobCardNo } = {}) {
   const dealer = normalizeDealerCode(dealerCode);
   const part = normalizePartNumber(partNumber);
   const regd = upper(regdNo);
@@ -166,8 +166,6 @@ function fittedIdentityFilter({ dealerCode, partNumber, regdNo, jobCardNo, audit
     isDuplicate: { $ne: true },
     $or: [{ normalizedPartNumber: part }, { partNumber: part }, { part }]
   };
-  const audit = String(auditId || '').trim();
-  if (audit) filter.auditId = audit;
   return filter;
 }
 

@@ -2840,6 +2840,7 @@
       return;
     }
     renderReportFilterSettingsList();
+    renderReportColumnSettingsList();
     $('#reportFilterSettingsModal')?.classList.remove('hidden');
   }
 
@@ -2871,13 +2872,34 @@
     return columns && columns.length ? columns : columnsForRows(rows);
   }
 
+  function defaultReportColumnLimit(reportType = activeReportType()) {
+    return ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary'].includes(reportType) ? 0 : 18;
+  }
+
+  function defaultReportColumns(available, reportType = activeReportType(), defaultLimit = defaultReportColumnLimit(reportType)) {
+    return (available || []).slice(0, defaultLimit || (available || []).length);
+  }
+
   function reportColumnsForDisplay(columns, rows, reportType = activeReportType(), defaultLimit = 18) {
     const available = baseReportColumns(columns, rows);
     const selected = savedReportColumnKeys(reportType);
     const visible = selected
       ? available.filter((column, index) => selected.includes(reportColumnKey(column, index)))
-      : available.slice(0, defaultLimit || available.length);
-    return applyReportColumnOrder(visible.length ? visible : available.slice(0, defaultLimit || available.length), reportType);
+      : defaultReportColumns(available, reportType, defaultLimit);
+    return applyReportColumnOrder(visible.length ? visible : defaultReportColumns(available, reportType, defaultLimit), reportType);
+  }
+
+  function currentReportColumnKeys(reportType = activeReportType()) {
+    const rendered = $$('#reportHead th[data-col-key]').map((th) => th.dataset.colKey).filter(Boolean);
+    if (rendered.length) return rendered;
+    const saved = savedReportColumnKeys(reportType);
+    return saved && saved.length ? saved : null;
+  }
+
+  function rerenderCurrentReportTable() {
+    if (state.reportTableRows.length || state.reportTableColumns.length) {
+      renderReportTable(state.reportTableColumns, state.reportTableRows, state.reportTableTotalRows, state.reportTableGrandTotal, activeReportType());
+    }
   }
 
   function renderReportColumnSettingsList() {
@@ -2886,7 +2908,7 @@
     const reportType = activeReportType();
     const available = baseReportColumns(state.reportTableColumns, state.reportTableRows);
     const selected = savedReportColumnKeys(reportType);
-    const selectedSet = new Set(selected || available.map((column, index) => reportColumnKey(column, index)));
+    const selectedSet = new Set(selected || defaultReportColumns(available, reportType).map((column, index) => reportColumnKey(column, index)));
     list.innerHTML = available.map((column, index) => {
       const key = reportColumnKey(column, index);
       const label = column.header || key;
@@ -2900,20 +2922,11 @@
   }
 
   function openReportColumnSettings() {
-    if (!activeReportType()) {
-      toast('Select report type first', 'error');
-      return;
-    }
-    if (!state.reportTableColumns.length && !state.reportTableRows.length) {
-      toast('Submit report first to choose fields', 'error');
-      return;
-    }
-    renderReportColumnSettingsList();
-    $('#reportColumnSettingsModal')?.classList.remove('hidden');
+    openReportFilterSettings();
   }
 
   function closeReportColumnSettings() {
-    $('#reportColumnSettingsModal')?.classList.add('hidden');
+    closeReportFilterSettings();
   }
 
   function compactParams(params) {
@@ -2976,7 +2989,7 @@
     });
     params.delete('testScanMode');
     if (format) {
-      const selectedColumns = savedReportColumnKeys(paramsObject.reportType || activeReportType());
+      const selectedColumns = currentReportColumnKeys(paramsObject.reportType || activeReportType());
       if (selectedColumns && selectedColumns.length) params.set('columns', selectedColumns.join(','));
     }
     if (format) params.set('format', format);
@@ -7172,14 +7185,11 @@
     $('#reportShow').addEventListener('click', () => loadReport().catch((error) => toast(error.message, 'error')));
     $('#reportRefresh')?.addEventListener('click', () => loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error')));
     $('#reportFilterSettingsOpen')?.addEventListener('click', openReportFilterSettings);
+    $('#reportResultSettingsOpen')?.addEventListener('click', openReportFilterSettings);
+    $('#reportColumnSettingsOpen')?.addEventListener('click', openReportFilterSettings);
     $('#reportFilterSettingsClose')?.addEventListener('click', closeReportFilterSettings);
     $('#reportFilterSettingsModal')?.addEventListener('click', (event) => {
       if (event.target.id === 'reportFilterSettingsModal') closeReportFilterSettings();
-    });
-    $('#reportColumnSettingsOpen')?.addEventListener('click', openReportColumnSettings);
-    $('#reportColumnSettingsClose')?.addEventListener('click', closeReportColumnSettings);
-    $('#reportColumnSettingsModal')?.addEventListener('click', (event) => {
-      if (event.target.id === 'reportColumnSettingsModal') closeReportColumnSettings();
     });
     $('#reportColumnSettingsAll')?.addEventListener('click', () => {
       $$('#reportColumnSettingsList input[type="checkbox"]').forEach((box) => {
@@ -7189,10 +7199,8 @@
     $('#reportColumnSettingsDefault')?.addEventListener('click', () => {
       saveReportColumnSettings(activeReportType(), null);
       renderReportColumnSettingsList();
-      if (state.reportTableRows.length || state.reportTableColumns.length) {
-        renderReportTable(state.reportTableColumns, state.reportTableRows, state.reportTableTotalRows, state.reportTableGrandTotal, activeReportType());
-      }
-      toast('Report fields reset');
+      rerenderCurrentReportTable();
+      toast('Report columns reset');
     });
     $('#reportColumnSettingsSave')?.addEventListener('click', () => {
       const selected = $$('#reportColumnSettingsList input[type="checkbox"]:checked').map((box) => box.value);
@@ -7201,13 +7209,14 @@
         return;
       }
       saveReportColumnSettings(activeReportType(), selected);
-      closeReportColumnSettings();
-      renderReportTable(state.reportTableColumns, state.reportTableRows, state.reportTableTotalRows, state.reportTableGrandTotal, activeReportType());
-      toast('Report fields saved');
+      closeReportFilterSettings();
+      rerenderCurrentReportTable();
+      toast('Report columns saved');
     });
     $('#reportFilterSettingsDefault')?.addEventListener('click', () => {
+      const defaults = REPORT_FILTER_DEFAULTS_BY_TYPE[activeReportType()] || REPORT_FILTER_DEFAULTS;
       $$('#reportFilterSettingsList input[type="checkbox"]').forEach((box) => {
-        box.checked = REPORT_FILTER_DEFAULTS.includes(box.value);
+        box.checked = defaults.includes(box.value);
       });
     });
     $('#reportFilterSettingsSave')?.addEventListener('click', async () => {

@@ -190,12 +190,13 @@ const AUDIT_COLUMNS = [
   { header: 'PRODUCT GROUP', key: 'productGroup', width: 18 },
   { header: 'PRODUCT SUBGROUP', key: 'partSubGroup', width: 18 },
   { header: 'DMS QTY', key: 'dmsQty', width: 12 },
-  { header: 'PHYSICAL QTY', key: 'physicalQty', width: 14 },
+  { header: 'PHYSICAL BIN QTY', key: 'physicalBinQty', width: 18 },
+  { header: 'ACTUAL AUDIT QTY', key: 'physicalQty', width: 18 },
   { header: 'INWARD QTY', key: 'inwardQty', width: 14 },
   { header: 'OUTWARD QTY', key: 'outwardQty', width: 14 },
   { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
-  { header: 'REGD NO', key: 'regdNo', width: 16 },
-  { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
+  { header: 'FITTED REGD NO', key: 'regdNo', width: 16 },
+  { header: 'FITTED JOB CARD NO', key: 'jobCardNo', width: 18 },
   { header: 'FITTED STATUS', key: 'fittedStatus', width: 16 },
   { header: 'DAMAGE QTY', key: 'damageQty', width: 14 },
   { header: 'SHORT QTY', key: 'shortQty', width: 12 },
@@ -216,6 +217,7 @@ const BIN_COLUMNS = [
   { header: 'PART DESCRIPTION', key: 'partDescription', width: 34 },
   { header: 'PRODUCT CATEGORY', key: 'productCategory', width: 20 },
   { header: 'QTY', key: 'qty', width: 12 },
+  { header: 'PHYSICAL BIN QTY', key: 'physicalBinQty', width: 18 },
   { header: 'MRP', key: 'mrp', width: 12 },
   { header: 'SCAN TYPE', key: 'scanType', width: 16 },
   { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
@@ -338,18 +340,22 @@ function auditRow(row) {
     manufacturingYear: row.manufacturingYear || row.year,
     category: row.productCategory || row.category,
     productCategory: row.productCategory || row.category,
-    bin: Number(row.fittedQty || 0) > 0 && !(row.binLocation || row.bin) ? 'FITTED - VEHICLE' : (row.binLocation || row.bin),
+    bin: row.binLocation || row.bin,
     mrp: row.mrp,
     dlc: row.dlc,
     productGroup: row.productGroup,
     partSubGroup: row.partSubGroup,
     dmsQty: row.dmsQty,
     physicalQty: row.physicalQty,
+    physicalBinQty: row.physicalBinQty ?? row.binPhysicalQty ?? row.physicalQty,
+    actualAuditQty: row.actualAuditQty ?? row.physicalQty,
     inwardQty: row.inwardQty || 0,
     outwardQty: row.outwardQty || 0,
     fittedQty: row.fittedQty || 0,
-    regdNo: row.regdNo || '',
-    jobCardNo: row.jobCardNo || '',
+    regdNo: row.fittedRegdNo || row.regdNo || '',
+    jobCardNo: row.fittedJobCardNo || row.jobCardNo || '',
+    fittedRegdNo: row.fittedRegdNo || row.regdNo || '',
+    fittedJobCardNo: row.fittedJobCardNo || row.jobCardNo || '',
     fittedStatus: Number(row.fittedQty || 0) > 0 ? 'Fitted' : 'Not Fitted',
     damageQty: row.damageQty || 0,
     shortQty: row.shortQty,
@@ -367,6 +373,8 @@ function auditRow(row) {
 function scanAuditRow(scan) {
   const physicalQty = Number(scan.qty || scan.quantity || 0);
   const isFitted = (scan.scanType || scan.type) === 'FITTED' || scan.isFitted;
+  const physicalBinQty = isFitted ? 0 : physicalQty;
+  const fittedQty = isFitted ? Math.abs(physicalQty) : 0;
   return {
     partNumber: scan.partNumber || scan.part,
     partDescription: scan.partDescription || scan.partName,
@@ -381,10 +389,16 @@ function scanAuditRow(scan) {
     partSubGroup: scan.partSubGroup,
     dmsQty: scan.dmsQty || 0,
     physicalQty,
+    physicalBinQty,
+    actualAuditQty: physicalBinQty + fittedQty,
     inwardQty: 0,
     outwardQty: 0,
     damageQty: (scan.scanType || scan.type) === 'DAMAGE' ? physicalQty : 0,
-    fittedQty: isFitted ? physicalQty : 0,
+    fittedQty,
+    fittedRegdNo: isFitted ? scan.regdNo || '' : '',
+    fittedJobCardNo: isFitted ? scan.jobCardNo || '' : '',
+    regdNo: isFitted ? scan.regdNo || '' : '',
+    jobCardNo: isFitted ? scan.jobCardNo || '' : '',
     fittedStatus: isFitted ? 'Fitted' : 'Not Fitted',
     shortQty: 0,
     excessQty: 0,
@@ -664,11 +678,15 @@ function selectRows(data, type) {
         autoDetectedBin: '',
         stockDeductedFromBin: '',
         qty: 0,
+        physicalBinQty: 0,
+        actualAuditQty: 0,
         lastScanTime: scan.timestamp,
         deviceId: scan.deviceId || ''
       }),
       (target, scan) => {
         target.qty += Number(scan.qty || scan.quantity || 0);
+        target.physicalBinQty = target.qty;
+        target.actualAuditQty = target.qty;
         if (!target.partDescription) target.partDescription = scan.partDescription || scan.partName || '';
         if (!target.productCategory) target.productCategory = scan.productCategory || scan.category || '';
         if (!target.deviceId) target.deviceId = scan.deviceId || '';
@@ -752,7 +770,8 @@ function selectedColumns(columns, query = {}) {
     .map((key) => key.trim())
     .filter(Boolean);
   if (!selected.length) return columns;
-  const filtered = columns.filter((column) => selected.includes(column.key));
+  const byKey = new Map(columns.map((column) => [column.key, column]));
+  const filtered = selected.map((key) => byKey.get(key)).filter(Boolean);
   return filtered.length ? filtered : columns;
 }
 

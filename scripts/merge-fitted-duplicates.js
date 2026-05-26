@@ -18,6 +18,7 @@ function qtyOf(row = {}) {
 }
 
 async function main() {
+  const dryRun = process.argv.includes('--dry-run');
   const uris = [
     process.env.MONGO_URI,
     process.env.MONGO_FALLBACK_URI,
@@ -35,7 +36,11 @@ async function main() {
     }
   }
   if (!connected) throw new Error('Unable to connect to MongoDB');
-  const rows = await Inventory.find({ scanType: 'FITTED' }).sort({ updatedAt: -1, createdAt: -1, timestamp: -1 }).lean();
+  const rows = await Inventory.find({
+    scanType: 'FITTED',
+    syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] },
+    isDuplicate: { $ne: true }
+  }).sort({ updatedAt: -1, createdAt: -1, timestamp: -1 }).lean();
   const groups = new Map();
   rows.forEach((row) => {
     const dealerCode = upper(row.dealerCode);
@@ -55,6 +60,10 @@ async function main() {
     duplicateGroups += 1;
     const [keeper, ...duplicates] = group;
     const totalQty = group.reduce((sum, row) => sum + qtyOf(row), 0);
+    if (dryRun) {
+      archivedCount += duplicates.length;
+      continue;
+    }
     await DeletedScanLog.insertMany(duplicates.map((scan) => ({
       deletedBy: 'system:migrate-fitted-duplicates',
       dealerCode: scan.dealerCode || '',
@@ -82,7 +91,7 @@ async function main() {
     await Inventory.deleteMany({ _id: { $in: duplicates.map((scan) => scan._id) } });
   }
 
-  console.log(JSON.stringify({ success: true, fittedRowsScanned: rows.length, duplicateGroups, archivedCount }, null, 2));
+  console.log(JSON.stringify({ success: true, dryRun, fittedRowsScanned: rows.length, duplicateGroups, archivedCount }, null, 2));
   await mongoose.disconnect();
 }
 

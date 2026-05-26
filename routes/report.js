@@ -318,14 +318,17 @@ function fittedScanQty(scan = {}) {
 
 function binDisplayWithFitted(entries = []) {
   const nonFitted = entries.filter((scan) => !fittedScanQty(scan));
-  const display = binDisplay(nonFitted);
-  if (entries.some((scan) => fittedScanQty(scan))) {
-    if (!display.bin1) display.bin1 = 'FITTED - VEHICLE';
-    else if (!display.bin2) display.bin2 = 'FITTED - VEHICLE';
-    else if (!display.bin3) display.bin3 = 'FITTED - VEHICLE';
-    else display.otherBins = [display.otherBins, 'FITTED - VEHICLE'].filter(Boolean).join(', ');
-  }
-  return display;
+  return binDisplay(nonFitted);
+}
+
+function fittedDetails(scans = []) {
+  const fittedScans = scans.filter((scan) => fittedScanQty(scan));
+  return {
+    fittedScans,
+    fittedQty: fittedScans.reduce((sum, scan) => sum + fittedScanQty(scan), 0),
+    fittedRegdNo: Array.from(new Set(fittedScans.map((scan) => cleanText(scan.regdNo)).filter(Boolean))).join(', '),
+    fittedJobCardNo: Array.from(new Set(fittedScans.map((scan) => cleanText(scan.jobCardNo)).filter(Boolean))).join(', ')
+  };
 }
 
 function signedVarianceQty(action, qty) {
@@ -444,6 +447,36 @@ function addSheet(workbook, name, columns, rows) {
     });
   });
   return sheet;
+}
+
+function requestedReportColumnKeys(query = {}) {
+  return String(query.columns || query.fields || '')
+    .split(',')
+    .map((key) => key.trim())
+    .filter(Boolean);
+}
+
+function hasRequestedReportColumns(query = {}) {
+  return requestedReportColumnKeys(query).length > 0;
+}
+
+function selectedReportColumns(columns = [], query = {}) {
+  const selected = requestedReportColumnKeys(query);
+  if (!selected.length) return columns;
+  const byKey = new Map(columns.map((column) => [column.key, column]));
+  const ordered = selected.map((key) => byKey.get(key)).filter(Boolean);
+  return ordered.length ? ordered : columns;
+}
+
+async function sendSelectedColumnsWorkbook(res, filename, sheetName, columns, rows, query = {}) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Daksh Inventory v2';
+  workbook.created = new Date();
+  addSheet(workbook, sheetName.slice(0, 31), selectedReportColumns(columns, query), rows);
+  const buffer = await workbook.xlsx.writeBuffer();
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\.xlsx$/i, '')}.xlsx"`);
+  return res.send(Buffer.from(buffer));
 }
 
 async function buildLegacyReportData(query = {}) {
@@ -759,7 +792,12 @@ function finalColumns() {
     { header: 'Product Group', key: 'productGroup', width: 18 },
     { header: 'Product SubGroup', key: 'partSubGroup', width: 18 },
     { header: 'System Qty', key: 'systemQty', width: 12 },
-    { header: 'Physical Qty', key: 'physicalQty', width: 12 },
+    { header: 'Physical Bin Qty', key: 'physicalBinQty', width: 16 },
+    { header: 'Fitted Qty', key: 'fittedQty', width: 12 },
+    { header: 'Actual Audit Qty', key: 'physicalQty', width: 16 },
+    { header: 'Fitted Regd No', key: 'fittedRegdNo', width: 16 },
+    { header: 'Fitted Job Card No', key: 'fittedJobCardNo', width: 18 },
+    { header: 'Fitted Status', key: 'fittedStatus', width: 16 },
     { header: 'System MRP Value', key: 'systemMrpValue', width: 18 },
     { header: 'Physical MRP Value', key: 'physicalMrpValue', width: 18 },
     { header: 'System DLC Value', key: 'systemDlcValue', width: 18 },
@@ -870,7 +908,8 @@ async function createWorkbook(query) {
     { header: 'Product Group', key: 'productGroup', width: 18 },
     { header: 'Product SubGroup', key: 'partSubGroup', width: 18 },
     { header: 'System Qty', key: 'systemQty', width: 14 },
-    { header: 'Physical Qty', key: 'physicalQty', width: 14 },
+    { header: 'Physical Bin Qty', key: 'physicalBinQty', width: 18 },
+    { header: 'Actual Audit Qty', key: 'actualAuditQty', width: 18 },
     { header: 'Part Total Physical Qty', key: 'partLevelPhysicalQty', width: 22 },
     { header: 'Part Level Difference Qty', key: 'differenceQty', width: 22 },
     { header: 'Status', key: 'status', width: 14 }
@@ -934,10 +973,11 @@ function mainAuditColumns() {
     { header: 'PRODUCT GROUP', key: 'productGroup', width: 18 },
     { header: 'PRODUCT SUBGROUP', key: 'partSubGroup', width: 18 },
     { header: 'DMS QTY', key: 'dmsQty', width: 12, numFmt: '#,##0.00' },
-    { header: 'PHYSICAL QTY', key: 'physicalQty', width: 14, numFmt: '#,##0.00' },
+    { header: 'PHYSICAL BIN QTY', key: 'physicalBinQty', width: 18, numFmt: '#,##0.00' },
+    { header: 'ACTUAL AUDIT QTY', key: 'physicalQty', width: 18, numFmt: '#,##0.00' },
     { header: 'FITTED QTY', key: 'fittedQty', width: 14, numFmt: '#,##0.00' },
-    { header: 'REGD NO', key: 'regdNo', width: 16 },
-    { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
+    { header: 'FITTED REGD NO', key: 'regdNo', width: 16 },
+    { header: 'FITTED JOB CARD NO', key: 'jobCardNo', width: 18 },
     { header: 'FITTED STATUS', key: 'fittedStatus', width: 16 },
     { header: 'SHORT QTY', key: 'shortQty', width: 12, numFmt: '#,##0.00' },
     { header: 'EXCESS QTY', key: 'excessQty', width: 12, numFmt: '#,##0.00' },
@@ -974,9 +1014,13 @@ function mainAuditRows(data) {
     partSubGroup: row.partSubGroup,
     dmsQty: row.dmsQty,
     physicalQty: row.physicalQty,
+    physicalBinQty: row.physicalBinQty ?? row.binPhysicalQty ?? row.physicalQty,
+    actualAuditQty: row.actualAuditQty ?? row.physicalQty,
     fittedQty: row.fittedQty || 0,
-    regdNo: row.regdNo || '',
-    jobCardNo: row.jobCardNo || '',
+    regdNo: row.fittedRegdNo || row.regdNo || '',
+    jobCardNo: row.fittedJobCardNo || row.jobCardNo || '',
+    fittedRegdNo: row.fittedRegdNo || row.regdNo || '',
+    fittedJobCardNo: row.fittedJobCardNo || row.jobCardNo || '',
     fittedStatus: row.fittedStatus || (Number(row.fittedQty || 0) > 0 ? 'Fitted' : 'Not Fitted'),
     shortQty: row.shortQty,
     excessQty: row.excessQty,
@@ -1432,19 +1476,56 @@ function scanBasedFilter(query = {}) {
   return filter;
 }
 
-function partsRefreshQuantityExpression() {
+function partsRefreshScanTypeExpression() {
+  return { $toUpper: { $ifNull: ['$scanType', { $ifNull: ['$type', ''] }] } };
+}
+
+function partsRefreshPhysicalBinQtyExpression() {
   const qtyValue = { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] };
+  const qtyAbs = { $abs: qtyValue };
+  const typeValue = partsRefreshScanTypeExpression();
   return {
     $cond: [
-      { $in: [{ $ifNull: ['$scanType', '$type'] }, ['OUTWARD', 'DAMAGE']] },
-      { $multiply: [qtyValue, -1] },
+      { $in: [typeValue, ['OUTWARD', 'DAMAGE']] },
+      { $multiply: [qtyAbs, -1] },
       {
         $cond: [
-          { $eq: [{ $ifNull: ['$scanType', '$type'] }, 'FITTED'] },
+          { $eq: [typeValue, 'FITTED'] },
           0,
-          qtyValue
+          qtyAbs
         ]
       }
+    ]
+  };
+}
+
+function partsRefreshFittedQtyExpression() {
+  const qtyValue = { $ifNull: ['$fittedQty', { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] }] };
+  return {
+    $cond: [
+      { $eq: [partsRefreshScanTypeExpression(), 'FITTED'] },
+      { $abs: qtyValue },
+      0
+    ]
+  };
+}
+
+function partsRefreshFittedFieldExpression(field) {
+  return {
+    $cond: [
+      { $eq: [partsRefreshScanTypeExpression(), 'FITTED'] },
+      { $ifNull: [`$${field}`, ''] },
+      ''
+    ]
+  };
+}
+
+function partsRefreshPhysicalBinExpression() {
+  return {
+    $cond: [
+      { $eq: [partsRefreshScanTypeExpression(), 'FITTED'] },
+      '',
+      { $ifNull: ['$binLocation', '$bin'] }
     ]
   };
 }
@@ -1462,8 +1543,11 @@ async function buildPartsInventoryRefreshRows(query = {}) {
       $group: {
         _id: { $ifNull: ['$normalizedPartNumber', { $ifNull: ['$partNumber', '$part'] }] },
         partNumber: { $first: { $ifNull: ['$partNumber', '$part'] } },
-        quantity: { $sum: partsRefreshQuantityExpression() },
-        bins: { $addToSet: { $ifNull: ['$binLocation', '$bin'] } }
+        physicalBinQty: { $sum: partsRefreshPhysicalBinQtyExpression() },
+        fittedQty: { $sum: partsRefreshFittedQtyExpression() },
+        bins: { $addToSet: partsRefreshPhysicalBinExpression() },
+        fittedRegdNos: { $addToSet: partsRefreshFittedFieldExpression('regdNo') },
+        fittedJobCardNos: { $addToSet: partsRefreshFittedFieldExpression('jobCardNo') }
       }
     },
     { $match: { _id: { $nin: [null, ''] } } },
@@ -1472,7 +1556,12 @@ async function buildPartsInventoryRefreshRows(query = {}) {
 
   return rows.map((row) => ({
     partNumber: row.partNumber || row._id,
-    quantity: Number(row.quantity || 0),
+    quantity: Number(row.physicalBinQty || 0) + Number(row.fittedQty || 0),
+    qty: Number(row.physicalBinQty || 0) + Number(row.fittedQty || 0),
+    physicalBinQty: Number(row.physicalBinQty || 0),
+    fittedQty: Number(row.fittedQty || 0),
+    fittedRegdNo: Array.from(new Set((row.fittedRegdNos || []).map(cleanText).filter(Boolean))).sort().join(', '),
+    fittedJobCardNo: Array.from(new Set((row.fittedJobCardNos || []).map(cleanText).filter(Boolean))).sort().join(', '),
     binLocations: Array.from(new Set((row.bins || []).flatMap(splitAllBins))).sort()
   }));
 }
@@ -1481,12 +1570,12 @@ function partsInventoryRefreshCsv(rows = []) {
   const maxBinCount = Math.max(1, ...rows.map((row) => (row.binLocations || []).length));
   const binHeaders = Array.from({ length: maxBinCount }, (_, index) => `Bin Loc ${index + 1}`);
   const lines = [
-    ['Part Number', 'Quantity', ...binHeaders].map(csvCell).join(',')
+    ['Part Number', 'Qty', 'Physical Bin Qty', 'Fitted Qty', 'Fitted Regd No', 'Fitted Job Card No', ...binHeaders].map(csvCell).join(',')
   ];
   rows.forEach((row) => {
     const binLocations = row.binLocations || [];
     const binCells = Array.from({ length: maxBinCount }, (_, index) => binLocations[index] || '');
-    lines.push([row.partNumber, row.quantity, ...binCells].map(csvCell).join(','));
+    lines.push([row.partNumber, row.quantity, row.physicalBinQty, row.fittedQty, row.fittedRegdNo, row.fittedJobCardNo, ...binCells].map(csvCell).join(','));
   });
   return `${lines.join('\r\n')}\r\n`;
 }
@@ -1562,7 +1651,7 @@ function buildAuditRow(group, master = {}) {
   const systemBins = splitBins(master.binLocation || master.bin || '');
   const partDescription = rowDescription(first, hasMaster ? master : {});
   const category = rowCategory(first, hasMaster ? master : {});
-  const fittedScans = group.scans.filter((scan) => String(scan.scanType || scan.type || '').toUpperCase() === 'FITTED' || scan.isFitted);
+  const fitted = fittedDetails(group.scans);
   const row = {
     partNo: group.partNo,
     partNumber: group.partNo,
@@ -1573,8 +1662,8 @@ function buildAuditRow(group, master = {}) {
     manufacturingYear: hasMaster ? master.manufacturingYear || master.year || '' : '',
     category,
     productCategory: category,
-    bin: physicalBins.bin1 || master.binLocation || master.bin || '',
-    binLocation: physicalBins.bin1 || master.binLocation || master.bin || '',
+    bin: physicalBins.bin1 || '',
+    binLocation: physicalBins.bin1 || '',
     mrp,
     dlc,
     productGroup: hasMaster ? master.productGroup || '' : first.productGroup || '',
@@ -1583,6 +1672,9 @@ function buildAuditRow(group, master = {}) {
     systemQty: dmsQty,
     physicalQty,
     binPhysicalQty,
+    physicalBinQty: binPhysicalQty,
+    actualAuditQty: physicalQty,
+    finalAuditQty: physicalQty,
     shortQty: Math.max(dmsQty - physicalQty, 0),
     excessQty: Math.max(physicalQty - dmsQty, 0),
     netDifference: diffQty,
@@ -1592,8 +1684,10 @@ function buildAuditRow(group, master = {}) {
     inwardQty: scanBreakdown.inwardQty,
     outwardQty: scanBreakdown.outwardQty,
     fittedQty: scanBreakdown.fittedQty,
-    regdNo: Array.from(new Set(fittedScans.map((scan) => cleanText(scan.regdNo)).filter(Boolean))).join(', '),
-    jobCardNo: Array.from(new Set(fittedScans.map((scan) => cleanText(scan.jobCardNo)).filter(Boolean))).join(', '),
+    regdNo: fitted.fittedRegdNo,
+    jobCardNo: fitted.fittedJobCardNo,
+    fittedRegdNo: fitted.fittedRegdNo,
+    fittedJobCardNo: fitted.fittedJobCardNo,
     fittedStatus: scanBreakdown.fittedQty > 0 ? 'Fitted' : 'Not Fitted',
     damageQty: scanBreakdown.damageQty,
     totalAuditQty: physicalQty,
@@ -1653,8 +1747,6 @@ function binWiseRowsFromScans(scans = [], finalRows = []) {
   return Array.from(groups.values()).map((group) => {
     const finalRow = finalByPartDealer.get(`${group.partNumber}::${group.dealerCode}`) || {};
     const first = group.scans[0] || {};
-    const fittedScans = group.scans.filter((scan) => String(scan.scanType || scan.type || '').toUpperCase() === 'FITTED' || scan.isFitted);
-    const fittedQty = fittedScans.reduce((sum, scan) => sum + Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0)), 0);
     return {
       bin: group.bin,
       binLocation: group.bin,
@@ -1671,11 +1763,16 @@ function binWiseRowsFromScans(scans = [], finalRows = []) {
       partSubGroup: finalRow.partSubGroup || first.partSubGroup || '',
       systemQty: finalRow.systemQty ?? finalRow.dmsQty ?? 0,
       physicalQty: group.physicalQty,
-      fittedQty,
-      regdNo: Array.from(new Set(fittedScans.map((scan) => cleanText(scan.regdNo)).filter(Boolean))).join(', '),
-      jobCardNo: Array.from(new Set(fittedScans.map((scan) => cleanText(scan.jobCardNo)).filter(Boolean))).join(', '),
-      fittedStatus: fittedQty > 0 ? 'Fitted' : 'Not Fitted',
+      physicalBinQty: group.physicalQty,
+      actualAuditQty: group.physicalQty,
+      fittedQty: 0,
+      regdNo: '',
+      jobCardNo: '',
+      fittedRegdNo: '',
+      fittedJobCardNo: '',
+      fittedStatus: 'Not Fitted',
       partLevelPhysicalQty: finalRow.physicalQty ?? group.physicalQty,
+      partLevelActualAuditQty: finalRow.actualAuditQty ?? finalRow.physicalQty ?? group.physicalQty,
       differenceQty: finalRow.differenceQty ?? finalRow.netDifference ?? '',
       status: finalRow.status || '',
       qty: group.physicalQty,
@@ -1836,7 +1933,7 @@ function partwiseInventoryAuditColumns() {
     { header: 'DLC', key: 'dlc', width: 12, numFmt: '#,##0.00' },
     { header: 'Opening Stock', key: 'openingStock', width: 16, numFmt: '#,##0.00' },
     { header: 'Physical Bin Quantity', key: 'binPhysicalQty', width: 22, numFmt: '#,##0.00' },
-    { header: 'Physical Quantity (As per Audit)', key: 'physicalQty', width: 26, numFmt: '#,##0.00' },
+    { header: 'Physical Quantity / Actual Audit Quantity', key: 'physicalQty', width: 34, numFmt: '#,##0.00' },
     { header: 'Physical Value On MRP', key: 'physicalValueOnMrp', width: 20, numFmt: '#,##0.00' },
     { header: 'Physical Value On DLC', key: 'physicalValueOnDlc', width: 20, numFmt: '#,##0.00' },
     { header: 'Scan Count', key: 'scanCount', width: 14, numFmt: '#,##0' },
@@ -1854,8 +1951,8 @@ function partwiseInventoryAuditColumns() {
     { header: 'Inward Quantity', key: 'inwardQty', width: 18, numFmt: '#,##0.00' },
     { header: 'Outward Quantity', key: 'outwardQty', width: 18, numFmt: '#,##0.00' },
     { header: 'Fitted Quantity', key: 'fittedQty', width: 18, numFmt: '#,##0.00' },
-    { header: 'Regd No', key: 'regdNo', width: 16 },
-    { header: 'Job Card No', key: 'jobCardNo', width: 18 },
+    { header: 'Fitted Regd No', key: 'regdNo', width: 16 },
+    { header: 'Fitted Job Card No', key: 'jobCardNo', width: 18 },
     { header: 'Fitted Status', key: 'fittedStatus', width: 16 },
     { header: 'Damage Quantity', key: 'damageQty', width: 18, numFmt: '#,##0.00' },
     { header: 'Final Available Quantity', key: 'finalAvailableQty', width: 24, numFmt: '#,##0.00' },
@@ -1960,6 +2057,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}) {
   const shortQty = Math.max(finalAvailableQty - physicalQty, 0);
   const excessQty = Math.max(physicalQty - finalAvailableQty, 0);
   const physicalBins = binDisplayWithFitted(scans);
+  const fitted = fittedDetails(scans);
   const status = partwiseStatus({ hasCatalogue: hasCatalogue || hasSystemStock, hasSystemStock, physicalQty, varianceQty });
   const action = partwiseAction(varianceQty, hasSystemStock, physicalQty);
   const scanTypes = Array.from(new Set(scans.map((scan) => actionForScan(scan) || displayAction(scan.scanType || scan.type) || cleanText(scan.scanType || scan.type)).filter(Boolean)));
@@ -1989,11 +2087,16 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}) {
     movementCodeA: movementCodeAValue(system) || movementCodeAValue(detailSource),
     physicalQty,
     binPhysicalQty,
+    physicalBinQty: binPhysicalQty,
+    actualAuditQty: physicalQty,
+    finalAuditQty: physicalQty,
     inwardQty: breakdown.inwardQty,
     outwardQty: breakdown.outwardQty,
     fittedQty,
-    regdNo: Array.from(new Set(scans.map((scan) => cleanText(scan.regdNo)).filter(Boolean))).join(', '),
-    jobCardNo: Array.from(new Set(scans.map((scan) => cleanText(scan.jobCardNo)).filter(Boolean))).join(', '),
+    regdNo: fitted.fittedRegdNo,
+    jobCardNo: fitted.fittedJobCardNo,
+    fittedRegdNo: fitted.fittedRegdNo,
+    fittedJobCardNo: fitted.fittedJobCardNo,
     fittedStatus: breakdown.fittedQty > 0 ? 'Fitted' : 'Not Fitted',
     damageQty: breakdown.damageQty,
     finalAvailableQty,
@@ -2602,7 +2705,9 @@ function stockSummaryColumns() {
     { header: 'Report Section', key: 'section', width: 34 },
     { header: 'Mismatch Cases / Metric', key: 'metric', width: 48 },
     { header: 'Scan Type', key: 'scanType', width: 16 },
-    { header: 'Fitted Qty', key: 'fittedQty', width: 14 },
+    { header: 'Physical Bin Stock Qty', key: 'physicalBinQty', width: 22 },
+    { header: 'Fitted On Vehicle Qty', key: 'fittedQty', width: 22 },
+    { header: 'Final Audit Qty', key: 'finalAuditQty', width: 18 },
     { header: 'Regd No', key: 'regdNo', width: 16 },
     { header: 'Job Card No', key: 'jobCardNo', width: 18 },
     { header: 'Fitted Status', key: 'fittedStatus', width: 16 },
@@ -2659,6 +2764,9 @@ function stockSummaryRowMatchesFilters(row = {}, query = {}) {
 function summarizeStockRows(rows = []) {
   return rows.reduce((total, row) => {
     total.skuCount += 1;
+    total.physicalBinQty += Number(row.physicalBinQty ?? row.physicalQty ?? 0);
+    total.fittedQty += Number(row.fittedQty || 0);
+    total.finalAuditQty += Number(row.finalAuditQty ?? row.actualAuditQty ?? row.physicalQty ?? 0);
     total.physicalMrp += stockSummaryValue(row, 'physicalQty', 'mrp');
     total.physicalDlc += stockSummaryValue(row, 'physicalQty', 'dlc');
     total.finalAuditMrp += stockSummaryValue(row, 'finalAuditQty', 'mrp');
@@ -2668,7 +2776,7 @@ function summarizeStockRows(rows = []) {
     total.varianceMrp += stockSummaryValue(row, 'varianceQty', 'mrp');
     total.varianceDlc += stockSummaryValue(row, 'varianceQty', 'dlc');
     return total;
-  }, { skuCount: 0, physicalMrp: 0, physicalDlc: 0, finalAuditMrp: 0, finalAuditDlc: 0, systemMrp: 0, systemDlc: 0, varianceMrp: 0, varianceDlc: 0 });
+  }, { skuCount: 0, physicalBinQty: 0, fittedQty: 0, finalAuditQty: 0, physicalMrp: 0, physicalDlc: 0, finalAuditMrp: 0, finalAuditDlc: 0, systemMrp: 0, systemDlc: 0, varianceMrp: 0, varianceDlc: 0 });
 }
 
 function caseSummary(rows = [], mode) {
@@ -2703,9 +2811,9 @@ function stockSummaryFlatRows(sections) {
   const { case1, case2, case3, case4, net } = sections.cases;
   return [
     { rowType: 'section', section: 'Physical (Inventory Audit) Value', metric: 'Value On MRP / Value On DLC' },
-    { section: 'Physical (Inventory Audit) Value', metric: 'Physical Bin Stock', valueOnMrp: sections.physical.valueOnMrp, valueOnDlc: sections.physical.valueOnDlc },
+    { section: 'Physical (Inventory Audit) Value', metric: 'Physical Bin Stock', physicalBinQty: sections.physical.physicalBinQty, valueOnMrp: sections.physical.valueOnMrp, valueOnDlc: sections.physical.valueOnDlc },
     { section: 'Physical (Inventory Audit) Value', metric: 'Fitted On Vehicle', scanType: 'FITTED', fittedQty: sections.fitted.fittedQty, fittedStatus: sections.fitted.fittedQty > 0 ? 'Fitted' : 'Not Fitted', skuCount: sections.fitted.skuCount, valueOnMrp: sections.fitted.valueOnMrp, valueOnDlc: sections.fitted.valueOnDlc },
-    { rowType: 'total', section: 'Physical (Inventory Audit) Value', metric: 'Final Audit Stock = Physical + Fitted', valueOnMrp: sections.finalAudit.valueOnMrp, valueOnDlc: sections.finalAudit.valueOnDlc },
+    { rowType: 'total', section: 'Physical (Inventory Audit) Value', metric: 'Final Audit Stock = Physical + Fitted', physicalBinQty: sections.finalAudit.physicalBinQty, fittedQty: sections.finalAudit.fittedQty, finalAuditQty: sections.finalAudit.finalAuditQty, valueOnMrp: sections.finalAudit.valueOnMrp, valueOnDlc: sections.finalAudit.valueOnDlc },
     { rowType: 'note', note: STOCK_SUMMARY_NOTE },
     { rowType: 'section', section: sections.system.title, metric: 'Value On MRP / Value On DLC' },
     { section: sections.system.title, metric: 'Total', valueOnMrp: sections.system.valueOnMrp, valueOnDlc: sections.system.valueOnDlc },
@@ -2735,9 +2843,9 @@ function stockSummaryFlatRows(sections) {
     { rowType: 'gap' },
     { rowType: 'section', section: sections.varianceAsOn.title, metric: 'Value On MRP / Value On DLC' },
     { section: sections.varianceAsOn.title, metric: 'Opening Stock value', valueOnMrp: sections.system.valueOnMrp, valueOnDlc: sections.system.valueOnDlc },
-    { section: sections.varianceAsOn.title, metric: 'Physical Bin Stock Value', valueOnMrp: sections.physical.valueOnMrp, valueOnDlc: sections.physical.valueOnDlc },
-    { section: sections.varianceAsOn.title, metric: 'Fitted On Vehicle Value', valueOnMrp: sections.fitted.valueOnMrp, valueOnDlc: sections.fitted.valueOnDlc },
-    { section: sections.varianceAsOn.title, metric: 'Final Audit Stock Value', valueOnMrp: sections.finalAudit.valueOnMrp, valueOnDlc: sections.finalAudit.valueOnDlc },
+    { section: sections.varianceAsOn.title, metric: 'Physical Bin Stock Value', physicalBinQty: sections.physical.physicalBinQty, valueOnMrp: sections.physical.valueOnMrp, valueOnDlc: sections.physical.valueOnDlc },
+    { section: sections.varianceAsOn.title, metric: 'Fitted On Vehicle Value', scanType: 'FITTED', fittedQty: sections.fitted.fittedQty, valueOnMrp: sections.fitted.valueOnMrp, valueOnDlc: sections.fitted.valueOnDlc },
+    { section: sections.varianceAsOn.title, metric: 'Final Audit Stock Value', physicalBinQty: sections.finalAudit.physicalBinQty, fittedQty: sections.finalAudit.fittedQty, finalAuditQty: sections.finalAudit.finalAuditQty, valueOnMrp: sections.finalAudit.valueOnMrp, valueOnDlc: sections.finalAudit.valueOnDlc },
     { rowType: 'net', section: sections.varianceAsOn.title, metric: 'Net Variance', valueOnMrp: net.valueOnMrp, valueOnDlc: net.valueOnDlc },
     { rowType: 'net', section: sections.varianceAsOn.title, metric: 'Net Variance (%age of Opening Stock)', percentMrp: stockSummaryPct(net.valueOnMrp, sections.system.valueOnMrp), percentDlc: stockSummaryPct(net.valueOnDlc, sections.system.valueOnDlc) },
     { rowType: 'note', note: STOCK_SUMMARY_NOTE },
@@ -2807,6 +2915,7 @@ async function buildStockSummaryReport(query = {}) {
     const fittedQty = numberValue(physical.fittedQty, 0);
     const finalAuditQty = physicalQty + fittedQty;
     const varianceQty = finalAuditQty - systemQty;
+    const fitted = fittedDetails(physical.scans || []);
     return {
       partNumber: partNo,
       partNo,
@@ -2822,8 +2931,15 @@ async function buildStockSummaryReport(query = {}) {
       dlc,
       systemQty,
       physicalQty,
+      physicalBinQty: physicalQty,
       fittedQty,
       finalAuditQty,
+      actualAuditQty: finalAuditQty,
+      fittedRegdNo: fitted.fittedRegdNo,
+      fittedJobCardNo: fitted.fittedJobCardNo,
+      regdNo: fitted.fittedRegdNo,
+      jobCardNo: fitted.fittedJobCardNo,
+      fittedStatus: fittedQty > 0 ? 'Fitted' : 'Not Fitted',
       varianceQty,
       systemValueOnMrp: systemQty * mrp,
       systemValueOnDlc: systemQty * dlc,
@@ -2872,9 +2988,9 @@ async function buildStockSummaryReport(query = {}) {
   const auditDateLabel = stockSummaryAuditDateLabel(query);
   const selectedDealer = dealerCode ? dealers.find((dealer) => dealer.dealerCode === dealerCode) : null;
   const sections = {
-    physical: { valueOnMrp: money(totals.physicalMrp), valueOnDlc: money(totals.physicalDlc) },
+    physical: { physicalBinQty: money(totals.physicalBinQty), valueOnMrp: money(totals.physicalMrp), valueOnDlc: money(totals.physicalDlc) },
     fitted: { skuCount: fitted.skuCount, fittedQty: fitted.fittedQty, valueOnMrp: money(fitted.valueOnMrp), valueOnDlc: money(fitted.valueOnDlc) },
-    finalAudit: { valueOnMrp: money(totals.finalAuditMrp), valueOnDlc: money(totals.finalAuditDlc) },
+    finalAudit: { physicalBinQty: money(totals.physicalBinQty), fittedQty: money(totals.fittedQty), finalAuditQty: money(totals.finalAuditQty), valueOnMrp: money(totals.finalAuditMrp), valueOnDlc: money(totals.finalAuditDlc) },
     system: { title: `System Value (Opening Stock ${auditDateLabel})`, valueOnMrp: money(totals.systemMrp), valueOnDlc: money(totals.systemDlc) },
     mismatch: { valueOnMrp: money(totals.finalAuditMrp - totals.systemMrp), valueOnDlc: money(totals.finalAuditDlc - totals.systemDlc) },
     hhmlVida: { physicalMrp: money(hhmlVida.finalAuditMrp), physicalDlc: money(hhmlVida.finalAuditDlc), systemMrp: money(hhmlVida.systemMrp), systemDlc: money(hhmlVida.systemDlc), varianceMrp: money(hhmlVida.varianceMrp), varianceDlc: money(hhmlVida.varianceDlc) },
@@ -3070,6 +3186,9 @@ router.get('/stock-summary', auth.requireAuth, async (req, res) => {
     const reportQuery = requireDealerForReport(req.query);
     const data = await buildStockSummaryReport(reportQuery);
     if (req.query.format === 'excel') {
+      if (hasRequestedReportColumns(reportQuery)) {
+        return sendSelectedColumnsWorkbook(res, 'Stock_Summary.xlsx', 'Stock Summary', data.columns, data.rows, reportQuery);
+      }
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'Daksh Inventory v2';
       workbook.created = new Date();
@@ -3099,6 +3218,10 @@ router.get('/category-wise-variance-summary', auth.requireAuth, async (req, res)
   try {
     const data = await buildCategoryWiseVarianceSummary(req.query);
     if (req.query.format === 'excel') {
+      if (hasRequestedReportColumns(req.query)) {
+        const exportRows = data.rows.concat([{ productCategory: 'Grand Total', action: '', ...data.grandTotal, rowType: 'grandTotal' }]);
+        return sendSelectedColumnsWorkbook(res, 'Category_Wise_Variance_Summary.xlsx', 'Category Wise Variance Summary', categoryVarianceColumns(), exportRows, req.query);
+      }
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'Daksh Inventory v2';
       workbook.created = new Date();
@@ -3136,6 +3259,9 @@ router.get('/partwise-inventory-audit', auth.requireAuth, async (req, res) => {
     const reportQuery = requireDealerForReport(req.query);
     const data = await buildPartwiseInventoryAuditReport(reportQuery);
     if (req.query.format === 'excel') {
+      if (hasRequestedReportColumns(reportQuery)) {
+        return sendSelectedColumnsWorkbook(res, 'Partwise_Inventory_Audit_Report.xlsx', 'Partwise Inventory Audit', data.columns, data.rows, reportQuery);
+      }
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'Daksh Inventory v2';
       workbook.created = new Date();
@@ -3218,6 +3344,11 @@ router.get('/professional/:kind', auth.requireAuth, async (req, res) => {
 
     const report = PROFESSIONAL_REPORTS[kind];
     if (reportQuery.format === 'excel') {
+      if (hasRequestedReportColumns(reportQuery)) {
+        const data = await buildReportData(reportQuery);
+        const preview = previewForReport(kind, data);
+        return sendSelectedColumnsWorkbook(res, `${report.fileName}.xlsx`, report.title, preview.columns, preview.rows, reportQuery);
+      }
       const { workbook } = await createProfessionalWorkbook(kind, reportQuery);
       const buffer = await workbook.xlsx.writeBuffer();
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -3297,6 +3428,11 @@ async function professionalAlias(req, res, kind) {
     const reportQuery = requireDealerForReport(req.query);
     console.log("REPORT API:", req.path, req.query);
     if (reportQuery.format === 'excel') {
+      if (hasRequestedReportColumns(reportQuery)) {
+        const data = await buildReportData(reportQuery);
+        const preview = previewForReport(kind, data);
+        return sendSelectedColumnsWorkbook(res, `${report.fileName}.xlsx`, report.title, preview.columns, preview.rows, reportQuery);
+      }
       const { workbook } = await createProfessionalWorkbook(kind, reportQuery);
       const buffer = await workbook.xlsx.writeBuffer();
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -3418,7 +3554,12 @@ router.get('/parts-inventory-refresh-template', auth.requireAuth, async (req, re
     const previewRows = rows.map((row) => {
       const record = {
         partNumber: row.partNumber || '',
-        quantity: row.quantity || 0
+        quantity: row.quantity || 0,
+        qty: row.quantity || 0,
+        physicalBinQty: row.physicalBinQty || 0,
+        fittedQty: row.fittedQty || 0,
+        fittedRegdNo: row.fittedRegdNo || '',
+        fittedJobCardNo: row.fittedJobCardNo || ''
       };
       binColumns.forEach((column, index) => {
         record[column.key] = (row.binLocations || [])[index] || '';
@@ -3432,7 +3573,11 @@ router.get('/parts-inventory-refresh-template', auth.requireAuth, async (req, re
       summary: { rows: previewRows.length },
       columns: [
         { header: 'Part Number', key: 'partNumber' },
-        { header: 'Quantity', key: 'quantity' },
+        { header: 'Qty', key: 'qty' },
+        { header: 'Physical Bin Qty', key: 'physicalBinQty' },
+        { header: 'Fitted Qty', key: 'fittedQty' },
+        { header: 'Fitted Regd No', key: 'fittedRegdNo' },
+        { header: 'Fitted Job Card No', key: 'fittedJobCardNo' },
         ...binColumns
       ],
       rows: previewRows,
@@ -3556,4 +3701,6 @@ module.exports.buildReportData = buildReportData;
 module.exports.createWorkbook = createWorkbook;
 module.exports.buildCategoryWiseVarianceSummary = buildCategoryWiseVarianceSummary;
 module.exports.buildStockSummaryReport = buildStockSummaryReport;
+module.exports.buildPartwiseInventoryAuditReport = buildPartwiseInventoryAuditReport;
+module.exports.buildPartsInventoryRefreshRows = buildPartsInventoryRefreshRows;
 module.exports.addStockSummarySheet = addStockSummarySheet;

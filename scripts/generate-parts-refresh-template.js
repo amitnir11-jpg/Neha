@@ -35,13 +35,56 @@ function testScanClause() {
   };
 }
 
-function physicalQuantityExpression() {
+function scanTypeExpression() {
+  return { $toUpper: { $ifNull: ['$scanType', { $ifNull: ['$type', ''] }] } };
+}
+
+function physicalBinQuantityExpression() {
   const qtyValue = { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] };
+  const qtyAbs = { $abs: qtyValue };
+  const typeValue = scanTypeExpression();
   return {
     $cond: [
-      { $in: [{ $ifNull: ['$scanType', '$type'] }, ['OUTWARD', 'FITTED', 'DAMAGE']] },
-      { $multiply: [qtyValue, -1] },
-      qtyValue
+      { $in: [typeValue, ['OUTWARD', 'DAMAGE']] },
+      { $multiply: [qtyAbs, -1] },
+      {
+        $cond: [
+          { $eq: [typeValue, 'FITTED'] },
+          0,
+          qtyAbs
+        ]
+      }
+    ]
+  };
+}
+
+function fittedQuantityExpression() {
+  const qtyValue = { $ifNull: ['$fittedQty', { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] }] };
+  return {
+    $cond: [
+      { $eq: [scanTypeExpression(), 'FITTED'] },
+      { $abs: qtyValue },
+      0
+    ]
+  };
+}
+
+function physicalBinExpression() {
+  return {
+    $cond: [
+      { $eq: [scanTypeExpression(), 'FITTED'] },
+      '',
+      { $ifNull: ['$binLocation', '$bin'] }
+    ]
+  };
+}
+
+function fittedFieldExpression(field) {
+  return {
+    $cond: [
+      { $eq: [scanTypeExpression(), 'FITTED'] },
+      { $ifNull: [`$${field}`, ''] },
+      ''
     ]
   };
 }
@@ -65,8 +108,11 @@ async function main() {
       $group: {
         _id: { $ifNull: ['$normalizedPartNumber', { $ifNull: ['$partNumber', '$part'] }] },
         partNumber: { $first: { $ifNull: ['$partNumber', '$part'] } },
-        quantity: { $sum: physicalQuantityExpression() },
-        bins: { $addToSet: { $ifNull: ['$binLocation', '$bin'] } }
+        physicalBinQty: { $sum: physicalBinQuantityExpression() },
+        fittedQty: { $sum: fittedQuantityExpression() },
+        bins: { $addToSet: physicalBinExpression() },
+        fittedRegdNos: { $addToSet: fittedFieldExpression('regdNo') },
+        fittedJobCardNos: { $addToSet: fittedFieldExpression('jobCardNo') }
       }
     },
     { $match: { _id: { $nin: [null, ''] } } },
@@ -75,13 +121,17 @@ async function main() {
 
   const preparedRows = rows.map((row) => ({
     partNumber: row.partNumber || row._id,
-    quantity: Number(row.quantity || 0),
+    quantity: Number(row.physicalBinQty || 0) + Number(row.fittedQty || 0),
+    physicalBinQty: Number(row.physicalBinQty || 0),
+    fittedQty: Number(row.fittedQty || 0),
+    fittedRegdNo: Array.from(new Set((row.fittedRegdNos || []).map((item) => String(item || '').trim()).filter(Boolean))).sort().join(', '),
+    fittedJobCardNo: Array.from(new Set((row.fittedJobCardNos || []).map((item) => String(item || '').trim()).filter(Boolean))).sort().join(', '),
     binLocations: Array.from(new Set((row.bins || []).flatMap(splitBins))).sort()
   }));
   const maxBinCount = Math.max(1, ...preparedRows.map((row) => row.binLocations.length));
   const binHeaders = Array.from({ length: maxBinCount }, (_, index) => `Bin Loc ${index + 1}`);
   const csvRows = [
-    ['Part Number', 'Quantity', ...binHeaders].map(csvCell).join(',')
+    ['Part Number', 'Qty', 'Physical Bin Qty', 'Fitted Qty', 'Fitted Regd No', 'Fitted Job Card No', ...binHeaders].map(csvCell).join(',')
   ];
 
   preparedRows.forEach((row) => {
@@ -89,6 +139,10 @@ async function main() {
     csvRows.push([
       row.partNumber,
       row.quantity,
+      row.physicalBinQty,
+      row.fittedQty,
+      row.fittedRegdNo,
+      row.fittedJobCardNo,
       ...binCells
     ].map(csvCell).join(','));
   });

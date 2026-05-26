@@ -389,9 +389,9 @@
           <div class="card-head report-preview-head">
             <h2 id="reportTitle">Main Inventory Audit Report</h2>
             <div class="actions report-layout-actions">
-              <button id="reportColumnSettingsOpen" class="btn icon-btn" type="button" title="Select Report Fields" aria-label="Select Report Fields">&#9881;</button>
               <input id="reportTableSearch" class="report-table-search" type="search" placeholder="Search within table">
               <span id="reportCount" class="muted">0 rows</span>
+              <button id="reportResultSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button>
             </div>
           </div>
           <div id="reportResizeHandle" class="report-resize-handle" title="Drag to resize report preview"></div>
@@ -1314,24 +1314,18 @@
         <h2 id="reportFilterSettingsTitle">Select Report Filters</h2>
         <button id="reportFilterSettingsClose" class="btn icon-btn" type="button" aria-label="Close">&times;</button>
       </div>
+      <h3 class="settings-section-title">Visible Filter Inputs</h3>
       <div id="reportFilterSettingsList" class="report-filter-settings-list"></div>
-      <div class="modal-actions">
-        <button id="reportFilterSettingsDefault" class="btn light" type="button">Reset Default</button>
-        <button id="reportFilterSettingsSave" class="btn primary" type="button">Save</button>
+      <div class="modal-actions compact-actions">
+        <button id="reportFilterSettingsDefault" class="btn light" type="button">Reset Default Filters</button>
+        <button id="reportFilterSettingsSave" class="btn primary" type="button">Save Filters</button>
       </div>
-    </div>
-  </div>
-  <div id="reportColumnSettingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="reportColumnSettingsTitle">
-    <div class="modal-card report-filter-settings-card">
-      <div class="modal-head">
-        <h2 id="reportColumnSettingsTitle">Select Report Fields</h2>
-        <button id="reportColumnSettingsClose" class="btn icon-btn" type="button" aria-label="Close">&times;</button>
-      </div>
+      <h3 class="settings-section-title">Visible Table Columns</h3>
       <div id="reportColumnSettingsList" class="report-filter-settings-list report-column-settings-list"></div>
       <div class="modal-actions">
         <button id="reportColumnSettingsAll" class="btn light" type="button">Select All</button>
-        <button id="reportColumnSettingsDefault" class="btn light" type="button">Reset Default</button>
-        <button id="reportColumnSettingsSave" class="btn primary" type="button">Save</button>
+        <button id="reportColumnSettingsDefault" class="btn light" type="button">Reset Default Columns</button>
+        <button id="reportColumnSettingsSave" class="btn primary" type="button">Save Selected Columns</button>
       </div>
     </div>
   </div>
