@@ -143,6 +143,8 @@
     reportTableColumns: [],
     reportTableTotalRows: 0,
     reportTableGrandTotal: null,
+    reportTableSummary: null,
+    reportTableSections: null,
     reportFilterSettings: {},
     reportFilterSettingsLoaded: new Set(),
     reportFilterDropdownsLoadedAt: 0,
@@ -2989,8 +2991,11 @@
     });
     params.delete('testScanMode');
     if (format) {
-      const selectedColumns = currentReportColumnKeys(paramsObject.reportType || activeReportType());
-      if (selectedColumns && selectedColumns.length) params.set('columns', selectedColumns.join(','));
+      const reportType = paramsObject.reportType || activeReportType();
+      if (reportType !== 'stock-summary') {
+        const selectedColumns = currentReportColumnKeys(reportType);
+        if (selectedColumns && selectedColumns.length) params.set('columns', selectedColumns.join(','));
+      }
     }
     if (format) params.set('format', format);
     const query = params.toString();
@@ -3026,6 +3031,8 @@
     const rows = data.rows || [];
     console.log("Rows received:", rows.length);
     console.log("First row:", rows[0]);
+    state.reportTableSummary = data.summary || null;
+    state.reportTableSections = data.sections || null;
     renderReportTable(data.columns || [], rows, data.totalRows, data.grandTotal, reportType);
     const message = $('#reportMessage');
     if (message) {
@@ -3149,6 +3156,8 @@
     state.reportTableColumns = [];
     state.reportTableTotalRows = 0;
     state.reportTableGrandTotal = null;
+    state.reportTableSummary = null;
+    state.reportTableSections = null;
     $('#reportHead').innerHTML = '';
     $('#reportRows').innerHTML = '';
     if ($('#reportTableSearch')) $('#reportTableSearch').value = '';
@@ -3442,7 +3451,7 @@
       const isSorted = sort.key === key;
       const direction = isSorted ? (sort.direction === 'desc' ? 'descending' : 'ascending') : 'none';
       const sortLabel = isSorted ? (sort.direction === 'desc' ? 'Sorted high to low' : 'Sorted low to high') : 'Not sorted';
-      return `<th class="${reportColumnClass(column, index)} ${isSorted ? `sorted-${escapeHtml(sort.direction)}` : ''}" draggable="true" data-col-index="${index}" data-col-key="${escapeHtml(key)}" aria-sort="${escapeHtml(direction)}" style="width:${width}px"><button type="button" class="report-sort-button" title="Sort ${escapeHtml(column.header)}" aria-label="Sort ${escapeHtml(column.header)}"><span class="report-th-content">${escapeHtml(column.header)}</span><span class="sr-only">${escapeHtml(sortLabel)}</span></button><span class="report-col-resize" role="separator" aria-label="Resize column. Double click to auto fit."></span></th>`;
+      return `<th class="${reportColumnClass(column, index)} ${isSorted ? `sorted-${escapeHtml(sort.direction)}` : ''}" draggable="true" data-col-index="${index}" data-col-key="${escapeHtml(key)}" aria-sort="${escapeHtml(direction)}" style="width:${width}px;text-align:left"><button type="button" class="report-sort-button" title="Sort ${escapeHtml(column.header)}" aria-label="Sort ${escapeHtml(column.header)}" style="justify-content:flex-start;text-align:left"><span class="report-th-content" style="text-align:left">${escapeHtml(column.header)}</span><span class="sr-only">${escapeHtml(sortLabel)}</span></button><span class="report-col-resize" role="separator" aria-label="Resize column. Double click to auto fit."></span></th>`;
     }).join('')}</tr>`;
   }
 
@@ -3586,36 +3595,142 @@
     enhanceCoreTables();
   }
 
+  function stockSummaryNumber(value) {
+    if (value === undefined || value === null || value === '') return '';
+    const num = Number(value);
+    return Number.isFinite(num) ? String(Math.round(num)) : String(value);
+  }
+
+  function stockSummaryCellClass(key) {
+    if (/^dms/i.test(key)) return 'stock-summary-dms-cell';
+    if (/^physical/i.test(key)) return 'stock-summary-physical-cell';
+    if (/^excess/i.test(key)) return 'stock-summary-excess-cell';
+    if (/^short/i.test(key)) return 'stock-summary-short-cell';
+    if (/^net/i.test(key)) return 'stock-summary-net-cell';
+    return 'stock-summary-category-cell';
+  }
+
   function renderStockSummaryTable(columns, rows, totalRows, reportType = activeReportType()) {
-    const keys = reportColumnsForDisplay(columns && columns.length ? columns : [
-      { header: 'Report Section', key: 'section' },
-      { header: 'Mismatch Cases / Metric', key: 'metric' },
-      { header: 'SKU Counts', key: 'skuCount' },
-      { header: 'Value On MRP', key: 'valueOnMrp' },
-      { header: 'Value On DLC', key: 'valueOnDlc' },
-      { header: '% of Opening Stock On MRP', key: 'percentMrp' },
-      { header: '% of Opening Stock On DLC', key: 'percentDlc' }
-    ], rows, reportType, 0);
-    const filteredRows = reportRowsForDisplay(rows, keys, reportType);
-    renderReportHeader(keys, reportType);
+    const keys = columns && columns.length ? columns : [
+      { header: 'Category', key: 'category' },
+      { header: 'Value', key: 'dmsValue' },
+      { header: 'Part Lines', key: 'dmsPartLines' },
+      { header: 'Quantity', key: 'dmsQuantity' },
+      { header: 'Value', key: 'physicalValue' },
+      { header: 'Part Lines', key: 'physicalPartLines' },
+      { header: 'Quantity', key: 'physicalQuantity' },
+      { header: 'Value', key: 'excessValue' },
+      { header: 'Part Lines', key: 'excessPartLines' },
+      { header: 'Value', key: 'shortValue' },
+      { header: 'Part Lines', key: 'shortPartLines' },
+      { header: 'Value', key: 'netDifference' }
+    ];
+    const table = $('#reportTable');
+    const wrap = $('#reportTableWrap');
+    if (table) table.dataset.reportType = reportType || '';
+    if (wrap) wrap.dataset.reportType = reportType || '';
+    const widths = [150, 128, 82, 96, 128, 82, 96, 110, 82, 110, 82, 118];
+    let colgroup = $('colgroup', table);
+    if (!colgroup) {
+      colgroup = document.createElement('colgroup');
+      table.insertBefore(colgroup, table.firstChild);
+    }
+    colgroup.innerHTML = widths.map((width, index) => {
+      const key = reportColumnKey(keys[index], index);
+      return `<col data-col-index="${index}" data-col-key="${escapeHtml(key)}" style="width:${width}px;min-width:${Math.min(width, 82)}px">`;
+    }).join('');
+    applyReportTableWidth(table);
+
+    const filteredRows = reportVisibleRows(rows || []);
     const pageRows = filteredRows.slice(0, 500);
+    const summary = state.reportTableSummary || {};
+    const sections = state.reportTableSections || {};
+    const metaRows = Array.isArray(summary.metadata) && summary.metadata.length
+      ? summary.metadata
+      : Array.isArray(sections.metadata) ? sections.metadata : [];
+    const footer = summary.footer || sections.footer || {};
+    const title = summary.title || sections.title || 'Wall -to-Wall Inventory Audit Service(WWIAS)';
+    const metaMarkup = metaRows.map((item) => `
+      <tr class="stock-summary-meta-row">
+        <th colspan="3" class="stock-summary-meta-label">${escapeHtml(item.label || '')} :</th>
+        <td colspan="9" class="stock-summary-meta-value">${escapeHtml(item.value || '')}</td>
+      </tr>
+    `).join('');
+    $('#reportHead').innerHTML = `
+      <tr class="stock-summary-app-title-row">
+        <th colspan="${keys.length}" class="stock-summary-app-title-cell">Daksh Inventory Solution V2</th>
+      </tr>
+      <tr class="stock-summary-title-row">
+        <th colspan="${keys.length}" class="stock-summary-title-cell">${escapeHtml(title)}</th>
+      </tr>
+      ${metaMarkup}
+      <tr class="stock-summary-service-row">
+        <th colspan="${keys.length}" class="stock-summary-service-cell">${escapeHtml(title)}</th>
+      </tr>
+      <tr class="stock-summary-group-row">
+        <th rowspan="2" data-col-key="category" class="stock-summary-category-head">Category</th>
+        <th colspan="3" class="stock-summary-dms-head">DMS Stock</th>
+        <th colspan="3" class="stock-summary-physical-head">Physical Stock as Counted</th>
+        <th colspan="2" class="stock-summary-excess-head">Excess Found</th>
+        <th colspan="2" class="stock-summary-short-head">Short Found</th>
+        <th class="stock-summary-net-head">Net Difference</th>
+      </tr>
+      <tr class="stock-summary-subhead-row">
+        ${keys.slice(1).map((column, index) => {
+          const key = reportColumnKey(column, index + 1);
+          return `<th data-col-key="${escapeHtml(key)}" class="${stockSummaryCellClass(key).replace('-cell', '-head')}">${escapeHtml(column.header || '')}</th>`;
+        }).join('')}
+      </tr>
+    `;
     $('#reportRows').innerHTML = pageRows.map((row) => {
-      if (row.rowType === 'gap') return `<tr class="stock-summary-gap-row"><td colspan="${keys.length}"></td></tr>`;
-      if (row.rowType === 'note') return `<tr class="stock-summary-note-row"><td colspan="${keys.length}">${escapeHtml(row.note || row.section || '')}</td></tr>`;
-      const cls = row.rowType === 'section' ? 'stock-summary-section-row' : row.rowType === 'total' || row.rowType === 'net' ? 'stock-summary-total-row' : '';
+      const isTotal = row.rowType === 'total';
       return `
-        <tr class="${cls}">
+        <tr class="${isTotal ? 'stock-summary-grand-total-row' : 'stock-summary-matrix-row'}">
           ${keys.map((column) => {
-            const value = row[column.key];
-            const isPercent = /^percent/i.test(column.key);
-            const isNumber = isPercent || ['skuCount', 'valueOnMrp', 'valueOnDlc'].includes(column.key);
-            const isBlank = value === undefined || value === null || value === '';
-            const text = isBlank ? '' : isPercent ? percent2(value) : (column.key === 'skuCount' ? Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : (isNumber ? money2(value) : (value || '')));
-            return `<td class="${isNumber ? 'numeric-cell number-cell' : reportCellClass(column, value)}" data-type="${isNumber ? 'number' : 'text'}" title="${escapeHtml(text)}">${reportCellContent(column, row, text)}</td>`;
+            const key = reportColumnKey(column);
+            const value = key === 'category' ? row[key] : stockSummaryNumber(row[key]);
+            return `<td class="${stockSummaryCellClass(key)}" data-type="${key === 'category' ? 'text' : 'number'}" title="${escapeHtml(value)}">${escapeHtml(value)}</td>`;
           }).join('')}
         </tr>
       `;
-    }).join('');
+    }).join('') + `
+      <tr class="stock-summary-footer-gap-row"><td colspan="${keys.length}"></td></tr>
+      <tr class="stock-summary-footer-row stock-summary-damaged-row">
+        <td colspan="4" class="stock-summary-footer-label">Damaged Items Value( Considered Value)</td>
+        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(stockSummaryNumber(footer.damagedItemsValue || 0))}</td>
+        <td colspan="5" class="stock-summary-footer-blank"></td>
+      </tr>
+      <tr class="stock-summary-footer-row">
+        <td colspan="4" class="stock-summary-footer-label">Manual Contribution</td>
+        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(footer.manualContribution || '')}</td>
+        <td colspan="5" class="stock-summary-footer-blank"></td>
+      </tr>
+      <tr class="stock-summary-footer-row stock-summary-short-footer-row">
+        <td colspan="4" class="stock-summary-footer-label">Total Short Value</td>
+        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(stockSummaryNumber(footer.totalShortValue || 0))}</td>
+        <td colspan="5" class="stock-summary-footer-blank"></td>
+      </tr>
+      <tr class="stock-summary-footer-row stock-summary-excess-footer-row">
+        <td colspan="4" class="stock-summary-footer-label">Total Excess Value</td>
+        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(stockSummaryNumber(footer.totalExcessValue || 0))}</td>
+        <td colspan="5" class="stock-summary-footer-blank"></td>
+      </tr>
+      <tr class="stock-summary-footer-row stock-summary-net-footer-row">
+        <td colspan="4" class="stock-summary-footer-label">Net Diff</td>
+        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(stockSummaryNumber(footer.netDiff || 0))}</td>
+        <td colspan="5" class="stock-summary-footer-blank"></td>
+      </tr>
+      <tr class="stock-summary-footer-row">
+        <td colspan="4" class="stock-summary-footer-label">Undefined Items Dead Line</td>
+        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(footer.undefinedItemsDeadline || '')}</td>
+        <td colspan="5" class="stock-summary-footer-blank"></td>
+      </tr>
+      <tr class="stock-summary-footer-row">
+        <td colspan="4" class="stock-summary-footer-label">Damaged items dead line</td>
+        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(footer.damagedItemsDeadline || '')}</td>
+        <td colspan="5" class="stock-summary-footer-blank"></td>
+      </tr>
+    `;
     setText('reportCount', `${pageRows.length} shown${filteredRows.length !== pageRows.length ? ` of ${filteredRows.length}` : ''}${totalRows ? ` | ${totalRows} total` : ''}`);
     refreshReportTableLayout();
     enhanceCoreTables();

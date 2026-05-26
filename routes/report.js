@@ -2698,24 +2698,34 @@ function buildCategoryWiseVariancePdfBuffer(data) {
   return Buffer.from(doc.output('arraybuffer'));
 }
 
-const STOCK_SUMMARY_NOTE = 'Note:-Opening Stock value & Physical Stock Value (Except HHML Oil,Lube, Publication, Battery, Tools,Merchandise,Consumables,Local Parts and Accessories.)';
+const STOCK_SUMMARY_TITLE = 'Wall -to-Wall Inventory Audit Service(WWIAS)';
+const STOCK_SUMMARY_CATEGORIES = [
+  'HHML Parts',
+  'VIDA Parts',
+  'HHML Publication',
+  'HHML Tyre',
+  'Lubricant',
+  'Accessories',
+  'Merchandise',
+  'Helmet',
+  'Tools',
+  'HHML Consumables'
+];
 
 function stockSummaryColumns() {
   return [
-    { header: 'Report Section', key: 'section', width: 34 },
-    { header: 'Mismatch Cases / Metric', key: 'metric', width: 48 },
-    { header: 'Scan Type', key: 'scanType', width: 16 },
-    { header: 'Physical Bin Stock Qty', key: 'physicalBinQty', width: 22 },
-    { header: 'Fitted On Vehicle Qty', key: 'fittedQty', width: 22 },
-    { header: 'Final Audit Qty', key: 'finalAuditQty', width: 18 },
-    { header: 'Regd No', key: 'regdNo', width: 16 },
-    { header: 'Job Card No', key: 'jobCardNo', width: 18 },
-    { header: 'Fitted Status', key: 'fittedStatus', width: 16 },
-    { header: 'SKU Counts', key: 'skuCount', width: 14 },
-    { header: 'Value On MRP', key: 'valueOnMrp', width: 18 },
-    { header: 'Value On DLC', key: 'valueOnDlc', width: 18 },
-    { header: '% of Opening Stock On MRP', key: 'percentMrp', width: 22 },
-    { header: '% of Opening Stock On DLC', key: 'percentDlc', width: 22 }
+    { header: 'Category', key: 'category', width: 20 },
+    { header: 'Value', key: 'dmsValue', width: 16 },
+    { header: 'Part Lines', key: 'dmsPartLines', width: 12 },
+    { header: 'Quantity', key: 'dmsQuantity', width: 14 },
+    { header: 'Value', key: 'physicalValue', width: 16 },
+    { header: 'Part Lines', key: 'physicalPartLines', width: 12 },
+    { header: 'Quantity', key: 'physicalQuantity', width: 14 },
+    { header: 'Value', key: 'excessValue', width: 16 },
+    { header: 'Part Lines', key: 'excessPartLines', width: 12 },
+    { header: 'Value', key: 'shortValue', width: 16 },
+    { header: 'Part Lines', key: 'shortPartLines', width: 12 },
+    { header: 'Value', key: 'netDifference', width: 16 }
   ];
 }
 
@@ -2807,54 +2817,129 @@ function stockSummaryAuditDateLabel(query = {}) {
   return query.auditDate || (query.from && query.to && query.from === query.to ? query.from : query.to || query.from || 'selected audit date');
 }
 
-function stockSummaryFlatRows(sections) {
-  const { case1, case2, case3, case4, net } = sections.cases;
+function emptyStockSummaryCategory(category) {
+  return {
+    category,
+    dmsValue: 0,
+    dmsPartLines: 0,
+    dmsQuantity: 0,
+    physicalValue: 0,
+    physicalPartLines: 0,
+    physicalQuantity: 0,
+    excessValue: 0,
+    excessPartLines: 0,
+    shortValue: 0,
+    shortPartLines: 0,
+    netDifference: 0
+  };
+}
+
+function stockSummaryCategory(row = {}) {
+  const text = stockSummaryCategoryText(row);
+  if (/\bVIDA\b/i.test(text)) return 'VIDA Parts';
+  if (/PUBLICATION|PUBLI|CATALOG|CATALOGUE|MANUAL|BOOK|LITERATURE/i.test(text)) return 'HHML Publication';
+  if (/\b(TYRE|TIRE|TUBE)\b/i.test(text)) return 'HHML Tyre';
+  if (/\b(OIL|LUBE|LUBRICANT|GREASE)\b/i.test(text)) return 'Lubricant';
+  if (/ACCESSOR/i.test(text)) return 'Accessories';
+  if (/MERCHANDISE|MERCH/i.test(text)) return 'Merchandise';
+  if (/HELMET/i.test(text)) return 'Helmet';
+  if (/\bTOOLS?\b/i.test(text)) return 'Tools';
+  if (/CONSUMABLE/i.test(text)) return 'HHML Consumables';
+  return 'HHML Parts';
+}
+
+function addStockSummaryMatrixValues(total, row = {}) {
+  const systemQty = Number(row.systemQty || 0);
+  const physicalQty = Number(row.finalAuditQty ?? row.actualAuditQty ?? row.physicalQty ?? 0);
+  const mrp = Number(row.mrp || 0);
+  const varianceQty = physicalQty - systemQty;
+  const dmsValue = systemQty * mrp;
+  const physicalValue = physicalQty * mrp;
+  const varianceValue = varianceQty * mrp;
+  total.dmsValue += dmsValue;
+  total.dmsQuantity += systemQty;
+  if (systemQty !== 0) total.dmsPartLines += 1;
+  total.physicalValue += physicalValue;
+  total.physicalQuantity += physicalQty;
+  if (physicalQty !== 0) total.physicalPartLines += 1;
+  if (varianceQty > 0) {
+    total.excessValue += varianceValue;
+    total.excessPartLines += 1;
+  } else if (varianceQty < 0) {
+    total.shortValue += varianceValue;
+    total.shortPartLines += 1;
+  }
+  total.netDifference += varianceValue;
+}
+
+function roundStockSummaryMatrixRow(row = {}) {
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => {
+    if (key === 'category' || key === 'rowType') return [key, value];
+    return [key, money(value)];
+  }));
+}
+
+function stockSummaryMatrixRows(rows = []) {
+  const buckets = new Map(STOCK_SUMMARY_CATEGORIES.map((category) => [category, emptyStockSummaryCategory(category)]));
+  rows.forEach((row) => {
+    const category = stockSummaryCategory(row);
+    const bucket = buckets.get(category) || emptyStockSummaryCategory(category);
+    addStockSummaryMatrixValues(bucket, row);
+    buckets.set(category, bucket);
+  });
+  return STOCK_SUMMARY_CATEGORIES.map((category) => roundStockSummaryMatrixRow(buckets.get(category) || emptyStockSummaryCategory(category)));
+}
+
+function stockSummaryGrandTotal(rows = []) {
+  const total = rows.reduce((summary, row) => {
+    stockSummaryColumns().forEach((column) => {
+      if (column.key !== 'category') summary[column.key] += Number(row[column.key] || 0);
+    });
+    return summary;
+  }, emptyStockSummaryCategory('Grand Total'));
+  return { ...roundStockSummaryMatrixRow(total), rowType: 'total' };
+}
+
+function stockSummaryDamageValue(scans = [], rowByPart = new Map()) {
+  return scans.reduce((sum, scan) => {
+    const type = cleanText(scan.scanType || scan.type).toUpperCase();
+    if (type !== 'DAMAGE') return sum;
+    const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
+    const detail = rowByPart.get(partNo) || {};
+    const qty = Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
+    const mrp = numberValue(firstPresent(detail.mrp, scan.mrp, scan.dlc), 0);
+    return sum + qty * mrp;
+  }, 0);
+}
+
+function stockSummaryDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return cleanText(value);
+  return new Intl.DateTimeFormat('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'Asia/Kolkata'
+  }).format(date);
+}
+
+function stockSummaryMetadata(selectedDealer = {}, selectedAudit = {}, query = {}) {
+  const audit = selectedAudit || {};
+  const dealer = selectedDealer || {};
+  const brand = firstPresent(audit.brand, dealer.brand, '');
+  const dealerName = firstPresent(query.dealerName, audit.dealerName, dealer.dealerName, '');
+  const dealership = dealerName ? `${dealerName}${brand ? ` (${brand})` : ''}` : '';
   return [
-    { rowType: 'section', section: 'Physical (Inventory Audit) Value', metric: 'Value On MRP / Value On DLC' },
-    { section: 'Physical (Inventory Audit) Value', metric: 'Physical Bin Stock', physicalBinQty: sections.physical.physicalBinQty, valueOnMrp: sections.physical.valueOnMrp, valueOnDlc: sections.physical.valueOnDlc },
-    { section: 'Physical (Inventory Audit) Value', metric: 'Fitted On Vehicle', scanType: 'FITTED', fittedQty: sections.fitted.fittedQty, fittedStatus: sections.fitted.fittedQty > 0 ? 'Fitted' : 'Not Fitted', skuCount: sections.fitted.skuCount, valueOnMrp: sections.fitted.valueOnMrp, valueOnDlc: sections.fitted.valueOnDlc },
-    { rowType: 'total', section: 'Physical (Inventory Audit) Value', metric: 'Final Audit Stock = Physical + Fitted', physicalBinQty: sections.finalAudit.physicalBinQty, fittedQty: sections.finalAudit.fittedQty, finalAuditQty: sections.finalAudit.finalAuditQty, valueOnMrp: sections.finalAudit.valueOnMrp, valueOnDlc: sections.finalAudit.valueOnDlc },
-    { rowType: 'note', note: STOCK_SUMMARY_NOTE },
-    { rowType: 'section', section: sections.system.title, metric: 'Value On MRP / Value On DLC' },
-    { section: sections.system.title, metric: 'Total', valueOnMrp: sections.system.valueOnMrp, valueOnDlc: sections.system.valueOnDlc },
-    { rowType: 'section', section: 'Mismatch Value', metric: 'Variance Value On MRP / Variance Value On DLC' },
-    { rowType: 'total', section: 'Mismatch Value', metric: 'Total', valueOnMrp: sections.mismatch.valueOnMrp, valueOnDlc: sections.mismatch.valueOnDlc },
-    { rowType: 'gap' },
-    { rowType: 'section', section: 'HHML/Vida Parts Variance', metric: 'HHML Parts' },
-    { section: 'HHML/Vida Parts Variance', metric: 'Physical Value', valueOnMrp: sections.hhmlVida.physicalMrp, valueOnDlc: sections.hhmlVida.physicalDlc },
-    { section: 'HHML/Vida Parts Variance', metric: 'System Value', valueOnMrp: sections.hhmlVida.systemMrp, valueOnDlc: sections.hhmlVida.systemDlc },
-    { rowType: 'total', section: 'HHML/Vida Parts Variance', metric: 'Total Variance', valueOnMrp: sections.hhmlVida.varianceMrp, valueOnDlc: sections.hhmlVida.varianceDlc },
-    { rowType: 'gap' },
-    { rowType: 'section', section: 'HHML Accessories Variance', metric: 'HHML Accessories' },
-    { section: 'HHML Accessories Variance', metric: 'Physical Value', valueOnMrp: sections.accessories.physicalMrp, valueOnDlc: sections.accessories.physicalDlc },
-    { section: 'HHML Accessories Variance', metric: 'System Value', valueOnMrp: sections.accessories.systemMrp, valueOnDlc: sections.accessories.systemDlc },
-    { rowType: 'total', section: 'HHML Accessories Variance', metric: 'Total Variance', valueOnMrp: sections.accessories.varianceMrp, valueOnDlc: sections.accessories.varianceDlc },
-    { rowType: 'gap' },
-    { rowType: 'section', section: 'Mismatch Cases', metric: 'Mismatch Cases SKU Counts / Variance Value' },
-    { section: 'Mismatch Cases', metric: 'Case1. Inventory Addition: - Found Physical but not in DMS', skuCount: case1.skuCount, valueOnMrp: case1.valueOnMrp, valueOnDlc: case1.valueOnDlc },
-    { section: 'Mismatch Cases', metric: 'Case2. Inward: - Excess', skuCount: case2.skuCount, valueOnMrp: case2.valueOnMrp, valueOnDlc: case2.valueOnDlc },
-    { section: 'Mismatch Cases', metric: 'Case3. Outward: - In DMS But Not Found in Physical', skuCount: case3.skuCount, valueOnMrp: -case3.valueOnMrp, valueOnDlc: -case3.valueOnDlc },
-    { rowType: 'total', section: 'Mismatch Cases', metric: 'Variance', valueOnMrp: net.valueOnMrp, valueOnDlc: net.valueOnDlc },
-    { section: 'Mismatch Cases', metric: 'Case4.Inventory Matched: -Equal', skuCount: case4.skuCount, valueOnMrp: case4.valueOnMrp, valueOnDlc: case4.valueOnDlc },
-    { rowType: 'gap' },
-    { rowType: 'section', section: 'NON MOVING SKU', metric: 'NON MOVING SKU' },
-    { section: 'NON MOVING SKU', metric: 'NON MOVING PARTS COUNT', skuCount: sections.nonMoving.count, valueOnMrp: sections.nonMoving.valueOnMrp, valueOnDlc: sections.nonMoving.valueOnDlc },
-    { section: 'NON MOVING SKU', metric: 'TOP HIGH VOLUME NON MOVING PARTS COUNT', skuCount: sections.nonMoving.highVolumeCount, valueOnMrp: sections.nonMoving.highVolumeMrp, valueOnDlc: sections.nonMoving.highVolumeDlc },
-    { rowType: 'gap' },
-    { rowType: 'section', section: sections.varianceAsOn.title, metric: 'Value On MRP / Value On DLC' },
-    { section: sections.varianceAsOn.title, metric: 'Opening Stock value', valueOnMrp: sections.system.valueOnMrp, valueOnDlc: sections.system.valueOnDlc },
-    { section: sections.varianceAsOn.title, metric: 'Physical Bin Stock Value', physicalBinQty: sections.physical.physicalBinQty, valueOnMrp: sections.physical.valueOnMrp, valueOnDlc: sections.physical.valueOnDlc },
-    { section: sections.varianceAsOn.title, metric: 'Fitted On Vehicle Value', scanType: 'FITTED', fittedQty: sections.fitted.fittedQty, valueOnMrp: sections.fitted.valueOnMrp, valueOnDlc: sections.fitted.valueOnDlc },
-    { section: sections.varianceAsOn.title, metric: 'Final Audit Stock Value', physicalBinQty: sections.finalAudit.physicalBinQty, fittedQty: sections.finalAudit.fittedQty, finalAuditQty: sections.finalAudit.finalAuditQty, valueOnMrp: sections.finalAudit.valueOnMrp, valueOnDlc: sections.finalAudit.valueOnDlc },
-    { rowType: 'net', section: sections.varianceAsOn.title, metric: 'Net Variance', valueOnMrp: net.valueOnMrp, valueOnDlc: net.valueOnDlc },
-    { rowType: 'net', section: sections.varianceAsOn.title, metric: 'Net Variance (%age of Opening Stock)', percentMrp: stockSummaryPct(net.valueOnMrp, sections.system.valueOnMrp), percentDlc: stockSummaryPct(net.valueOnDlc, sections.system.valueOnDlc) },
-    { rowType: 'note', note: STOCK_SUMMARY_NOTE },
-    { rowType: 'section', section: 'Inventory Health Check', metric: 'SKU Counts / Variance Value / % of Opening Stock' },
-    { section: 'Inventory Health Check', metric: 'Case1. Inventory Addition: - Found Physical but not in DMS', skuCount: case1.skuCount, valueOnMrp: case1.valueOnMrp, valueOnDlc: case1.valueOnDlc, percentMrp: stockSummaryPct(case1.valueOnMrp, sections.system.valueOnMrp), percentDlc: stockSummaryPct(case1.valueOnDlc, sections.system.valueOnDlc) },
-    { section: 'Inventory Health Check', metric: 'Case2. Inward: - Excess', skuCount: case2.skuCount, valueOnMrp: case2.valueOnMrp, valueOnDlc: case2.valueOnDlc, percentMrp: stockSummaryPct(case2.valueOnMrp, sections.system.valueOnMrp), percentDlc: stockSummaryPct(case2.valueOnDlc, sections.system.valueOnDlc) },
-    { section: 'Inventory Health Check', metric: 'Case3. Outward: - In DMS But Not Found in Physical', skuCount: case3.skuCount, valueOnMrp: case3.valueOnMrp, valueOnDlc: case3.valueOnDlc, percentMrp: stockSummaryPct(case3.valueOnMrp, sections.system.valueOnMrp), percentDlc: stockSummaryPct(case3.valueOnDlc, sections.system.valueOnDlc) },
-    { section: 'Inventory Health Check', metric: 'Case4.Inventory Matched: -Equal', skuCount: case4.skuCount, valueOnMrp: case4.valueOnMrp, valueOnDlc: case4.valueOnDlc, percentMrp: stockSummaryPct(case4.valueOnMrp, sections.system.valueOnMrp), percentDlc: stockSummaryPct(case4.valueOnDlc, sections.system.valueOnDlc) },
-    { rowType: 'net', section: 'Inventory Health Check', metric: 'Net Variance', valueOnMrp: net.valueOnMrp, valueOnDlc: net.valueOnDlc, percentMrp: stockSummaryPct(net.valueOnMrp, sections.system.valueOnMrp), percentDlc: stockSummaryPct(net.valueOnDlc, sections.system.valueOnDlc) }
+    { label: 'Dealership Name', value: dealership },
+    { label: 'Brand', value: brand || '' },
+    { label: 'Location', value: firstPresent(audit.location, dealer.location, '') || '' },
+    { label: 'Audit Start Date', value: stockSummaryDate(firstPresent(audit.auditStartDate, dealer.auditStartDate, query.from)) },
+    { label: 'Audit Closed Date', value: stockSummaryDate(firstPresent(audit.auditClosedDate, dealer.auditClosedDate, query.to)) },
+    { label: 'SPM Name', value: firstPresent(audit.spmName, dealer.spmName, '') || '' },
+    { label: 'General Manager', value: firstPresent(audit.generalManager, dealer.generalManager, '') || '' },
+    { label: 'Auditer Name', value: firstPresent(audit.auditorName, dealer.auditorName, '') || '' }
   ];
 }
 
@@ -2866,10 +2951,11 @@ async function buildStockSummaryReport(query = {}) {
     { syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] } },
     { isDuplicate: { $ne: true } }
   ]);
-  const [rawScans, stockRows, dealers] = await Promise.all([
+  const [rawScans, stockRows, dealers, audits] = await Promise.all([
     Inventory.find(scanFilter).sort({ timestamp: 1 }).lean(),
     DealerStock.find({ dealerCode }).sort({ partNumber: 1 }).lean(),
-    Dealer.find({}).sort({ dealerName: 1 }).lean()
+    Dealer.find({}).sort({ dealerName: 1 }).lean(),
+    Audit.find({ dealerCode }).sort({ createdAt: -1 }).lean()
   ]);
   const scans = rawScans.map(inventoryRoute.publicScan);
   const seenScanIds = new Set();
@@ -2949,75 +3035,49 @@ async function buildStockSummaryReport(query = {}) {
       varianceOnDlc: varianceQty * dlc
     };
   }).filter((row) => stockSummaryRowMatchesFilters(row, query));
-  const eligibleRows = rows.filter((row) => !isStockSummaryExcluded(row));
-  const accessoryRows = eligibleRows.filter(isStockSummaryAccessory);
-  const hhmlVidaRows = eligibleRows.filter((row) => !isStockSummaryAccessory(row));
-  const totals = summarizeStockRows(eligibleRows);
-  const fittedRows = eligibleRows.filter((row) => Number(row.fittedQty || 0) > 0);
-  const fitted = fittedRows.reduce((total, row) => {
-    const qty = Number(row.fittedQty || 0);
-    total.skuCount += 1;
-    total.fittedQty += qty;
-    total.valueOnMrp += qty * Number(row.mrp || 0);
-    total.valueOnDlc += qty * Number(row.dlc || 0);
-    return total;
-  }, { skuCount: 0, fittedQty: 0, valueOnMrp: 0, valueOnDlc: 0 });
-  const hhmlVida = summarizeStockRows(hhmlVidaRows);
-  const accessories = summarizeStockRows(accessoryRows);
-  const case1 = caseSummary(eligibleRows, 'case1');
-  const case2 = caseSummary(eligibleRows, 'case2');
-  const case3 = caseSummary(eligibleRows, 'case3');
-  const case4 = caseSummary(eligibleRows, 'case4');
-  const net = {
-    valueOnMrp: case1.valueOnMrp + case2.valueOnMrp - case3.valueOnMrp,
-    valueOnDlc: case1.valueOnDlc + case2.valueOnDlc - case3.valueOnDlc
-  };
-  const nonMovingRows = eligibleRows.filter((row) => Number(row.systemQty || 0) > 0 && Number(row.physicalQty || 0) === 0);
-  const nonMovingTotals = summarizeStockRows(nonMovingRows);
-  const sortedNonMoving = nonMovingRows.slice().sort((a, b) => Number(b.systemValueOnMrp || 0) - Number(a.systemValueOnMrp || 0));
-  const highVolumeTarget = Number(nonMovingTotals.systemMrp || 0) * 0.85;
-  let highVolumeMrp = 0;
-  let highVolumeDlc = 0;
-  let highVolumeCount = 0;
-  for (const row of sortedNonMoving) {
-    if (highVolumeTarget > 0 && highVolumeMrp >= highVolumeTarget) break;
-    highVolumeCount += 1;
-    highVolumeMrp += Number(row.systemValueOnMrp || 0);
-    highVolumeDlc += Number(row.systemValueOnDlc || 0);
-  }
-  const auditDateLabel = stockSummaryAuditDateLabel(query);
   const selectedDealer = dealerCode ? dealers.find((dealer) => dealer.dealerCode === dealerCode) : null;
+  const selectedAudit = query.auditId
+    ? audits.find((audit) => audit.auditId === query.auditId)
+    : (selectedDealer && selectedDealer.currentAuditId
+      ? audits.find((audit) => audit.auditId === selectedDealer.currentAuditId)
+      : audits[0]);
+  const matrixRows = stockSummaryMatrixRows(rows);
+  const grandTotal = stockSummaryGrandTotal(matrixRows);
+  const rowByPart = new Map(rows.map((row) => [normalizePartNumber(row.partNo || row.partNumber), row]).filter(([partNo]) => partNo));
+  const footer = {
+    damagedItemsValue: money(stockSummaryDamageValue(scans, rowByPart)),
+    manualContribution: '',
+    totalShortValue: grandTotal.shortValue,
+    totalExcessValue: grandTotal.excessValue,
+    netDiff: grandTotal.netDifference,
+    undefinedItemsDeadline: '',
+    damagedItemsDeadline: ''
+  };
+  const metadata = stockSummaryMetadata(selectedDealer, selectedAudit, query);
   const sections = {
-    physical: { physicalBinQty: money(totals.physicalBinQty), valueOnMrp: money(totals.physicalMrp), valueOnDlc: money(totals.physicalDlc) },
-    fitted: { skuCount: fitted.skuCount, fittedQty: fitted.fittedQty, valueOnMrp: money(fitted.valueOnMrp), valueOnDlc: money(fitted.valueOnDlc) },
-    finalAudit: { physicalBinQty: money(totals.physicalBinQty), fittedQty: money(totals.fittedQty), finalAuditQty: money(totals.finalAuditQty), valueOnMrp: money(totals.finalAuditMrp), valueOnDlc: money(totals.finalAuditDlc) },
-    system: { title: `System Value (Opening Stock ${auditDateLabel})`, valueOnMrp: money(totals.systemMrp), valueOnDlc: money(totals.systemDlc) },
-    mismatch: { valueOnMrp: money(totals.finalAuditMrp - totals.systemMrp), valueOnDlc: money(totals.finalAuditDlc - totals.systemDlc) },
-    hhmlVida: { physicalMrp: money(hhmlVida.finalAuditMrp), physicalDlc: money(hhmlVida.finalAuditDlc), systemMrp: money(hhmlVida.systemMrp), systemDlc: money(hhmlVida.systemDlc), varianceMrp: money(hhmlVida.varianceMrp), varianceDlc: money(hhmlVida.varianceDlc) },
-    accessories: { physicalMrp: money(accessories.finalAuditMrp), physicalDlc: money(accessories.finalAuditDlc), systemMrp: money(accessories.systemMrp), systemDlc: money(accessories.systemDlc), varianceMrp: money(accessories.varianceMrp), varianceDlc: money(accessories.varianceDlc) },
-    cases: {
-      case1: { ...case1, valueOnMrp: money(case1.valueOnMrp), valueOnDlc: money(case1.valueOnDlc) },
-      case2: { ...case2, valueOnMrp: money(case2.valueOnMrp), valueOnDlc: money(case2.valueOnDlc) },
-      case3: { ...case3, valueOnMrp: money(case3.valueOnMrp), valueOnDlc: money(case3.valueOnDlc) },
-      case4: { ...case4, valueOnMrp: money(case4.valueOnMrp), valueOnDlc: money(case4.valueOnDlc) },
-      net: { valueOnMrp: money(net.valueOnMrp), valueOnDlc: money(net.valueOnDlc) }
-    },
-    nonMoving: { count: nonMovingRows.length, valueOnMrp: money(nonMovingTotals.systemMrp), valueOnDlc: money(nonMovingTotals.systemDlc), highVolumeCount, highVolumeMrp: money(highVolumeMrp), highVolumeDlc: money(highVolumeDlc) },
-    varianceAsOn: { title: `Variance as on ${auditDateLabel}` }
+    title: STOCK_SUMMARY_TITLE,
+    metadata,
+    rows: matrixRows,
+    grandTotal,
+    footer
   };
   const summary = {
+    title: STOCK_SUMMARY_TITLE,
+    metadata,
+    footer,
     generatedAt: formatIstDateTime(new Date()),
     dealerName: query.dealerName || (selectedDealer ? selectedDealer.dealerName : ''),
     dealerCode,
-    auditDate: auditDateLabel,
+    auditId: selectedAudit ? selectedAudit.auditId : (query.auditId || ''),
+    auditDate: stockSummaryDate(firstPresent(selectedAudit && selectedAudit.auditStartDate, selectedDealer && selectedDealer.auditStartDate, query.from)),
     productCategory: query.productCategory || query.category || 'All',
     model: query.model || 'All',
     year: query.year || 'All',
-    totalSkuCount: eligibleRows.length,
+    totalSkuCount: rows.length,
     totalStockRows: stockRows.length,
     totalPhysicalParts: physicalGroups.size
   };
-  return { rows: stockSummaryFlatRows(sections), columns: stockSummaryColumns(), sections, summary, detailRows: rows, message: rows.length ? '' : 'No stock summary data found for selected dealer/filter' };
+  return { rows: matrixRows.concat([grandTotal]), columns: stockSummaryColumns(), sections, summary, detailRows: rows, message: rows.length ? '' : 'No stock summary data found for selected dealer/filter' };
 }
 
 function styleStockSummaryRange(sheet, startRow, endRow, startCol = 1, endCol = 6) {
@@ -3038,146 +3098,155 @@ function styleStockSummaryRange(sheet, startRow, endRow, startCol = 1, endCol = 
 
 function addStockSummarySheet(workbook, data) {
   const sheet = workbook.addWorksheet('Stock Summary');
-  sheet.columns = [{ width: 42 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 22 }, { width: 22 }];
-  const darkFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
-  const lightFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F2FC' } };
-  const noteFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF7ED' } };
-  const setTitle = (range, value) => {
-    sheet.mergeCells(range);
-    const cell = sheet.getCell(range.split(':')[0]);
-    cell.value = value;
-    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    cell.fill = darkFill;
-    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  sheet.columns = [
+    { width: 22 }, { width: 15 }, { width: 11 }, { width: 12 },
+    { width: 15 }, { width: 11 }, { width: 12 }, { width: 14 },
+    { width: 11 }, { width: 14 }, { width: 11 }, { width: 14 }
+  ];
+  const fills = {
+    title: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBDD7EE' } },
+    meta: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC9C9C9' } },
+    green: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA7BF95' } },
+    dms: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6A58E' } },
+    physical: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD8C87E' } },
+    excess: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF7188AD' } },
+    short: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBFBFBF' } },
+    net: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF8FB2CC' } },
+    total: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF70A83A' } },
+    black: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } }
   };
-  const setHeader = (cells) => cells.forEach(([address, value]) => {
-    const cell = sheet.getCell(address);
-    cell.value = value;
-    cell.font = { bold: true };
-    cell.fill = lightFill;
-    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-  });
-  const setMoney = (address, value) => {
-    const cell = sheet.getCell(address);
-    cell.value = Number(value || 0);
-    cell.numFmt = '#,##0.00';
+  const border = {
+    top: { style: 'thin', color: { argb: 'FF000000' } },
+    left: { style: 'thin', color: { argb: 'FF000000' } },
+    bottom: { style: 'thin', color: { argb: 'FF000000' } },
+    right: { style: 'thin', color: { argb: 'FF000000' } }
   };
-  const setPercent = (address, value) => {
-    const cell = sheet.getCell(address);
-    cell.value = Number(value || 0);
-    cell.numFmt = '0.00%';
-  };
-  const { case1, case2, case3, case4, net } = data.sections.cases;
-
-  setTitle('A1:B2', 'Physical (Inventory Audit) Value');
-  setHeader([['C1', 'Value On MRP'], ['D1', 'Value On DLC']]);
-  setMoney('C2', data.sections.physical.valueOnMrp);
-  setMoney('D2', data.sections.physical.valueOnDlc);
-  sheet.mergeCells('A3:F3');
-  sheet.getCell('A3').value = STOCK_SUMMARY_NOTE;
-  sheet.getCell('A3').fill = noteFill;
-  sheet.getCell('A3').font = { bold: true, color: { argb: 'FF9A3412' } };
-  setTitle('A4:B5', data.sections.system.title);
-  setHeader([['C4', 'Value On MRP'], ['D4', 'Value On DLC']]);
-  setMoney('C5', data.sections.system.valueOnMrp);
-  setMoney('D5', data.sections.system.valueOnDlc);
-  setTitle('A6:B7', 'Mismatch Value');
-  setHeader([['C6', 'Variance Value On MRP'], ['D6', 'Variance Value On DLC']]);
-  sheet.getCell('A7').value = 'Total';
-  setMoney('C7', data.sections.mismatch.valueOnMrp);
-  setMoney('D7', data.sections.mismatch.valueOnDlc);
-
-  setTitle('A9:B14', 'HHML/Vida Parts Variance');
-  setHeader([['C9', 'HHML Parts'], ['D9', 'HHML Parts'], ['C10', 'Physical Value On MRP'], ['D10', 'Physical Value On DLC']]);
-  setMoney('C11', data.sections.hhmlVida.physicalMrp);
-  setMoney('D11', data.sections.hhmlVida.physicalDlc);
-  setHeader([['C12', 'HHML Parts'], ['D12', 'HHML Parts'], ['C13', 'System Value On MRP'], ['D13', 'System Value On DLC']]);
-  setMoney('C14', data.sections.hhmlVida.systemMrp);
-  setMoney('D14', data.sections.hhmlVida.systemDlc);
-  sheet.mergeCells('A15:B16');
-  sheet.getCell('A15').value = 'Total';
-  setHeader([['C15', 'Variance Value On MRP'], ['D15', 'Variance Value On DLC']]);
-  setMoney('C16', data.sections.hhmlVida.varianceMrp);
-  setMoney('D16', data.sections.hhmlVida.varianceDlc);
-
-  setTitle('A18:B23', 'HHML Accessories Variance');
-  setHeader([['C18', 'HHML Accessories'], ['D18', 'HHML Accessories'], ['C19', 'Physical Value On MRP'], ['D19', 'Physical Value On DLC']]);
-  setMoney('C20', data.sections.accessories.physicalMrp);
-  setMoney('D20', data.sections.accessories.physicalDlc);
-  setHeader([['C21', 'HHML Accessories'], ['D21', 'HHML Accessories'], ['C22', 'System Value On MRP'], ['D22', 'System Value On DLC']]);
-  setMoney('C23', data.sections.accessories.systemMrp);
-  setMoney('D23', data.sections.accessories.systemDlc);
-  sheet.mergeCells('A24:B25');
-  sheet.getCell('A24').value = 'Total';
-  setHeader([['C24', 'Variance Value On MRP'], ['D24', 'Variance Value On DLC']]);
-  setMoney('C25', data.sections.accessories.varianceMrp);
-  setMoney('D25', data.sections.accessories.varianceDlc);
-
-  setHeader([['A27', 'Mismatch Cases'], ['B27', 'Mismatch Cases SKU Counts'], ['C27', 'Variance Value On MRP'], ['D27', 'Variance Value On DLC']]);
-  [[28, 'Case1. Inventory Addition: - Found Physical but not in DMS', case1.skuCount, case1.valueOnMrp, case1.valueOnDlc], [29, 'Case2. Inward: - Excess', case2.skuCount, case2.valueOnMrp, case2.valueOnDlc], [30, 'Case3. Outward: - In DMS But Not Found in Physical', case3.skuCount, -case3.valueOnMrp, -case3.valueOnDlc], [31, 'Variance', '', net.valueOnMrp, net.valueOnDlc], [33, 'Case4.Inventory Matched: -Equal', case4.skuCount, case4.valueOnMrp, case4.valueOnDlc]].forEach(([rowNumber, label, count, mrp, dlc]) => {
-    sheet.getCell(rowNumber, 1).value = label;
-    sheet.getCell(rowNumber, 2).value = count;
-    setMoney(`C${rowNumber}`, mrp);
-    setMoney(`D${rowNumber}`, dlc);
-  });
-
-  sheet.mergeCells('A35:F35');
-  sheet.getCell('A35').value = 'NON MOVING SKU';
-  sheet.getCell('A35').font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  sheet.getCell('A35').fill = darkFill;
-  sheet.mergeCells('A37:B37');
-  sheet.getCell('A37').value = 'NON MOVING PARTS COUNT';
-  setHeader([['C37', 'Value On MRP'], ['D37', 'Value On DLC']]);
-  sheet.getCell('A38').value = data.sections.nonMoving.count;
-  setMoney('C38', data.sections.nonMoving.valueOnMrp);
-  setMoney('D38', data.sections.nonMoving.valueOnDlc);
-  sheet.mergeCells('A40:B40');
-  sheet.getCell('A40').value = 'TOP HIGH VOLUME NON MOVING PARTS COUNT';
-  setHeader([['C40', 'Value On MRP'], ['D40', 'Value On DLC']]);
-  sheet.getCell('A41').value = data.sections.nonMoving.highVolumeCount;
-  setMoney('C41', data.sections.nonMoving.highVolumeMrp);
-  setMoney('D41', data.sections.nonMoving.highVolumeDlc);
-
-  sheet.mergeCells('A43:F43');
-  sheet.getCell('A43').value = data.sections.varianceAsOn.title;
-  sheet.getCell('A43').font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  sheet.getCell('A43').fill = darkFill;
-  setHeader([['D44', 'Value On MRP'], ['E44', 'Value On DLC']]);
-  [[45, 'Opening Stock value', data.sections.system.valueOnMrp, data.sections.system.valueOnDlc, false], [46, 'Physical Stock Value', data.sections.physical.valueOnMrp, data.sections.physical.valueOnDlc, false], [47, 'Net Variance', net.valueOnMrp, net.valueOnDlc, false], [48, 'Net Variance (%age of Opening Stock)', stockSummaryPct(net.valueOnMrp, data.sections.system.valueOnMrp), stockSummaryPct(net.valueOnDlc, data.sections.system.valueOnDlc), true]].forEach(([rowNumber, label, mrp, dlc, percent]) => {
-    sheet.mergeCells(`A${rowNumber}:C${rowNumber}`);
-    sheet.getCell(`A${rowNumber}`).value = label;
-    if (percent) {
-      setPercent(`D${rowNumber}`, mrp);
-      setPercent(`E${rowNumber}`, dlc);
-    } else {
-      setMoney(`D${rowNumber}`, mrp);
-      setMoney(`E${rowNumber}`, dlc);
+  const center = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  const numberKeys = stockSummaryColumns().filter((column) => column.key !== 'category').map((column) => column.key);
+  const applyRange = (startRow, endRow, startCol = 1, endCol = 12) => {
+    for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
+      for (let colNumber = startCol; colNumber <= endCol; colNumber += 1) {
+        const cell = sheet.getCell(rowNumber, colNumber);
+        cell.border = border;
+        cell.alignment = center;
+      }
     }
-  });
-  sheet.mergeCells('A50:F50');
-  sheet.getCell('A50').value = STOCK_SUMMARY_NOTE;
-  sheet.getCell('A50').fill = noteFill;
-  sheet.getCell('A50').font = { bold: true, color: { argb: 'FF9A3412' } };
+  };
+  const setFill = (rowNumber, startCol, endCol, fill, font = {}) => {
+    for (let colNumber = startCol; colNumber <= endCol; colNumber += 1) {
+      const cell = sheet.getCell(rowNumber, colNumber);
+      cell.fill = fill;
+      cell.font = { name: 'Arial', size: 10, ...font };
+    }
+  };
+  const setNumber = (rowNumber, colNumber, value) => {
+    const cell = sheet.getCell(rowNumber, colNumber);
+    cell.value = Number(value || 0);
+    cell.numFmt = '0';
+  };
 
-  sheet.mergeCells('A52:F52');
-  sheet.getCell('A52').value = 'Inventory Health Check';
-  sheet.getCell('A52').font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  sheet.getCell('A52').fill = darkFill;
-  setHeader([['A53', 'Mismatch Cases'], ['B53', 'SKU Counts'], ['C53', 'Variance Value On MRP'], ['D53', 'Variance Value On DLC'], ['E53', '% of Opening Stock On MRP'], ['F53', '% of Opening Stock On DLC']]);
-  [[54, 'Case1. Inventory Addition: - Found Physical but not in DMS', case1.skuCount, case1.valueOnMrp, case1.valueOnDlc], [55, 'Case2. Inward: - Excess', case2.skuCount, case2.valueOnMrp, case2.valueOnDlc], [56, 'Case3. Outward: - In DMS But Not Found in Physical', case3.skuCount, case3.valueOnMrp, case3.valueOnDlc], [57, 'Case4.Inventory Matched: -Equal', case4.skuCount, case4.valueOnMrp, case4.valueOnDlc], [58, 'Net Variance', '', net.valueOnMrp, net.valueOnDlc]].forEach(([rowNumber, label, count, mrp, dlc]) => {
+  sheet.mergeCells('A1:L1');
+  sheet.getCell('A1').value = 'Daksh Inventory Solution V2';
+  setFill(1, 1, 12, fills.black, { bold: true, size: 16, color: { argb: 'FFFFFFFF' } });
+  sheet.getRow(1).height = 24;
+
+  sheet.mergeCells('A2:L2');
+  sheet.getCell('A2').value = data.sections.title || STOCK_SUMMARY_TITLE;
+  setFill(2, 1, 12, fills.title, { bold: false, size: 14 });
+  sheet.getRow(2).height = 22;
+
+  const metadata = data.sections.metadata || [];
+  metadata.forEach((item, index) => {
+    const rowNumber = index + 3;
+    sheet.mergeCells(rowNumber, 1, rowNumber, 3);
+    sheet.mergeCells(rowNumber, 4, rowNumber, 12);
+    sheet.getCell(rowNumber, 1).value = `${item.label || ''} :`;
+    sheet.getCell(rowNumber, 4).value = item.value || '';
+    sheet.getCell(rowNumber, 1).alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+    sheet.getCell(rowNumber, 4).alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+    setFill(rowNumber, 1, 12, fills.meta, { bold: false });
+    sheet.getCell(rowNumber, 1).font = { name: 'Arial', size: 10, bold: true };
+    sheet.getCell(rowNumber, 4).font = { name: 'Arial', size: 10, bold: /Dealership Name/i.test(item.label || '') };
+  });
+
+  const serviceRow = metadata.length + 3;
+  sheet.mergeCells(serviceRow, 1, serviceRow, 12);
+  sheet.getCell(serviceRow, 1).value = data.sections.title || STOCK_SUMMARY_TITLE;
+  setFill(serviceRow, 1, 12, fills.green, { bold: true });
+
+  const groupRow = serviceRow + 1;
+  const subHeadRow = serviceRow + 2;
+  sheet.mergeCells(groupRow, 1, subHeadRow, 1);
+  sheet.getCell(groupRow, 1).value = 'Category';
+  sheet.mergeCells(groupRow, 2, groupRow, 4);
+  sheet.getCell(groupRow, 2).value = 'DMS Stock';
+  sheet.mergeCells(groupRow, 5, groupRow, 7);
+  sheet.getCell(groupRow, 5).value = 'Physical Stock as Counted';
+  sheet.mergeCells(groupRow, 8, groupRow, 9);
+  sheet.getCell(groupRow, 8).value = 'Excess Found';
+  sheet.mergeCells(groupRow, 10, groupRow, 11);
+  sheet.getCell(groupRow, 10).value = 'Short Found';
+  sheet.getCell(groupRow, 12).value = 'Net Difference';
+  ['Value', 'Part Lines', 'Quantity', 'Value', 'Part Lines', 'Quantity', 'Value', 'Part Lines', 'Value', 'Part Lines', 'Value']
+    .forEach((value, index) => { sheet.getCell(subHeadRow, index + 2).value = value; });
+  setFill(groupRow, 1, 1, fills.green, { bold: true });
+  setFill(subHeadRow, 1, 1, fills.green, { bold: true });
+  setFill(groupRow, 2, 4, fills.dms, { bold: true });
+  setFill(subHeadRow, 2, 4, fills.dms, { bold: true });
+  setFill(groupRow, 5, 7, fills.physical, { bold: true });
+  setFill(subHeadRow, 5, 7, fills.physical, { bold: true });
+  setFill(groupRow, 8, 9, fills.excess, { bold: true });
+  setFill(subHeadRow, 8, 9, fills.excess, { bold: true });
+  setFill(groupRow, 10, 11, fills.short, { bold: true });
+  setFill(subHeadRow, 10, 11, fills.short, { bold: true });
+  setFill(groupRow, 12, 12, fills.net, { bold: true });
+  setFill(subHeadRow, 12, 12, fills.net, { bold: true });
+
+  const rows = data.rows || [];
+  const dataStartRow = subHeadRow + 1;
+  rows.forEach((row, rowIndex) => {
+    const rowNumber = dataStartRow + rowIndex;
+    sheet.getCell(rowNumber, 1).value = row.category;
+    numberKeys.forEach((key, index) => setNumber(rowNumber, index + 2, row[key]));
+    const isTotal = row.rowType === 'total';
+    setFill(rowNumber, 1, 12, isTotal ? fills.total : fills.meta, { bold: isTotal });
+    sheet.getCell(rowNumber, 1).font = { name: 'Arial', size: 10, bold: true };
+    setFill(rowNumber, 2, 4, isTotal ? fills.total : fills.dms, { bold: isTotal });
+    setFill(rowNumber, 5, 7, isTotal ? fills.total : fills.physical, { bold: isTotal });
+    setFill(rowNumber, 8, 9, isTotal ? fills.total : fills.excess, { bold: isTotal });
+    setFill(rowNumber, 10, 11, isTotal ? fills.total : fills.short, { bold: isTotal });
+    setFill(rowNumber, 12, 12, isTotal ? fills.total : fills.net, { bold: isTotal });
+  });
+
+  const footerStart = dataStartRow + rows.length + 1;
+  const footer = data.sections.footer || {};
+  const footerRows = [
+    ['Damaged Items Value( Considered Value)', footer.damagedItemsValue || 0, 'damage'],
+    ['Manual Contribution', footer.manualContribution || '', 'normal'],
+    ['Total Short Value', footer.totalShortValue || 0, 'short'],
+    ['Total Excess Value', footer.totalExcessValue || 0, 'excess'],
+    ['Net Diff', footer.netDiff || 0, 'net'],
+    ['Undefined Items Dead Line', footer.undefinedItemsDeadline || '', 'normal'],
+    ['Damaged items dead line', footer.damagedItemsDeadline || '', 'normal']
+  ];
+  footerRows.forEach(([label, value, kind], index) => {
+    const rowNumber = footerStart + index;
+    sheet.mergeCells(rowNumber, 1, rowNumber, 4);
+    sheet.mergeCells(rowNumber, 5, rowNumber, 7);
+    sheet.mergeCells(rowNumber, 8, rowNumber, 12);
     sheet.getCell(rowNumber, 1).value = label;
-    sheet.getCell(rowNumber, 2).value = count;
-    setMoney(`C${rowNumber}`, mrp);
-    setMoney(`D${rowNumber}`, dlc);
-    setPercent(`E${rowNumber}`, stockSummaryPct(mrp, data.sections.system.valueOnMrp));
-    setPercent(`F${rowNumber}`, stockSummaryPct(dlc, data.sections.system.valueOnDlc));
+    sheet.getCell(rowNumber, 5).value = value === '' ? '' : Number(value || 0);
+    if (value !== '') sheet.getCell(rowNumber, 5).numFmt = '0';
+    setFill(rowNumber, 1, 4, fills.green, { bold: true });
+    setFill(rowNumber, 5, 7, kind === 'damage' ? fills.excess : kind === 'net' ? fills.black : fills.meta, { bold: true });
+    setFill(rowNumber, 8, 12, fills.meta, {});
+    if (kind === 'short') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFF0000' } };
+    if (kind === 'excess') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF008000' } };
+    if (kind === 'net') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
   });
-  [1, 4, 6, 9, 18, 27, 35, 37, 40, 43, 44, 52, 53].forEach((rowNumber) => {
-    sheet.getRow(rowNumber).font = { ...(sheet.getRow(rowNumber).font || {}), bold: true };
-  });
-  [3, 50].forEach((rowNumber) => { sheet.getRow(rowNumber).height = 34; });
-  styleStockSummaryRange(sheet, 1, 58);
-  sheet.views = [{ state: 'frozen', ySplit: 1 }];
+
+  applyRange(1, footerStart + footerRows.length - 1);
+  sheet.views = [{ state: 'frozen', ySplit: subHeadRow }];
   return sheet;
 }
 
@@ -3186,9 +3255,6 @@ router.get('/stock-summary', auth.requireAuth, async (req, res) => {
     const reportQuery = requireDealerForReport(req.query);
     const data = await buildStockSummaryReport(reportQuery);
     if (req.query.format === 'excel') {
-      if (hasRequestedReportColumns(reportQuery)) {
-        return sendSelectedColumnsWorkbook(res, 'Stock_Summary.xlsx', 'Stock Summary', data.columns, data.rows, reportQuery);
-      }
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'Daksh Inventory v2';
       workbook.created = new Date();

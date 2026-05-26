@@ -4929,3 +4929,293 @@ tr:hover td,
   max-width: 280px !important;
   justify-content: center !important;
 }
+
+/* Final table pass: keep report headers readable and aligned with row values. */
+.table-wrap table th,
+.table-wrap table td,
+.app-table th,
+.app-table td,
+.report-table-wrap th,
+.report-table-wrap td,
+.dashboard-data-table th,
+.dashboard-data-table td,
+.scan-history-table th,
+.scan-history-table td,
+.validator-summary-table th,
+.validator-summary-table td,
+.admin-delete-table th,
+.admin-delete-table td,
+.removed-report-table th,
+.removed-report-table td,
+.advanced-part-result-table th,
+.advanced-part-result-table td {
+  padding-left: 10px !important;
+  padding-right: 10px !important;
+  text-align: left !important;
+  vertical-align: middle !important;
+  border-right: 1px solid #e2e8f0 !important;
+}
+
+.table-wrap table th,
+.app-table th,
+.report-table-wrap th,
+.dashboard-data-table th,
+.scan-history-table th,
+.validator-summary-table th,
+.admin-delete-table th,
+.removed-report-table th,
+.advanced-part-result-table th {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 6 !important;
+  height: auto !important;
+  max-height: none !important;
+  min-height: 46px !important;
+  padding-top: 12px !important;
+  padding-bottom: 12px !important;
+  background: #1E3A5F !important;
+  color: #FFFFFF !important;
+  border-color: #2B4C73 !important;
+  border-right: 1px solid #2B4C73 !important;
+  border-bottom: 1px solid #2B4C73 !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.2px !important;
+  line-height: 1.25 !important;
+  text-transform: none !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  box-shadow: none !important;
+}
+
+.table-wrap table tbody td,
+.app-table tbody td,
+.report-table-wrap tbody td,
+.dashboard-data-table tbody td,
+.scan-history-table tbody td,
+.validator-summary-table tbody td,
+.admin-delete-table tbody td,
+.removed-report-table tbody td,
+.advanced-part-result-table tbody td {
+  border-right: 1px solid #e2e8f0 !important;
+  border-bottom: 1px solid #e8eef5 !important;
+  color: #1f2937 !important;
+  line-height: 1.25 !important;
+}
+
+.table-wrap table tbody tr:nth-child(odd) td,
+.app-table tbody tr:nth-child(odd) td,
+.report-table-wrap tbody tr:nth-child(odd) td,
+.dashboard-data-table tbody tr:nth-child(odd) td,
+.scan-history-table tbody tr:nth-child(odd) td,
+.validator-summary-table tbody tr:nth-child(odd) td,
+.admin-delete-table tbody tr:nth-child(odd) td,
+.removed-report-table tbody tr:nth-child(odd) td,
+.advanced-part-result-table tbody tr:nth-child(odd) td {
+  background: #ffffff !important;
+}
+
+.table-wrap table tbody tr:nth-child(even) td,
+.app-table tbody tr:nth-child(even) td,
+.report-table-wrap tbody tr:nth-child(even) td,
+.dashboard-data-table tbody tr:nth-child(even) td,
+.scan-history-table tbody tr:nth-child(even) td,
+.validator-summary-table tbody tr:nth-child(even) td,
+.admin-delete-table tbody tr:nth-child(even) td,
+.removed-report-table tbody tr:nth-child(even) td,
+.advanced-part-result-table tbody tr:nth-child(even) td {
+  background: #f8fafc !important;
+}
+
+.table-wrap table tbody tr:hover td,
+.app-table tbody tr:hover td,
+.report-table-wrap tbody tr:hover td,
+.dashboard-data-table tbody tr:hover td,
+.scan-history-table tbody tr:hover td,
+.validator-summary-table tbody tr:hover td,
+.admin-delete-table tbody tr:hover td,
+.removed-report-table tbody tr:hover td,
+.advanced-part-result-table tbody tr:hover td {
+  background: #eef6ff !important;
+}
+
+.report-table-wrap .report-sort-button {
+  display: flex !important;
+  justify-content: flex-start !important;
+  align-items: center !important;
+  width: 100% !important;
+  height: auto !important;
+  max-height: none !important;
+  min-width: 0 !important;
+  padding: 0 28px 0 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #FFFFFF !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.2px !important;
+  text-align: left !important;
+  transform: none !important;
+}
+
+.report-table-wrap .report-th-content {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-align: left !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+}
+
+#reportHead th,
+#reportHead .report-sort-button,
+#reportHead .report-th-content,
+#reportRows td {
+  text-align: left !important;
+}
+
+#reportHead th[data-col-key*="part" i],
+#reportRows td.part-cell,
+#reportRows td.description-cell {
+  text-align: left !important;
+}
+
+/* Stock Summary exact WWIAS matrix layout. */
+.report-table-wrap[data-report-type="stock-summary"] {
+  background: #c9c9c9 !important;
+  border: 2px solid #2f7f52 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] #reportTable {
+  border-collapse: collapse !important;
+  table-layout: fixed !important;
+  background: #c9c9c9 !important;
+  font-family: Arial, sans-serif !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] #reportHead th,
+.report-table-wrap[data-report-type="stock-summary"] #reportHead td,
+.report-table-wrap[data-report-type="stock-summary"] #reportRows td {
+  position: static !important;
+  top: auto !important;
+  z-index: auto !important;
+  border: 1px solid #111827 !important;
+  padding: 3px 6px !important;
+  color: #000000 !important;
+  font-size: 13px !important;
+  line-height: 1.12 !important;
+  text-align: center !important;
+  vertical-align: middle !important;
+  white-space: normal !important;
+  letter-spacing: 0 !important;
+  box-shadow: none !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-app-title-cell {
+  background: #000000 !important;
+  color: #ffffff !important;
+  font-size: 16px !important;
+  font-weight: 800 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-title-cell {
+  background: #bdd7ee !important;
+  font-size: 18px !important;
+  font-weight: 500 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-meta-label,
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-meta-value {
+  background: #c9c9c9 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-meta-label {
+  font-weight: 700 !important;
+  text-align: right !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-meta-value {
+  text-align: left !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-service-cell,
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-category-head {
+  background: #a7bf95 !important;
+  font-weight: 700 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-dms-head,
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-dms-cell {
+  background: #c6a58e !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-physical-head,
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-physical-cell {
+  background: #d8c87e !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-excess-head,
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-excess-cell {
+  background: #7188ad !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-short-head,
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-short-cell {
+  background: #bfbfbf !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-net-head,
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-net-cell {
+  background: #8fb2cc !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-category-cell {
+  background: #d9d9d9 !important;
+  font-weight: 700 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-grand-total-row td {
+  background: #70a83a !important;
+  font-weight: 800 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-footer-gap-row td {
+  height: 16px !important;
+  background: #c9c9c9 !important;
+  border-color: #c9c9c9 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-footer-label {
+  background: #b7c6ae !important;
+  font-weight: 800 !important;
+  text-align: center !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-footer-value,
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-footer-blank {
+  background: #c9c9c9 !important;
+  font-weight: 800 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-damaged-row .stock-summary-footer-value {
+  background: #7188ad !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-short-footer-row .stock-summary-footer-value {
+  color: #ff0000 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-excess-footer-row .stock-summary-footer-value {
+  color: #008000 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-net-footer-row .stock-summary-footer-value {
+  background: #000000 !important;
+  color: #ffffff !important;
+}
