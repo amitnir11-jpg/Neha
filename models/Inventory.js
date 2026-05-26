@@ -173,6 +173,18 @@ const inventorySchema = new mongoose.Schema(
       default: 0,
       min: 0
     },
+    fittedLocation: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: ''
+    },
+    status: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: ''
+    },
     type: {
       type: String,
       enum: ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'],
@@ -420,7 +432,7 @@ inventorySchema.index(
     partialFilterExpression: {
       rawUpi: { $type: 'string', $gt: '' },
       scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] },
-      scanType: { $in: ['AUDIT', 'INWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'] }
+      scanType: { $in: ['AUDIT', 'INWARD', 'VERIFICATION', 'DAMAGE'] }
     }
   }
 );
@@ -477,6 +489,8 @@ inventorySchema.pre('save', function syncInventoryAliases(next) {
     'stockDeductedFromBin',
     'regdNo',
     'jobCardNo',
+    'fittedLocation',
+    'status',
     'dealerCode',
     'dealerName',
     'staffName'

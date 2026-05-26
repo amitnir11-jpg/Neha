@@ -1963,6 +1963,10 @@ textarea:focus {
   height: 16px;
 }
 
+.report-column-settings-list label {
+  font-weight: 700;
+}
+
 [data-report-filter-key].hidden {
   display: none !important;
 }
@@ -2983,6 +2987,13 @@ td.numeric,
   font-weight: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.report-table-wrap th,
+.report-table-wrap th.numeric-header,
+.report-table-wrap .report-sort-button,
+.report-table-wrap .report-th-content {
+  text-align: left !important;
 }
 
 .report-sort-button::before,

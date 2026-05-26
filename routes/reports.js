@@ -338,7 +338,7 @@ function auditRow(row) {
     manufacturingYear: row.manufacturingYear || row.year,
     category: row.productCategory || row.category,
     productCategory: row.productCategory || row.category,
-    bin: row.binLocation || row.bin,
+    bin: Number(row.fittedQty || 0) > 0 && !(row.binLocation || row.bin) ? 'FITTED - VEHICLE' : (row.binLocation || row.bin),
     mrp: row.mrp,
     dlc: row.dlc,
     productGroup: row.productGroup,
@@ -374,7 +374,7 @@ function scanAuditRow(scan) {
     manufacturingYear: scan.manufacturingYear || scan.year,
     category: scan.productCategory || scan.category,
     productCategory: scan.productCategory || scan.category,
-    bin: scan.binLocation || scan.bin,
+    bin: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin),
     mrp: scan.mrp,
     dlc: scan.dlc,
     productGroup: scan.productGroup,
@@ -399,6 +399,7 @@ function scanAuditRow(scan) {
 }
 
 function validScanRow(scan) {
+  const isFitted = (scan.scanType || scan.type) === 'FITTED' || scan.isFitted;
   return {
     scanTime: scan.timestamp,
     scanStatus: scan.scanStatus || ((scan.scanType || scan.type) === 'OUTWARD' ? 'OUTWARD_DONE' : 'ACCEPTED'),
@@ -407,11 +408,11 @@ function validScanRow(scan) {
     partDescription: scan.partDescription || scan.partName || '',
     quantity: Number(scan.qty || scan.quantity || 0),
     rawBarcode: scan.rawBarcode || scan.rawQR || scan.rawUpi || scan.rawScan || scan.rawScanString || '',
-    binLocation: scan.binLocation || scan.bin || '',
+    binLocation: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin || ''),
     regdNo: scan.regdNo || '',
     jobCardNo: scan.jobCardNo || '',
     fittedQty: Number(scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty || scan.quantity || 0 : 0)),
-    fittedStatus: (scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'Fitted' : 'Not Fitted',
+    fittedStatus: isFitted ? 'Fitted' : 'Not Fitted',
     autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No',
     stockDeductedFromBin: scan.stockDeductedFromBin || '',
     dealerCode: scan.dealerCode || '',
@@ -461,6 +462,7 @@ function normalizeRegisterStatus(value) {
 function scanRegisterInventoryRow(scan) {
   const syncStatus = scan.syncStatus || (scan.synced || scan.isSynced ? 'synced' : 'pending');
   const status = registerScanStatus({ scanStatus: scan.scanStatus, syncStatus });
+  const isFitted = (scan.scanType || scan.type) === 'FITTED' || scan.isFitted;
   return {
     scanTime: scan.timestamp,
     scanStatus: status,
@@ -470,11 +472,11 @@ function scanRegisterInventoryRow(scan) {
     partNumber: scan.partNumber || scan.part || '',
     partDescription: scan.partDescription || scan.partName || '',
     quantity: Number(scan.qty || scan.quantity || 0),
-    binLocation: scan.binLocation || scan.bin || '',
+    binLocation: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin || ''),
     regdNo: scan.regdNo || '',
     jobCardNo: scan.jobCardNo || '',
     fittedQty: Number(scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty || scan.quantity || 0 : 0)),
-    fittedStatus: (scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'Fitted' : 'Not Fitted',
+    fittedStatus: isFitted ? 'Fitted' : 'Not Fitted',
     autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No',
     stockDeductedFromBin: scan.stockDeductedFromBin || '',
     rawQrUpi: scan.rawBarcode || scan.rawQR || scan.rawUpi || scan.rawScan || scan.rawScanString || scan.upiNo || scan.upiId || '',
@@ -643,8 +645,9 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
 
 function selectRows(data, type) {
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') {
+    const binScans = data.scans.filter((scan) => String(scan.scanType || scan.type || '').toUpperCase() !== 'FITTED');
     return groupRows(
-      data.scans,
+      binScans,
       (scan) => `${scan.dealerCode || 'UNKNOWN'}:${scan.binLocation || scan.bin || 'UNKNOWN'}:${scan.partNumber || scan.part || ''}:${scan.scanType || scan.type || ''}`,
       (scan) => ({
         dealerCode: scan.dealerCode || '',
@@ -743,10 +746,20 @@ function columnsForReport(type, rows) {
   return columnsForRows(rows);
 }
 
-async function sendExcel(res, title, rows, type) {
+function selectedColumns(columns, query = {}) {
+  const selected = String(query.columns || query.fields || '')
+    .split(',')
+    .map((key) => key.trim())
+    .filter(Boolean);
+  if (!selected.length) return columns;
+  const filtered = columns.filter((column) => selected.includes(column.key));
+  return filtered.length ? filtered : columns;
+}
+
+async function sendExcel(res, title, rows, type, query = {}) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet(title.slice(0, 31));
-  const columns = columnsForReport(type, rows);
+  const columns = selectedColumns(columnsForReport(type, rows), query);
   sheet.columns = columns.length ? columns : [{ header: 'Message', key: 'message', width: 30 }];
   (rows.length ? rows : [{ message: 'No data found' }]).forEach((row) => sheet.addRow(formatDateLikeFields(row)));
   sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -758,10 +771,10 @@ async function sendExcel(res, title, rows, type) {
   res.send(Buffer.from(buffer));
 }
 
-async function buildExcelBuffer(title, rows, type) {
+async function buildExcelBuffer(title, rows, type, query = {}) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet(title.slice(0, 31));
-  const columns = columnsForReport(type, rows);
+  const columns = selectedColumns(columnsForReport(type, rows), query);
   sheet.columns = columns.length ? columns : [{ header: 'Message', key: 'message', width: 30 }];
   (rows.length ? rows : [{ message: 'No data found' }]).forEach((row) => sheet.addRow(formatDateLikeFields(row)));
   sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -778,9 +791,9 @@ async function buildExcelBuffer(title, rows, type) {
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
-function sendPdf(res, title, rows, type) {
+function sendPdf(res, title, rows, type, query = {}) {
   const doc = new jsPDF({ orientation: 'landscape' });
-  const columns = columnsForReport(type, rows).slice(0, 12);
+  const columns = selectedColumns(columnsForReport(type, rows), query).slice(0, 12);
   const bodyRows = (rows.length ? rows : [{ message: 'No data found' }]).slice(0, 200);
   doc.setFontSize(14);
   doc.text(`DAKSH INVENTORY SYSTEM - ${title}`, 14, 15);
@@ -800,9 +813,9 @@ function sendPdf(res, title, rows, type) {
   res.send(pdf);
 }
 
-function buildPdfBuffer(title, rows, type) {
+function buildPdfBuffer(title, rows, type, query = {}) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-  const columns = columnsForReport(type, rows).slice(0, 12);
+  const columns = selectedColumns(columnsForReport(type, rows), query).slice(0, 12);
   const bodyRows = (rows.length ? rows : [{ message: 'No data found' }]).slice(0, 500);
   doc.setFontSize(14);
   doc.text(`DAKSH INVENTORY SYSTEM - ${title}`, 24, 24);
@@ -828,8 +841,8 @@ async function handleReport(req, res, type, title) {
     console.log("REPORT API:", req.path, query);
     if (type === 'scan-register') {
       const rows = await scanRegisterRows(query);
-      if (query.format === 'excel') return sendExcel(res, title, rows, type);
-      if (query.format === 'pdf') return sendPdf(res, title, rows, type);
+      if (query.format === 'excel') return sendExcel(res, title, rows, type, query);
+      if (query.format === 'pdf') return sendPdf(res, title, rows, type, query);
       return res.json({
         success: true,
         type,
@@ -843,8 +856,8 @@ async function handleReport(req, res, type, title) {
     }
     const data = await reportModule.buildReportData(query);
     const rows = selectRows(data, type);
-    if (query.format === 'excel') return sendExcel(res, title, rows, type);
-    if (query.format === 'pdf') return sendPdf(res, title, rows, type);
+    if (query.format === 'excel') return sendExcel(res, title, rows, type, query);
+    if (query.format === 'pdf') return sendPdf(res, title, rows, type, query);
     return res.json({
       success: true,
       type,
@@ -950,8 +963,8 @@ router.get('/wrong-not-found-master', auth.requireAuth, async (req, res) => {
     if (!selectedDealerCode(req.query)) return requireDealerSelection(res);
     const rows = await rejectedReportRows(req.query);
     const title = 'Rejected Report';
-    if (req.query.format === 'excel') return sendExcel(res, title, rows, 'wrong-not-found-master');
-    if (req.query.format === 'pdf') return sendPdf(res, title, rows, 'wrong-not-found-master');
+    if (req.query.format === 'excel') return sendExcel(res, title, rows, 'wrong-not-found-master', req.query);
+    if (req.query.format === 'pdf') return sendPdf(res, title, rows, 'wrong-not-found-master', req.query);
     return res.json({
       success: true,
       type: 'wrong-not-found-master',

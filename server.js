@@ -1355,7 +1355,9 @@ async function fixInventoryIndexes() {
     for (const index of indexes) {
       const isOldSyncUnique = index.name === 'syncKey_1' && index.unique;
       const isOldUpiUnique = index.name === 'upiId_1_dealerCode_1' && index.unique;
-      const isOldRawUpiUnique = index.name === 'unique_accepted_raw_upi' || (index.unique && index.key && index.key.rawUpi === 1 && !index.key.dealerCode);
+      const isOldRawUpiUnique = index.name === 'unique_accepted_raw_upi'
+        || index.name === 'unique_accepted_raw_upi_by_audit'
+        || (index.unique && index.key && index.key.rawUpi === 1 && !index.key.dealerCode);
       const isNonUniqueScanId = index.name === 'scanId_1' && !index.unique;
       if (isOldSyncUnique || isOldUpiUnique || isOldRawUpiUnique || isNonUniqueScanId) {
         await collection.dropIndex(index.name);
@@ -1387,7 +1389,7 @@ async function fixInventoryIndexes() {
         partialFilterExpression: {
           rawUpi: { $type: 'string', $gt: '' },
           scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] },
-          scanType: { $in: ['AUDIT', 'INWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'] }
+          scanType: { $in: ['AUDIT', 'INWARD', 'VERIFICATION', 'DAMAGE'] }
         }
       }
     );

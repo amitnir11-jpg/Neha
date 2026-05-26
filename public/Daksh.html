@@ -389,6 +389,7 @@
           <div class="card-head report-preview-head">
             <h2 id="reportTitle">Main Inventory Audit Report</h2>
             <div class="actions report-layout-actions">
+              <button id="reportColumnSettingsOpen" class="btn icon-btn" type="button" title="Select Report Fields" aria-label="Select Report Fields">&#9881;</button>
               <input id="reportTableSearch" class="report-table-search" type="search" placeholder="Search within table">
               <span id="reportCount" class="muted">0 rows</span>
             </div>
@@ -1320,10 +1321,24 @@
       </div>
     </div>
   </div>
+  <div id="reportColumnSettingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="reportColumnSettingsTitle">
+    <div class="modal-card report-filter-settings-card">
+      <div class="modal-head">
+        <h2 id="reportColumnSettingsTitle">Select Report Fields</h2>
+        <button id="reportColumnSettingsClose" class="btn icon-btn" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div id="reportColumnSettingsList" class="report-filter-settings-list report-column-settings-list"></div>
+      <div class="modal-actions">
+        <button id="reportColumnSettingsAll" class="btn light" type="button">Select All</button>
+        <button id="reportColumnSettingsDefault" class="btn light" type="button">Reset Default</button>
+        <button id="reportColumnSettingsSave" class="btn primary" type="button">Save</button>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260525-report-tabs-removed" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260526-report-fields" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {

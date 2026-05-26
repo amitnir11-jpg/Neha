@@ -10,7 +10,8 @@ const deletedScanLogSchema = new mongoose.Schema(
     scanType: { type: String, trim: true, uppercase: true, default: '' },
     reason: { type: String, trim: true, default: '' },
     source: { type: String, trim: true, default: 'PC' },
-    scanId: { type: String, trim: true, default: '' }
+    scanId: { type: String, trim: true, default: '' },
+    archivedDocument: { type: mongoose.Schema.Types.Mixed, default: null }
   },
   { timestamps: true }
 );

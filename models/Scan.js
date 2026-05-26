@@ -11,6 +11,8 @@ const scanSchema = new mongoose.Schema({
     jobCardNo: String,
     isFitted: { type: Boolean, default: false },
     fittedQty: { type: Number, default: 0 },
+    fittedLocation: String,
+    status: String,
     stockDeductedFromBin: String,
     quantity: Number,
     mrp: Number,

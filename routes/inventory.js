@@ -150,6 +150,40 @@ function duplicateScanFilter(uniqueScanId, qrFingerprint, dealerCode = '', rawSc
   return filter;
 }
 
+function fittedIdentityFilter({ dealerCode, partNumber, regdNo, jobCardNo, auditId = '' } = {}) {
+  const dealer = normalizeDealerCode(dealerCode);
+  const part = normalizePartNumber(partNumber);
+  const regd = upper(regdNo);
+  const job = upper(jobCardNo);
+  if (!dealer || !part || !regd || !job) return null;
+  const filter = {
+    dealerCode: dealer,
+    scanType: 'FITTED',
+    regdNo: regd,
+    jobCardNo: job,
+    scanStatus: { $in: acceptedStatuses() },
+    syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] },
+    isDuplicate: { $ne: true },
+    $or: [{ normalizedPartNumber: part }, { partNumber: part }, { part }]
+  };
+  const audit = String(auditId || '').trim();
+  if (audit) filter.auditId = audit;
+  return filter;
+}
+
+function prepareFittedScan(scan = {}, qty = 0) {
+  scan.binLocation = '';
+  scan.bin = '';
+  scan.binSelectionMode = '';
+  scan.autoDetectedBin = false;
+  scan.isFitted = true;
+  scan.fittedQty = Number(qty || scan.quantity || scan.qty || 1);
+  scan.fittedLocation = 'VEHICLE';
+  scan.status = 'FITTED_ON_VEHICLE';
+  scan.stockDeductedFromBin = '';
+  return scan;
+}
+
 function numberValue(value, fallback = 0) {
   const parsed = Number(String(value === undefined || value === null || value === '' ? fallback : value).replace(/,/g, '').trim());
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -733,6 +767,8 @@ function publicScan(scan = {}) {
     jobCardNo: scan.jobCardNo || '',
     isFitted: Boolean(scan.isFitted || (scan.scanType || scan.type) === 'FITTED'),
     fittedQty: numberValue(scan.fittedQty !== undefined ? scan.fittedQty : ((scan.scanType || scan.type) === 'FITTED' ? qty : 0), 0),
+    fittedLocation: scan.fittedLocation || ((scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'VEHICLE' : ''),
+    status: scan.status || ((scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'FITTED_ON_VEHICLE' : ''),
     stockDeductedFromBin: scan.stockDeductedFromBin || '',
     deviceId: scan.deviceId || '',
     deviceName: scan.deviceName || '',
@@ -1119,7 +1155,7 @@ async function saveScanRequest(req, res) {
     let stockDeductedFromBin = '';
     if (type === 'FITTED') {
       binLocation = '';
-      binSelectionMode = 'MANUAL';
+      binSelectionMode = '';
     }
     if (type === 'OUTWARD') {
       const detected = await autoDetectOutwardBin({ dealerCode, auditId, partNumber: part });
@@ -1162,20 +1198,55 @@ async function saveScanRequest(req, res) {
       rawScanString: rawScanText,
       binLocation
     }) : '';
-    const finalQrFingerprint = type === 'OUTWARD' && qrFingerprint ? `OUTWARD:${qrFingerprint}` : qrFingerprint;
-    const duplicateQuery = duplicateScanFilter(uniqueScanId, finalQrFingerprint, dealerCode, rawScanText, upiNo, binLocation, auditId);
+    const finalQrFingerprint = type === 'FITTED' ? '' : (type === 'OUTWARD' && qrFingerprint ? `OUTWARD:${qrFingerprint}` : qrFingerprint);
+    const duplicateQuery = type === 'FITTED' ? null : duplicateScanFilter(uniqueScanId, finalQrFingerprint, dealerCode, rawScanText, upiNo, binLocation, auditId);
     let existing = null;
-    if (type === 'OUTWARD') {
+    if (type === 'FITTED' && regdNo && jobCardNo) {
+      existing = await Inventory.findOne(fittedIdentityFilter({ dealerCode, partNumber: part, regdNo, jobCardNo, auditId })).lean();
+    } else if (type === 'OUTWARD') {
       existing = rawScanText ? await Inventory.findOne(outwardDoneFilter(rawScanText, dealerCode, auditId)).lean() : null;
     } else {
       existing = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
     }
     if (existing) {
+      if (type === 'FITTED') {
+        if (booleanFlag(req.body.addFittedQuantity || req.body.confirmAddQuantity)) {
+          const addQty = numberValue(firstValue(req.body, ['qty', 'quantity', 'count']) || parsed.qty, 1);
+          const updated = await Inventory.findByIdAndUpdate(existing._id, {
+            $inc: { qty: addQty, quantity: addQty, fittedQty: addQty },
+            $set: {
+              fittedLocation: 'VEHICLE',
+              status: 'FITTED_ON_VEHICLE',
+              syncStatus: 'synced',
+              synced: true,
+              isSynced: true
+            }
+          }, { new: true }).lean();
+          if (req.io) {
+            req.io.emit('scan:saved', publicScan(updated || existing));
+            req.io.emit('stats:update');
+          }
+          return res.json({
+            success: true,
+            updated: true,
+            duplicate: false,
+            message: 'Fitted part quantity updated for this vehicle/job card',
+            scan: updated || existing
+          });
+        }
+        return res.status(409).json({
+          success: false,
+          duplicate: true,
+          fittedDuplicate: true,
+          message: 'This fitted part already exists for this vehicle/job card. Add quantity?',
+          scan: existing
+        });
+      }
       await logDuplicateScan({
         ...req.body,
         uniqueScanId,
         scanId: uniqueScanId,
-        qrFingerprint,
+        qrFingerprint: finalQrFingerprint,
         partNumber: part,
         dealerCode,
         binLocation,
@@ -1321,6 +1392,8 @@ async function saveScanRequest(req, res) {
       jobCardNo,
       isFitted: type === 'FITTED',
       fittedQty: type === 'FITTED' ? qty : 0,
+      fittedLocation: type === 'FITTED' ? 'VEHICLE' : '',
+      status: type === 'FITTED' ? 'FITTED_ON_VEHICLE' : '',
       stockDeductedFromBin,
       type,
       scanType: type,
@@ -1363,7 +1436,7 @@ async function saveScanRequest(req, res) {
       });
     } catch (error) {
       if (!isDuplicateKeyError(error)) throw error;
-      const duplicate = await Inventory.findOne(duplicateQuery).lean();
+      const duplicate = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
       if (duplicate) {
         await logDuplicateScan({
           ...req.body,
@@ -1408,7 +1481,7 @@ async function saveScanRequest(req, res) {
     scanDebug("Matched category:", scan.category || '');
     scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
     emitScanUpdate(req, scan).catch((error) => console.warn('[MANUAL SCAN] realtime refresh failed', error.message));
-    res.status(201).json({ success: true, scan, warnings });
+    res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
   } catch (error) {
     console.error('[MANUAL SCAN] save failed', { message: error.message, stack: error.stack });
     res.status(500).json({ success: false, message: error.message });
@@ -2230,3 +2303,5 @@ module.exports.findMasterPart = findMasterPart;
 module.exports.numberValue = numberValue;
 module.exports.dashboardStats = dashboardStats;
 module.exports.publicScan = publicScan;
+module.exports.fittedIdentityFilter = fittedIdentityFilter;
+module.exports.prepareFittedScan = prepareFittedScan;

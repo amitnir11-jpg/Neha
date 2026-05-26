@@ -597,6 +597,9 @@ function applyActiveAudit(scan, activeAudit) {
 }
 
 function duplicateQuery(scan) {
+  if (upper(scan.scanType || scan.type) === 'FITTED') {
+    return inventory.fittedIdentityFilter(scan) || { uniqueScanId: '__missing__' };
+  }
   if (isManualEntry(scan)) {
     const scanId = clean(scan.uniqueScanId || scan.scanId);
     return scanIdentityScope({ $or: scanId ? [{ uniqueScanId: scanId }, { scanId }] : [{ uniqueScanId: '__missing__' }] }, scan);
@@ -718,6 +721,19 @@ async function emitEnterpriseRealtime(io, scans = []) {
 
 async function scanPolicyResult(scan = {}) {
   const raw = rawIdentity(scan);
+  if (scan.scanType === 'FITTED') {
+    const duplicate = await Inventory.findOne(duplicateQuery(scan)).sort({ timestamp: 1, createdAt: 1 }).lean();
+    if (duplicate) {
+      return {
+        ok: false,
+        status: 'duplicate',
+        existing: duplicate,
+        reason: 'Fitted part already exists for this vehicle/job card',
+        message: 'Fitted part already exists for this vehicle/job card'
+      };
+    }
+    return { ok: true };
+  }
   if (!raw || isManualEntry(scan)) return { ok: true };
   if (scan.scanType === 'OUTWARD') {
     const outwardDone = await Inventory.findOne(outwardDoneFilter(raw, scan)).lean();
@@ -781,11 +797,7 @@ async function saveNormalizedScan(scan, req) {
   if (scan.partNumber && !isValidPartNumber(scan.partNumber)) errors.push('Invalid part number format');
   if (['INWARD', 'DAMAGE'].includes(scan.scanType) && !scan.binLocation) errors.push(BIN_REQUIRED_MESSAGE);
   if (scan.scanType === 'FITTED') {
-    scan.binLocation = '';
-    scan.binSelectionMode = 'MANUAL';
-    scan.autoDetectedBin = false;
-    scan.isFitted = true;
-    scan.fittedQty = Number(scan.quantity || 1);
+    inventory.prepareFittedScan(scan, scan.quantity || 1);
     if (!scan.regdNo || !scan.jobCardNo) errors.push('Regd No and Job Card No are required for fitted parts.');
   }
   if (!scan.dealerCode) errors.push('Dealer code missing');
@@ -845,6 +857,7 @@ async function saveNormalizedScan(scan, req) {
   }
 
   scan.qrFingerprint = manualEntry ? '' : makeQrFingerprint(scan);
+  if (scan.scanType === 'FITTED') scan.qrFingerprint = '';
   if (scan.scanType === 'OUTWARD' && scan.qrFingerprint) scan.qrFingerprint = `OUTWARD:${scan.qrFingerprint}`;
   const policy = manualEntry ? { ok: true } : await scanPolicyResult(scan);
   if (!policy.ok) {
@@ -949,6 +962,8 @@ async function saveNormalizedScan(scan, req) {
     jobCardNo: scan.jobCardNo || '',
     isFitted: scan.scanType === 'FITTED',
     fittedQty: scan.scanType === 'FITTED' ? finalQty : 0,
+    fittedLocation: scan.scanType === 'FITTED' ? 'VEHICLE' : '',
+    status: scan.scanType === 'FITTED' ? 'FITTED_ON_VEHICLE' : '',
     stockDeductedFromBin: scan.stockDeductedFromBin || (scan.scanType === 'OUTWARD' ? finalBin : ''),
     type: scan.scanType,
     scanType: scan.scanType,
@@ -1176,6 +1191,20 @@ async function pushHandler(req, res) {
       .filter((item) => !isManualEntry(item.scan))
       .map((item) => item.scan.upiNo || item.scan.upiId)
       .filter(Boolean);
+    const fittedDuplicateClauses = normalized
+      .map((item) => item.scan)
+      .filter((scan) => scan.scanType === 'FITTED' && scan.dealerCode && scan.partNumber && scan.regdNo && scan.jobCardNo)
+      .map((scan) => ({
+        dealerCode: upper(scan.dealerCode),
+        scanType: 'FITTED',
+        regdNo: upper(scan.regdNo),
+        jobCardNo: upper(scan.jobCardNo),
+        $or: [
+          { normalizedPartNumber: normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part) },
+          { partNumber: normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part) },
+          { part: normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part) }
+        ]
+      }));
     const [catalogueMasters, legacyMasters, dealers, existingScans] = await Promise.all([
       MasterCatalogue.find({ normalizedPartNumber: { $in: partNumbers } }).lean(),
       MasterPart.find({ $or: [{ normalizedPartNumber: { $in: partNumbers } }, { partNo: { $in: partNumbers } }, { partNumber: { $in: partNumbers } }] }).lean(),
@@ -1189,9 +1218,10 @@ async function pushHandler(req, res) {
           { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawScanString: { $in: normalizedRawScans } },
           { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawUpi: { $in: normalizedRawScans } },
           { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiNo: { $in: normalizedUpiNos } },
-          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiId: { $in: normalizedUpiNos } }
+          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiId: { $in: normalizedUpiNos } },
+          ...fittedDuplicateClauses
         ]
-      }).select('uniqueScanId scanId qrFingerprint rawScan rawScanString rawUpi upiNo upiId dealerCode binLocation bin scanType type').lean()
+      }).select('uniqueScanId scanId qrFingerprint rawScan rawScanString rawUpi upiNo upiId dealerCode binLocation bin scanType type normalizedPartNumber partNumber part regdNo jobCardNo').lean()
     ]);
     const masterByPart = new Map();
     const masterByDealer = new Map();
@@ -1209,6 +1239,17 @@ async function pushHandler(req, res) {
       const scanDealer = upper(scan.dealerCode);
       const scanType = upper(scan.scanType || scan.type);
       const scanBin = upper(scan.binLocation || scan.bin);
+      if (scanType === 'FITTED') {
+        const fittedKey = [
+          scanDealer,
+          normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part),
+          upper(scan.regdNo),
+          upper(scan.jobCardNo),
+          'FITTED'
+        ].join('::');
+        existingScanIds.add(fittedKey);
+        existingIdentityByKey.set(fittedKey, identity);
+      }
       if (scan.uniqueScanId) {
         existingScanIds.add(scan.uniqueScanId);
         existingIdentityByKey.set(scan.uniqueScanId, identity);
@@ -1239,11 +1280,7 @@ async function pushHandler(req, res) {
 
     for (const { scan } of normalized) {
       if (scan.scanType === 'FITTED') {
-        scan.binLocation = '';
-        scan.binSelectionMode = 'MANUAL';
-        scan.autoDetectedBin = false;
-        scan.isFitted = true;
-        scan.fittedQty = Number(scan.quantity || 1);
+        inventory.prepareFittedScan(scan, scan.quantity || 1);
       }
       if (scan.scanType === 'OUTWARD') {
         const detected = await autoDetectOutwardBin(scan);
@@ -1332,17 +1369,29 @@ async function pushHandler(req, res) {
         return;
       }
 
+      const fittedKey = scan.scanType === 'FITTED'
+        ? [
+            upper(scan.dealerCode),
+            normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part),
+            upper(scan.regdNo),
+            upper(scan.jobCardNo),
+            'FITTED'
+          ].join('::')
+        : '';
       const identityBin = upper(scan.binLocation || scan.bin);
       const identityType = upper(scan.scanType || scan.type);
       const rawIdentityKey = !manualEntry && clean(scan.rawScanString) ? `${upper(scan.dealerCode)}::${identityType}::${identityBin}::RAW::${clean(scan.rawScanString)}` : '';
       const upiIdentityKey = !manualEntry && upper(scan.upiNo || scan.upiId) ? `${upper(scan.dealerCode)}::${identityType}::${identityBin}::UPI::${upper(scan.upiNo || scan.upiId)}` : '';
-      if (!manualEntry && (existingScanIds.has(scan.uniqueScanId) || existingScanIds.has(scan.qrFingerprint) || (rawIdentityKey && existingScanIds.has(rawIdentityKey)) || (upiIdentityKey && existingScanIds.has(upiIdentityKey)) || duplicateScanIds.has(scan.uniqueScanId) || duplicateScanIds.has(scan.qrFingerprint) || (rawIdentityKey && duplicateScanIds.has(rawIdentityKey)) || (upiIdentityKey && duplicateScanIds.has(upiIdentityKey)))) {
+      const fittedDuplicate = fittedKey && (existingScanIds.has(fittedKey) || duplicateScanIds.has(fittedKey));
+      const normalDuplicate = !manualEntry && !fittedKey && (existingScanIds.has(scan.uniqueScanId) || existingScanIds.has(scan.qrFingerprint) || (rawIdentityKey && existingScanIds.has(rawIdentityKey)) || (upiIdentityKey && existingScanIds.has(upiIdentityKey)) || duplicateScanIds.has(scan.uniqueScanId) || duplicateScanIds.has(scan.qrFingerprint) || (rawIdentityKey && duplicateScanIds.has(rawIdentityKey)) || (upiIdentityKey && duplicateScanIds.has(upiIdentityKey)));
+      if (fittedDuplicate || normalDuplicate) {
         duplicateScanIds.add(scan.uniqueScanId);
         duplicateScanIds.add(scan.qrFingerprint);
+        if (fittedKey) duplicateScanIds.add(fittedKey);
         if (rawIdentityKey) duplicateScanIds.add(rawIdentityKey);
         if (upiIdentityKey) duplicateScanIds.add(upiIdentityKey);
-        const existingIdentity = existingIdentityByKey.get(rawIdentityKey) || existingIdentityByKey.get(upiIdentityKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.qrFingerprint) || {};
-        logDuplicateScan(scan, existingIdentity, 'Duplicate scanId skipped').catch(() => undefined);
+        const existingIdentity = existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(rawIdentityKey) || existingIdentityByKey.get(upiIdentityKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.qrFingerprint) || {};
+        logDuplicateScan(scan, existingIdentity, fittedKey ? 'Fitted part already exists for this vehicle/job card' : 'Duplicate scanId skipped').catch(() => undefined);
         logSync('duplicate scan skipped', {
           row: index + 1,
           scanId: scan.uniqueScanId,
@@ -1351,12 +1400,13 @@ async function pushHandler(req, res) {
           dealerCode: scan.dealerCode,
           existing: existingIdentity || 'same request batch'
         });
-        logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'duplicate', 'Duplicate scanId skipped'));
+        logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'duplicate', fittedKey ? 'Fitted part already exists for this vehicle/job card' : 'Duplicate scanId skipped'));
         return;
       }
       duplicateScanIds.add(scan.uniqueScanId);
-      scan.qrFingerprint = manualEntry ? '' : makeQrFingerprint(scan);
+      scan.qrFingerprint = manualEntry || fittedKey ? '' : makeQrFingerprint(scan);
       duplicateScanIds.add(scan.qrFingerprint);
+      if (fittedKey) duplicateScanIds.add(fittedKey);
       if (rawIdentityKey) duplicateScanIds.add(rawIdentityKey);
       if (upiIdentityKey) duplicateScanIds.add(upiIdentityKey);
 
@@ -1390,6 +1440,8 @@ async function pushHandler(req, res) {
         jobCardNo: scan.jobCardNo || '',
         isFitted: scan.scanType === 'FITTED',
         fittedQty: scan.scanType === 'FITTED' ? finalQty : 0,
+        fittedLocation: scan.scanType === 'FITTED' ? 'VEHICLE' : '',
+        status: scan.scanType === 'FITTED' ? 'FITTED_ON_VEHICLE' : '',
         stockDeductedFromBin: scan.stockDeductedFromBin || (scan.scanType === 'OUTWARD' ? finalBin : ''),
         type: scan.scanType,
         scanType: scan.scanType,
