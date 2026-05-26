@@ -56,6 +56,11 @@ const auditSchema = new mongoose.Schema(
       trim: true,
       default: ''
     },
+    completedBy: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     status: {
       type: String,
       enum: ['active', 'open', 'closed'],

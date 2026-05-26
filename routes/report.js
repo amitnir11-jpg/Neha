@@ -2936,7 +2936,8 @@ function stockSummaryMetadata(selectedDealer = {}, selectedAudit = {}, query = {
     { label: 'Brand', value: brand || '' },
     { label: 'Location', value: firstPresent(audit.location, dealer.location, '') || '' },
     { label: 'Audit Start Date', value: stockSummaryDate(firstPresent(audit.auditStartDate, dealer.auditStartDate, query.from)) },
-    { label: 'Audit Closed Date', value: stockSummaryDate(firstPresent(audit.auditClosedDate, dealer.auditClosedDate, query.to)) },
+    { label: 'Audit End Date', value: stockSummaryDate(firstPresent(audit.auditClosedDate, dealer.auditClosedDate, query.to)) },
+    { label: 'Audit Completed By', value: firstPresent(audit.completedBy, '') || '' },
     { label: 'SPM Name', value: firstPresent(audit.spmName, dealer.spmName, '') || '' },
     { label: 'General Manager', value: firstPresent(audit.generalManager, dealer.generalManager, '') || '' },
     { label: 'Auditer Name', value: firstPresent(audit.auditorName, dealer.auditorName, '') || '' }

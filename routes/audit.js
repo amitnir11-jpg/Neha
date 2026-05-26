@@ -87,9 +87,10 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 router.post('/:auditId/close', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const auditId = clean(req.params.auditId);
+    const completedByUser = req.user ? (req.user.name || req.user.username || req.user.email || '') : '';
     const audit = await Audit.findOneAndUpdate(
       { auditId },
-      { status: 'closed', auditClosedDate: new Date() },
+      { status: 'closed', auditClosedDate: new Date(), completedBy: completedByUser },
       { new: true }
     );
     if (!audit) return res.status(404).json({ success: false, message: 'Audit not found' });
