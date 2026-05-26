@@ -3649,7 +3649,7 @@
       ? summary.metadata
       : Array.isArray(sections.metadata) ? sections.metadata : [];
     const footer = summary.footer || sections.footer || {};
-    const title = summary.title || sections.title || 'Wall -to-Wall Inventory Audit Service(WWIAS)';
+    const title = summary.title || sections.title || 'Stock Summary Report';
     const metaMarkup = metaRows.map((item) => `
       <tr class="stock-summary-meta-row">
         <th colspan="3" class="stock-summary-meta-label">${escapeHtml(item.label || '')} :</th>

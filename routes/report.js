@@ -2698,7 +2698,7 @@ function buildCategoryWiseVariancePdfBuffer(data) {
   return Buffer.from(doc.output('arraybuffer'));
 }
 
-const STOCK_SUMMARY_TITLE = 'Wall -to-Wall Inventory Audit Service(WWIAS)';
+const STOCK_SUMMARY_TITLE = 'Stock Summary Report';
 const STOCK_SUMMARY_CATEGORIES = [
   'HHML Parts',
   'VIDA Parts',
