@@ -121,6 +121,53 @@ const inventorySchema = new mongoose.Schema(
       type: Number,
       default: 0
     },
+    scanMRP: {
+      type: Number,
+      default: 0
+    },
+    manualMRP: {
+      type: Number,
+      default: 0
+    },
+    valuationMRP: {
+      type: Number,
+      default: 0,
+      index: true
+    },
+    valuationSource: {
+      type: String,
+      enum: ['UPI_SCANNED_MRP', 'MANUAL_ENTERED_MRP', 'NO_SCANNED_OR_MANUAL_MRP', ''],
+      default: '',
+      index: true
+    },
+    finalInventoryValue: {
+      type: Number,
+      default: 0
+    },
+    priceHistoryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'PartPriceHistory',
+      default: null,
+      index: true
+    },
+    pricePeriodFrom: {
+      type: Date,
+      default: null
+    },
+    pricePeriodTo: {
+      type: Date,
+      default: null
+    },
+    pricePeriodMatched: {
+      type: Boolean,
+      default: false
+    },
+    pricePeriodStatus: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: ''
+    },
     dlc: {
       type: Number,
       default: 0
@@ -408,6 +455,10 @@ const inventorySchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: ''
+    },
+    rawScanArchivedAt: {
+      type: Date,
+      default: null
     }
   },
   {
@@ -416,6 +467,10 @@ const inventorySchema = new mongoose.Schema(
 );
 
 inventorySchema.index({ part: 1, dealerCode: 1, auditId: 1, timestamp: 1 });
+inventorySchema.index({ normalizedPartNumber: 1, valuationMRP: 1, timestamp: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, normalizedPartNumber: 1, valuationMRP: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, normalizedPartNumber: 1, scanType: 1, scanMRP: 1, timestamp: -1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, partNumber: 1, scanType: 1, valuationMRP: 1, scanTime: -1 });
 inventorySchema.index({ dealerCode: 1, auditId: 1, timestamp: -1, createdAt: -1 });
 inventorySchema.index({ dealerCode: 1, auditId: 1, scanStatus: 1, rawScan: 1 });
 inventorySchema.index({ dealerCode: 1, auditId: 1, scanStatus: 1, rawScanString: 1 });

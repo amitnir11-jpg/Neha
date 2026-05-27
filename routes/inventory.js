@@ -18,6 +18,9 @@ const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentit
 const masterValidation = require('../utils/masterValidation');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
 const { dateDebugPayload, formatIstDateTime, validDate } = require('../utils/time');
+const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
+const { findPricePeriod, pricePeriodPayload } = require('../utils/priceHistory');
+const { scheduleMovementSummaryRefresh } = require('../services/inventoryMovementSummary');
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
@@ -28,6 +31,28 @@ const realtimeRefreshDelay = Number(process.env.REALTIME_SCAN_REFRESH_DELAY_MS |
 const REALTIME_SCAN_REFRESH_DELAY_MS = Number.isFinite(realtimeRefreshDelay) && realtimeRefreshDelay >= 100
   ? realtimeRefreshDelay
   : 900;
+
+/**
+ * ====================================================================
+ * INVENTORY ROUTE - DASHBOARD & STATISTICS COMPLIANCE
+ * ====================================================================
+ *
+ * DASHBOARD STATS CALCULATION:
+ *   totalScannedValue = SUM of finalInventoryValue from all records
+ *
+ * WHERE finalInventoryValue must be:
+ *   - Calculated using decorateScanValue() from inventoryValueEngine.js
+ *   - Based on scanned MRP or manual entered MRP only
+ *   - NOT based on master MRP or current catalogue MRP
+ *
+ * CRITICAL:
+ *   - dashboardStats() reads finalInventoryValue from database records
+ *   - Each record already has finalInventoryValue calculated at save time
+ *   - aggregation does NOT recalculate, only sums existing values
+ *   - This ensures dashboard total == report total
+ *
+ * ====================================================================
+ */
 let bluetoothScanQueue = Promise.resolve();
 const realtimeDashboardTimers = new Map();
 
@@ -197,6 +222,25 @@ function booleanFlag(value) {
   return value === true || String(value).toLowerCase() === 'true' || value === 1 || value === '1';
 }
 
+function valuationFields({ rawScanText = '', scannedMrp, mrpProvided = false, entrySource = '', manualEntryMode = false } = {}) {
+  const valued = decorateScanValue({
+    rawScan: rawScanText,
+    rawScanString: rawScanText,
+    source: manualEntryMode ? 'manual' : entrySource,
+    scanMode: manualEntryMode ? 'Manual' : entrySource,
+    scanMRP: !manualEntryMode && mrpProvided ? scannedMrp : undefined,
+    manualMRP: manualEntryMode && mrpProvided ? scannedMrp : undefined
+  });
+  return {
+    mrp: Number(valued.valuationMRP || 0),
+    scanMRP: Number(valued.scanMRP || 0),
+    manualMRP: Number(valued.manualMRP || 0),
+    valuationMRP: Number(valued.valuationMRP || 0),
+    valuationSource: valued.valuationSource || 'NO_SCANNED_OR_MANUAL_MRP',
+    finalInventoryValue: Number(valued.finalInventoryValue || 0)
+  };
+}
+
 const DASHBOARD_BLANK_MARKERS = ['', 'NULL', 'UNDEFINED', 'N/A', 'NA', '-'];
 
 function firstNonBlankExpression(fields = [], fallback = '') {
@@ -292,13 +336,15 @@ function parseRawScan(rawScan) {
   const raw = String(rawScan || '').trim();
   const slashParts = raw.split('/');
   if (slashParts.length >= 6 && slashParts[3] && slashParts[4] && slashParts[5]) {
+    const slashQty = optionalNumber(slashParts[4]);
+    const slashMrp = optionalNumber(slashParts[5]);
     return {
       upiNo: upper(slashParts[1]),
       upiId: upper(slashParts[1]),
       part: upper(slashParts[3]).replace(/\s+/g, ''),
-      qty: numberValue(slashParts[4], 1),
-      mrp: undefined,
-      mrpProvided: false,
+      qty: slashQty !== undefined ? slashQty : 1,
+      mrp: slashMrp,
+      mrpProvided: slashMrp !== undefined,
       dlc: undefined,
       dlcProvided: false,
       bin: '',
@@ -506,7 +552,7 @@ async function dashboardStats(filter) {
   if (filter.timestamp) duplicateFilter.timestamp = filter.timestamp;
 
   const [records, todayCount, activeDevices, activeUsers, lastScan, last10Scans, duplicateCount] = await Promise.all([
-    Inventory.find(filter).select('qty quantity mrp type scanType synced isSynced warnings part partNumber normalizedPartNumber rawScan rawScanString rawUpi category productCategory').lean(),
+    Inventory.find(filter).select('qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue type scanType source scanMode entryMode synced isSynced warnings part partNumber normalizedPartNumber rawScan rawScanString rawUpi category productCategory').lean(),
     Inventory.countDocuments(todayFilter),
     Device.countDocuments({ status: 'online', lastSeen: { $gte: liveCutoff } }),
     Inventory.distinct('userId', activeUserFilter),
@@ -555,7 +601,7 @@ async function dashboardStats(filter) {
     if (scan.type === 'DAMAGE') stats.damageCount += qty;
     if (!record.synced) stats.pendingSync += 1;
     if ((record.warnings || []).some((warning) => /mismatch|inactive|not found/i.test(warning))) stats.mismatchCount += 1;
-    stats.totalScannedValue += qty * Number(scan.mrp || 0);
+    stats.totalScannedValue += Number(scan.finalInventoryValue || 0);
   });
   stats.totalUniqueScannedParts = uniqueParts.size;
 
@@ -564,114 +610,73 @@ async function dashboardStats(filter) {
 
 async function dashboardProductGroupSummary({ limit = 100, q = '', filter = {} } = {}) {
   const search = String(q || '').trim();
-  const pipeline = [
-    { $match: applyTestScanMode({ ...(filter || {}) }, 'real') },
-    {
-      $addFields: {
-        _dashboardProductGroup: firstNonBlankExpression(['productGroup', 'partGroup', 'productCategory', 'category'], 'OTHERS'),
-        _dashboardProductSubGroup: firstNonBlankExpression(['partSubGroup', 'productSubGroup', 'productType'], 'GENERAL'),
-        _dashboardPartNumber: firstNonBlankExpression(['normalizedPartNumber', 'partNumber', 'part', 'partNo'], ''),
-        _dashboardQty: numberExpression(['qty', 'quantity']),
-        _dashboardMrp: numberExpression(['mrp']),
-        _dashboardDlc: numberExpression(['dlc'])
-      }
-    }
-  ];
-  if (search) {
-    const regex = new RegExp(escapeRegex(search), 'i');
-    pipeline.push({
-      $match: {
-        $or: [
-          { _dashboardProductGroup: regex },
-          { _dashboardProductSubGroup: regex }
-        ]
-      }
-    });
-  }
-  pipeline.push(
-    {
-      $group: {
-        _id: {
-          productGroup: '$_dashboardProductGroup',
-          partSubGroup: '$_dashboardProductSubGroup'
-        },
-        totalScans: { $sum: 1 },
-        totalQuantity: { $sum: '$_dashboardQty' },
-        uniquePartSet: { $addToSet: '$_dashboardPartNumber' },
-        totalMrpValue: { $sum: { $multiply: ['$_dashboardQty', '$_dashboardMrp'] } },
-        totalDlcValue: { $sum: { $multiply: ['$_dashboardQty', '$_dashboardDlc'] } }
-      }
-    },
-    {
-      $project: {
-        _id: 0,
-        productGroup: '$_id.productGroup',
-        partSubGroup: '$_id.partSubGroup',
-        totalScans: 1,
-        scanCount: '$totalScans',
-        totalQuantity: 1,
-        qty: '$totalQuantity',
-        uniqueParts: { $size: { $setDifference: ['$uniquePartSet', ['']] } },
-        totalMrpValue: 1,
-        totalDlcValue: 1
-      }
-    },
-    { $sort: { totalQuantity: -1, totalScans: -1, productGroup: 1, partSubGroup: 1 } }
-  );
-  if (limit && Number(limit) > 0) pipeline.push({ $limit: Math.min(Number(limit), 5000) });
-  return Inventory.aggregate(pipeline);
+  const regex = search ? new RegExp(escapeRegex(search), 'i') : null;
+  const records = await Inventory.find(applyTestScanMode({ ...(filter || {}) }, 'real'))
+    .select('part partNumber normalizedPartNumber productGroup partGroup productCategory category partSubGroup productSubGroup productType qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue rawScan rawScanString rawUpi source scanMode entryMode dlc')
+    .lean();
+  const groups = new Map();
+  records.map(publicScan).forEach((scan) => {
+    const productGroup = clean(scan.productGroup || scan.partGroup || scan.productCategory || scan.category || 'OTHERS') || 'OTHERS';
+    const partSubGroup = clean(scan.partSubGroup || scan.productSubGroup || scan.productType || 'GENERAL') || 'GENERAL';
+    if (regex && !regex.test(productGroup) && !regex.test(partSubGroup)) return;
+    const key = `${productGroup}::${partSubGroup}`;
+    const group = groups.get(key) || {
+      productGroup,
+      partSubGroup,
+      totalScans: 0,
+      scanCount: 0,
+      totalQuantity: 0,
+      qty: 0,
+      uniquePartSet: new Set(),
+      totalMrpValue: 0,
+      totalDlcValue: 0
+    };
+    const qty = Number(scan.qty || 0);
+    group.totalScans += 1;
+    group.scanCount = group.totalScans;
+    group.totalQuantity += qty;
+    group.qty = group.totalQuantity;
+    if (scan.partNumber) group.uniquePartSet.add(scan.partNumber);
+    group.totalMrpValue += Number(scan.finalInventoryValue || 0);
+    group.totalDlcValue += qty * Number(scan.dlc || 0);
+    groups.set(key, group);
+  });
+  const rows = Array.from(groups.values()).map((row) => {
+    const uniqueParts = row.uniquePartSet.size;
+    delete row.uniquePartSet;
+    return { ...row, uniqueParts, totalMrpValue: money(row.totalMrpValue), totalDlcValue: money(row.totalDlcValue) };
+  }).sort((a, b) => Number(b.totalQuantity || 0) - Number(a.totalQuantity || 0) || Number(b.totalScans || 0) - Number(a.totalScans || 0) || String(a.productGroup).localeCompare(String(b.productGroup)) || String(a.partSubGroup).localeCompare(String(b.partSubGroup)));
+  return limit && Number(limit) > 0 ? rows.slice(0, Math.min(Number(limit), 5000)) : rows;
 }
 
 async function dashboardProductGroupDetails({ productGroup = '', partSubGroup = '', filter = {} } = {}) {
   const group = String(productGroup || 'OTHERS').trim() || 'OTHERS';
   const subGroup = String(partSubGroup || 'GENERAL').trim() || 'GENERAL';
-  const pipeline = [
-    { $match: applyTestScanMode({ ...(filter || {}) }, 'real') },
-    {
-      $addFields: {
-        _dashboardProductGroup: firstNonBlankExpression(['productGroup', 'partGroup', 'productCategory', 'category'], 'OTHERS'),
-        _dashboardProductSubGroup: firstNonBlankExpression(['partSubGroup', 'productSubGroup', 'productType'], 'GENERAL'),
-        _dashboardPartNumber: firstNonBlankExpression(['normalizedPartNumber', 'partNumber', 'part', 'partNo'], ''),
-        _dashboardPartDescription: firstNonBlankExpression(['partDescription', 'partName', 'description'], ''),
-        _dashboardBinLocation: firstNonBlankExpression(['binLocation', 'bin'], ''),
-        _dashboardQty: numberExpression(['qty', 'quantity']),
-        _dashboardMrp: numberExpression(['mrp'])
-      }
-    },
-    {
-      $match: {
-        _dashboardProductGroup: new RegExp(`^${escapeRegex(group)}$`, 'i'),
-        _dashboardProductSubGroup: new RegExp(`^${escapeRegex(subGroup)}$`, 'i')
-      }
-    },
-    {
-      $group: {
-        _id: {
-          partNumber: '$_dashboardPartNumber',
-          partDescription: '$_dashboardPartDescription',
-          binLocation: '$_dashboardBinLocation',
-          mrp: '$_dashboardMrp'
-        },
-        qty: { $sum: '$_dashboardQty' },
-        scanCount: { $sum: 1 },
-        mrpTotal: { $sum: { $multiply: ['$_dashboardQty', '$_dashboardMrp'] } }
-      }
-    },
-    {
-      $project: {
-        _id: 0,
-        partNumber: '$_id.partNumber',
-        partDescription: '$_id.partDescription',
-        qty: 1,
-        binLocation: '$_id.binLocation',
-        mrp: '$_id.mrp',
-        mrpTotal: 1,
-        scanCount: 1
-      }
-    },
-    { $sort: { partNumber: 1, binLocation: 1 } }
-  ];
-  const rows = await Inventory.aggregate(pipeline);
+  const records = await Inventory.find(applyTestScanMode({ ...(filter || {}) }, 'real'))
+    .select('part partNumber normalizedPartNumber partDescription partName productGroup partGroup productCategory category partSubGroup productSubGroup productType binLocation bin qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue rawScan rawScanString rawUpi source scanMode entryMode')
+    .lean();
+  const groups = new Map();
+  records.map(publicScan).forEach((scan) => {
+    const productGroupText = clean(scan.productGroup || scan.partGroup || scan.productCategory || scan.category || 'OTHERS') || 'OTHERS';
+    const partSubGroupText = clean(scan.partSubGroup || scan.productSubGroup || scan.productType || 'GENERAL') || 'GENERAL';
+    if (!new RegExp(`^${escapeRegex(group)}$`, 'i').test(productGroupText)) return;
+    if (!new RegExp(`^${escapeRegex(subGroup)}$`, 'i').test(partSubGroupText)) return;
+    const key = [scan.partNumber, scan.partDescription || scan.partName, scan.binLocation || scan.bin, scan.valuationMRP || 0].join('::');
+    const item = groups.get(key) || {
+      partNumber: scan.partNumber,
+      partDescription: scan.partDescription || scan.partName || '',
+      qty: 0,
+      binLocation: scan.binLocation || scan.bin || '',
+      mrp: scan.valuationMRP || 0,
+      mrpTotal: 0,
+      scanCount: 0
+    };
+    item.qty += Number(scan.qty || 0);
+    item.mrpTotal += Number(scan.finalInventoryValue || 0);
+    item.scanCount += 1;
+    groups.set(key, item);
+  });
+  const rows = Array.from(groups.values()).map((row) => ({ ...row, mrpTotal: money(row.mrpTotal) })).sort((a, b) => String(a.partNumber).localeCompare(String(b.partNumber)) || String(a.binLocation).localeCompare(String(b.binLocation)));
   return {
     productGroup: group,
     partSubGroup: subGroup,
@@ -731,12 +736,19 @@ function publicScan(scan = {}) {
   const parsed = parseRawScan(scanRawText(scan));
   const partNumber = normalizePartNumber(scan.partNumber || scan.part || scan.normalizedPartNumber || parsed.part || '');
   const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity !== undefined ? scan.quantity : parsed.qty, 0);
-  const mrp = numberValue(scan.mrp !== undefined ? scan.mrp : parsed.mrp, 0);
   const rawScan = scanRawText(scan);
   const syncStatus = normalizedSyncStatus(scan);
   const labels = sourceLabels(scan);
-  return {
+  const valued = decorateScanValue({
     ...scan,
+    rawScan,
+    rawScanString: rawScan,
+    qty,
+    quantity: qty
+  });
+  const mrp = numberValue(valued.valuationMRP, 0);
+  return {
+    ...valued,
     scanId: scan.scanId || scan.uniqueScanId || String(scan._id || ''),
     rawUpi: rawScan,
     rawScan,
@@ -753,6 +765,11 @@ function publicScan(scan = {}) {
     qty,
     quantity: qty,
     mrp,
+    scanMRP: valued.scanMRP || 0,
+    manualMRP: valued.manualMRP || 0,
+    valuationMRP: mrp,
+    valuationSource: valued.valuationSource || '',
+    finalInventoryValue: valued.finalInventoryValue || 0,
     scanType: scan.scanType || scan.type || '',
     type: scan.scanType || scan.type || '',
     dealerCode: scan.dealerCode || '',
@@ -951,6 +968,20 @@ async function repairParsedFields(records = []) {
     if ((record.qty === undefined || record.qty === null || Number(record.qty) === 0) && qty) patch.qty = qty;
     if ((record.quantity === undefined || record.quantity === null || Number(record.quantity) === 0) && qty) patch.quantity = qty;
     if ((record.mrp === undefined || record.mrp === null || Number(record.mrp) === 0) && mrp) patch.mrp = mrp;
+    if (parsed.mrpProvided) {
+      const valueFields = valuationFields({
+        rawScanText: scanRawText(record),
+        scannedMrp: parsed.mrp,
+        mrpProvided: true,
+        entrySource: record.source || 'barcode',
+        manualEntryMode: false
+      });
+      patch.mrp = valueFields.mrp;
+      patch.scanMRP = valueFields.scanMRP;
+      patch.valuationMRP = valueFields.valuationMRP;
+      patch.valuationSource = valueFields.valuationSource;
+      patch.finalInventoryValue = qty * Number(valueFields.valuationMRP || 0);
+    }
     if (Object.keys(patch).length && record._id) operations.push({ updateOne: { filter: { _id: record._id }, update: { $set: patch } } });
   });
   if (operations.length) await Inventory.bulkWrite(operations, { ordered: false });
@@ -1034,25 +1065,27 @@ async function cleanupTestScans(req, res) {
   }
 }
 
-async function validateScan(payload, master, timestamp) {
+async function validateScan(payload, master, timestamp, pricePeriod = null) {
   const warnings = [];
   const scannedMrp = optionalNumber(payload.mrp);
   const scannedDlc = optionalNumber(payload.dlc);
   const mrpCompareRequired = shouldComparePrice(payload, 'mrp');
   const dlcCompareRequired = shouldComparePrice(payload, 'dlc');
-  const mrpMatch = !mrpCompareRequired || !approxMismatch(scannedMrp, master ? master.mrp : undefined);
+  const expectedMrp = pricePeriod ? pricePeriod.mrp : undefined;
+  const mrpMatch = !mrpCompareRequired || expectedMrp === undefined || !approxMismatch(scannedMrp, expectedMrp);
 
   if (!master) {
     warnings.push(`Part not found in Master Catalogue: ${payload.part || payload.partNumber || ''}`);
   } else {
-    if (mrpCompareRequired && approxMismatch(scannedMrp, master.mrp)) warnings.push('MRP mismatch');
+    if (mrpCompareRequired && expectedMrp !== undefined && approxMismatch(scannedMrp, expectedMrp)) warnings.push('MRP mismatch against price history period');
+    if (mrpCompareRequired && expectedMrp === undefined) warnings.push('No matching price history period for scanned MRP');
     if (dlcCompareRequired && approxMismatch(scannedDlc, master.dlc)) warnings.push('DLC mismatch');
     if (!master.activeStatus) warnings.push('Inactive part');
   }
 
   scanDebug('RAW_SCAN:', payload.rawScan || payload.rawScanString || '');
   scanDebug('EXTRACTED_PART:', payload.part || payload.partNumber || '');
-  scanDebug('MASTER_MRP:', master ? master.mrp : '');
+  scanDebug('PRICE_HISTORY_MRP:', expectedMrp !== undefined ? expectedMrp : '');
   scanDebug('SCANNED_MRP:', mrpCompareRequired ? scannedMrp : '');
   scanDebug('MRP_COMPARE_REQUIRED', mrpCompareRequired);
   scanDebug('MRP_MATCH', mrpMatch);
@@ -1303,19 +1336,22 @@ async function saveScanRequest(req, res) {
     const dlcProvided = bodyDlcProvided || parsedDlcProvided;
     const scannedMrp = mrpProvided ? optionalNumber(bodyMrpProvided ? req.body.mrp : parsed.mrp) : undefined;
     const scannedDlc = dlcProvided ? optionalNumber(bodyDlcProvided ? req.body.dlc : parsed.dlc) : undefined;
+    const valueFields = valuationFields({ rawScanText, scannedMrp, mrpProvided, entrySource, manualEntryMode });
+    const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(part, timestamp, valueFields.valuationMRP) : null;
+    const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
     const candidate = {
       part,
       dealerCode,
       auditId,
       rawScan: rawScanText,
       rawScanProvided: Boolean(rawScanInput || parsed.rawScan),
-      mrp: scannedMrp,
+      mrp: valueFields.valuationMRP || scannedMrp,
       mrpProvided,
       dlc: scannedDlc,
       dlcProvided
     };
 
-    const warnings = await validateScan(candidate, master, timestamp);
+    const warnings = await validateScan(candidate, master, timestamp, pricePeriod);
     if (!master && manualEntryMode) {
       await logValidationFailure({
         ...req.body,
@@ -1380,7 +1416,13 @@ async function saveScanRequest(req, res) {
       gstCategory: master ? master.gstCategory || '' : String(req.body.gstCategory || '').toUpperCase(),
       qty,
       quantity: qty,
-      mrp: master ? Number(master.mrp || 0) : numberValue(parsed.mrp !== undefined ? parsed.mrp : req.body.mrp),
+      mrp: valueFields.mrp,
+      scanMRP: valueFields.scanMRP,
+      manualMRP: valueFields.manualMRP,
+      valuationMRP: valueFields.valuationMRP,
+      valuationSource: valueFields.valuationSource,
+      finalInventoryValue: Number(qty || 0) * Number(valueFields.valuationMRP || 0),
+      ...pricePeriodFields,
       dlc: master ? Number(master.dlc || 0) : numberValue(req.body.dlc || parsed.dlc),
       bin: binLocation,
       binLocation,
@@ -1478,6 +1520,7 @@ async function saveScanRequest(req, res) {
     scanDebug('SAVED_VALID_SCAN', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode });
     scanDebug("Matched category:", scan.category || '');
     scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
+    scheduleMovementSummaryRefresh(scan);
     emitScanUpdate(req, scan).catch((error) => console.warn('[MANUAL SCAN] realtime refresh failed', error.message));
     res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
   } catch (error) {
@@ -1788,6 +1831,9 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
         const dlcProvided = itemDlcProvided || parsedDlcProvided;
         const scannedMrp = mrpProvided ? optionalNumber(itemMrpProvided ? item.mrp : parsed.mrp) : undefined;
         const scannedDlc = dlcProvided ? optionalNumber(itemDlcProvided ? item.dlc : parsed.dlc) : undefined;
+        const valueFields = valuationFields({ rawScanText, scannedMrp, mrpProvided, entrySource, manualEntryMode });
+        const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(part, timestamp, valueFields.valuationMRP) : null;
+        const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
         const duplicateQuery = duplicateScanFilter(uniqueScanId, qrFingerprint, dealerCode, rawScanText, upiNo, binLocation, auditId);
         const duplicate = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
         if (duplicate) {
@@ -1815,7 +1861,8 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
         if (!VALID_TYPES.includes(type)) warnings.push('Invalid scan type');
         if (!master) warnings.push(`Part number not found in master: ${part}`);
         if (master && !master.activeStatus) warnings.push('Inactive part');
-        if (master && mrpProvided && approxMismatch(scannedMrp, master.mrp)) warnings.push('MRP mismatch');
+        if (master && mrpProvided && pricePeriod && approxMismatch(valueFields.valuationMRP, pricePeriod.mrp)) warnings.push('MRP mismatch against price history period');
+        if (master && mrpProvided && !pricePeriod) warnings.push('No matching price history period for scanned MRP');
         if (master && dlcProvided && approxMismatch(scannedDlc, master.dlc)) warnings.push('DLC mismatch');
 
         if (!part || !isValidPartNumber(part) || !binLocation || !dealerCode || !VALID_TYPES.includes(type) || (!master && manualEntryMode)) {
@@ -1879,7 +1926,13 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           gstCategory: master ? master.gstCategory || '' : String(item.gstCategory || '').toUpperCase(),
           qty: numberValue(firstValue(item, ['qty', 'quantity', 'count']) || parsed.qty, 1),
           quantity: numberValue(firstValue(item, ['qty', 'quantity', 'count']) || parsed.qty, 1),
-          mrp: master && master.mrp ? Number(master.mrp || 0) : numberValue(parsed.mrp !== undefined ? parsed.mrp : item.mrp),
+          mrp: valueFields.mrp,
+          scanMRP: valueFields.scanMRP,
+          manualMRP: valueFields.manualMRP,
+          valuationMRP: valueFields.valuationMRP,
+          valuationSource: valueFields.valuationSource,
+          finalInventoryValue: numberValue(firstValue(item, ['qty', 'quantity', 'count']) || parsed.qty, 1) * Number(valueFields.valuationMRP || 0),
+          ...pricePeriodFields,
           dlc: master && master.dlc ? Number(master.dlc || 0) : numberValue(item.dlc || parsed.dlc),
           bin: binLocation,
           binLocation,
@@ -1924,6 +1977,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
     }
 
     if (saved.length) {
+      scheduleMovementSummaryRefresh(saved);
       await emitScanUpdate(req, saved[saved.length - 1]);
     }
 

@@ -58,6 +58,16 @@ const masterPartSchema = new mongoose.Schema(
       trim: true,
       default: ''
     },
+    productGroup: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    partSubGroup: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     mrp: {
       type: Number,
       default: 0
@@ -136,6 +146,8 @@ masterPartSchema.index({ normalizedPartNumber: 1, dealerCode: 1 });
 masterPartSchema.index({ partNo: 1, dealerCode: 1 });
 masterPartSchema.index({ partDescription: 1 });
 masterPartSchema.index({ productCategory: 1 });
+masterPartSchema.index({ normalizedPartNumber: 1, productCategory: 1, productGroup: 1 });
+masterPartSchema.index({ productCategory: 1, productGroup: 1, partSubGroup: 1 });
 masterPartSchema.index({ model: 1 });
 masterPartSchema.index({ manufacturingYear: 1 });
 

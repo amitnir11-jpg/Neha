@@ -56,5 +56,7 @@ masterCatalogueSchema.index({
   year: 'text',
   productGroup: 'text'
 });
+masterCatalogueSchema.index({ normalizedPartNumber: 1, productCategory: 1, productGroup: 1 });
+masterCatalogueSchema.index({ productCategory: 1, productGroup: 1, partSubGroup: 1 });
 
 module.exports = mongoose.model('MasterCatalogue', masterCatalogueSchema);

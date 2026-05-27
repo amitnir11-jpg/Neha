@@ -1,6 +1,11 @@
 const express = require('express');
+const path = require('path');
+const fsp = require('fs/promises');
 const Audit = require('../models/Audit');
+const Dealer = require('../models/Dealer');
+const Inventory = require('../models/Inventory');
 const auth = require('./auth');
+const { compactClosedAuditRawScans, rebuildMovementSummaries } = require('../services/inventoryMovementSummary');
 const {
   clean,
   cleanCode,
@@ -12,11 +17,48 @@ const {
 } = require('../utils/audit');
 
 const router = express.Router();
+const AUDIT_DATA_DIR = path.resolve(__dirname, '..', 'Audit Data');
 
 function buildAuditId(dealerCode, auditName) {
   const namePart = clean(auditName || 'AUDIT').replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 12);
   const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
   return `AUD-${dealerCode}-${namePart}-${stamp}`;
+}
+
+function safeArchiveName(value = '') {
+  return clean(value).replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '') || 'audit';
+}
+
+async function createClosedAuditBackup(audit, completedBy = '') {
+  await fsp.mkdir(AUDIT_DATA_DIR, { recursive: true });
+  const dealerCode = cleanCode(audit.dealerCode);
+  const auditId = clean(audit.auditId);
+  const [dealer, scans] = await Promise.all([
+    Dealer.findOne({ dealerCode }).lean(),
+    Inventory.find({ dealerCode, auditId }).lean()
+  ]);
+  const generatedAt = new Date();
+  const archiveId = `${safeArchiveName(dealerCode)}_${safeArchiveName(auditId)}_${generatedAt.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}.json`;
+  const archivePath = path.join(AUDIT_DATA_DIR, archiveId);
+  const backup = {
+    manifest: {
+      archiveId,
+      dealerCode,
+      dealerName: dealer ? dealer.dealerName : audit.dealerName,
+      auditId,
+      auditName: audit.auditName,
+      createdAt: generatedAt.toISOString(),
+      createdBy: completedBy || 'System',
+      purpose: 'Pre-compaction closed audit backup'
+    },
+    collections: {
+      audits: [audit],
+      dealers: dealer ? [dealer] : [],
+      inventory: scans
+    }
+  };
+  await fsp.writeFile(archivePath, JSON.stringify(backup, null, 2), 'utf8');
+  return { archiveId, archivePath, scanCount: scans.length };
 }
 
 router.get('/active', auth.optionalAuth, async (req, res) => {
@@ -95,6 +137,9 @@ router.post('/:auditId/close', auth.requireAuth, auth.requireAdmin, async (req, 
     );
     if (!audit) return res.status(404).json({ success: false, message: 'Audit not found' });
     await syncDealerWithAudit(audit);
+    const backupArchive = await createClosedAuditBackup(audit.toObject ? audit.toObject() : audit, completedByUser);
+    const movementSummary = await rebuildMovementSummaries({ dealerCode: audit.dealerCode, auditId: audit.auditId });
+    const rawArchive = await compactClosedAuditRawScans({ dealerCode: audit.dealerCode, auditId: audit.auditId });
 
     const io = req.io || req.app.get('io');
     if (io) {
@@ -102,7 +147,7 @@ router.post('/:auditId/close', auth.requireAuth, auth.requireAdmin, async (req, 
       io.emit('dealers:update');
     }
 
-    return res.json({ success: true, audit });
+    return res.json({ success: true, audit, backupArchive, movementSummary, rawArchive });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

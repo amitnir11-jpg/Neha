@@ -2,6 +2,7 @@ const MasterCatalogue = require('../models/MasterCatalogue');
 const MasterPart = require('../models/MasterPart');
 const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
 const { applyProductGroup } = require('./productGroupClassifier');
+const { decorateScanValue } = require('./inventoryValueEngine');
 
 function upper(value) {
   return cleanText(value).toUpperCase();
@@ -81,10 +82,17 @@ async function reprocessScansWithCatalogue() {
 
 function enrichScanFields(scan = {}, catalogue = null) {
   const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
+  const valued = decorateScanValue(scan);
   const base = {
     part: partNo,
     partNumber: partNo,
     normalizedPartNumber: partNo,
+    mrp: valued.valuationMRP || 0,
+    scanMRP: valued.scanMRP || 0,
+    manualMRP: valued.manualMRP || 0,
+    valuationMRP: valued.valuationMRP || 0,
+    valuationSource: valued.valuationSource || '',
+    finalInventoryValue: valued.finalInventoryValue || 0,
     masterMatch: Boolean(catalogue),
     isMasterMatched: Boolean(catalogue)
   };
@@ -95,7 +103,7 @@ function enrichScanFields(scan = {}, catalogue = null) {
     partDescription: catalogue.partDescription || '',
     category: catalogue.productCategory || '',
     productCategory: catalogue.productCategory || '',
-    mrp: catalogue.mrp || 0,
+    currentCatalogueMRP: catalogue.mrp || 0,
     dlc: catalogue.dlc || 0,
     productGroup: catalogue.productGroup || '',
     model: catalogue.model || '',

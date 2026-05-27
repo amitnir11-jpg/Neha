@@ -6,19 +6,50 @@ const autoTableModule = require('jspdf-autotable');
 const Inventory = require('../models/Inventory');
 const MasterPart = require('../models/MasterPart');
 const MasterCatalogue = require('../models/MasterCatalogue');
+const PartPriceHistory = require('../models/PartPriceHistory');
 const DealerStock = require('../models/DealerStock');
 const Dealer = require('../models/Dealer');
 const Audit = require('../models/Audit');
 const User = require('../models/User');
 const Device = require('../models/Device');
+const InventoryMovementSummary = require('../models/InventoryMovementSummary');
 const auth = require('./auth');
 const inventoryRoute = require('./inventory');
 const { normalizePartNumber: normalizePartNo, cleanText: normalizedCleanText, numberValue } = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
 const { formatDateLikeFields, formatIstDateTime, isDateLikeKey } = require('../utils/time');
+const { calculateInventoryValue, decorateScanValue, scanValueRow, summarizeMovementBucket, validateReportValueSource } = require('../utils/inventoryValueEngine');
 
 const router = express.Router();
 const autoTable = autoTableModule.default || autoTableModule;
+
+/**
+ * ====================================================================
+ * REPORT ROUTE - INVENTORY VALUE CALCULATION COMPLIANCE
+ * ====================================================================
+ *
+ * ALL REPORTS MUST USE:
+ *   - calculateInventoryValue() for value aggregation
+ *   - scanValueRow() for per-scan decoration
+ *   - validateReportValueSource() for data quality checks
+ *
+ * FINAL INVENTORY VALUE FORMULA (FOR ALL REPORTS):
+ *   finalInventoryValue = SUM(scanned qty × scanned MRP) + SUM(manual qty × manual MRP)
+ *
+ * NEVER:
+ *   - Recalculate inventory value independently
+ *   - Use master MRP for inventory calculations
+ *   - Use current catalogue MRP for value calculations
+ *   - Aggregate values differently than calculateInventoryValue()
+ *
+ * REPORT CONSISTENCY CHECKS:
+ *   1. Dashboard total must match Report total
+ *   2. All reports use same calculation engine
+ *   3. No report-specific MRP overrides allowed
+ *   4. Movement categories based on scan history, not just current MRP
+ *
+ * ====================================================================
+ */
 
 const PROFESSIONAL_REPORTS = {
   main: {
@@ -37,6 +68,152 @@ const PROFESSIONAL_REPORTS = {
 
 function money(value) {
   return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function rowValueSummary(scans = [], catalogue = {}, priceHistories = []) {
+  const summary = calculateInventoryValue(scans);
+  return {
+    currentCatalogueMRP: Number(catalogue && catalogue.mrp || 0),
+    totalQty: summary.totalQty,
+    scanUPIMRP: scanUpiMrpDisplay(summary.rows),
+    averageScannedMRP: summary.averageScannedMRP,
+    minScannedMRP: summary.minScannedMRP,
+    maxScannedMRP: summary.maxScannedMRP,
+    totalScanValue: summary.totalScanValue,
+    totalManualValue: summary.totalManualValue,
+    finalInventoryValue: summary.finalInventoryValue,
+    scannedQty: summary.scannedQty,
+    manualQty: summary.manualQty,
+    priceChangeCount: summary.priceChangeCount,
+    pricePeriod: pricePeriodDisplay(scans, priceHistories, summary.rows)
+  };
+}
+
+function valuationRateForDisplay(summary = {}) {
+  return Number(summary.averageScannedMRP || summary.minScannedMRP || summary.maxScannedMRP || 0);
+}
+
+function scanUpiMrpDisplay(valueRows = []) {
+  const values = Array.from(new Set(
+    valueRows
+      .filter((row) => row.valuationSource === 'UPI_SCANNED_MRP' && Number(row.valuationMRP || 0) > 0)
+      .map((row) => Number(row.valuationMRP || 0).toFixed(2))
+  )).sort((a, b) => Number(a) - Number(b));
+  if (!values.length) return 0;
+  if (values.length === 1) return Number(values[0]);
+  return values.join(', ');
+}
+
+function pricePeriodText(from, to, status = '') {
+  const fromText = formatDate(from);
+  const toText = formatDate(to);
+  if (fromText || toText) return `${fromText || 'START'} to ${toText || 'CURRENT'}`;
+  return cleanText(status).replace(/_/g, ' ');
+}
+
+function priceHistoryPeriodDisplay(priceHistories = [], valueRows = []) {
+  const histories = Array.isArray(priceHistories) ? priceHistories : [];
+  if (!histories.length) return '';
+  const scannedMrps = Array.from(new Set(valueRows
+    .filter((row) => row.valuationSource === 'UPI_SCANNED_MRP' && Number(row.valuationMRP || 0) > 0)
+    .map((row) => Number(row.valuationMRP || 0).toFixed(2))));
+  const periods = scannedMrps.map((mrpText) => {
+    const mrp = Number(mrpText);
+    const match = histories.find((history) => Math.abs(Number(history.mrp || 0) - mrp) <= 0.01);
+    return match ? pricePeriodText(match.effectiveFrom, match.effectiveTo, `MRP ${mrpText}`) : '';
+  }).filter(Boolean);
+  return Array.from(new Set(periods)).join(' ; ');
+}
+
+function pricePeriodDisplay(scans = [], priceHistories = [], valueRows = []) {
+  const historyPeriod = priceHistoryPeriodDisplay(priceHistories, valueRows);
+  if (historyPeriod) return historyPeriod;
+  const periods = Array.from(new Set(scans.map((scan) => pricePeriodText(
+    scan.pricePeriodFrom,
+    scan.pricePeriodTo,
+    scan.pricePeriodStatus
+  )).filter(Boolean)));
+  if (periods.length <= 3) return periods.join(' ; ');
+  return `${periods.slice(0, 3).join(' ; ')} ; +${periods.length - 3} more`;
+}
+
+function partMovementLabel(value = '') {
+  const text = cleanText(value).toUpperCase().replace(/_/g, '-');
+  if (text === 'FAST') return 'FAST MOVING';
+  if (text === 'SLOW') return 'SLOW MOVING';
+  if (text === 'DEAD') return 'DEAD STOCK';
+  if (text === 'NON-MOVING' || text === 'NON MOVING') return 'NON MOVING';
+  return text;
+}
+
+function blankMovementSummary() {
+  return {
+    oldestPricePeriod: null,
+    newestPricePeriod: null,
+    priceAgeingDays: 0,
+    lastMovementDate: null,
+    movementQtyLast30Days: 0,
+    movementQtyLast90Days: 0,
+    movementQtyLast180Days: 0,
+    movementQtyLast365Days: 0,
+    movementCategory: '',
+    inventoryRiskValue: 0
+  };
+}
+
+function mergeMovementSummary(current, summaryRow = {}) {
+  const merged = current || blankMovementSummary();
+  const oldest = summaryRow.oldestPricePeriod || summaryRow.firstScanDate;
+  const newest = summaryRow.newestPricePeriod || summaryRow.lastScanDate;
+  if (oldest && (!merged.oldestPricePeriod || new Date(oldest) < new Date(merged.oldestPricePeriod))) merged.oldestPricePeriod = oldest;
+  if (newest && (!merged.newestPricePeriod || new Date(newest) > new Date(merged.newestPricePeriod))) merged.newestPricePeriod = newest;
+  if (summaryRow.lastMovementDate && (!merged.lastMovementDate || new Date(summaryRow.lastMovementDate) > new Date(merged.lastMovementDate))) merged.lastMovementDate = summaryRow.lastMovementDate;
+  merged.priceAgeingDays = Math.max(merged.priceAgeingDays, Number(summaryRow.priceAgeingDays || summaryRow.ageingDays || 0));
+  merged.movementQtyLast30Days += Number(summaryRow.movementQtyLast30Days || 0);
+  merged.movementQtyLast90Days += Number(summaryRow.movementQtyLast90Days || 0);
+  merged.movementQtyLast180Days += Number(summaryRow.movementQtyLast180Days || 0);
+  merged.movementQtyLast365Days += Number(summaryRow.movementQtyLast365Days || 0);
+  merged.inventoryRiskValue += Number(summaryRow.inventoryRiskValue || 0);
+  if (summaryRow.movementCategory === 'DEAD') merged.movementCategory = 'DEAD';
+  else if (summaryRow.movementCategory === 'NON-MOVING' && merged.movementCategory !== 'DEAD') merged.movementCategory = 'NON-MOVING';
+  else if (summaryRow.movementCategory === 'SLOW' && !['DEAD', 'NON-MOVING'].includes(merged.movementCategory)) merged.movementCategory = 'SLOW';
+  else if (summaryRow.movementCategory === 'FAST' && !merged.movementCategory) merged.movementCategory = 'FAST';
+  return merged;
+}
+
+async function cachedMovementByPart(partNumbers = [], query = {}) {
+  const allParts = Array.from(new Set(partNumbers.map(normalizePartNumber).filter(Boolean)));
+  if (!allParts.length) return new Map();
+  const movementFilter = { normalizedPartNumber: { $in: allParts } };
+  if (query.dealerCode) movementFilter.dealerCode = String(query.dealerCode).trim().toUpperCase();
+  if (query.auditId) movementFilter.auditId = String(query.auditId).trim();
+  const movementSummaries = await InventoryMovementSummary.find(movementFilter).lean();
+  const movementByPart = new Map();
+  movementSummaries.forEach((summaryRow) => {
+    const partNo = normalizePartNumber(summaryRow.normalizedPartNumber || summaryRow.partNumber);
+    if (!partNo) return;
+    movementByPart.set(partNo, mergeMovementSummary(movementByPart.get(partNo), summaryRow));
+  });
+  return movementByPart;
+}
+
+function attachCachedMovement(rows = [], movementByPart = new Map()) {
+  rows.forEach((row) => {
+    const movement = movementByPart.get(normalizePartNumber(row.partNum || row.partNumber || row.partNo)) || {};
+    Object.assign(row, {
+      oldestPricePeriod: movement.oldestPricePeriod || row.oldestPricePeriod || '',
+      newestPricePeriod: movement.newestPricePeriod || row.newestPricePeriod || '',
+      priceAgeingDays: movement.priceAgeingDays || row.priceAgeingDays || 0,
+      lastMovementDate: movement.lastMovementDate || row.lastMovementDate || '',
+      movementQtyLast30Days: movement.movementQtyLast30Days || row.movementQtyLast30Days || 0,
+      movementQtyLast90Days: movement.movementQtyLast90Days || row.movementQtyLast90Days || 0,
+      movementQtyLast180Days: movement.movementQtyLast180Days || row.movementQtyLast180Days || 0,
+      movementQtyLast365Days: movement.movementQtyLast365Days || row.movementQtyLast365Days || 0,
+      movementCategory: movement.movementCategory || row.movementCategory || '',
+      inventoryRiskValue: money(movement.inventoryRiskValue || row.inventoryRiskValue || 0)
+    });
+  });
+  return rows;
 }
 
 function scanSourceValue(scan = {}) {
@@ -532,7 +709,8 @@ async function buildLegacyReportData(query = {}) {
       scan.productCategory = rowCategory(scan, master);
       scan.bin = scan.bin || scan.binLocation || master.bin || master.binLocation;
       scan.binLocation = scan.binLocation || scan.bin || master.bin || master.binLocation;
-      scan.mrp = scan.mrp || master.mrp;
+      scan = Object.assign(scan, decorateScanValue(scan));
+      scan.currentCatalogueMRP = Number(master.mrp || 0);
       scan.dlc = scan.dlc || master.dlc;
       scan.dealerCode = scan.dealerCode || master.dealerCode;
     }
@@ -553,6 +731,9 @@ async function buildLegacyReportData(query = {}) {
   });
 
   const rows = masterParts.map((part) => {
+    const relatedScans = scanByPart.get(part.partNo) || [];
+    const valueSummary = rowValueSummary(relatedScans, part);
+    const displayMrp = valuationRateForDisplay(valueSummary);
     const systemQty = Number(part.openingStockQty || 0);
     const physicalQty = Number(scanTotals.get(part.partNo) || 0);
     const countedQty = Number(countedTotals.get(part.partNo) || 0);
@@ -573,7 +754,17 @@ async function buildLegacyReportData(query = {}) {
       productCategory: part.productCategory || part.category,
       bin: binLocation,
       binLocation,
-      mrp: Number(part.mrp || 0),
+      mrp: displayMrp,
+      currentCatalogueMRP: valueSummary.currentCatalogueMRP,
+      totalQty: valueSummary.totalQty,
+      scannedQty: valueSummary.scannedQty,
+      manualQty: valueSummary.manualQty,
+      averageScannedMRP: valueSummary.averageScannedMRP,
+      minScannedMRP: valueSummary.minScannedMRP,
+      maxScannedMRP: valueSummary.maxScannedMRP,
+      totalScanValue: valueSummary.totalScanValue,
+      totalManualValue: valueSummary.totalManualValue,
+      finalInventoryValue: valueSummary.finalInventoryValue,
       dlc: Number(part.dlc || 0),
       systemQty,
       dmsQty: systemQty,
@@ -582,7 +773,7 @@ async function buildLegacyReportData(query = {}) {
       excessQty,
       netDifference: diffQty,
       countedQty,
-      manualQty: 0,
+      manualQty: valueSummary.manualQty,
       damageQty,
       totalAuditQty: physicalQty,
       saleQtyLast12Months: Number(saleQtyLast12Months.get(part.partNo) || 0),
@@ -595,14 +786,14 @@ async function buildLegacyReportData(query = {}) {
       systemBin1: systemBins[0],
       systemBin2: systemBins[1],
       systemBin3: systemBins[2],
-      systemMrpValue: money(systemQty * Number(part.mrp || 0)),
-      physicalMrpValue: money(physicalQty * Number(part.mrp || 0)),
+      systemMrpValue: 0,
+      physicalMrpValue: valueSummary.finalInventoryValue,
       systemDlcValue: money(systemQty * Number(part.dlc || 0)),
       physicalDlcValue: money(physicalQty * Number(part.dlc || 0)),
       differenceQty: diffQty,
       varianceQty: Math.abs(diffQty),
-      varianceValue: money(Math.abs(diffQty) * Number(part.mrp || 0)),
-      differenceMrpValue: money(diffQty * Number(part.mrp || 0)),
+      varianceValue: valueSummary.finalInventoryValue,
+      differenceMrpValue: valueSummary.finalInventoryValue,
       differenceDlcValue: money(diffQty * Number(part.dlc || 0)),
       status: rowStatus(diffQty),
       rawScanProof: (scanByPart.get(part.partNo) || []).map((scan) => scan.rawScan).filter(Boolean).slice(0, 5).join(' | ')
@@ -621,7 +812,8 @@ async function buildLegacyReportData(query = {}) {
     const partName = first.partName || (master ? master.partName : '');
     const category = first.category || (master ? master.category : '');
     const binLocation = first.binLocation || first.bin || (master ? master.binLocation || master.bin : '');
-    const mrp = Number(first.mrp || (master ? master.mrp : 0) || 0);
+    const valueSummary = rowValueSummary(related, master || {});
+    const mrp = valuationRateForDisplay(valueSummary);
     extraParts.push({
       partNo,
       partNumber: partNo,
@@ -632,6 +824,16 @@ async function buildLegacyReportData(query = {}) {
       bin: binLocation,
       binLocation,
       mrp,
+      currentCatalogueMRP: valueSummary.currentCatalogueMRP,
+      totalQty: valueSummary.totalQty,
+      scannedQty: valueSummary.scannedQty,
+      manualQty: valueSummary.manualQty,
+      averageScannedMRP: valueSummary.averageScannedMRP,
+      minScannedMRP: valueSummary.minScannedMRP,
+      maxScannedMRP: valueSummary.maxScannedMRP,
+      totalScanValue: valueSummary.totalScanValue,
+      totalManualValue: valueSummary.totalManualValue,
+      finalInventoryValue: valueSummary.finalInventoryValue,
       dlc: Number(first.dlc || 0),
       systemQty: 0,
       dmsQty: 0,
@@ -640,7 +842,7 @@ async function buildLegacyReportData(query = {}) {
       excessQty: physicalQty,
       netDifference: physicalQty,
       countedQty,
-      manualQty: 0,
+      manualQty: valueSummary.manualQty,
       damageQty,
       totalAuditQty: physicalQty,
       saleQtyLast12Months: Number(saleQtyLast12Months.get(partNo) || 0),
@@ -654,13 +856,13 @@ async function buildLegacyReportData(query = {}) {
       systemBin2: '',
       systemBin3: '',
       systemMrpValue: 0,
-      physicalMrpValue: money(physicalQty * mrp),
+      physicalMrpValue: valueSummary.finalInventoryValue,
       systemDlcValue: 0,
       physicalDlcValue: money(physicalQty * Number(first.dlc || 0)),
       differenceQty: physicalQty,
       varianceQty: physicalQty,
-      varianceValue: money(physicalQty * mrp),
-      differenceMrpValue: money(physicalQty * mrp),
+      varianceValue: valueSummary.finalInventoryValue,
+      differenceMrpValue: valueSummary.finalInventoryValue,
       differenceDlcValue: money(physicalQty * Number(first.dlc || 0)),
       status: 'Extra Part',
       rawScanProof: related.map((scan) => scan.rawScan).filter(Boolean).slice(0, 5).join(' | ')
@@ -788,6 +990,13 @@ function finalColumns() {
     { header: 'Bin Loc 3', key: 'physicalBin3', width: 16 },
     { header: 'Other Bin Locations', key: 'otherBinLocations', width: 24 },
     { header: 'MRP', key: 'mrp', width: 12 },
+    { header: 'SCAN UPI MRP', key: 'scanUPIMRP', width: 18 },
+    { header: 'CURRENT CATALOGUE MRP', key: 'currentCatalogueMRP', width: 22 },
+    { header: 'AVERAGE SCANNED MRP', key: 'averageScannedMRP', width: 22 },
+    { header: 'PRICE PERIOD', key: 'pricePeriod', width: 30 },
+    { header: 'PRICE AGEING DAYS', key: 'priceAgeingDays', width: 18 },
+    { header: 'PART MOVEMENT', key: 'partMovement', width: 20 },
+    { header: 'FINAL INVENTORY VALUE', key: 'finalInventoryValue', width: 22 },
     { header: 'DLC', key: 'dlc', width: 12 },
     { header: 'Product Group', key: 'productGroup', width: 18 },
     { header: 'Product SubGroup', key: 'partSubGroup', width: 18 },
@@ -969,6 +1178,13 @@ function mainAuditColumns() {
     { header: 'CATEGORY', key: 'category', width: 20 },
     { header: 'BIN', key: 'bin', width: 16 },
     { header: 'MRP', key: 'mrp', width: 12, numFmt: '#,##0.00' },
+    { header: 'SCAN UPI MRP', key: 'scanUPIMRP', width: 18 },
+    { header: 'CURRENT CATALOGUE MRP', key: 'currentCatalogueMRP', width: 22, numFmt: '#,##0.00' },
+    { header: 'AVERAGE SCANNED MRP', key: 'averageScannedMRP', width: 22, numFmt: '#,##0.00' },
+    { header: 'PRICE PERIOD', key: 'pricePeriod', width: 30 },
+    { header: 'PRICE AGEING DAYS', key: 'priceAgeingDays', width: 18, numFmt: '#,##0' },
+    { header: 'PART MOVEMENT', key: 'partMovement', width: 20 },
+    { header: 'FINAL INVENTORY VALUE', key: 'finalInventoryValue', width: 22, numFmt: '#,##0.00' },
     { header: 'DLC', key: 'dlc', width: 12, numFmt: '#,##0.00' },
     { header: 'PRODUCT GROUP', key: 'productGroup', width: 18 },
     { header: 'PRODUCT SUBGROUP', key: 'partSubGroup', width: 18 },
@@ -1009,6 +1225,13 @@ function mainAuditRows(data) {
     physicalBin3: row.physicalBin3 || row.binLoc3 || '',
     otherBinLocations: row.otherBinLocations || '',
     mrp: row.mrp,
+    scanUPIMRP: row.scanUPIMRP || '',
+    currentCatalogueMRP: row.currentCatalogueMRP || 0,
+    averageScannedMRP: row.averageScannedMRP || 0,
+    pricePeriod: row.pricePeriod || '',
+    priceAgeingDays: row.priceAgeingDays || 0,
+    partMovement: row.partMovement || '',
+    finalInventoryValue: row.finalInventoryValue || row.physicalMrpValue || 0,
     dlc: row.dlc,
     productGroup: row.productGroup,
     partSubGroup: row.partSubGroup,
@@ -1135,7 +1358,7 @@ function countingRows(data) {
     partNo: scan.part,
     location: scan.bin || scan.binLocation || '',
     description: scan.partName || '',
-    landedCost: Number(scan.dlc || scan.mrp || 0),
+    landedCost: Number(scan.valuationMRP || 0),
     count: Number(scan.qty || 0),
     finalCount: Number(scan.qty || 0),
     category: scan.category || '',
@@ -1172,10 +1395,10 @@ function damageRows(data) {
     partNo: scan.part,
     location: scan.bin || scan.binLocation || '',
     description: scan.partName || '',
-    landedCost: Number(scan.dlc || scan.mrp || 0),
+    landedCost: Number(scan.valuationMRP || 0),
     count: Number(scan.qty || 0),
     finalCount: Number(scan.qty || 0),
-    value: money(Number(scan.qty || 0) * Number(scan.dlc || scan.mrp || 0)),
+    value: Number(scanValueRow(scan).finalInventoryValue || 0),
     category: scan.category || '',
     remark: 'Damaged',
     dateCreated: scan.timestamp,
@@ -1390,6 +1613,7 @@ function masterQty(master = {}) {
 
 function enrichScan(scan = {}, master = {}) {
   master = master || {};
+  scan = decorateScanValue(scan);
   const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
   const hasMaster = Boolean(master && (master.partNo || master.partNumber || master.normalizedPartNumber));
   const binLocation = scan.binLocation || scan.bin || master.binLocation || master.bin || '';
@@ -1415,7 +1639,13 @@ function enrichScan(scan = {}, master = {}) {
     productCategory: category,
     bin: binLocation,
     binLocation,
-    mrp: Number(master.mrp !== undefined ? master.mrp : scan.mrp || 0),
+    mrp: Number(scan.valuationMRP || 0),
+    scanMRP: Number(scan.scanMRP || 0),
+    manualMRP: Number(scan.manualMRP || 0),
+    valuationMRP: Number(scan.valuationMRP || 0),
+    valuationSource: scan.valuationSource || '',
+    finalInventoryValue: Number(scan.finalInventoryValue || 0),
+    currentCatalogueMRP: Number(master.mrp || 0),
     dlc: Number(master.dlc !== undefined ? master.dlc : scan.dlc || 0),
     productGroup: hasMaster ? master.productGroup || scan.productGroup || '' : scan.productGroup || '',
     partSubGroup: hasMaster ? master.partSubGroup || scan.partSubGroup || '' : scan.partSubGroup || '',
@@ -1588,6 +1818,13 @@ function finalReportCsv(rows = []) {
     ['Year', (row) => row.manufacturingYear || row.year || ''],
     ['Category', (row) => row.category || row.productCategory || ''],
     ['MRP', (row) => row.mrp || ''],
+    ['SCAN UPI MRP', (row) => row.scanUPIMRP || ''],
+    ['CURRENT CATALOGUE MRP', (row) => row.currentCatalogueMRP || 0],
+    ['AVERAGE SCANNED MRP', (row) => row.averageScannedMRP || 0],
+    ['PRICE PERIOD', (row) => row.pricePeriod || ''],
+    ['PRICE AGEING DAYS', (row) => row.priceAgeingDays || 0],
+    ['PART MOVEMENT', (row) => row.partMovement || ''],
+    ['FINAL INVENTORY VALUE', (row) => row.finalInventoryValue || row.physicalMrpValue || 0],
     ['DLC', (row) => row.dlc || ''],
     ['Product Group', (row) => row.productGroup || ''],
     ['Product SubGroup', (row) => row.partSubGroup || row.productSubGroup || ''],
@@ -1645,7 +1882,12 @@ function buildAuditRow(group, master = {}) {
   const binPhysicalQty = numberValue(group.binPhysicalQty !== undefined ? group.binPhysicalQty : group.qty, 0);
   const physicalQty = binPhysicalQty + numberValue(scanBreakdown.fittedQty, 0);
   const diffQty = physicalQty - dmsQty;
-  const mrp = Number(hasMaster ? master.mrp || 0 : 0);
+  const valueSummary = rowValueSummary(group.scans, master);
+  const movementSummary = summarizeMovementBucket(group.scans, {
+    partNumber: group.partNo,
+    currentCatalogueMRP: valueSummary.currentCatalogueMRP
+  });
+  const mrp = valuationRateForDisplay(valueSummary);
   const dlc = Number(hasMaster ? master.dlc || 0 : 0);
   const physicalBins = binDisplayWithFitted(group.scans);
   const systemBins = splitBins(master.binLocation || master.bin || '');
@@ -1665,6 +1907,20 @@ function buildAuditRow(group, master = {}) {
     bin: physicalBins.bin1 || '',
     binLocation: physicalBins.bin1 || '',
     mrp,
+    scanUPIMRP: valueSummary.scanUPIMRP,
+    currentCatalogueMRP: valueSummary.currentCatalogueMRP,
+    averageScannedMRP: valueSummary.averageScannedMRP,
+    minScannedMRP: valueSummary.minScannedMRP,
+    maxScannedMRP: valueSummary.maxScannedMRP,
+    totalScanValue: valueSummary.totalScanValue,
+    totalManualValue: valueSummary.totalManualValue,
+    finalInventoryValue: valueSummary.finalInventoryValue,
+    pricePeriod: valueSummary.pricePeriod,
+    priceAgeingDays: movementSummary.ageingDays || 0,
+    movementCategory: movementSummary.movementCategory || '',
+    partMovement: partMovementLabel(movementSummary.movementCategory),
+    inventoryRiskValue: movementSummary.inventoryRiskValue || 0,
+    lastMovementDate: movementSummary.lastMovementDate || '',
     dlc,
     productGroup: hasMaster ? master.productGroup || '' : first.productGroup || '',
     partSubGroup: hasMaster ? master.partSubGroup || '' : first.partSubGroup || '',
@@ -1680,7 +1936,7 @@ function buildAuditRow(group, master = {}) {
     netDifference: diffQty,
     scanCount: group.scans.length,
     countedQty: group.scans.filter((scan) => scan.type !== 'DAMAGE' && scan.scanType !== 'DAMAGE').reduce((sum, scan) => sum + Number(scan.qty || 0), 0),
-    manualQty: 0,
+    manualQty: valueSummary.manualQty,
     inwardQty: scanBreakdown.inwardQty,
     outwardQty: scanBreakdown.outwardQty,
     fittedQty: scanBreakdown.fittedQty,
@@ -1701,14 +1957,14 @@ function buildAuditRow(group, master = {}) {
     systemBin1: systemBins[0],
     systemBin2: systemBins[1],
     systemBin3: systemBins[2],
-    systemMrpValue: money(dmsQty * mrp),
-    physicalMrpValue: money(physicalQty * mrp),
+    systemMrpValue: 0,
+    physicalMrpValue: valueSummary.finalInventoryValue,
     systemDlcValue: money(dmsQty * dlc),
     physicalDlcValue: money(physicalQty * dlc),
     differenceQty: diffQty,
     varianceQty: Math.abs(diffQty),
-    varianceValue: money(Math.abs(diffQty) * mrp),
-    differenceMrpValue: money(diffQty * mrp),
+    varianceValue: valueSummary.finalInventoryValue,
+    differenceMrpValue: valueSummary.finalInventoryValue,
     differenceDlcValue: money(diffQty * dlc),
     status: hasMaster ? rowStatus(diffQty) : 'Extra Part',
     scanType: Array.from(new Set(group.scans.map((scan) => scan.scanType || scan.type).filter(Boolean))).join(', '),
@@ -1930,6 +2186,25 @@ function partwiseInventoryAuditColumns() {
     { header: 'Product Category', key: 'productCategory', width: 20 },
     { header: 'Product Group', key: 'productGroup', width: 20 },
     { header: 'MRP', key: 'mrp', width: 12, numFmt: '#,##0.00' },
+    { header: 'SCAN UPI MRP', key: 'scanUPIMRP', width: 18 },
+    { header: 'CURRENT CATALOGUE MRP', key: 'currentCatalogueMRP', width: 22, numFmt: '#,##0.00' },
+    { header: 'AVERAGE SCANNED MRP', key: 'averageScannedMRP', width: 22, numFmt: '#,##0.00' },
+    { header: 'Min Scanned MRP', key: 'minScannedMRP', width: 18, numFmt: '#,##0.00' },
+    { header: 'Max Scanned MRP', key: 'maxScannedMRP', width: 18, numFmt: '#,##0.00' },
+    { header: 'Total Scan Value', key: 'totalScanValue', width: 18, numFmt: '#,##0.00' },
+    { header: 'Total Manual Value', key: 'totalManualValue', width: 20, numFmt: '#,##0.00' },
+    { header: 'Final Inventory Value', key: 'finalInventoryValue', width: 22, numFmt: '#,##0.00' },
+    { header: 'PRICE PERIOD', key: 'pricePeriod', width: 30 },
+    { header: 'Oldest Price Period', key: 'oldestPricePeriod', width: 22 },
+    { header: 'Newest Price Period', key: 'newestPricePeriod', width: 22 },
+    { header: 'PRICE AGEING DAYS', key: 'priceAgeingDays', width: 18, numFmt: '#,##0' },
+    { header: 'Last Movement Date', key: 'lastMovementDate', width: 22 },
+    { header: 'Movement Qty 30 Days', key: 'movementQtyLast30Days', width: 22, numFmt: '#,##0.00' },
+    { header: 'Movement Qty 90 Days', key: 'movementQtyLast90Days', width: 22, numFmt: '#,##0.00' },
+    { header: 'Movement Qty 180 Days', key: 'movementQtyLast180Days', width: 24, numFmt: '#,##0.00' },
+    { header: 'Movement Qty 365 Days', key: 'movementQtyLast365Days', width: 24, numFmt: '#,##0.00' },
+    { header: 'PART MOVEMENT', key: 'partMovement', width: 20 },
+    { header: 'Inventory Risk Value', key: 'inventoryRiskValue', width: 22, numFmt: '#,##0.00' },
     { header: 'DLC', key: 'dlc', width: 12, numFmt: '#,##0.00' },
     { header: 'Opening Stock', key: 'openingStock', width: 16, numFmt: '#,##0.00' },
     { header: 'Physical Bin Quantity', key: 'binPhysicalQty', width: 22, numFmt: '#,##0.00' },
@@ -2011,13 +2286,15 @@ function scanDetailsForPartwise(scans = []) {
   return details.join(' ; ');
 }
 
-function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}) {
+function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceHistories = []) {
   const scans = group.scans || [];
   const firstScan = scans[0] || {};
   const hasCatalogue = Boolean(catalogue && (catalogue.partNo || catalogue.partNumber || catalogue.normalizedPartNumber));
   const hasSystemStock = Boolean(system && (system.partNo || system.partNumber || system.normalizedPartNumber));
   const detailSource = hasCatalogue ? catalogue : (hasSystemStock ? system : firstScan);
-  const mrp = numberValue(firstPresent(detailSource.mrp, firstScan.mrp), 0);
+  const valueSummary = rowValueSummary(scans, detailSource, priceHistories);
+  const movementSummary = scans.length ? summarizeMovementBucket(scans) : blankMovementSummary();
+  const mrp = valuationRateForDisplay(valueSummary);
   const dlc = numberValue(firstPresent(detailSource.dlc, firstScan.dlc), 0);
   const auditTypes = new Set(['AUDIT', 'VERIFICATION', 'FITTED']);
   const userSummary = new Map();
@@ -2081,6 +2358,27 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}) {
     model: firstPresent(detailSource.model, firstScan.model) || '',
     year: firstPresent(detailSource.manufacturingYear, detailSource.year, firstScan.manufacturingYear, firstScan.year) || '',
     mrp,
+    scanUPIMRP: valueSummary.scanUPIMRP,
+    currentCatalogueMRP: valueSummary.currentCatalogueMRP,
+    averageScannedMRP: valueSummary.averageScannedMRP,
+    minScannedMRP: valueSummary.minScannedMRP,
+    maxScannedMRP: valueSummary.maxScannedMRP,
+    totalScanValue: valueSummary.totalScanValue,
+    totalManualValue: valueSummary.totalManualValue,
+    finalInventoryValue: valueSummary.finalInventoryValue,
+    priceChangeCount: valueSummary.priceChangeCount,
+    pricePeriod: valueSummary.pricePeriod,
+    oldestPricePeriod: movementSummary.firstScanDate || '',
+    newestPricePeriod: movementSummary.lastScanDate || '',
+    priceAgeingDays: movementSummary.ageingDays || 0,
+    lastMovementDate: movementSummary.lastMovementDate || '',
+    movementQtyLast30Days: movementSummary.movementQtyLast30Days || 0,
+    movementQtyLast90Days: movementSummary.movementQtyLast90Days || 0,
+    movementQtyLast180Days: movementSummary.movementQtyLast180Days || 0,
+    movementQtyLast365Days: movementSummary.movementQtyLast365Days || 0,
+    movementCategory: movementSummary.movementCategory || '',
+    partMovement: partMovementLabel(movementSummary.movementCategory),
+    inventoryRiskValue: money(movementSummary.inventoryRiskValue || 0),
     dlc,
     openingStock: systemQty,
     saleQtyLast12Months: saleQtyLast12Value(system) || saleQtyLast12Value(detailSource),
@@ -2102,13 +2400,13 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}) {
     finalAvailableQty,
     shortQty,
     excessQty,
-    physicalValueOnMrp: physicalQty * mrp,
+    physicalValueOnMrp: valueSummary.finalInventoryValue,
     physicalValueOnDlc: physicalQty * dlc,
     systemQty,
-    systemValueOnMrp: systemQty * mrp,
+    systemValueOnMrp: 0,
     systemValueOnDlc: systemQty * dlc,
     varianceQty,
-    varianceOnMrp: varianceQty * mrp,
+    varianceOnMrp: valueSummary.finalInventoryValue,
     varianceOnDlc: varianceQty * dlc,
     reservedQty: reservedQtyValue(system) || reservedQtyValue(detailSource),
     action,
@@ -2244,21 +2542,85 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   }
 
   const allParts = Array.from(partSet).filter(Boolean);
-  const catalogueRows = allParts.length ? await MasterCatalogue.find({ normalizedPartNumber: { $in: allParts } }).lean() : [];
+  const [catalogueRows, priceHistoryRows] = allParts.length ? await Promise.all([
+    MasterCatalogue.find({ normalizedPartNumber: { $in: allParts } }).lean(),
+    PartPriceHistory.find({ normalizedPartNumber: { $in: allParts } }).sort({ normalizedPartNumber: 1, isCurrentPrice: -1, effectiveFrom: -1 }).lean()
+  ]) : [[], []];
   const catalogueByPart = new Map(catalogueRows.map((row) => [masterPartNumber(row), cataloguePayload(row)]).filter(([partNo]) => partNo));
+  const priceHistoryByPart = new Map();
+  priceHistoryRows.forEach((row) => {
+    const partNo = normalizePartNumber(row.normalizedPartNumber || row.partNumber);
+    if (!partNo) return;
+    const rowsForPart = priceHistoryByPart.get(partNo) || [];
+    rowsForPart.push(row);
+    priceHistoryByPart.set(partNo, rowsForPart);
+  });
   const systemByPart = new Map();
   systemParts.forEach((part) => {
     const partNo = masterPartNumber(part);
     if (partNo && !systemByPart.has(partNo)) systemByPart.set(partNo, part);
   });
 
-  const groupedRows = Array.from(groups.values()).map((group) => partwiseRowFrom(group.partNo, group, catalogueByPart.get(group.partNo), systemByPart.get(group.partNo)));
+  const groupedRows = Array.from(groups.values()).map((group) => partwiseRowFrom(group.partNo, group, catalogueByPart.get(group.partNo), systemByPart.get(group.partNo), priceHistoryByPart.get(group.partNo) || []));
   const zeroScanRows = includeFullMaster
-    ? allParts.filter((partNo) => !scannedParts.includes(partNo)).map((partNo) => partwiseRowFrom(partNo, { partNo, scans: [], physicalQty: 0 }, catalogueByPart.get(partNo), systemByPart.get(partNo)))
+    ? allParts.filter((partNo) => !scannedParts.includes(partNo)).map((partNo) => partwiseRowFrom(partNo, { partNo, scans: [], physicalQty: 0 }, catalogueByPart.get(partNo), systemByPart.get(partNo), priceHistoryByPart.get(partNo) || []))
     : [];
   const rows = applyPartwiseFilters(groupedRows.concat(zeroScanRows), query)
     .filter((row) => row.status !== 'MASTER NOT FOUND')
     .sort(sortPartwiseInventoryRows);
+  const movementFilter = { normalizedPartNumber: { $in: allParts } };
+  if (query.dealerCode) movementFilter.dealerCode = String(query.dealerCode).trim().toUpperCase();
+  if (query.auditId) movementFilter.auditId = String(query.auditId).trim();
+  const movementSummaries = allParts.length ? await InventoryMovementSummary.find(movementFilter).lean() : [];
+  const movementByPart = new Map();
+  movementSummaries.forEach((summaryRow) => {
+    const partNo = normalizePartNumber(summaryRow.normalizedPartNumber || summaryRow.partNumber);
+    if (!partNo) return;
+    const current = movementByPart.get(partNo) || {
+      oldestPricePeriod: null,
+      newestPricePeriod: null,
+      priceAgeingDays: 0,
+      lastMovementDate: null,
+      movementQtyLast30Days: 0,
+      movementQtyLast90Days: 0,
+      movementQtyLast180Days: 0,
+      movementQtyLast365Days: 0,
+      movementCategory: '',
+      inventoryRiskValue: 0
+    };
+    const oldest = summaryRow.oldestPricePeriod || summaryRow.firstScanDate;
+    const newest = summaryRow.newestPricePeriod || summaryRow.lastScanDate;
+    if (oldest && (!current.oldestPricePeriod || new Date(oldest) < new Date(current.oldestPricePeriod))) current.oldestPricePeriod = oldest;
+    if (newest && (!current.newestPricePeriod || new Date(newest) > new Date(current.newestPricePeriod))) current.newestPricePeriod = newest;
+    if (summaryRow.lastMovementDate && (!current.lastMovementDate || new Date(summaryRow.lastMovementDate) > new Date(current.lastMovementDate))) current.lastMovementDate = summaryRow.lastMovementDate;
+    current.priceAgeingDays = Math.max(current.priceAgeingDays, Number(summaryRow.priceAgeingDays || summaryRow.ageingDays || 0));
+    current.movementQtyLast30Days += Number(summaryRow.movementQtyLast30Days || 0);
+    current.movementQtyLast90Days += Number(summaryRow.movementQtyLast90Days || 0);
+    current.movementQtyLast180Days += Number(summaryRow.movementQtyLast180Days || 0);
+    current.movementQtyLast365Days += Number(summaryRow.movementQtyLast365Days || 0);
+    current.inventoryRiskValue += Number(summaryRow.inventoryRiskValue || 0);
+    if (summaryRow.movementCategory === 'DEAD') current.movementCategory = 'DEAD';
+    else if (summaryRow.movementCategory === 'NON-MOVING' && current.movementCategory !== 'DEAD') current.movementCategory = 'NON-MOVING';
+    else if (summaryRow.movementCategory === 'SLOW' && !['DEAD', 'NON-MOVING'].includes(current.movementCategory)) current.movementCategory = 'SLOW';
+    else if (summaryRow.movementCategory === 'FAST' && !current.movementCategory) current.movementCategory = 'FAST';
+    movementByPart.set(partNo, current);
+  });
+  rows.forEach((row) => {
+    const movement = movementByPart.get(normalizePartNumber(row.partNum || row.partNumber)) || {};
+    Object.assign(row, {
+      oldestPricePeriod: movement.oldestPricePeriod || row.oldestPricePeriod || '',
+      newestPricePeriod: movement.newestPricePeriod || row.newestPricePeriod || '',
+      priceAgeingDays: movement.priceAgeingDays || row.priceAgeingDays || 0,
+      lastMovementDate: movement.lastMovementDate || row.lastMovementDate || '',
+      movementQtyLast30Days: movement.movementQtyLast30Days || 0,
+      movementQtyLast90Days: movement.movementQtyLast90Days || 0,
+      movementQtyLast180Days: movement.movementQtyLast180Days || 0,
+      movementQtyLast365Days: movement.movementQtyLast365Days || 0,
+      movementCategory: movement.movementCategory || row.movementCategory || '',
+      partMovement: partMovementLabel(movement.movementCategory || row.movementCategory || row.partMovement),
+      inventoryRiskValue: money(movement.inventoryRiskValue || row.inventoryRiskValue || 0)
+    });
+  });
 
   rows.forEach((row) => {
     if (row.status === 'MASTER NOT FOUND') validationLog.unmatchedParts += 1;
@@ -2542,7 +2904,8 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     if (hasProductCategoryFilter && category !== productCategoryFilter) return;
 
     const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
-    const mrp = numberValue(master && master.mrp !== undefined ? master.mrp : scan.mrp, 0);
+    const valueRow = scanValueRow(scan);
+    const mrp = numberValue(valueRow.valuationMRP, 0);
     const dlc = numberValue(master && master.dlc !== undefined ? master.dlc : scan.dlc, 0);
     if (actionFilter === 'Inventory Matched') {
       if (master) addCategoryVarianceGroup(groupMap, category, 'Inventory Matched', 0, mrp, dlc);
@@ -2738,6 +3101,10 @@ function stockSummaryQty(scan = {}) {
 }
 
 function stockSummaryValue(row = {}, qtyKey, rateKey) {
+  if (rateKey === 'mrp') {
+    if (/^system/i.test(qtyKey)) return 0;
+    return Number(row.finalInventoryValue || row.physicalValueOnMrp || row.varianceOnMrp || 0);
+  }
   return Number(row[qtyKey] || 0) * Number(row[rateKey] || 0);
 }
 
@@ -2805,9 +3172,9 @@ function caseSummary(rows = [], mode) {
     const diff = physical - system;
     const qty = mode === 'case4' ? physical : Math.abs(diff);
     total.skuCount += 1;
-    total.valueOnMrp += qty * Number(row.mrp || 0);
+    total.valueOnMrp += mode === 'case3' ? 0 : Number(row.finalInventoryValue || row.physicalValueOnMrp || 0);
     total.valueOnDlc += qty * Number(row.dlc || 0);
-    total.signedMrp += diff * Number(row.mrp || 0);
+    total.signedMrp += diff < 0 ? 0 : Number(row.finalInventoryValue || row.physicalValueOnMrp || 0);
     total.signedDlc += diff * Number(row.dlc || 0);
     return total;
   }, { skuCount: 0, valueOnMrp: 0, valueOnDlc: 0, signedMrp: 0, signedDlc: 0 });
@@ -2851,11 +3218,10 @@ function stockSummaryCategory(row = {}) {
 function addStockSummaryMatrixValues(total, row = {}) {
   const systemQty = Number(row.systemQty || 0);
   const physicalQty = Number(row.finalAuditQty ?? row.actualAuditQty ?? row.physicalQty ?? 0);
-  const mrp = Number(row.mrp || 0);
   const varianceQty = physicalQty - systemQty;
-  const dmsValue = systemQty * mrp;
-  const physicalValue = physicalQty * mrp;
-  const varianceValue = varianceQty * mrp;
+  const dmsValue = 0;
+  const physicalValue = Number(row.finalInventoryValue || row.physicalValueOnMrp || 0);
+  const varianceValue = varianceQty > 0 ? physicalValue : 0;
   total.dmsValue += dmsValue;
   total.dmsQuantity += systemQty;
   if (systemQty !== 0) total.dmsPartLines += 1;
@@ -2904,11 +3270,9 @@ function stockSummaryDamageValue(scans = [], rowByPart = new Map()) {
   return scans.reduce((sum, scan) => {
     const type = cleanText(scan.scanType || scan.type).toUpperCase();
     if (type !== 'DAMAGE') return sum;
-    const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
-    const detail = rowByPart.get(partNo) || {};
     const qty = Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
-    const mrp = numberValue(firstPresent(detail.mrp, scan.mrp, scan.dlc), 0);
-    return sum + qty * mrp;
+    const valueRow = scanValueRow(scan);
+    return sum + qty * Number(valueRow.valuationMRP || 0);
   }, 0);
 }
 
@@ -2995,7 +3359,8 @@ async function buildStockSummaryReport(query = {}) {
     const firstScan = physical.firstScan || {};
     const catalogue = catalogueByPart.get(partNo) || {};
     const detail = Object.keys(stock).length ? stock : (Object.keys(catalogue).length ? catalogue : firstScan);
-    const mrp = numberValue(firstPresent(stock.mrp, catalogue.mrp, firstScan.mrp), 0);
+    const valueSummary = rowValueSummary(physical.scans || [], catalogue);
+    const mrp = valuationRateForDisplay(valueSummary);
     const dlc = numberValue(firstPresent(stock.dlc, catalogue.dlc, firstScan.dlc), 0);
     const systemQty = numberValue(firstPresent(stock.systemQty, stock.dmsStock), 0);
     const physicalQty = numberValue(physical.physicalQty, 0);
@@ -3015,6 +3380,13 @@ async function buildStockSummaryReport(query = {}) {
       year: firstPresent(detail.year, detail.manufacturingYear, firstScan.year, firstScan.manufacturingYear) || '',
       manufacturingYear: firstPresent(detail.manufacturingYear, detail.year, firstScan.manufacturingYear, firstScan.year) || '',
       mrp,
+      currentCatalogueMRP: valueSummary.currentCatalogueMRP,
+      averageScannedMRP: valueSummary.averageScannedMRP,
+      minScannedMRP: valueSummary.minScannedMRP,
+      maxScannedMRP: valueSummary.maxScannedMRP,
+      totalScanValue: valueSummary.totalScanValue,
+      totalManualValue: valueSummary.totalManualValue,
+      finalInventoryValue: valueSummary.finalInventoryValue,
       dlc,
       systemQty,
       physicalQty,
@@ -3028,11 +3400,11 @@ async function buildStockSummaryReport(query = {}) {
       jobCardNo: fitted.fittedJobCardNo,
       fittedStatus: fittedQty > 0 ? 'Fitted' : 'Not Fitted',
       varianceQty,
-      systemValueOnMrp: systemQty * mrp,
+      systemValueOnMrp: 0,
       systemValueOnDlc: systemQty * dlc,
-      physicalValueOnMrp: finalAuditQty * mrp,
+      physicalValueOnMrp: valueSummary.finalInventoryValue,
       physicalValueOnDlc: finalAuditQty * dlc,
-      varianceOnMrp: varianceQty * mrp,
+      varianceOnMrp: valueSummary.finalInventoryValue,
       varianceOnDlc: varianceQty * dlc
     };
   }).filter((row) => stockSummaryRowMatchesFilters(row, query));
@@ -3693,20 +4065,20 @@ router.get('/pdf', auth.requireAuth, async (req, res) => {
     const body = data.finalRows.slice(0, 80).map((row) => [
       row.partNumber || row.partNo,
       row.partDescription || row.partName,
-      row.model,
-      row.manufacturingYear || row.year,
       row.category,
-      row.mrp,
-      row.dlc,
-      row.productGroup,
-      row.partSubGroup,
+      row.scanUPIMRP || '',
+      row.currentCatalogueMRP || 0,
+      row.averageScannedMRP || 0,
       row.systemQty,
       row.physicalQty,
       row.differenceQty,
+      row.finalInventoryValue || row.physicalMrpValue || 0,
+      row.priceAgeingDays || 0,
+      row.partMovement || '',
       row.status
     ]);
     autoTable(doc, {
-      head: [['Part Number', 'Part Description', 'Model', 'Year', 'Category', 'MRP', 'DLC', 'Product Group', 'Product SubGroup', 'System Qty', 'Physical Qty', 'Diff Qty', 'Status']],
+      head: [['Part Number', 'Part Description', 'Category', 'SCAN UPI MRP', 'CURRENT CATALOGUE MRP', 'AVERAGE SCANNED MRP', 'System Qty', 'Physical Qty', 'Diff Qty', 'FINAL INVENTORY VALUE', 'PRICE AGEING DAYS', 'PART MOVEMENT', 'Status']],
       body,
       startY: 28,
       styles: { fontSize: 7, cellPadding: 2 },

@@ -2,11 +2,13 @@ const express = require('express');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 const MasterCatalogue = require('../models/MasterCatalogue');
+const PartPriceHistory = require('../models/PartPriceHistory');
 const Inventory = require('../models/Inventory');
 const auth = require('./auth');
 const { cleanText, normalizePartNumber, numberValue } = require('../utils/normalize');
 const { cataloguePayload, reprocessScansWithCatalogue } = require('../utils/catalogue');
 const { applyProductGroup } = require('../utils/productGroupClassifier');
+const { rebuildMovementSummaries } = require('../services/inventoryMovementSummary');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -24,7 +26,9 @@ const FIELD_ALIASES = {
   superceededBy: ['SUPERCEEDED BY', 'SUPERSEDED BY'],
   partGroup: ['PART GROUP'],
   partSubGroup: ['PRODUCT GROUP SUBGROUP', 'PRODUCT GROUP SUB GROUP', 'PRODUCT SUBGROUP', 'PRODUCT SUB GROUP', 'PART SUBGROUP', 'PART SUB GROUP'],
-  gstCategory: ['GST CATEGORY', 'HSN']
+  gstCategory: ['GST CATEGORY', 'HSN'],
+  effectiveFrom: ['EFFECTIVE START DATE', 'EFFECTIVE FROM', 'VALID FROM', 'FROM DATE', 'START DATE'],
+  effectiveTo: ['EFFECTIVE END DATE', 'EFFECTIVE TO', 'VALID TO', 'TO DATE', 'END DATE']
 };
 
 function normalizeHeader(value) {
@@ -87,6 +91,30 @@ function cellValue(cell) {
   return value === undefined || value === null ? '' : value;
 }
 
+function parseExcelDate(value) {
+  if (value === undefined || value === null || cleanText(value) === '') return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const date = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const text = cleanText(value);
+  const dmy = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+  if (dmy) {
+    const year = Number(dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3]);
+    const date = new Date(Date.UTC(year, Number(dmy[2]) - 1, Number(dmy[1])));
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function dateKey(value) {
+  const date = parseExcelDate(value);
+  return date ? date.toISOString().slice(0, 10) : '';
+}
+
 async function parseUpload(file) {
   if (!file) return [];
   const lowerName = String(file.originalname || '').toLowerCase();
@@ -123,6 +151,8 @@ function mapRow(row, sourceFileName) {
     productCategory: cleanText(aliasValue(row, 'productCategory')).toUpperCase(),
     mrp: numberValue(aliasValue(row, 'mrp'), 0),
     dlc: numberValue(aliasValue(row, 'dlc'), 0),
+    effectiveFrom: parseExcelDate(aliasValue(row, 'effectiveFrom')),
+    effectiveTo: parseExcelDate(aliasValue(row, 'effectiveTo')),
     productGroup: cleanText(aliasValue(row, 'productGroup')).toUpperCase(),
     model: cleanText(aliasValue(row, 'model')).toUpperCase(),
     year,
@@ -139,6 +169,61 @@ function mapRow(row, sourceFileName) {
   mapped.productGroup = grouping.productGroup;
   mapped.partSubGroup = grouping.partSubGroup;
   return mapped;
+}
+
+function priceHistoryPayload(row) {
+  if (!row || !row.normalizedPartNumber) return null;
+  const hasPrice = Number(row.mrp || 0) > 0 || Number(row.dlc || 0) > 0 || row.effectiveFrom || row.effectiveTo;
+  if (!hasPrice) return null;
+  return {
+    partNumber: row.normalizedPartNumber,
+    normalizedPartNumber: row.normalizedPartNumber,
+    mrp: Number(row.mrp || 0),
+    dlc: Number(row.dlc || 0),
+    effectiveFrom: row.effectiveFrom || null,
+    effectiveTo: row.effectiveTo || null,
+    isCurrentPrice: !row.effectiveTo,
+    sourceFileName: row.sourceFileName || '',
+    uploadedAt: row.uploadedAt || new Date()
+  };
+}
+
+function priceHistoryKey(row = {}) {
+  return [
+    row.normalizedPartNumber,
+    Number(row.mrp || 0).toFixed(2),
+    Number(row.dlc || 0).toFixed(2),
+    dateKey(row.effectiveFrom),
+    dateKey(row.effectiveTo)
+  ].join('|');
+}
+
+function exactPeriodKey(row = {}) {
+  return [
+    row.normalizedPartNumber,
+    dateKey(row.effectiveFrom),
+    dateKey(row.effectiveTo)
+  ].join('|');
+}
+
+function rangesOverlap(a = {}, b = {}) {
+  const aStart = parseExcelDate(a.effectiveFrom) || new Date(-8640000000000000);
+  const aEnd = parseExcelDate(a.effectiveTo) || new Date(8640000000000000);
+  const bStart = parseExcelDate(b.effectiveFrom) || new Date(-8640000000000000);
+  const bEnd = parseExcelDate(b.effectiveTo) || new Date(8640000000000000);
+  return aStart <= bEnd && bStart <= aEnd;
+}
+
+function betterCatalogueRow(current, candidate) {
+  if (!current) return candidate;
+  if (!candidate) return current;
+  const currentOpen = !current.effectiveTo;
+  const candidateOpen = !candidate.effectiveTo;
+  if (currentOpen !== candidateOpen) return candidateOpen ? candidate : current;
+  const currentFrom = parseExcelDate(current.effectiveFrom);
+  const candidateFrom = parseExcelDate(candidate.effectiveFrom);
+  if (candidateFrom && (!currentFrom || candidateFrom > currentFrom)) return candidate;
+  return current;
 }
 
 async function reprocessProductGroups({ force = true } = {}) {
@@ -193,36 +278,167 @@ async function importCatalogue(file) {
   const sourceFileName = file ? cleanText(file.originalname) : '';
   const rows = await parseUpload(file);
   const mapped = rows.map((row) => mapRow(row, sourceFileName));
-  const valid = [];
-  const seen = new Set();
-  let duplicateInsideFile = 0;
-  mapped.forEach((row) => {
-    if (!row) return;
-    if (seen.has(row.normalizedPartNumber)) {
-      duplicateInsideFile += 1;
+  const validRows = mapped.filter(Boolean);
+  const invalidCount = rows.length - validRows.length;
+  if (!validRows.length) {
+    return {
+      uploadedRowsCount: rows.length,
+      totalRowsUploaded: rows.length,
+      importedCount: 0,
+      uniquePartsCount: 0,
+      priceHistoryRowsCount: 0,
+      updatedDuplicateCount: 0,
+      duplicateSkippedRows: 0,
+      skippedInvalidRowsCount: rows.length,
+      overlapWarningCount: 0,
+      warningReportRows: []
+    };
+  }
+
+  const byPart = new Map();
+  const priceRows = [];
+  const seenPriceKeys = new Set();
+  const seenPeriodKeys = new Set();
+  const warningReportRows = [];
+  let duplicateSkippedRows = 0;
+
+  validRows.forEach((row, index) => {
+    byPart.set(row.normalizedPartNumber, betterCatalogueRow(byPart.get(row.normalizedPartNumber), row));
+    const priceRow = priceHistoryPayload(row);
+    if (!priceRow) return;
+    const exactPriceKey = priceHistoryKey(priceRow);
+    if (seenPriceKeys.has(exactPriceKey)) {
+      duplicateSkippedRows += 1;
+      warningReportRows.push({
+        row: index + 2,
+        partNumber: row.normalizedPartNumber,
+        type: 'DUPLICATE_SKIPPED',
+        message: 'Exact duplicate price period skipped',
+        mrp: priceRow.mrp,
+        dlc: priceRow.dlc,
+        effectiveFrom: dateKey(priceRow.effectiveFrom),
+        effectiveTo: dateKey(priceRow.effectiveTo)
+      });
       return;
     }
-    seen.add(row.normalizedPartNumber);
-    valid.push(row);
+    seenPriceKeys.add(exactPriceKey);
+    const periodKey = exactPeriodKey(priceRow);
+    if (seenPeriodKeys.has(periodKey)) {
+      warningReportRows.push({
+        row: index + 2,
+        partNumber: row.normalizedPartNumber,
+        type: 'DUPLICATE_PERIOD_WARNING',
+        message: 'Same effective period found with a different MRP/DLC',
+        mrp: priceRow.mrp,
+        dlc: priceRow.dlc,
+        effectiveFrom: dateKey(priceRow.effectiveFrom),
+        effectiveTo: dateKey(priceRow.effectiveTo)
+      });
+    }
+    seenPeriodKeys.add(periodKey);
+    priceRows.push(priceRow);
   });
-  if (!valid.length) return { uploadedRowsCount: rows.length, importedCount: 0, updatedDuplicateCount: 0, skippedInvalidRowsCount: rows.length };
+
+  const priceRowsByPart = new Map();
+  priceRows.forEach((row) => {
+    const list = priceRowsByPart.get(row.normalizedPartNumber) || [];
+    list.forEach((existing) => {
+      if (rangesOverlap(row, existing) && priceHistoryKey(row) !== priceHistoryKey(existing)) {
+        warningReportRows.push({
+          row: '',
+          partNumber: row.normalizedPartNumber,
+          type: 'OVERLAP_WARNING',
+          message: `Overlapping effective dates: ${dateKey(existing.effectiveFrom) || 'blank'} to ${dateKey(existing.effectiveTo) || 'current'} overlaps ${dateKey(row.effectiveFrom) || 'blank'} to ${dateKey(row.effectiveTo) || 'current'}`,
+          mrp: row.mrp,
+          dlc: row.dlc,
+          effectiveFrom: dateKey(row.effectiveFrom),
+          effectiveTo: dateKey(row.effectiveTo)
+        });
+      }
+    });
+    list.push(row);
+    priceRowsByPart.set(row.normalizedPartNumber, list);
+  });
+
+  const valid = Array.from(byPart.values()).map((row) => {
+    const copy = { ...row };
+    delete copy.effectiveFrom;
+    delete copy.effectiveTo;
+    return copy;
+  });
 
   const existing = await MasterCatalogue.find({ normalizedPartNumber: { $in: valid.map((row) => row.normalizedPartNumber) } }).select('normalizedPartNumber').lean();
   const existingSet = new Set(existing.map((row) => row.normalizedPartNumber));
-  await MasterCatalogue.bulkWrite(valid.map((row) => ({
-    updateOne: {
-      filter: { normalizedPartNumber: row.normalizedPartNumber },
-      update: { $set: row },
-      upsert: true
+  if (valid.length) {
+    await MasterCatalogue.bulkWrite(valid.map((row) => ({
+      updateOne: {
+        filter: { normalizedPartNumber: row.normalizedPartNumber },
+        update: { $set: row },
+        upsert: true
+      }
+    })), { ordered: false });
+  }
+  if (priceRows.length) {
+    const existingPriceRows = await PartPriceHistory.find({ normalizedPartNumber: { $in: Array.from(priceRowsByPart.keys()) } }).lean();
+    const existingPriceKeys = new Set(existingPriceRows.map(priceHistoryKey));
+    priceRows.forEach((row) => {
+      existingPriceRows
+        .filter((existingRow) => existingRow.normalizedPartNumber === row.normalizedPartNumber)
+        .forEach((existingRow) => {
+          if (!existingPriceKeys.has(priceHistoryKey(row)) && rangesOverlap(row, existingRow)) {
+            warningReportRows.push({
+              row: '',
+              partNumber: row.normalizedPartNumber,
+              type: 'EXISTING_OVERLAP_WARNING',
+              message: `Uploaded period ${dateKey(row.effectiveFrom) || 'blank'} to ${dateKey(row.effectiveTo) || 'current'} overlaps existing period ${dateKey(existingRow.effectiveFrom) || 'blank'} to ${dateKey(existingRow.effectiveTo) || 'current'}`,
+              mrp: row.mrp,
+              dlc: row.dlc,
+              effectiveFrom: dateKey(row.effectiveFrom),
+              effectiveTo: dateKey(row.effectiveTo)
+            });
+          }
+        });
+    });
+    const newPriceRows = priceRows.filter((row) => {
+      const key = priceHistoryKey(row);
+      if (existingPriceKeys.has(key)) {
+        duplicateSkippedRows += 1;
+        return false;
+      }
+      existingPriceKeys.add(key);
+      return true;
+    });
+    if (newPriceRows.length) {
+      await PartPriceHistory.bulkWrite(newPriceRows.map((row) => ({
+        updateOne: {
+          filter: {
+            normalizedPartNumber: row.normalizedPartNumber,
+            mrp: row.mrp,
+            dlc: row.dlc,
+            effectiveFrom: row.effectiveFrom,
+            effectiveTo: row.effectiveTo
+          },
+          update: { $set: row },
+          upsert: true
+        }
+      })), { ordered: false });
     }
-  })), { ordered: false });
+  }
   await MasterCatalogue.syncIndexes();
+  await PartPriceHistory.syncIndexes();
+  rebuildMovementSummaries({ partNumbers: valid.map((row) => row.normalizedPartNumber) }).catch((error) => console.warn('[movement-summary] rebuild after catalogue upload failed', error.message));
 
   return {
     uploadedRowsCount: rows.length,
+    totalRowsUploaded: rows.length,
     importedCount: valid.length,
-    updatedDuplicateCount: valid.filter((row) => existingSet.has(row.normalizedPartNumber)).length + duplicateInsideFile,
-    skippedInvalidRowsCount: rows.length - valid.length
+    uniquePartsCount: valid.length,
+    priceHistoryRowsCount: priceRows.length,
+    updatedDuplicateCount: valid.filter((row) => existingSet.has(row.normalizedPartNumber)).length,
+    duplicateSkippedRows,
+    skippedInvalidRowsCount: invalidCount,
+    overlapWarningCount: warningReportRows.filter((row) => row.type === 'OVERLAP_WARNING').length,
+    warningReportRows
   };
 }
 
@@ -238,9 +454,12 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, upload.single('file'
 
 router.delete('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
-    const result = await MasterCatalogue.deleteMany({});
+    const [result, priceResult] = await Promise.all([
+      MasterCatalogue.deleteMany({}),
+      PartPriceHistory.deleteMany({})
+    ]);
     req.io.emit('master:update');
-    res.json({ success: true, deletedOldRowsCount: result.deletedCount || 0 });
+    res.json({ success: true, deletedOldRowsCount: result.deletedCount || 0, deletedPriceHistoryRowsCount: priceResult.deletedCount || 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -248,12 +467,15 @@ router.delete('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 
 router.post('/delete-and-reupload', auth.requireAuth, auth.requireAdmin, upload.single('file'), async (req, res) => {
   try {
-    const deleted = await MasterCatalogue.deleteMany({});
+    const [deleted, deletedPrices] = await Promise.all([
+      MasterCatalogue.deleteMany({}),
+      PartPriceHistory.deleteMany({})
+    ]);
     const result = await importCatalogue(req.file);
     const reprocess = await reprocessScansWithCatalogue();
     req.io.emit('master:update');
     req.io.emit('scan:saved');
-    res.json({ success: true, deletedOldRowsCount: deleted.deletedCount || 0, ...result, reprocess });
+    res.json({ success: true, deletedOldRowsCount: deleted.deletedCount || 0, deletedPriceHistoryRowsCount: deletedPrices.deletedCount || 0, ...result, reprocess });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

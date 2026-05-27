@@ -6,6 +6,8 @@ build/
 uploads/temp/
 backup*/
 _cleanup_quarantine/
+_archive_unused/
+Audit Data/
 *.zip
 *.apk
 

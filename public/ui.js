@@ -153,6 +153,7 @@
     reconLoaded: false,
     validatorInvalidRows: [],
     validatorMapIndex: null,
+    catalogueWarningRows: [],
     masterSearch: { q: '', page: 1, limit: 25, total: 0 },
     masterSearchRows: [],
     activeAudit: null,
@@ -1218,12 +1219,13 @@
     const parts = raw.split('/');
     if (parts.length >= 6 && parts[3] && parts[4] && parts[5]) {
       const slashQty = optionalScanNumber(parts[4]);
+      const slashMrp = optionalScanNumber(parts[5]);
       return {
         partNumber: normalizePartText(parts[3]),
         qty: slashQty !== undefined ? slashQty : 1,
         qtyProvided: slashQty !== undefined,
-        mrp: undefined,
-        mrpProvided: false,
+        mrp: slashMrp,
+        mrpProvided: slashMrp !== undefined,
         rawScan: raw
       };
     }
@@ -4421,6 +4423,38 @@
     triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'Master_Part_Search_Result.csv');
   }
 
+  function updateCatalogueUploadStats(data = {}) {
+    state.catalogueWarningRows = data.warningReportRows || [];
+    const warningButton = $('#downloadCatalogueWarningsBtn');
+    if (warningButton) warningButton.hidden = !state.catalogueWarningRows.length;
+    $('#uploadStats').textContent = [
+      `Rows ${data.totalRowsUploaded ?? data.uploadedRowsCount ?? 0}`,
+      `Unique parts ${data.uniquePartsCount ?? data.importedCount ?? 0}`,
+      `Price history ${data.priceHistoryRowsCount ?? 0}`,
+      `Duplicates skipped ${data.duplicateSkippedRows ?? data.updatedDuplicateCount ?? 0}`,
+      `Invalid ${data.skippedInvalidRowsCount ?? 0}`,
+      `Overlaps ${data.overlapWarningCount ?? 0}`
+    ].join(' | ');
+  }
+
+  function downloadCatalogueWarnings() {
+    const rows = state.catalogueWarningRows || [];
+    if (!rows.length) return toast('No upload warnings to download', 'error');
+    const headers = ['Row', 'Part Number', 'Type', 'Message', 'MRP', 'DLC', 'Effective From', 'Effective To'];
+    const csvRows = rows.map((row) => [
+      row.row || '',
+      row.partNumber || '',
+      row.type || '',
+      row.message || '',
+      row.mrp || '',
+      row.dlc || '',
+      row.effectiveFrom || '',
+      row.effectiveTo || ''
+    ]);
+    const csv = [headers].concat(csvRows).map((cols) => cols.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'Master_Catalogue_Upload_Warnings.csv');
+  }
+
   function renderDealerMaster() {
     $('#dealerMasterRows').innerHTML = state.dealers.length ? state.dealers.map((dealer) => `
       <tr>
@@ -5862,7 +5896,7 @@
       });
       toast(data.message || 'Audit restored');
       state.reportCache.clear();
-      if (activeReportType() && state.reportHasRun) await loadReport({ forceRefresh: true });
+      queueRealtimeReportRefresh('audit restore');
       await refreshAll();
       await loadAuditBackups();
     } catch (error) {
@@ -6572,8 +6606,9 @@
     if (state.dashboardFallbackTimer) clearInterval(state.dashboardFallbackTimer);
     state.dashboardFallbackTimer = setInterval(async () => {
       if (document.hidden || state.dashboardFallbackBusy) return;
+      if (!document.body.classList.contains('dashboard-view-active')) return;
       const realtimeQuietMs = Date.now() - Number(state.lastRealtimeAt || 0);
-      if (realtimeQuietMs < 5000) return;
+      if (realtimeQuietMs < 30000) return;
       state.dashboardFallbackBusy = true;
       try {
         await Promise.all([loadDashboard(), loadSyncStatus(), loadDevices()]);
@@ -6583,7 +6618,7 @@
       } finally {
         state.dashboardFallbackBusy = false;
       }
-    }, 5000);
+    }, 60000);
   }
 
   function bulkQrOptions() {
@@ -7440,8 +7475,8 @@
       event.preventDefault();
       try {
         const data = await api('/api/master-catalogue/upload', { method: 'POST', body: new FormData(event.currentTarget) });
-        $('#uploadStats').textContent = `Imported ${data.importedCount || 0} | Updated duplicates ${data.updatedDuplicateCount || 0} | Skipped ${data.skippedInvalidRowsCount || 0}`;
-        toast(`Master catalogue uploaded: imported ${data.importedCount || 0}`);
+        updateCatalogueUploadStats(data);
+        toast(`Master catalogue uploaded: ${data.uniquePartsCount || data.importedCount || 0} unique parts, ${data.priceHistoryRowsCount || 0} price rows`);
         if (hasPartSearchFilter()) await loadParts(state.masterSearch.page || 1);
       } catch (error) {
         toast(error.message, 'error');
@@ -7450,16 +7485,19 @@
     $('#deleteCatalogueBtn')?.addEventListener('click', async () => {
       if (!window.confirm('Are you sure you want to delete old catalogue? Scan and audit data will not be deleted.')) return;
       const data = await api('/api/master-catalogue', { method: 'DELETE', body: {} });
-      $('#uploadStats').textContent = `Deleted old rows ${data.deletedOldRowsCount || 0}`;
+      $('#uploadStats').textContent = `Deleted old rows ${data.deletedOldRowsCount || 0} | Deleted price history ${data.deletedPriceHistoryRowsCount || 0}`;
+      state.catalogueWarningRows = [];
+      if ($('#downloadCatalogueWarningsBtn')) $('#downloadCatalogueWarningsBtn').hidden = true;
       clearPartSearch('Old catalogue deleted. Scan and audit data was not deleted.');
     });
+    $('#downloadCatalogueWarningsBtn')?.addEventListener('click', downloadCatalogueWarnings);
     $('#deleteReuploadCatalogueBtn')?.addEventListener('click', async () => {
       const form = $('#partUploadForm');
       const fileInput = $('[name="file"]', form);
       if (!fileInput || !fileInput.files.length) return toast('Select new master file first', 'error');
       if (!window.confirm('Are you sure you want to delete old catalogue? Scan and audit data will not be deleted.')) return;
       const data = await api('/api/master-catalogue/delete-and-reupload', { method: 'POST', body: new FormData(form) });
-      $('#uploadStats').textContent = `Deleted ${data.deletedOldRowsCount || 0} | Imported ${data.importedCount || 0} | Updated duplicates ${data.updatedDuplicateCount || 0} | Skipped ${data.skippedInvalidRowsCount || 0}`;
+      updateCatalogueUploadStats(data);
       toast('Catalogue deleted, reuploaded and reports reprocessed');
       if (hasPartSearchFilter()) await loadParts(state.masterSearch.page || 1);
     });
@@ -7727,14 +7765,17 @@
 
   function bindSocket() {
     if (!window.io) return;
+    if (state.dashboardSocket) return;
     const socket = window.io({ transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000, reconnectionDelayMax: 5000 });
+    state.dashboardSocket = socket;
     socket.on('connect', () => {
       state.lastRealtimeAt = Date.now();
       console.log('[DASHBOARD] socket connected', { socketId: socket.id });
       socket.emit('device:hello', { deviceId: ensureDeviceId(), deviceName: 'Dashboard Browser', deviceType: 'web' });
       addConnectionLog('Device connected', 'success');
     });
-    setInterval(() => {
+    if (state.dashboardHeartbeatTimer) clearInterval(state.dashboardHeartbeatTimer);
+    state.dashboardHeartbeatTimer = setInterval(() => {
       if (!socket.connected) return;
       socket.emit('device:heartbeat', {
         deviceId: ensureDeviceId(),
@@ -7743,7 +7784,7 @@
         serverUrl: state.serverInfo ? state.serverInfo.serverUrl : '',
         appVersion: 'web-dashboard'
       });
-    }, 10000);
+    }, 30000);
     socket.on('disconnect', (reason) => {
       console.warn('[DASHBOARD] socket disconnected', reason);
       addConnectionLog(`Socket disconnected: ${reason}`, 'warning');
@@ -7939,8 +7980,10 @@
           window.location.href = '/';
         }
       });
-      setInterval(sendHeartbeat, 15000);
-      setInterval(() => loadHealth().catch(console.warn), 5000);
+      if (state.headerHeartbeatTimer) clearInterval(state.headerHeartbeatTimer);
+      state.headerHeartbeatTimer = setInterval(sendHeartbeat, 30000);
+      if (state.healthRefreshTimer) clearInterval(state.healthRefreshTimer);
+      state.healthRefreshTimer = setInterval(() => loadHealth().catch(console.warn), 30000);
     } catch (error) {
       bootError('fatal startup failure before network refresh', errorDetails(error));
       toast(`Startup failed: ${error.message}`, 'error');

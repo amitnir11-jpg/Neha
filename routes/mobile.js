@@ -19,6 +19,7 @@ const { getActiveAudit, publicAudit } = require('../utils/audit');
 const { serverInfo } = require('../utils/network');
 const { normalizePartNumber } = require('../utils/normalize');
 const { formatDateLikeFields } = require('../utils/time');
+const { decorateScanValue } = require('../utils/inventoryValueEngine');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
@@ -149,12 +150,15 @@ function reportFilter(query = {}, scanType = '') {
 }
 
 function reportRow(scan) {
+  const valued = decorateScanValue(scan);
   return {
     time: scan.timestamp || scan.createdAt || '',
     dealerCode: scan.dealerCode || '',
     partNumber: scan.partNumber || scan.part || '',
     qty: Number(scan.qty || scan.quantity || 0),
-    mrp: Number(scan.mrp || 0),
+    mrp: Number(valued.valuationMRP || 0),
+    valuationSource: valued.valuationSource || '',
+    finalInventoryValue: Number(valued.finalInventoryValue || 0),
     binLocation: scan.binLocation || scan.bin || '',
     scanType: scan.scanType || scan.type || '',
     deviceId: scan.deviceId || '',
@@ -188,6 +192,7 @@ async function scanReport(req, res, scanType) {
 
 function mobileItem(scan) {
   const timestamp = scan.timestamp || scan.scanTime || scan.createdAt || Date.now();
+  const valued = decorateScanValue(scan);
   return {
     id: scan.rawScan || scan.rawScanString || scan.uniqueScanId || String(scan._id),
     type: scan.type || scan.scanType || 'INWARD',
@@ -202,7 +207,9 @@ function mobileItem(scan) {
     bin: scan.binLocation || scan.bin || '',
     quantity: Number(scan.quantity || scan.qty || 1),
     qty: Number(scan.quantity || scan.qty || 1),
-    mrp: Number(scan.mrp || 0),
+    mrp: Number(valued.valuationMRP || 0),
+    valuationSource: valued.valuationSource || '',
+    finalInventoryValue: Number(valued.finalInventoryValue || 0),
     damageReason: scan.damageReason || '',
     remarks: scan.remarks || '',
     vinNo: scan.vinNo || '',

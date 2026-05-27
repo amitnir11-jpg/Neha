@@ -8,6 +8,7 @@ const auth = require('./auth');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const RejectedScan = require('../models/RejectedScan');
 const { formatDateLikeFields } = require('../utils/time');
+const { scanValueRow, summarizeMovementBucket } = require('../utils/inventoryValueEngine');
 
 const autoTable = autoTableModule.default || autoTableModule;
 
@@ -21,6 +22,26 @@ function clean(value) {
 
 function upper(value) {
   return clean(value).toUpperCase();
+}
+
+function partMovementLabel(value = '') {
+  const text = upper(value).replace(/_/g, '-');
+  if (text === 'FAST') return 'FAST MOVING';
+  if (text === 'SLOW') return 'SLOW MOVING';
+  if (text === 'DEAD') return 'DEAD STOCK';
+  if (text === 'NON-MOVING' || text === 'NON MOVING') return 'NON MOVING';
+  return text;
+}
+
+function scanUpiMrpDisplay(valueRows = []) {
+  const values = Array.from(new Set(
+    valueRows
+      .filter((row) => row.valuationSource === 'UPI_SCANNED_MRP' && Number(row.valuationMRP || 0) > 0)
+      .map((row) => Number(row.valuationMRP || 0).toFixed(2))
+  )).sort((a, b) => Number(a) - Number(b));
+  if (!values.length) return 0;
+  if (values.length === 1) return Number(values[0]);
+  return values.join(', ');
 }
 
 function regex(value) {
@@ -186,6 +207,13 @@ const AUDIT_COLUMNS = [
   { header: 'PRODUCT CATEGORY', key: 'productCategory', width: 20 },
   { header: 'BIN', key: 'bin', width: 16 },
   { header: 'MRP', key: 'mrp', width: 12 },
+  { header: 'SCAN UPI MRP', key: 'scanUPIMRP', width: 18 },
+  { header: 'CURRENT CATALOGUE MRP', key: 'currentCatalogueMRP', width: 22 },
+  { header: 'AVERAGE SCANNED MRP', key: 'averageScannedMRP', width: 22 },
+  { header: 'PRICE PERIOD', key: 'pricePeriod', width: 30 },
+  { header: 'PRICE AGEING DAYS', key: 'priceAgeingDays', width: 18 },
+  { header: 'PART MOVEMENT', key: 'partMovement', width: 20 },
+  { header: 'FINAL INVENTORY VALUE', key: 'finalInventoryValue', width: 22 },
   { header: 'DLC', key: 'dlc', width: 12 },
   { header: 'PRODUCT GROUP', key: 'productGroup', width: 18 },
   { header: 'PRODUCT SUBGROUP', key: 'partSubGroup', width: 18 },
@@ -254,6 +282,33 @@ const SCAN_COLUMNS = [
   { header: 'ENTRY CHANNEL', key: 'entryChannel', width: 18 },
   { header: 'ENTRY SOURCE', key: 'scanSourceLabel', width: 24 },
   { header: 'SYNC STATUS', key: 'syncStatus', width: 16 }
+];
+
+const MOVEMENT_VALUE_COLUMNS = [
+  { header: 'Part Number', key: 'partNumber', width: 18 },
+  { header: 'Part Description', key: 'partDescription', width: 34 },
+  { header: 'Product Category', key: 'productCategory', width: 22 },
+  { header: 'Total Qty', key: 'totalQty', width: 14 },
+  { header: 'Scanned Qty', key: 'scannedQty', width: 14 },
+  { header: 'Manual Qty', key: 'manualQty', width: 14 },
+  { header: 'SCAN UPI MRP', key: 'scanUPIMRP', width: 18 },
+  { header: 'CURRENT CATALOGUE MRP', key: 'currentCatalogueMRP', width: 22 },
+  { header: 'AVERAGE SCANNED MRP', key: 'averageScannedMRP', width: 22 },
+  { header: 'Min Scanned MRP', key: 'minScannedMRP', width: 18 },
+  { header: 'Max Scanned MRP', key: 'maxScannedMRP', width: 18 },
+  { header: 'Total Scan Value', key: 'totalScanValue', width: 18 },
+  { header: 'Total Manual Value', key: 'totalManualValue', width: 20 },
+  { header: 'Final Inventory Value', key: 'finalInventoryValue', width: 22 },
+  { header: 'Oldest Price Period', key: 'oldestPricePeriod', width: 22 },
+  { header: 'Newest Price Period', key: 'newestPricePeriod', width: 22 },
+  { header: 'PRICE AGEING DAYS', key: 'priceAgeingDays', width: 18 },
+  { header: 'Last Movement Date', key: 'lastMovementDate', width: 22 },
+  { header: 'Movement Qty 30', key: 'movementQtyLast30Days', width: 18 },
+  { header: 'Movement Qty 90', key: 'movementQtyLast90Days', width: 18 },
+  { header: 'Movement Qty 180', key: 'movementQtyLast180Days', width: 20 },
+  { header: 'Movement Qty 365', key: 'movementQtyLast365Days', width: 20 },
+  { header: 'PART MOVEMENT', key: 'partMovement', width: 20 },
+  { header: 'Inventory Risk Value', key: 'inventoryRiskValue', width: 22 }
 ];
 
 const SCAN_REGISTER_COLUMNS = [
@@ -342,6 +397,13 @@ function auditRow(row) {
     productCategory: row.productCategory || row.category,
     bin: row.binLocation || row.bin,
     mrp: row.mrp,
+    scanUPIMRP: row.scanUPIMRP || '',
+    currentCatalogueMRP: row.currentCatalogueMRP || 0,
+    averageScannedMRP: row.averageScannedMRP || 0,
+    pricePeriod: row.pricePeriod || '',
+    priceAgeingDays: row.priceAgeingDays || 0,
+    partMovement: row.partMovement || '',
+    finalInventoryValue: row.finalInventoryValue || row.physicalMrpValue || 0,
     dlc: row.dlc,
     productGroup: row.productGroup,
     partSubGroup: row.partSubGroup,
@@ -636,7 +698,7 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
       const qty = scanQuantity(scan);
       target.scanCount += 1;
       target.totalQty += qty;
-      target.totalMrpValue = money(target.totalMrpValue + qty * Number(scan.mrp || 0));
+      target.totalMrpValue = money(target.totalMrpValue + Number(scanValueRow(scan).finalInventoryValue || 0));
       target.totalDlcValue = money(target.totalDlcValue + qty * Number(scan.dlc || 0));
       const bucket = scanTypeQtyBucket(scan);
       if (bucket) target[bucket] += qty;
@@ -655,6 +717,49 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
     delete row.memberSets;
     return { ...row, uniqueParts, ...members };
   }).sort((a, b) => Number(b.scanCount || 0) - Number(a.scanCount || 0) || String(a.userName || a.dealerName || a.deviceName || '').localeCompare(String(b.userName || b.dealerName || b.deviceName || '')));
+}
+
+function movementValueRows(scans = []) {
+  const groups = new Map();
+  scans.forEach((scan) => {
+    const partNumber = upper(scan.normalizedPartNumber || scan.partNumber || scan.part);
+    if (!partNumber) return;
+    const group = groups.get(partNumber) || [];
+    group.push(scan);
+    groups.set(partNumber, group);
+  });
+  return Array.from(groups.entries()).map(([partNumber, rows]) => {
+    const first = rows[0] || {};
+    const summary = summarizeMovementBucket(rows);
+    const valueRows = rows.map(scanValueRow);
+    return {
+      partNumber,
+      partDescription: first.partDescription || first.partName || '',
+      productCategory: first.productCategory || first.category || '',
+      totalQty: summary.totalQty,
+      scannedQty: summary.scannedQty,
+      manualQty: summary.manualQty,
+      scanUPIMRP: scanUpiMrpDisplay(valueRows),
+      currentCatalogueMRP: Number(first.currentCatalogueMRP || 0),
+      averageScannedMRP: summary.averageScannedMRP,
+      minScannedMRP: summary.minScannedMRP,
+      maxScannedMRP: summary.maxScannedMRP,
+      totalScanValue: summary.totalScanValue,
+      totalManualValue: summary.totalManualValue,
+      finalInventoryValue: summary.finalInventoryValue,
+      oldestPricePeriod: summary.firstScanDate,
+      newestPricePeriod: summary.lastScanDate,
+      priceAgeingDays: summary.ageingDays,
+      lastMovementDate: summary.lastMovementDate,
+      movementQtyLast30Days: summary.movementQtyLast30Days,
+      movementQtyLast90Days: summary.movementQtyLast90Days,
+      movementQtyLast180Days: summary.movementQtyLast180Days,
+      movementQtyLast365Days: summary.movementQtyLast365Days,
+      movementCategory: summary.movementCategory,
+      partMovement: partMovementLabel(summary.movementCategory),
+      inventoryRiskValue: summary.inventoryRiskValue
+    };
+  }).sort((a, b) => Number(b.inventoryRiskValue || 0) - Number(a.inventoryRiskValue || 0) || String(a.partNumber).localeCompare(String(b.partNumber)));
 }
 
 function selectRows(data, type) {
@@ -723,7 +828,7 @@ function selectRows(data, type) {
   }
 
   if (type === 'valid-scans') return data.scans.map(validScanRow);
-  if (type === 'movement-scans') return data.scans.filter(isMovementScan).map(validScanRow);
+  if (type === 'movement-scans') return movementValueRows(data.scans);
   if (type === 'device-wise') {
     return groupedScanSummary(
       data.scans,
@@ -755,7 +860,8 @@ function columnsForRows(rows) {
 function columnsForReport(type, rows) {
   if (['main-inventory-audit', 'compile-audit', 'consolidated-final'].includes(type)) return AUDIT_COLUMNS;
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') return BIN_COLUMNS;
-  if (['valid-scans', 'movement-scans'].includes(type)) return SCAN_COLUMNS;
+  if (type === 'movement-scans') return MOVEMENT_VALUE_COLUMNS;
+  if (type === 'valid-scans') return SCAN_COLUMNS;
   if (type === 'scan-register') return SCAN_REGISTER_COLUMNS;
   if (type === 'user-dealer-wise') return USER_DEALER_COLUMNS;
   if (type === 'device-wise') return DEVICE_COLUMNS;

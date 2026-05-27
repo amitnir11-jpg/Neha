@@ -21,10 +21,46 @@ const { cataloguePayload } = require('../utils/catalogue');
 const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentity');
 const masterValidation = require('../utils/masterValidation');
 const { dateDebugPayload, formatIstDateTime, validDate: validTimestamp } = require('../utils/time');
+const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
+const { findPricePeriod, pricePeriodPayload } = require('../utils/priceHistory');
+const { scheduleMovementSummaryRefresh } = require('../services/inventoryMovementSummary');
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
 const BIN_REQUIRED_MESSAGE = 'Please enter/select bin location first.';
+
+/**
+ * ====================================================================
+ * SYNC ROUTE - INVENTORY VALUE CALCULATION COMPLIANCE
+ * ====================================================================
+ *
+ * CRITICAL BUSINESS RULE:
+ *   finalInventoryValue = qty × valuationMRP
+ *
+ * WHERE valuationMRP MUST BE:
+ *   1. Manual MRP (if user entered manually)
+ *   2. Scanned UPI MRP (if from QR/barcode)
+ *   3. Parsed MRP from raw scan payload
+ *   4. Stored valuationMRP only with correct source flag
+ *
+ * NEVER USE:
+ *   - Latest master MRP
+ *   - Current catalogue MRP
+ *   - Master part default MRP
+ *
+ * ENFORCEMENT:
+ *   - decorateScanValue() from inventoryValueEngine.js sets valuationMRP
+ *   - valuationFields() calls decorateScanValue()
+ *   - finalInventoryValue calculated using valuationFields.valuationMRP
+ *   - Manual batch merges use existing valuationMRP (not master)
+ *
+ * VALIDATION:
+ *   - All valuationMRP values must have corresponding valuationSource
+ *   - valuationSource must be 'MANUAL_ENTERED_MRP' or 'UPI_SCANNED_MRP'
+ *   - If valuationMRP = 0, valuationSource must be 'NO_SCANNED_OR_MANUAL_MRP'
+ *
+ * ====================================================================
+ */
 const NO_OUTWARD_STOCK_MESSAGE = 'No available stock found for this part in any bin.';
 
 function clean(value) {
@@ -404,6 +440,31 @@ function normalizeSource(value, fallback = 'mobile') {
   if (/camera|mobile/.test(source)) return 'mobile';
   if (['manual', 'scanner', 'import', 'api', 'ocr_label', 'qr'].includes(source)) return source;
   return fallback;
+}
+
+function optionalNumber(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = Number(String(value).replace(/,/g, '').trim());
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function valuationFields({ scan = {}, rawScanText = '', scannedMrp, mrpProvided = false, manualEntry = false } = {}) {
+  const source = normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, manualEntry ? 'manual' : 'mobile');
+  const valued = decorateScanValue({
+    rawScan: rawScanText,
+    rawScanString: rawScanText,
+    source: manualEntry ? 'manual' : source,
+    scanMode: manualEntry ? 'Manual' : source,
+    scanMRP: !manualEntry && mrpProvided ? scannedMrp : undefined,
+    manualMRP: manualEntry && mrpProvided ? scannedMrp : undefined
+  });
+  return {
+    mrp: Number(valued.valuationMRP || 0),
+    scanMRP: Number(valued.scanMRP || 0),
+    manualMRP: Number(valued.manualMRP || 0),
+    valuationMRP: Number(valued.valuationMRP || 0),
+    valuationSource: valued.valuationSource || 'NO_SCANNED_OR_MANUAL_MRP'
+  };
 }
 
 function makeScanId(item = {}, timestamp = new Date()) {
@@ -791,6 +852,10 @@ async function saveNormalizedScan(scan, req) {
 
   const dealer = scan.dealerCode ? await Dealer.findOne({ dealerCode: scan.dealerCode }).lean() : null;
   const manualEntry = isManualEntry(scan);
+  const scannedMrp = scan.mrpProvided ? optionalNumber(scan.mrp) : undefined;
+  const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: scan.mrpProvided, manualEntry });
+  const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(scan.partNumber, scan.timestamp || scan.serverReceivedAt, valueFields.valuationMRP) : null;
+  const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
 
   const errors = [];
   if (!scan.partNumber) errors.push('Part number missing');
@@ -869,6 +934,8 @@ async function saveNormalizedScan(scan, req) {
   const warnings = [];
   if (!master) warnings.push(manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`);
   if (master && !master.activeStatus) warnings.push('Inactive part');
+  if (master && scan.mrpProvided && pricePeriod && Math.abs(Number(valueFields.valuationMRP || 0) - Number(pricePeriod.mrp || 0)) > 0.01) warnings.push('MRP mismatch against price history period');
+  if (master && scan.mrpProvided && !pricePeriod) warnings.push('No matching price history period for scanned MRP');
   const finalQty = Number(scan.quantity || 1);
   const finalBin = scan.binLocation;
 
@@ -952,7 +1019,13 @@ async function saveNormalizedScan(scan, req) {
     partSubGroup: master ? master.partSubGroup || '' : clean(scan.source.partSubGroup || scan.source.productSubGroup).toUpperCase(),
     qty: finalQty,
     quantity: finalQty,
-    mrp: master && master.mrp !== undefined ? master.mrp : scan.mrp,
+    mrp: valueFields.mrp,
+    scanMRP: valueFields.scanMRP,
+    manualMRP: valueFields.manualMRP,
+    valuationMRP: valueFields.valuationMRP,
+    valuationSource: valueFields.valuationSource,
+    finalInventoryValue: Number(finalQty || 0) * Number(valueFields.valuationMRP || 0),
+    ...pricePeriodFields,
     dlc: master && master.dlc !== undefined ? master.dlc : inventory.numberValue(scan.source.dlc, 0),
     bin: finalBin,
     binLocation: finalBin,
@@ -1015,6 +1088,7 @@ async function saveNormalizedScan(scan, req) {
 
   logSync('DB insert success', { id: doc._id, deviceId: doc.deviceId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, syncKey: doc.syncKey });
   console.log('SAVED_VALID_SCAN', { id: doc._id, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'mobile' });
+  scheduleMovementSummaryRefresh(doc);
   await emitEnterpriseRealtime(req.io || req.app.get('io'), [doc]);
   return { status: 'synced', scan: doc, error: '' };
 }
@@ -1299,7 +1373,7 @@ async function pushHandler(req, res) {
       }
     }
 
-    normalized.forEach(({ index, scan }) => {
+    for (const { index, scan } of normalized) {
       const master = masterByDealer.get(`${scan.normalizedPartNumber || scan.partNumber}::${upper(scan.dealerCode)}`) || masterByPart.get(scan.normalizedPartNumber || scan.partNumber);
       const manualEntry = isManualEntry(scan);
       console.log('RAW_SCAN_RECEIVED', scan.rawScanString || scan.partNumber || '');
@@ -1412,6 +1486,13 @@ async function pushHandler(req, res) {
 
       const finalQty = Number(scan.quantity || 1);
       const finalBin = scan.binLocation;
+      const scannedMrp = scan.mrpProvided ? optionalNumber(scan.mrp) : undefined;
+      const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: scan.mrpProvided, manualEntry });
+      const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(scan.partNumber, scan.timestamp || scan.serverReceivedAt, valueFields.valuationMRP) : null;
+      const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
+      const warnings = master ? [] : [manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`];
+      if (master && scan.mrpProvided && pricePeriod && Math.abs(Number(valueFields.valuationMRP || 0) - Number(pricePeriod.mrp || 0)) > 0.01) warnings.push('MRP mismatch against price history period');
+      if (master && scan.mrpProvided && !pricePeriod) warnings.push('No matching price history period for scanned MRP');
       const doc = {
         uniqueScanId: scan.uniqueScanId,
         scanId: scan.uniqueScanId,
@@ -1430,7 +1511,13 @@ async function pushHandler(req, res) {
         partSubGroup: master ? master.partSubGroup || '' : clean(scan.source.partSubGroup || scan.source.productSubGroup).toUpperCase(),
         qty: finalQty,
         quantity: finalQty,
-        mrp: master && master.mrp !== undefined ? master.mrp : scan.mrp,
+        mrp: valueFields.mrp,
+        scanMRP: valueFields.scanMRP,
+        manualMRP: valueFields.manualMRP,
+        valuationMRP: valueFields.valuationMRP,
+        valuationSource: valueFields.valuationSource,
+        finalInventoryValue: finalQty * Number(valueFields.valuationMRP || 0),
+        ...pricePeriodFields,
         dlc: master && master.dlc !== undefined ? master.dlc : inventory.numberValue(scan.source.dlc, 0),
         bin: finalBin,
         binLocation: finalBin,
@@ -1475,8 +1562,8 @@ async function pushHandler(req, res) {
         syncStatus: 'synced',
         syncError: '',
         source: normalizeSource(scan.scanSource || scan.source.source || scan.source.scanSource, 'mobile'),
-        warnings: master ? [] : [manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`],
-        remarks: master ? '' : (manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`),
+        warnings,
+        remarks: warnings.join(', '),
         masterFound: Boolean(master),
         masterMatch: Boolean(master),
         isMasterMatched: Boolean(master)
@@ -1496,7 +1583,7 @@ async function pushHandler(req, res) {
         })
       });
       console.log('SAVED_VALID_SCAN', { scanId: doc.uniqueScanId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'sync' });
-    });
+    }
 
     const manualBatch = new Map();
     const mergedDocs = [];
@@ -1511,9 +1598,15 @@ async function pushHandler(req, res) {
       const existing = manualBatch.get(key);
       if (existing) {
         const addQty = Number(doc.qty || doc.quantity || 0);
+        const trustedMrp = Number(existing.doc.valuationMRP || doc.valuationMRP || 0);
         existing.meta.acks = ackList(existing.meta).concat(ackList(insertMeta[index]));
         existing.doc.qty = Number(existing.doc.qty || 0) + addQty;
         existing.doc.quantity = Number(existing.doc.quantity || 0) + addQty;
+        existing.doc.mrp = trustedMrp;
+        existing.doc.valuationMRP = trustedMrp;
+        existing.doc.valuationSource = existing.doc.valuationSource || doc.valuationSource || 'MANUAL_ENTERED_MRP';
+        existing.doc.manualMRP = Number(existing.doc.manualMRP || doc.manualMRP || trustedMrp || 0);
+        existing.doc.finalInventoryValue = money(Number(existing.doc.quantity || 0) * trustedMrp);
         existing.doc.rawScan = [existing.doc.rawScan, doc.rawScan].filter(Boolean).join(' | ');
         existing.doc.rawScanString = [existing.doc.rawScanString, doc.rawScanString].filter(Boolean).join(' | ');
         existing.doc.rawUpi = [existing.doc.rawUpi, doc.rawUpi].filter(Boolean).join(' | ');
@@ -1570,8 +1663,18 @@ async function pushHandler(req, res) {
           { sort: { timestamp: -1, createdAt: -1 }, new: true }
         ).lean();
         if (existing) {
-          manualUpdatedScans.push(existing);
-          ackList(meta).forEach((ack) => logs.push(syncLogFromAck(existing, ack, 'inserted', '')));
+          const trustedMrp = Number(existing.valuationMRP || doc.valuationMRP || 0);
+          const valuationUpdate = {
+            mrp: trustedMrp,
+            manualMRP: Number(existing.manualMRP || doc.manualMRP || trustedMrp || 0),
+            valuationMRP: trustedMrp,
+            valuationSource: existing.valuationSource || doc.valuationSource || 'MANUAL_ENTERED_MRP',
+            finalInventoryValue: money(Number(existing.quantity || existing.qty || 0) * trustedMrp)
+          };
+          await Inventory.updateOne({ _id: existing._id }, { $set: valuationUpdate });
+          const updatedExisting = { ...existing, ...valuationUpdate };
+          manualUpdatedScans.push(updatedExisting);
+          ackList(meta).forEach((ack) => logs.push(syncLogFromAck(updatedExisting, ack, 'inserted', '')));
           continue;
         }
         remainingDocs.push(doc);
@@ -1651,6 +1754,7 @@ async function pushHandler(req, res) {
       : [];
     savedScans.push(...manualUpdatedScans);
     const verifiedInsertedCount = savedScans.length;
+    if (savedScans.length) scheduleMovementSummaryRefresh(savedScans);
     if (insertedCount !== verifiedInsertedCount) {
       logSync('DB insert verification mismatch', {
         reportedInsertedCount: insertedCount,

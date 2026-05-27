@@ -243,7 +243,9 @@
     return {
       rawUPI: raw,
       partNumber: keyed(['PART\\s*NO', 'PART', 'PN', 'SKU']) || (slash.length >= 4 ? slash[3] : '') || text,
-      qty: Number(keyed(['QTY', 'QUANTITY']) || 1) || 1,
+      qty: Number(keyed(['QTY', 'QUANTITY']) || (slash.length >= 5 ? slash[4] : '') || 1) || 1,
+      mrp: Number(keyed(['MRP', 'PRICE']) || (slash.length >= 6 ? slash[5] : '') || 0) || 0,
+      mrpProvided: Boolean(keyed(['MRP', 'PRICE']) || (slash.length >= 6 && slash[5])),
       binLocation: keyed(['BIN', 'LOCATION'])
     };
   }
@@ -298,6 +300,10 @@
       return null;
     }
     const master = input.master || await enrichPart(partNumber);
+    const inputMrp = Number(input.mrp || 0);
+    const parsedMrp = Number(parsed.mrp || 0);
+    const scannedMrp = parsedMrp || inputMrp;
+    const scannedMrpProvided = Boolean(parsed.mrpProvided || input.mrpProvided || scannedMrp);
     let record = {
       scanId: input.scanId || `${deviceId()}-${now}-${Math.random().toString(16).slice(2, 8)}`,
       userId: state.session.user?.id || state.session.user?.username || '',
@@ -324,7 +330,9 @@
       partDescription: master?.partDescription || master?.partName || '',
       category: master?.productCategory || master?.category || '',
       productCategory: master?.productCategory || master?.category || '',
-      mrp: Number(master?.mrp || input.mrp || 0),
+      mrp: scannedMrpProvided ? scannedMrp : Number(master?.mrp || 0),
+      scanMRP: scannedMrpProvided ? scannedMrp : 0,
+      mrpProvided: scannedMrpProvided,
       dlc: Number(master?.dlc || input.dlc || 0),
       model: master?.model || '',
       year: master?.year || master?.manufacturingYear || ''

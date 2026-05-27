@@ -1037,6 +1037,9 @@ class _ScanDraft {
             .where((value) => value.isNotEmpty)
             .toList();
         if (slashParts.length >= 4) part = slashParts[3];
+        if (slashParts.length >= 5) {
+          qty = int.tryParse(slashParts[4]) ?? qty;
+        }
       }
       if (part.isEmpty &&
           RegExp(r'^[A-Z0-9][A-Z0-9._/-]{2,39}$').hasMatch(upperText)) {

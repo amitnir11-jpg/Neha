@@ -1238,15 +1238,19 @@
         <td>${escapeHtml(row.model || '')}</td>
         <td>${escapeHtml(row.manufacturingYear || row.year || '')}</td>
         <td>${escapeHtml(row.category ?? row.productCategory)}</td>
-        <td>${escapeHtml(row.mrp)}</td>
+        <td>${escapeHtml(row.scanUPIMRP || '')}</td>
+        <td>${escapeHtml(currency(row.currentCatalogueMRP || 0))}</td>
+        <td>${escapeHtml(currency(row.averageScannedMRP || 0))}</td>
+        <td>${escapeHtml(row.pricePeriod || '')}</td>
+        <td>${escapeHtml(row.priceAgeingDays || 0)}</td>
+        <td>${escapeHtml(row.partMovement || '')}</td>
         <td>${escapeHtml(row.dlc)}</td>
         <td>${escapeHtml(row.productGroup || '')}</td>
         <td>${escapeHtml(row.partSubGroup ?? row.productSubGroup ?? '')}</td>
         <td>${escapeHtml(row.systemQty)}</td>
         <td>${escapeHtml(row.physicalQty)}</td>
         <td>${escapeHtml(row.differenceQty ?? row.difference)}</td>
-        <td>${escapeHtml(currency(row.systemMrpValue))}</td>
-        <td>${escapeHtml(currency(row.physicalMrpValue))}</td>
+        <td>${escapeHtml(currency(row.finalInventoryValue || row.physicalMrpValue || 0))}</td>
         <td>${escapeHtml(row.status)}</td>
       </tr>
     `).join('');

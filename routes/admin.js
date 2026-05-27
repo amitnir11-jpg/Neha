@@ -12,6 +12,7 @@ const auth = require('./auth');
 const inventory = require('./inventory');
 const smtpConfig = require('../utils/smtpConfig');
 const { cleanText, normalizePartNumber, normalizeCategory } = require('../utils/normalize');
+const { decorateScanValue } = require('../utils/inventoryValueEngine');
 
 const router = express.Router();
 const DELETE_MESSAGE = 'Are you sure you want to delete this data? This action cannot be undone.';
@@ -313,6 +314,13 @@ async function reprocessScans(req, res) {
         rawUpi: scan.rawUpi || scan.rawScan || scan.rawScanString || '',
         isMasterMatched: Boolean(master)
       };
+      const valued = decorateScanValue({ ...scan, partNumber: partNo, normalizedPartNumber: partNo });
+      update.mrp = Number(valued.valuationMRP || 0);
+      update.scanMRP = Number(valued.scanMRP || 0);
+      update.manualMRP = Number(valued.manualMRP || 0);
+      update.valuationMRP = Number(valued.valuationMRP || 0);
+      update.valuationSource = valued.valuationSource || 'NO_SCANNED_OR_MANUAL_MRP';
+      update.finalInventoryValue = Number(valued.finalInventoryValue || 0);
       if (master) {
         matchedCount += 1;
         update.partName = master.partDescription || master.partName || '';
@@ -322,7 +330,6 @@ async function reprocessScans(req, res) {
         update.model = master.model || '';
         update.manufacturingYear = master.manufacturingYear || master.year || '';
         update.year = master.manufacturingYear || master.year || '';
-        update.mrp = Number(master.mrp || 0);
         update.dlc = Number(master.dlc || 0);
       }
       return { updateOne: { filter: { _id: scan._id }, update: { $set: update } } };
@@ -573,6 +580,13 @@ router.post('/reprocess-master-data', auth.requireAuth, auth.requireAdmin, async
         normalizedPartNumber: partNo,
         isMasterMatched: Boolean(master)
       };
+      const valued = decorateScanValue({ ...scan, partNumber: partNo, normalizedPartNumber: partNo });
+      update.mrp = Number(valued.valuationMRP || 0);
+      update.scanMRP = Number(valued.scanMRP || 0);
+      update.manualMRP = Number(valued.manualMRP || 0);
+      update.valuationMRP = Number(valued.valuationMRP || 0);
+      update.valuationSource = valued.valuationSource || 'NO_SCANNED_OR_MANUAL_MRP';
+      update.finalInventoryValue = Number(valued.finalInventoryValue || 0);
       if (master) {
         matchedCount += 1;
         update.partName = master.partDescription || master.partName || '';
@@ -582,7 +596,6 @@ router.post('/reprocess-master-data', auth.requireAuth, auth.requireAdmin, async
         update.model = master.model || '';
         update.manufacturingYear = master.manufacturingYear || master.year || '';
         update.year = master.manufacturingYear || master.year || '';
-        update.mrp = Number(master.mrp || 0);
         update.dlc = Number(master.dlc || 0);
       }
       return { updateOne: { filter: { _id: scan._id }, update: { $set: update } } };

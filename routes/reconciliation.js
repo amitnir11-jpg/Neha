@@ -235,9 +235,10 @@ async function physicalRows(dealerCode, filters = {}) {
         year: { $first: { $ifNull: ['$manufacturingYear', '$year'] } },
         productGroup: { $first: '$productGroup' },
         partSubGroup: { $first: '$partSubGroup' },
-        mrp: { $max: '$mrp' },
+        mrp: { $max: '$valuationMRP' },
         dlc: { $max: '$dlc' },
         physicalStock: { $sum: stockQtyExpression() },
+        physicalValue: { $sum: '$finalInventoryValue' },
         bins: { $addToSet: { $ifNull: ['$binLocation', '$bin'] } },
         rawProofs: { $addToSet: { $ifNull: ['$rawScan', { $ifNull: ['$upiNo', '$uniqueScanId'] }] } }
       }
@@ -274,7 +275,7 @@ async function buildUploadedStockReport(query = {}) {
     const dmsStock = Number(stock.systemQty || stock.dmsStock || 0);
     const physicalStock = Number((physical && physical.physicalStock) || 0);
     const netDifference = physicalStock - dmsStock;
-    const mrp = Number(stock.mrp || (physical && physical.mrp) || 0);
+    const mrp = Number((physical && physical.mrp) || 0);
     const dlc = Number(stock.dlc || (physical && physical.dlc) || 0);
     return {
       partNo: stock.partNumber,
@@ -295,7 +296,7 @@ async function buildUploadedStockReport(query = {}) {
       excess: Math.max(netDifference, 0),
       short: Math.max(netDifference * -1, 0),
       netDifference,
-      varianceMrp: netDifference * mrp,
+      varianceMrp: netDifference > 0 ? Number((physical && physical.physicalValue) || 0) : 0,
       varianceDlc: netDifference * dlc,
       status: netDifference === 0 ? 'MATCHED' : netDifference > 0 ? 'EXCESS' : 'SHORT',
       rawScanProof: ((physical && physical.rawProofs) || []).filter(Boolean).slice(0, 4).join(' | ')
@@ -324,7 +325,7 @@ async function buildUploadedStockReport(query = {}) {
       excess: Math.max(Number(physical.physicalStock || 0), 0),
       short: 0,
       netDifference: Number(physical.physicalStock || 0),
-      varianceMrp: Number(physical.physicalStock || 0) * Number(physical.mrp || 0),
+      varianceMrp: Number(physical.physicalValue || 0),
       varianceDlc: Number(physical.physicalStock || 0) * Number(physical.dlc || 0),
       status: 'EXCESS',
       rawScanProof: (physical.rawProofs || []).filter(Boolean).slice(0, 4).join(' | ')
