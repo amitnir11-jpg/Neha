@@ -22,10 +22,9 @@
  * Master data is ONLY for:
  *   1. Part Catalogue Search
  *   2. Current Price Reference (display only)
- *   3. Part Movement Analysis (historical trends)
- *   4. Price Period Mapping (when was MRP effective)
- *   5. Stock Ageing Intelligence
- *   6. Historical MRP Matching
+ *   3. Price Period Mapping (when was MRP effective)
+ *   4. Audit Stock Risk Status
+ *   5. Historical MRP Matching
  *
  * MASTER PRICE MUST NOT directly override scanned/manual values.
  *
@@ -91,7 +90,7 @@
  * ALL REPORTS MUST USE:
  *   - calculateInventoryValue() function
  *   - scanValueRow() for per-scan decoration
- *   - summarizeMovementBucket() for movement analysis
+ *   - summarizeMovementBucket() for audit quantity/value aggregation
  *
  * NO REPORT IS ALLOWED TO:
  *   - Recalculate inventory value independently
@@ -100,22 +99,17 @@
  *   - Aggregate values differently than calculateInventoryValue()
  *
  * ====================================================================
- * MOVEMENT REPORT REQUIREMENTS
+ * AUDIT RISK REQUIREMENTS
  * ====================================================================
  *
- * Movement category must use:
- *   - Scan history (not just current MRP)
- *   - Old price period stock remaining
- *   - Outward movement patterns
- *   - Stock ageing (days since first scan)
- *   - Days since last movement
- *   - Qty under old MRP bucket
+ * The application does not maintain sales history. OUTWARD is an
+ * audit-time outward entry, not regular sales movement. Reports must not
+ * calculate movement velocity or sales categories from OUTWARD/FITTED
+ * scan rows.
  *
- * Categories:
- *   - FAST MOVING: old MRP consumed quickly, regular movements
- *   - SLOW MOVING: partial old stock still remaining
- *   - DEAD STOCK: very old stock, no movement for 180+ days
- *   - NON MOVING: stock available but no outward found
+ * Inventory risk status is derived from:
+ *   - finalMRP availability
+ *   - Physical Qty + Fitted Qty versus System Qty
  *
  * ====================================================================
  */
@@ -216,7 +210,25 @@ function explicitScannedMrp(scan = {}) {
   );
 }
 
+function explicitFinalMrp(scan = {}) {
+  return optionalNumber(
+    scan.finalMRP !== undefined ? scan.finalMRP
+      : scan.finalMrp !== undefined ? scan.finalMrp
+        : scan.final_mrp
+  );
+}
+
 function getFinalInventoryMRP(scan = {}, catalogueData = {}) {
+  const finalMrp = explicitFinalMrp(scan);
+  if (finalMrp !== undefined) {
+    const scanned = explicitScannedMrp(scan);
+    const parsed = parseRawMrp(rawScanText(scan));
+    const source = (scanned !== undefined && scanned > 0) || (parsed !== undefined && parsed > 0)
+      ? 'UPI_SCANNED_MRP'
+      : 'MANUAL_ENTERED_MRP';
+    return { mrp: money(finalMrp), source };
+  }
+
   const scanned = explicitScannedMrp(scan);
   if (scanned !== undefined) {
     return { mrp: money(scanned), source: 'UPI_SCANNED_MRP' };
@@ -259,6 +271,9 @@ function getFinalInventoryMRP(scan = {}, catalogueData = {}) {
 
 function scanValuation(scan = {}) {
   const valuation = getFinalInventoryMRP(scan);
+  if (valuation.source === 'CATALOGUE_MRP_FALLBACK' && isManualScan(scan)) {
+    return { mrp: valuation.mrp, source: 'MANUAL_ENTERED_MRP' };
+  }
   return valuation.source === 'CATALOGUE_MRP_FALLBACK'
     ? { mrp: 0, source: 'NO_SCANNED_OR_MANUAL_MRP' }
     : valuation;
@@ -266,10 +281,6 @@ function scanValuation(scan = {}) {
 
 function movementType(scan = {}) {
   return cleanText(scan.scanType || scan.type).toUpperCase();
-}
-
-function isMovementOut(scan = {}) {
-  return ['OUTWARD', 'FITTED'].includes(movementType(scan));
 }
 
 function scanValueRow(scan = {}) {
@@ -326,6 +337,14 @@ function calculateInventoryValue(input = [], options = {}) {
   };
 }
 
+function auditStockStatus({ mrp = 0, physicalQty = 0, fittedQty = 0, systemQty = 0 } = {}) {
+  if (Number(mrp || 0) <= 0) return 'MRP Pending';
+  const auditedQty = Number(physicalQty || 0) + Number(fittedQty || 0);
+  const system = Number(systemQty || 0);
+  if (auditedQty === system) return 'Inventory Matched';
+  return auditedQty > system ? 'Excess' : 'Short';
+}
+
 function decorateScanValue(scan = {}) {
   const row = scanValueRow(scan);
   const manual = row.valuationSource === 'MANUAL_ENTERED_MRP';
@@ -341,43 +360,19 @@ function decorateScanValue(scan = {}) {
   };
 }
 
-function movementWindowQty(rows = [], referenceDate, days) {
-  const ref = validDate(referenceDate) || new Date();
-  const cutoff = new Date(ref.getTime() - days * 24 * 60 * 60 * 1000);
-  return rows.reduce((sum, row) => {
-    const timestamp = row.timestamp;
-    if (!timestamp || timestamp < cutoff || timestamp > ref) return sum;
-    return sum + row.qty;
-  }, 0);
-}
-
-function movementCategory({ remainingQty, movementCount, daysSinceLastMovement, ageingDays, movementQtyLast90Days }) {
-  if (remainingQty > 0 && movementCount <= 0) return 'NON-MOVING';
-  if (remainingQty > 0 && (Number(daysSinceLastMovement || 0) >= 180 || Number(ageingDays || 0) >= 365)) return 'DEAD';
-  if (remainingQty > 0 && (Number(daysSinceLastMovement || 0) >= 60 || movementQtyLast90Days <= 0)) return 'SLOW';
-  if (movementCount >= 3 && Number(daysSinceLastMovement || 0) <= 30) return 'FAST';
-  if (remainingQty <= 0 && movementCount > 0) return 'FAST';
-  return remainingQty > 0 ? 'SLOW' : '';
-}
-
 function summarizeMovementBucket(scans = [], options = {}) {
   const referenceDate = validDate(options.referenceDate) || new Date();
   const value = calculateInventoryValue(scans);
   const rows = value.rows;
   const dates = rows.map((row) => row.timestamp).filter(Boolean).sort((a, b) => a - b);
-  const movementRows = rows.filter((row) => isMovementOut(row.scan));
   const firstScanDate = dates[0] || null;
   const lastScanDate = dates[dates.length - 1] || null;
-  const movementDates = movementRows.map((row) => row.timestamp).filter(Boolean).sort((a, b) => a - b);
-  const lastMovementDate = movementDates[movementDates.length - 1] || null;
   const inwardQty = rows.filter((row) => ['INWARD', 'AUDIT', 'VERIFICATION'].includes(movementType(row.scan))).reduce((sum, row) => sum + row.qty, 0);
   const outwardQty = rows.filter((row) => movementType(row.scan) === 'OUTWARD').reduce((sum, row) => sum + row.qty, 0);
   const fittedQty = rows.filter((row) => movementType(row.scan) === 'FITTED').reduce((sum, row) => sum + row.qty, 0);
   const damageQty = rows.filter((row) => movementType(row.scan) === 'DAMAGE').reduce((sum, row) => sum + row.qty, 0);
   const remainingQty = Math.max(inwardQty - outwardQty - fittedQty - damageQty, 0);
-  const daysSinceLastMovement = lastMovementDate ? Math.max(0, Math.floor((referenceDate - lastMovementDate) / 86400000)) : null;
   const ageingDays = firstScanDate ? Math.max(0, Math.floor((referenceDate - firstScanDate) / 86400000)) : 0;
-  const movementQtyLast90Days = movementWindowQty(movementRows, referenceDate, 90);
   return {
     ...value,
     inwardQty,
@@ -385,24 +380,10 @@ function summarizeMovementBucket(scans = [], options = {}) {
     fittedQty,
     damageQty,
     remainingQty,
-    movementCount: movementRows.length,
+    movementCount: 0,
     firstScanDate,
     lastScanDate,
-    lastMovementDate,
-    movementQtyLast30Days: movementWindowQty(movementRows, referenceDate, 30),
-    movementQtyLast90Days,
-    movementQtyLast180Days: movementWindowQty(movementRows, referenceDate, 180),
-    movementQtyLast365Days: movementWindowQty(movementRows, referenceDate, 365),
-    ageingDays,
-    daysSinceLastMovement,
-    movementCategory: movementCategory({
-      remainingQty,
-      movementCount: movementRows.length,
-      daysSinceLastMovement,
-      ageingDays,
-      movementQtyLast90Days
-    }),
-    inventoryRiskValue: money(remainingQty * (value.averageScannedMRP || 0))
+    ageingDays
   };
 }
 
@@ -520,6 +501,7 @@ function aggregateReportValues(rows = []) {
 }
 
 module.exports = {
+  auditStockStatus,
   calculateInventoryValue,
   decorateScanValue,
   getFinalInventoryMRP,

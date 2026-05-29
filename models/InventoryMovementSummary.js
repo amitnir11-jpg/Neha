@@ -9,8 +9,10 @@ const inventoryMovementSummarySchema = new mongoose.Schema(
     dealerCode: { type: String, trim: true, uppercase: true, default: '', index: true },
     auditId: { type: String, trim: true, default: '', index: true },
     mrp: { type: Number, default: 0, index: true },
+    scanUPIMRP: { type: Number, default: 0, index: true },
     priceSource: { type: String, trim: true, uppercase: true, default: '' },
     currentCatalogueMrp: { type: Number, default: 0 },
+    averageMRP: { type: Number, default: 0 },
     totalQty: { type: Number, default: 0 },
     scannedQty: { type: Number, default: 0 },
     manualQty: { type: Number, default: 0 },
@@ -23,25 +25,16 @@ const inventoryMovementSummarySchema = new mongoose.Schema(
     totalScanValue: { type: Number, default: 0 },
     totalManualValue: { type: Number, default: 0 },
     finalInventoryValue: { type: Number, default: 0 },
-    inventoryRiskValue: { type: Number, default: 0 },
+    finalValue: { type: Number, default: 0 },
     firstScanDate: { type: Date, default: null },
     lastScanDate: { type: Date, default: null },
-    lastMovementDate: { type: Date, default: null },
-    movementQtyLast30Days: { type: Number, default: 0 },
-    movementQtyLast90Days: { type: Number, default: 0 },
-    movementQtyLast180Days: { type: Number, default: 0 },
-    movementQtyLast365Days: { type: Number, default: 0 },
     ageingDays: { type: Number, default: 0 },
-    daysSinceLastMovement: { type: Number, default: null },
-    movementCategory: {
-      type: String,
-      enum: ['FAST', 'SLOW', 'DEAD', 'NON-MOVING', ''],
-      default: '',
-      index: true
-    },
     oldestPricePeriod: { type: Date, default: null },
     newestPricePeriod: { type: Date, default: null },
+    pricePeriodFrom: { type: Date, default: null },
+    pricePeriodTo: { type: Date, default: null },
     priceAgeingDays: { type: Number, default: 0 },
+    remarks: { type: String, trim: true, default: '' },
     calculatedAt: { type: Date, default: Date.now, index: true },
     rawScanCount: { type: Number, default: 0 }
   },
@@ -59,13 +52,12 @@ inventoryMovementSummarySchema.pre('validate', function normalizeSummary(next) {
     this.auditId || 'ALL',
     partNo,
     Number(this.mrp || 0).toFixed(2),
-    this.priceSource || 'UNKNOWN'
+    'SCAN-UPI-MRP'
   ].join('::');
   next();
 });
 
 inventoryMovementSummarySchema.index({ dealerCode: 1, auditId: 1, normalizedPartNumber: 1 });
-inventoryMovementSummarySchema.index({ dealerCode: 1, auditId: 1, normalizedPartNumber: 1, movementCategory: 1 });
 inventoryMovementSummarySchema.index({ normalizedPartNumber: 1, mrp: 1, firstScanDate: 1 });
 
 module.exports = mongoose.model('InventoryMovementSummary', inventoryMovementSummarySchema);

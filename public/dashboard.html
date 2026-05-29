@@ -148,8 +148,17 @@
               <input name="category" id="categoryInput" readonly>
             </label>
             <label>
-              MRP
-              <input name="mrp" id="mrpInput" type="number" step="0.01">
+              Default MRP (Latest)
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input name="defaultMRP" id="defaultMRPInput" type="number" step="0.01" readonly style="flex: 1;">
+                <span id="mrpStatusBadge" style="padding: 6px 12px; border-radius: 4px; font-size: 11px; font-weight: bold; background: #fff1f0; color: #c24132; display: none;">MRP PENDING</span>
+              </div>
+              <small style="color: #667085; margin-top: 4px; display: block;">Latest MRP from Price History/Part Master (auto-filled)</small>
+            </label>
+            <label>
+              Final MRP (Editable)
+              <input name="mrp" id="mrpInput" type="number" step="0.01" placeholder="Leave empty to auto-use default MRP or save with MRP Pending status">
+              <small style="color: #667085; margin-top: 4px; display: block;">Optional: Override default MRP if needed. If blank, will be filled from default MRP.</small>
             </label>
             <label>
               DLC

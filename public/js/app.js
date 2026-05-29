@@ -190,7 +190,11 @@
 
   function partLink(partNumber) {
     const part = String(partNumber || '').trim();
-    return part ? enterpriseLink(part, dashboardHref({ view: 'master', partNumber: part }), { className: 'table-link', label: `Open part ${part} in a new tab` }) : escapeHtml('-');
+    if (!part) return escapeHtml('-');
+    // Return plain selectable text with copy button instead of link
+    // The link will work via row click, not direct click on the part number
+    const copyBtn = `<button class="copy-part-btn" data-part="${escapeHtml(part)}" title="Copy part number" style="background: none; border: none; color: #0b5cab; cursor: pointer; padding: 2px 4px; margin-left: 4px; font-size: 12px;">📋</button>`;
+    return `<span class="part-number-selectable" style="user-select: text; cursor: text;">${escapeHtml(part)}</span>${copyBtn}`;
   }
 
   function deviceLink(deviceId) {
@@ -298,7 +302,7 @@
 
   function requireSession() {
     if (!state.token) {
-      window.location.href = '/';
+      navigateTo('/', { replace: true });
       return false;
     }
     return true;
@@ -320,7 +324,28 @@
 
   function logout() {
     clearSession();
-    window.location.href = '/';
+    navigateTo('/', { replace: true });
+  }
+
+  function appUrl(path) {
+    return new URL(path, window.location.origin).href;
+  }
+
+  function navigateTo(path, options = {}) {
+    const href = appUrl(path);
+    try {
+      if (options.replace) window.location.replace(href);
+      else window.location.assign(href);
+    } catch (error) {
+      console.warn('Browser blocked navigation; showing direct link instead.', { href, error });
+      const message = $('#loginMessage');
+      if (message) {
+        const label = path === '/dashboard' ? 'Open dashboard' : 'Open login';
+        const text = path === '/dashboard' ? 'Login successful.' : 'Session changed.';
+        message.className = 'form-message success';
+        message.innerHTML = `${text} <a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+      }
+    }
   }
 
   function setUserChrome() {
@@ -381,7 +406,7 @@
     }
 
     if (await validateStoredLogin()) {
-      window.location.href = '/dashboard';
+      navigateTo('/dashboard');
       return;
     }
 
@@ -424,8 +449,8 @@
         console.log("Login response:", data);
         saveSession(data);
         message.className = 'form-message success';
-        message.textContent = 'Login successful';
-        window.location.href = '/dashboard';
+        message.innerHTML = `Login successful. <a href="${escapeHtml(appUrl('/dashboard'))}">Open dashboard</a>`;
+        navigateTo('/dashboard');
       } catch (error) {
         message.className = 'form-message error';
         message.textContent = error.message;
@@ -442,8 +467,8 @@
         console.log("Login response:", data);
         saveSession(data);
         message.className = 'form-message success';
-        message.textContent = 'Login successful';
-        window.location.href = '/dashboard';
+        message.innerHTML = `Login successful. <a href="${escapeHtml(appUrl('/dashboard'))}">Open dashboard</a>`;
+        navigateTo('/dashboard');
       } catch (error) {
         message.className = 'form-message error';
         message.textContent = error.message;
@@ -1231,8 +1256,12 @@
 
     state.lastReportRows = data.finalRows || [];
     $('#reportRowsLabel').textContent = `${state.lastReportRows.length} rows`;
+    
+    // Calculate count summary for filtered data
+    calculateAndDisplayCountSummary(state.lastReportRows);
+    
     $('#reportTableBody').innerHTML = state.lastReportRows.map((row) => `
-      <tr>
+      <tr data-part-number="${escapeHtml(row.partNo ?? row.partNumber)}">
         <td>${partLink(row.partNo ?? row.partNumber)}</td>
         <td>${escapeHtml(row.partDescription ?? row.partName)}</td>
         <td>${escapeHtml(row.model || '')}</td>
@@ -1243,7 +1272,6 @@
         <td>${escapeHtml(currency(row.averageScannedMRP || 0))}</td>
         <td>${escapeHtml(row.pricePeriod || '')}</td>
         <td>${escapeHtml(row.priceAgeingDays || 0)}</td>
-        <td>${escapeHtml(row.partMovement || '')}</td>
         <td>${escapeHtml(row.dlc)}</td>
         <td>${escapeHtml(row.productGroup || '')}</td>
         <td>${escapeHtml(row.partSubGroup ?? row.productSubGroup ?? '')}</td>
@@ -1254,6 +1282,84 @@
         <td>${escapeHtml(row.status)}</td>
       </tr>
     `).join('');
+    
+    // Add event listeners for part number copy and row click
+    initReportTableEvents();
+  }
+  
+  function calculateAndDisplayCountSummary(rows) {
+    if (!rows || rows.length === 0) {
+      $('#reportCountSummary').style.display = 'none';
+      return;
+    }
+    
+    // Show the summary section
+    $('#reportCountSummary').style.display = 'block';
+    
+    // Calculate totals from filtered data
+    let totalRecords = rows.length;
+    let totalQty = 0;
+    let totalPhysicalQty = 0;
+    let totalValue = 0;
+    let totalVariance = 0;
+    let mrpPendingCount = 0;
+    
+    rows.forEach((row) => {
+      totalQty += Number(row.systemQty || 0);
+      totalPhysicalQty += Number(row.physicalQty || 0);
+      totalValue += Number(row.finalInventoryValue || row.physicalMrpValue || 0);
+      totalVariance += Number(row.differenceQty || row.difference || 0);
+      
+      // Count MRP Pending records (assuming status field contains 'MRP_PENDING')
+      if (String(row.status || '').includes('MRP') || row.mrpStatus === 'PENDING') {
+        mrpPendingCount++;
+      }
+    });
+    
+    // Update the summary display
+    $('#countTotalRecords').textContent = totalRecords.toLocaleString();
+    $('#countTotalQty').textContent = totalQty.toLocaleString();
+    $('#countPhysicalQty').textContent = totalPhysicalQty.toLocaleString();
+    $('#countMRPPending').textContent = mrpPendingCount.toLocaleString();
+    $('#countTotalValue').textContent = '₹' + totalValue.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    $('#countVariance').textContent = totalVariance.toLocaleString();
+  }
+  
+  function initReportTableEvents() {
+    // Copy button handler
+    $$('#reportTableBody .copy-part-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation(); // Prevent row click
+        const partNumber = btn.getAttribute('data-part');
+        navigator.clipboard.writeText(partNumber).then(() => {
+          const originalText = btn.textContent;
+          btn.textContent = '✓';
+          setTimeout(() => {
+            btn.textContent = originalText;
+          }, 1500);
+          toast(`Copied: ${partNumber}`, 'success');
+        }).catch(() => {
+          toast('Failed to copy part number', 'error');
+        });
+      });
+    });
+    
+    // Row click handler to open part in master view
+    $$('#reportTableBody tr').forEach((row) => {
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', (e) => {
+        // Don't navigate if clicking on copy button
+        if (e.target.closest('.copy-part-btn')) return;
+        // Don't navigate if selecting text
+        if (window.getSelection().toString()) return;
+        
+        const partNumber = row.getAttribute('data-part-number');
+        if (partNumber) {
+          const href = dashboardHref({ view: 'master', partNumber });
+          window.open(href, '_blank', 'noopener,noreferrer');
+        }
+      });
+    });
   }
 
   async function loadReportPreview() {

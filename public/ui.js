@@ -620,7 +620,7 @@
 
   function logout() {
     clearSession();
-    window.location.href = '/';
+    navigateTo('/', { replace: true });
   }
 
   function clearSession() {
@@ -629,6 +629,28 @@
     state.user = null;
     storageRemove('dakshToken');
     storageRemove('dakshUser');
+  }
+
+  function appUrl(path) {
+    return new URL(path, window.location.origin).href;
+  }
+
+  function navigateTo(path, options = {}) {
+    const href = appUrl(path);
+    try {
+      if (options.replace) window.location.replace(href);
+      else window.location.assign(href);
+    } catch (error) {
+      bootWarn('browser blocked navigation', {
+        href,
+        error: errorDetails(error)
+      });
+      const toastNode = $('#toast');
+      if (toastNode) {
+        toastNode.innerHTML = `Session expired. <a href="${escapeHtml(href)}">Open login</a>`;
+        toastNode.className = 'toast active error';
+      }
+    }
   }
 
   async function parseApiResponse(response) {
@@ -1783,7 +1805,7 @@
       bootWarn('setUserChrome missing token; redirecting to login', {
         path: window.location.pathname
       });
-      window.location.href = '/';
+      navigateTo('/', { replace: true });
       return false;
     }
     bootLog('setUserChrome start', {
@@ -1813,7 +1835,7 @@
       bootWarn('validateSession missing token; redirecting to login', {
         path: window.location.pathname
       });
-      window.location.href = '/';
+      navigateTo('/', { replace: true });
       return false;
     }
     try {
@@ -1833,7 +1855,7 @@
     } catch (error) {
       bootError('validateSession failed; clearing session and redirecting to login', errorDetails(error));
       clearSession();
-      window.location.href = '/';
+      navigateTo('/', { replace: true });
       return false;
     }
   }
@@ -2877,7 +2899,7 @@
   }
 
   function defaultReportColumnLimit(reportType = activeReportType()) {
-    return ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary'].includes(reportType) ? 0 : 18;
+    return ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary', 'movement-scans'].includes(reportType) ? 0 : 18;
   }
 
   function defaultReportColumns(available, reportType = activeReportType(), defaultLimit = defaultReportColumnLimit(reportType)) {
@@ -3093,6 +3115,11 @@
     const isExcelOnlyReport = EXCEL_ONLY_REPORT_TYPES.has(reportType);
     $('#reportShow').disabled = !canShow || state.reportLoading;
     $('#reportRefresh').disabled = !canShow || state.reportLoading;
+    const movementRefresh = $('#movementAnalysisRefresh');
+    if (movementRefresh) {
+      movementRefresh.classList.toggle('hidden', reportType !== 'movement-scans');
+      movementRefresh.disabled = reportType !== 'movement-scans' || !canShow || state.reportLoading;
+    }
     $('#reportExcel').disabled = isCsvReport || !canShow || state.reportLoading;
     if ($('#reportPdf')) $('#reportPdf').disabled = isCsvReport || isExcelOnlyReport || !state.reportLoaded || state.reportLoading;
     if ($('#reportEmail')) $('#reportEmail').disabled = isCsvReport || isExcelOnlyReport || !state.reportLoaded || state.reportLoading;
@@ -3813,6 +3840,24 @@
         state.reportLoading = false;
         state.reportAbortController = null;
       }
+      updateReportButtons();
+    }
+  }
+
+  async function refreshMovementAnalysis() {
+    if (!validateReportSelection(true)) return;
+    const params = reportParams();
+    const button = $('#movementAnalysisRefresh');
+    if (button) button.disabled = true;
+    try {
+      const data = await api('/api/reports/movement-analysis/refresh', {
+        method: 'POST',
+        body: params
+      });
+      state.reportCache.clear();
+      toast(data.message || 'Movement analysis refreshed');
+      if (activeReportType() === 'movement-scans') await loadReport({ forceRefresh: true });
+    } finally {
       updateReportButtons();
     }
   }
@@ -7334,6 +7379,7 @@
     });
     $('#reportShow').addEventListener('click', () => loadReport().catch((error) => toast(error.message, 'error')));
     $('#reportRefresh')?.addEventListener('click', () => loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error')));
+    $('#movementAnalysisRefresh')?.addEventListener('click', () => refreshMovementAnalysis().catch((error) => toast(error.message, 'error')));
     $('#reportFilterSettingsOpen')?.addEventListener('click', openReportFilterSettings);
     $('#reportResultSettingsOpen')?.addEventListener('click', openReportFilterSettings);
     $('#reportColumnSettingsOpen')?.addEventListener('click', openReportFilterSettings);
@@ -7977,7 +8023,7 @@
           bootWarn('storage event cleared token; redirecting to login');
           state.token = '';
           state.user = null;
-          window.location.href = '/';
+          navigateTo('/', { replace: true });
         }
       });
       if (state.headerHeartbeatTimer) clearInterval(state.headerHeartbeatTimer);

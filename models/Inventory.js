@@ -144,6 +144,29 @@ const inventorySchema = new mongoose.Schema(
       type: Number,
       default: 0
     },
+    // MRP Management Fields - NEW
+    defaultMRP: {
+      type: Number,
+      default: 0,
+      description: 'Latest MRP from Price History or Part Master (auto-fetched)'
+    },
+    finalMRP: {
+      type: Number,
+      default: 0,
+      description: 'Final MRP used for calculations (user-entered or default)'
+    },
+    mrpStatus: {
+      type: String,
+      enum: ['AVAILABLE', 'PENDING', 'UPDATED', ''],
+      default: '',
+      index: true,
+      description: 'PENDING = MRP not entered at scan time, AVAILABLE = MRP set, UPDATED = MRP updated later'
+    },
+    mrpPendingUpdatedAt: {
+      type: Date,
+      default: null,
+      description: 'When MRP Pending status was last updated with actual MRP'
+    },
     priceHistoryId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'PartPriceHistory',

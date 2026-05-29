@@ -13,13 +13,13 @@ function upper(value) {
   return clean(value).toUpperCase();
 }
 
-function summaryKey({ dealerCode = '', auditId = '', partNumber = '', mrp = 0, priceSource = '' }) {
+function summaryKey({ dealerCode = '', auditId = '', partNumber = '', mrp = 0 }) {
   return [
     upper(dealerCode) || 'ALL',
     clean(auditId) || 'ALL',
     normalizePartNumber(partNumber),
     Number(mrp || 0).toFixed(2),
-    upper(priceSource) || 'UNKNOWN'
+    'SCAN-UPI-MRP'
   ].join('::');
 }
 
@@ -64,8 +64,11 @@ async function rebuildMovementSummaries(filter = {}) {
     const first = bucketScans[0] || {};
     const valueRow = scanValueRow(first);
     const partNumber = valueRow.partNumber;
-    const summary = summarizeMovementBucket(bucketScans, { referenceDate: calculatedAt });
     const catalogue = catalogueByPart.get(partNumber) || {};
+    const summary = summarizeMovementBucket(bucketScans, {
+      referenceDate: calculatedAt,
+      currentCatalogueMRP: Number(catalogue.mrp || 0)
+    });
     operations.push({
       updateOne: {
         filter: { summaryKey: key },
@@ -77,8 +80,10 @@ async function rebuildMovementSummaries(filter = {}) {
             dealerCode: upper(first.dealerCode),
             auditId: clean(first.auditId),
             mrp: valueRow.valuationMRP,
+            scanUPIMRP: valueRow.valuationSource === 'UPI_SCANNED_MRP' ? valueRow.valuationMRP : 0,
             priceSource: valueRow.valuationSource,
             currentCatalogueMrp: Number(catalogue.mrp || 0),
+            averageMRP: summary.averageScannedMRP,
             totalQty: summary.totalQty,
             scannedQty: summary.scannedQty,
             manualQty: summary.manualQty,
@@ -91,20 +96,16 @@ async function rebuildMovementSummaries(filter = {}) {
             totalScanValue: summary.totalScanValue,
             totalManualValue: summary.totalManualValue,
             finalInventoryValue: summary.finalInventoryValue,
-            inventoryRiskValue: summary.inventoryRiskValue,
+            finalValue: summary.finalInventoryValue,
             firstScanDate: summary.firstScanDate,
             lastScanDate: summary.lastScanDate,
-            lastMovementDate: summary.lastMovementDate,
-            movementQtyLast30Days: summary.movementQtyLast30Days,
-            movementQtyLast90Days: summary.movementQtyLast90Days,
-            movementQtyLast180Days: summary.movementQtyLast180Days,
-            movementQtyLast365Days: summary.movementQtyLast365Days,
             ageingDays: summary.ageingDays,
-            daysSinceLastMovement: summary.daysSinceLastMovement,
-            movementCategory: summary.movementCategory,
             oldestPricePeriod: summary.firstScanDate,
             newestPricePeriod: summary.lastScanDate,
+            pricePeriodFrom: summary.firstScanDate,
+            pricePeriodTo: summary.lastScanDate,
             priceAgeingDays: summary.ageingDays,
+            remarks: '',
             calculatedAt,
             rawScanCount: bucketScans.length
           }

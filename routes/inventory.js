@@ -19,7 +19,7 @@ const masterValidation = require('../utils/masterValidation');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
 const { dateDebugPayload, formatIstDateTime, validDate } = require('../utils/time');
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
-const { findPricePeriod, pricePeriodPayload } = require('../utils/priceHistory');
+const { findPricePeriod, pricePeriodPayload, getLatestMRP } = require('../utils/priceHistory');
 const { scheduleMovementSummaryRefresh } = require('../services/inventoryMovementSummary');
 
 const router = express.Router();
@@ -1337,15 +1337,50 @@ async function saveScanRequest(req, res) {
     const scannedMrp = mrpProvided ? optionalNumber(bodyMrpProvided ? req.body.mrp : parsed.mrp) : undefined;
     const scannedDlc = dlcProvided ? optionalNumber(bodyDlcProvided ? req.body.dlc : parsed.dlc) : undefined;
     const valueFields = valuationFields({ rawScanText, scannedMrp, mrpProvided, entrySource, manualEntryMode });
-    const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(part, timestamp, valueFields.valuationMRP) : null;
-    const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
+    
+    // NEW: Fetch latest MRP for display and potential use
+    const latestMRPData = await getLatestMRP(part, timestamp);
+    const defaultMRP = latestMRPData.mrp || 0;
+    
+    // Determine final MRP and MRP status
+    let finalMRP = defaultMRP;
+    let mrpStatus = 'AVAILABLE';
+    
+    if (scannedMrp && scannedMrp > 0) {
+      // User provided explicit MRP
+      finalMRP = scannedMrp;
+      mrpStatus = 'AVAILABLE';
+    } else if (defaultMRP && defaultMRP > 0) {
+      // Use default MRP
+      finalMRP = defaultMRP;
+      mrpStatus = 'AVAILABLE';
+    } else {
+      // No MRP available - save with PENDING status
+      finalMRP = 0;
+      mrpStatus = 'PENDING';
+    }
+    
+    // Use finalMRP for calculations
+    const valueFieldsWithFinalMRP = {
+      ...valueFields,
+      mrp: finalMRP,
+      valuationMRP: finalMRP,
+      finalInventoryValue: Number(qty || 0) * Number(finalMRP || 0)
+    };
+    if (finalMRP > 0 && !scannedMrp) {
+      valueFieldsWithFinalMRP.valuationSource = 'MANUAL_ENTERED_MRP'; // Treat auto-filled MRP as manual
+      valueFieldsWithFinalMRP.manualMRP = finalMRP;
+    }
+    
+    const pricePeriod = finalMRP > 0 ? await findPricePeriod(part, timestamp, finalMRP) : null;
+    const pricePeriodFields = pricePeriodPayload(pricePeriod, finalMRP);
     const candidate = {
       part,
       dealerCode,
       auditId,
       rawScan: rawScanText,
       rawScanProvided: Boolean(rawScanInput || parsed.rawScan),
-      mrp: valueFields.valuationMRP || scannedMrp,
+      mrp: valueFieldsWithFinalMRP.valuationMRP || scannedMrp,
       mrpProvided,
       dlc: scannedDlc,
       dlcProvided
@@ -1416,12 +1451,17 @@ async function saveScanRequest(req, res) {
       gstCategory: master ? master.gstCategory || '' : String(req.body.gstCategory || '').toUpperCase(),
       qty,
       quantity: qty,
-      mrp: valueFields.mrp,
-      scanMRP: valueFields.scanMRP,
-      manualMRP: valueFields.manualMRP,
-      valuationMRP: valueFields.valuationMRP,
-      valuationSource: valueFields.valuationSource,
-      finalInventoryValue: Number(qty || 0) * Number(valueFields.valuationMRP || 0),
+      mrp: valueFieldsWithFinalMRP.mrp,
+      scanMRP: valueFieldsWithFinalMRP.scanMRP,
+      manualMRP: valueFieldsWithFinalMRP.manualMRP,
+      valuationMRP: valueFieldsWithFinalMRP.valuationMRP,
+      valuationSource: valueFieldsWithFinalMRP.valuationSource,
+      finalInventoryValue: valueFieldsWithFinalMRP.finalInventoryValue,
+      // NEW MRP Management fields
+      defaultMRP,
+      finalMRP,
+      mrpStatus,
+      mrpPendingUpdatedAt: mrpStatus === 'UPDATED' ? timestamp : null,
       ...pricePeriodFields,
       dlc: master ? Number(master.dlc || 0) : numberValue(req.body.dlc || parsed.dlc),
       bin: binLocation,

@@ -18,9 +18,11 @@ const partPriceHistorySchema = new mongoose.Schema(
 
 partPriceHistorySchema.pre('validate', function normalizePriceHistory(next) {
   const partNo = normalizePartNumber(this.normalizedPartNumber || this.partNumber);
+  const today = new Date();
+  const effectiveTo = this.effectiveTo instanceof Date ? this.effectiveTo : (this.effectiveTo ? new Date(this.effectiveTo) : null);
   this.partNumber = partNo;
   this.normalizedPartNumber = partNo;
-  this.isCurrentPrice = !this.effectiveTo;
+  this.isCurrentPrice = !effectiveTo || (!Number.isNaN(effectiveTo.getTime()) && effectiveTo >= today);
   next();
 });
 

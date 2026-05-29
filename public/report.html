@@ -98,6 +98,39 @@
       </section>
       <div id="legacyReportMessage" class="form-message">Please select filters and click Submit.</div>
 
+      <!-- Count Summary Section -->
+      <section class="panel compact-panel" id="reportCountSummary" style="display: none;">
+        <div class="panel-heading">
+          <h2>Report Count Summary</h2>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; padding: 12px;">
+          <div style="padding: 12px; background: #f0f9ff; border-radius: 4px; border-left: 3px solid #0b5cab;">
+            <div style="font-size: 11px; color: #667085; margin-bottom: 4px;">Total Records</div>
+            <div style="font-size: 18px; font-weight: bold; color: #0b5cab;" id="countTotalRecords">0</div>
+          </div>
+          <div style="padding: 12px; background: #f0fdf4; border-radius: 4px; border-left: 3px solid #168253;">
+            <div style="font-size: 11px; color: #667085; margin-bottom: 4px;">Total Quantity</div>
+            <div style="font-size: 18px; font-weight: bold; color: #168253;" id="countTotalQty">0</div>
+          </div>
+          <div style="padding: 12px; background: #fef3c7; border-radius: 4px; border-left: 3px solid #b7791f;">
+            <div style="font-size: 11px; color: #667085; margin-bottom: 4px;">Total Physical Qty</div>
+            <div style="font-size: 18px; font-weight: bold; color: #b7791f;" id="countPhysicalQty">0</div>
+          </div>
+          <div style="padding: 12px; background: #fce7f3; border-radius: 4px; border-left: 3px solid #c24132;">
+            <div style="font-size: 11px; color: #667085; margin-bottom: 4px;">MRP Pending Count</div>
+            <div style="font-size: 18px; font-weight: bold; color: #c24132;" id="countMRPPending">0</div>
+          </div>
+          <div style="padding: 12px; background: #f3e8ff; border-radius: 4px; border-left: 3px solid #7c3aed;">
+            <div style="font-size: 11px; color: #667085; margin-bottom: 4px;">Total Value</div>
+            <div style="font-size: 18px; font-weight: bold; color: #7c3aed;" id="countTotalValue">₹0</div>
+          </div>
+          <div style="padding: 12px; background: #ecfdf5; border-radius: 4px; border-left: 3px solid #059669;">
+            <div style="font-size: 11px; color: #667085; margin-bottom: 4px;">Variance</div>
+            <div style="font-size: 18px; font-weight: bold; color: #059669;" id="countVariance">0</div>
+          </div>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-heading">
           <h2>Final Compile Report</h2>
@@ -117,7 +150,6 @@
                 <th>AVERAGE SCANNED MRP</th>
                 <th>PRICE PERIOD</th>
                 <th>PRICE AGEING DAYS</th>
-                <th>PART MOVEMENT</th>
                 <th>DLC</th>
                 <th>Product Group</th>
                 <th>Product SubGroup</th>

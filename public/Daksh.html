@@ -336,7 +336,7 @@
 
       <section id="reports" class="view">
         <section class="card">
-          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Manual Refresh</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button></div></div>
+          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Manual Refresh</button><button id="movementAnalysisRefresh" class="btn light hidden" type="button" disabled>Refresh Movement Analysis</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button></div></div>
           <form id="reportFilters" class="filter-grid">
             <label>Report Type<select name="reportType" id="reportTypeSelect" required>
               <option value="">Select report</option>
@@ -1356,7 +1356,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260526-stock-summary" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260527-login-redirect" onload="console.log('[DAKSH_DASHBOARD_ASSET] ui.js loaded', this.src)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {
