@@ -241,6 +241,42 @@ function valuationFields({ rawScanText = '', scannedMrp, mrpProvided = false, en
   };
 }
 
+function existingHasPositiveMrp(scan = {}) {
+  return [
+    scan.finalMRP,
+    scan.finalMrp,
+    scan.valuationMRP,
+    scan.valuationMrp,
+    scan.scanMRP,
+    scan.scanMrp,
+    scan.manualMRP,
+    scan.manualMrp,
+    scan.mrp
+  ].some((value) => Number(value || 0) > 0);
+}
+
+async function backfillDuplicateMrp(existing = {}, { partNumber = '', rawScanText = '', scannedMrp, mrpProvided = false, entrySource = 'barcode', manualEntryMode = false, qty = 1, timestamp = new Date() } = {}) {
+  if (!existing || !existing._id || existingHasPositiveMrp(existing) || !mrpProvided || !(Number(scannedMrp || 0) > 0)) return existing;
+  const valueFields = valuationFields({ rawScanText, scannedMrp, mrpProvided, entrySource, manualEntryMode });
+  if (!(Number(valueFields.valuationMRP || 0) > 0)) return existing;
+  const pricePeriod = await findPricePeriod(partNumber || existing.partNumber || existing.part, timestamp, valueFields.valuationMRP).catch(() => null);
+  const quantity = Number(existing.quantity || existing.qty || qty || 1);
+  const update = {
+    mrp: valueFields.mrp,
+    scanMRP: valueFields.scanMRP,
+    manualMRP: valueFields.manualMRP,
+    valuationMRP: valueFields.valuationMRP,
+    valuationSource: valueFields.valuationSource,
+    finalInventoryValue: Number(quantity || 0) * Number(valueFields.valuationMRP || 0),
+    finalMRP: valueFields.valuationMRP,
+    mrpStatus: 'AVAILABLE',
+    mrpPendingUpdatedAt: timestamp,
+    ...pricePeriodPayload(pricePeriod, valueFields.valuationMRP)
+  };
+  await Inventory.updateOne({ _id: existing._id }, { $set: update });
+  return { ...existing, ...update };
+}
+
 const DASHBOARD_BLANK_MARKERS = ['', 'NULL', 'UNDEFINED', 'N/A', 'NA', '-'];
 
 function firstNonBlankExpression(fields = [], fallback = '') {
@@ -1210,6 +1246,11 @@ async function saveScanRequest(req, res) {
       rawScanText || upiId ? 'barcode' : 'manual'
     );
     const manualEntryMode = isManualEntryMode(req.body, rawScanText, upiId);
+    const preBodyMrpProvided = booleanFlag(req.body.mrpProvided);
+    const preParsedMrpProvided = booleanFlag(parsed.mrpProvided);
+    const preMrpProvided = preBodyMrpProvided || preParsedMrpProvided;
+    const preScannedMrp = preMrpProvided ? optionalNumber(preBodyMrpProvided ? req.body.mrp : parsed.mrp) : undefined;
+    const preQty = numberValue(firstValue(req.body, ['qty', 'quantity', 'count']) || parsed.qty, 1);
     const duplicateIdentityRaw = rawScanText || upiNo;
     const serverSavedStatus = normalizedSyncStatus({
       ...req.body,
@@ -1240,6 +1281,16 @@ async function saveScanRequest(req, res) {
       existing = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
     }
     if (existing) {
+      existing = await backfillDuplicateMrp(existing, {
+        partNumber: part,
+        rawScanText,
+        scannedMrp: preScannedMrp,
+        mrpProvided: preMrpProvided,
+        entrySource,
+        manualEntryMode,
+        qty: preQty,
+        timestamp
+      });
       if (type === 'FITTED') {
         if (booleanFlag(req.body.addFittedQuantity || req.body.confirmAddQuantity)) {
           const addQty = numberValue(firstValue(req.body, ['qty', 'quantity', 'count']) || parsed.qty, 1);
@@ -1273,7 +1324,7 @@ async function saveScanRequest(req, res) {
           scan: existing
         });
       }
-      await logDuplicateScan({
+      logDuplicateScan({
         ...req.body,
         uniqueScanId,
         scanId: uniqueScanId,
@@ -1284,7 +1335,7 @@ async function saveScanRequest(req, res) {
         scanType: type,
         rawScan: rawScanText,
         upiNo
-      }, existing);
+      }, existing).catch(() => undefined);
       if (req.io) {
         req.io.emit('scan:duplicate', publicScan(existing));
         req.io.emit('stats:update');
@@ -1327,19 +1378,19 @@ async function saveScanRequest(req, res) {
     const roleError = roleScanError(role, type);
     if (roleError) return res.status(403).json({ success: false, message: roleError });
 
-    const qty = numberValue(firstValue(req.body, ['qty', 'quantity', 'count']) || parsed.qty, 1);
-    const bodyMrpProvided = booleanFlag(req.body.mrpProvided);
+    const qty = preQty;
+    const bodyMrpProvided = preBodyMrpProvided;
     const bodyDlcProvided = booleanFlag(req.body.dlcProvided);
-    const parsedMrpProvided = booleanFlag(parsed.mrpProvided);
+    const parsedMrpProvided = preParsedMrpProvided;
     const parsedDlcProvided = booleanFlag(parsed.dlcProvided);
-    const mrpProvided = bodyMrpProvided || parsedMrpProvided;
+    const mrpProvided = preMrpProvided;
     const dlcProvided = bodyDlcProvided || parsedDlcProvided;
-    const scannedMrp = mrpProvided ? optionalNumber(bodyMrpProvided ? req.body.mrp : parsed.mrp) : undefined;
+    const scannedMrp = preScannedMrp;
     const scannedDlc = dlcProvided ? optionalNumber(bodyDlcProvided ? req.body.dlc : parsed.dlc) : undefined;
     const valueFields = valuationFields({ rawScanText, scannedMrp, mrpProvided, entrySource, manualEntryMode });
     
     // NEW: Fetch latest MRP for display and potential use
-    const latestMRPData = await getLatestMRP(part, timestamp);
+    const latestMRPData = scannedMrp && scannedMrp > 0 ? { mrp: 0 } : await getLatestMRP(part, timestamp);
     const defaultMRP = latestMRPData.mrp || 0;
     
     // Determine final MRP and MRP status
@@ -1516,9 +1567,19 @@ async function saveScanRequest(req, res) {
       });
     } catch (error) {
       if (!isDuplicateKeyError(error)) throw error;
-      const duplicate = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
+      let duplicate = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
       if (duplicate) {
-        await logDuplicateScan({
+        duplicate = await backfillDuplicateMrp(duplicate, {
+          partNumber: part,
+          rawScanText,
+          scannedMrp: preScannedMrp,
+          mrpProvided: preMrpProvided,
+          entrySource,
+          manualEntryMode,
+          qty,
+          timestamp
+        });
+        logDuplicateScan({
           ...req.body,
           uniqueScanId,
           scanId: uniqueScanId,
@@ -1528,7 +1589,7 @@ async function saveScanRequest(req, res) {
           binLocation,
           scanType: type,
           rawScan: candidate.rawScan
-        }, duplicate);
+        }, duplicate).catch(() => undefined);
         if (req.io) {
           req.io.emit('scan:duplicate', publicScan(duplicate));
           req.io.emit('stats:update');

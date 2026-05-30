@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Daksh Mobile Scanner</title>
-  <link rel="stylesheet" href="/mobile-scanner.css?v=20260525-manual-retry-fix">
+  <link rel="stylesheet" href="/mobile-scanner.css?v=20260529-dealer-audit-cache-reset">
 </head>
 <body>
   <main class="mobile-shell">
@@ -20,7 +20,8 @@
         <label>Username or Email<input name="username" autocomplete="username" required></label>
         <label>Password<input name="password" type="password" autocomplete="current-password"></label>
         <label>PIN<input name="pin" inputmode="numeric" maxlength="8" autocomplete="one-time-code"></label>
-        <label>Dealer Code<input name="dealerCode" autocapitalize="characters" required></label>
+        <label id="dealerCodeInputLabel">Dealer Code<input name="dealerCode" autocapitalize="characters"></label>
+        <label id="dealerSelectLabel" hidden>Dealer<select id="loginDealerSelect" name="selectedDealerCode"></select></label>
         <label>Device Name<input name="deviceName" placeholder="Android Chrome"></label>
         <button class="primary-action" type="submit">Login</button>
         <p id="loginMessage" class="message"></p>
@@ -33,6 +34,7 @@
           <strong id="dealerLabel">Dealer</strong>
           <span id="userLabel">User</span>
         </div>
+        <select id="mobileDealerSwitch" aria-label="Switch dealer" hidden></select>
         <button id="logoutBtn" class="ghost-action" type="button">Logout</button>
       </header>
 
@@ -92,7 +94,7 @@
         </div>
         <div class="scan-actions">
           <button id="retryFailedBtn" class="secondary-action" type="button">Retry Failed</button>
-          <button id="clearSyncedBtn" class="danger-action" type="button">Clear Synced Cache</button>
+          <button id="clearSyncedBtn" class="danger-action" type="button">Clear Local Cache</button>
         </div>
       </section>
 
@@ -128,6 +130,6 @@
   </dialog>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/mobile-scanner.js?v=20260525-manual-retry-fix"></script>
+  <script src="/mobile-scanner.js?v=20260530-fast-qr-scan"></script>
 </body>
 </html>

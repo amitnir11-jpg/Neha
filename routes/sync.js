@@ -83,11 +83,13 @@ function newestDate(...values) {
     .sort((a, b) => b.getTime() - a.getTime())[0] || null;
 }
 
-async function latestSuccessfulSyncTime() {
+async function latestSuccessfulSyncTime(dealerCode = '') {
+  const dealer = upper(dealerCode);
+  const syncFilter = dealer ? { dealerCode: dealer } : {};
   const [lastLog, lastDevice, lastInventory] = await Promise.all([
-    SyncLog.findOne({ status: { $in: ['success', 'partial'] } }).sort({ updatedAt: -1, createdAt: -1 }).select('updatedAt createdAt').lean(),
-    Device.findOne({ lastSyncTime: { $exists: true, $ne: null } }).sort({ lastSyncTime: -1 }).select('lastSyncTime').lean(),
-    Inventory.findOne({ $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }).sort({ updatedAt: -1, timestamp: -1 }).select('updatedAt timestamp').lean()
+    SyncLog.findOne({ ...syncFilter, status: { $in: ['success', 'partial'] } }).sort({ updatedAt: -1, createdAt: -1 }).select('updatedAt createdAt').lean(),
+    Device.findOne({ ...syncFilter, lastSyncTime: { $exists: true, $ne: null } }).sort({ lastSyncTime: -1 }).select('lastSyncTime').lean(),
+    Inventory.findOne({ ...syncFilter, $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }).sort({ updatedAt: -1, timestamp: -1 }).select('updatedAt timestamp').lean()
   ]);
   return newestDate(
     lastLog && (lastLog.updatedAt || lastLog.createdAt),
@@ -267,6 +269,26 @@ function scanIdentityScope(filter = {}, scan = {}) {
   if (dealerCode) filter.dealerCode = dealerCode;
   if (auditId) filter.auditId = auditId;
   return filter;
+}
+
+function identityUserKey(scan = {}) {
+  return clean(scan.userId || scan.loginId || scan.userName || scan.staffName);
+}
+
+function identitySessionKey(scan = {}) {
+  return clean(scan.syncBatchId || scan.batchId || scan.auditId || '');
+}
+
+async function activeAuditForDealer(dealerCode = '') {
+  const code = upper(dealerCode);
+  return code ? getActiveAudit({ dealerCode: code }) : getActiveAudit();
+}
+
+function noActiveAuditMessage(dealerCode = '') {
+  const code = upper(dealerCode);
+  return code
+    ? `No active audit found for dealer ${code}. Please start audit from PC Admin.`
+    : 'No active audit found. Please start audit from PC Admin.';
 }
 
 function inboundAcceptedFilter(raw, scan = {}) {
@@ -467,6 +489,44 @@ function valuationFields({ scan = {}, rawScanText = '', scannedMrp, mrpProvided 
   };
 }
 
+function existingHasPositiveMrp(scan = {}) {
+  return [
+    scan.finalMRP,
+    scan.finalMrp,
+    scan.valuationMRP,
+    scan.valuationMrp,
+    scan.scanMRP,
+    scan.scanMrp,
+    scan.manualMRP,
+    scan.manualMrp,
+    scan.mrp
+  ].some((value) => Number(value || 0) > 0);
+}
+
+async function backfillDuplicateMrp(existing = {}, scan = {}, { manualEntry = false } = {}) {
+  if (!existing || !existing._id || existingHasPositiveMrp(existing) || !scan.mrpProvided) return existing;
+  const scannedMrp = optionalNumber(scan.mrp);
+  if (!(Number(scannedMrp || 0) > 0)) return existing;
+  const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: true, manualEntry });
+  if (!(Number(valueFields.valuationMRP || 0) > 0)) return existing;
+  const pricePeriod = await findPricePeriod(scan.partNumber || existing.partNumber || existing.part, scan.timestamp || scan.serverReceivedAt || new Date(), valueFields.valuationMRP).catch(() => null);
+  const quantity = Number(existing.quantity || existing.qty || scan.quantity || 1);
+  const update = {
+    mrp: valueFields.mrp,
+    scanMRP: valueFields.scanMRP,
+    manualMRP: valueFields.manualMRP,
+    valuationMRP: valueFields.valuationMRP,
+    valuationSource: valueFields.valuationSource,
+    finalInventoryValue: quantity * Number(valueFields.valuationMRP || 0),
+    finalMRP: valueFields.valuationMRP,
+    mrpStatus: 'AVAILABLE',
+    mrpPendingUpdatedAt: new Date(),
+    ...pricePeriodPayload(pricePeriod, valueFields.valuationMRP)
+  };
+  await Inventory.updateOne({ _id: existing._id }, { $set: update });
+  return { ...existing, ...update };
+}
+
 function makeScanId(item = {}, timestamp = new Date()) {
   const explicit = clean(item.scanId || item.uniqueScanId || item.mobileScanId || item.localId);
   if (explicit) return explicit;
@@ -590,7 +650,9 @@ function normalizeScan(item = {}) {
   const uniqueScanId = scanSource === 'manual'
     ? makeScanId(idSource, timestamp)
     : (explicitScanId || makeScanId(idSource, timestamp));
-  const itemMrpProvided = item.mrpProvided === true || String(item.mrpProvided).toLowerCase() === 'true';
+  const itemMrpValue = firstValue(item, ['mrp', 'scanMRP', 'scanMrp', 'scannedMRP', 'scannedMrp', 'upiMRP', 'upiMrp', 'valuationMRP', 'valuationMrp', 'finalMRP', 'finalMrp']);
+  const itemMrpNumber = optionalNumber(itemMrpValue);
+  const itemMrpProvided = item.mrpProvided === true || String(item.mrpProvided).toLowerCase() === 'true' || itemMrpNumber !== undefined;
   const parsedMrpProvided = parsed.mrpProvided === true || String(parsed.mrpProvided).toLowerCase() === 'true';
   const mrpProvided = itemMrpProvided || parsedMrpProvided;
 
@@ -620,12 +682,12 @@ function normalizeScan(item = {}) {
     binSelectionMode: upper(item.binSelectionMode),
     stockDeductedFromBin: upper(item.stockDeductedFromBin),
     quantity,
-    mrp: mrpProvided ? inventory.numberValue(itemMrpProvided ? item.mrp : parsed.mrp, 0) : undefined,
+    mrp: mrpProvided ? inventory.numberValue(itemMrpProvided && itemMrpNumber !== undefined ? itemMrpNumber : parsed.mrp, 0) : undefined,
     mrpProvided,
     scanType,
     upiId,
     upiNo,
-    rawScanString: rawScan || partNumber,
+    rawScanString: rawScan || (scanSource === 'manual' ? partNumber : ''),
     dealerCode,
     dealerName: clean(item.dealerName),
     auditId: clean(item.auditId),
@@ -676,6 +738,20 @@ function duplicateQuery(scan) {
     scanStatus: { $in: acceptedStatuses() },
     $or: terms.length ? terms : [{ uniqueScanId: '__missing__' }]
   };
+  const userKey = identityUserKey(scan);
+  if (userKey) {
+    const userKeys = Array.from(new Set([userKey, userKey.toLowerCase()].filter(Boolean)));
+    filter.$and = (filter.$and || []).concat([{
+      $or: [
+        { userId: { $in: userKeys } },
+        { loginId: { $in: userKeys } },
+        { userName: { $in: userKeys } },
+        { staffName: { $in: userKeys } }
+      ]
+    }]);
+  }
+  const sessionKey = identitySessionKey(scan);
+  if (sessionKey && scan.syncBatchId) filter.syncBatchId = sessionKey;
   return scanIdentityScope(filter, scan);
 }
 
@@ -744,8 +820,8 @@ async function emitEnterpriseRealtime(io, scans = []) {
     io.emit('scan:saved', scan);
     io.emit('scanData', scan);
   });
-  const activeAudit = await getActiveAudit().catch(() => null);
   const firstScan = publicScans[0] || {};
+  const activeAudit = await getActiveAudit(firstScan.dealerCode ? { dealerCode: firstScan.dealerCode } : {}).catch(() => null);
   const dashboardFilter = {};
   if (activeAudit && activeAudit.dealerCode) dashboardFilter.dealerCode = upper(activeAudit.dealerCode);
   else if (firstScan.dealerCode) dashboardFilter.dealerCode = upper(firstScan.dealerCode);
@@ -809,7 +885,7 @@ async function scanPolicyResult(scan = {}) {
   }
   const duplicate = await Inventory.findOne(duplicateQuery(scan)).sort({ timestamp: 1, createdAt: 1 }).lean();
   if (duplicate) {
-    return { ok: false, status: 'duplicate', existing: duplicate, reason: 'Duplicate QR/UPI', message: `Duplicate QR already scanned. First scanned by ${duplicate.userName || duplicate.staffName || duplicate.loginId || 'Unknown'}, at ${formatIstDateTime(duplicate.timestamp) || '-'}, Bin ${duplicate.binLocation || duplicate.bin || '-'}.` };
+    return { ok: false, status: 'duplicate', existing: duplicate, reason: 'Duplicate exact UPI/barcode', message: `Duplicate exact UPI/barcode already scanned. First scanned by ${duplicate.userName || duplicate.staffName || duplicate.loginId || 'Unknown'}, at ${formatIstDateTime(duplicate.timestamp) || '-'}, Bin ${duplicate.binLocation || duplicate.bin || '-'}.` };
   }
   return { ok: true };
 }
@@ -824,10 +900,11 @@ async function saveNormalizedScan(scan, req) {
     syncKey: scan.syncKey,
     scanId: scan.uniqueScanId
   });
-  const activeAudit = await getActiveAudit();
+  const requestedDealerCode = upper(scan.dealerCode || req.body?.dealerCode || req.query?.dealerCode);
+  const activeAudit = await activeAuditForDealer(requestedDealerCode);
   if (!activeAudit) {
-    logSync('scan rejected', { reason: 'No active audit', deviceId: scan.deviceId, scanId: scan.uniqueScanId });
-    return { status: 'failed', scan, error: 'No active audit found. Please start audit from PC Admin.' };
+    logSync('scan rejected', { reason: 'No active audit', requestedDealerCode, deviceId: scan.deviceId, scanId: scan.uniqueScanId });
+    return { status: 'failed', scan, error: noActiveAuditMessage(requestedDealerCode) };
   }
   applyActiveAudit(scan, activeAudit);
   applyUserContext(scan, await resolveScanUserContext(req, scan));
@@ -1093,20 +1170,23 @@ async function saveNormalizedScan(scan, req) {
   return { status: 'synced', scan: doc, error: '' };
 }
 
-async function syncSummary(activePort) {
+async function syncSummary(activePort, dealerCode = '') {
   await Device.updateMany({ status: 'online', lastSeen: { $lt: liveCutoff() } }, { status: 'offline' });
+  const dealer = upper(dealerCode);
+  const scope = dealer ? { dealerCode: dealer } : {};
   const [pendingRecords, failedRecords, totalSynced, connectedDevices, lastSyncAt] = await Promise.all([
-    Inventory.countDocuments({ $or: [{ syncStatus: 'pending' }, { isSynced: false }] }),
-    Inventory.countDocuments({ syncStatus: 'failed' }),
-    Inventory.countDocuments({ $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }),
-    Device.countDocuments({ status: 'online', lastSeen: { $gte: liveCutoff() } }),
-    latestSuccessfulSyncTime()
+    Inventory.countDocuments({ ...scope, $or: [{ syncStatus: 'pending' }, { isSynced: false }] }),
+    Inventory.countDocuments({ ...scope, syncStatus: 'failed' }),
+    Inventory.countDocuments({ ...scope, $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }),
+    Device.countDocuments({ ...scope, status: 'online', lastSeen: { $gte: liveCutoff() } }),
+    latestSuccessfulSyncTime(dealer)
   ]);
   const info = serverInfo(activePort);
   const lastSync = lastSyncAt ? lastSyncAt.toISOString() : '';
 
   return {
     serverStatus: 'online',
+    dealerCode: dealer,
     mongoStatus: mongoose.connection.readyState === 1 ? 'online' : 'offline',
     db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     lastSync,
@@ -1176,12 +1256,36 @@ async function pushHandler(req, res) {
         invalidCleanedCount: 0
       });
     }
-    const activeAudit = await getActiveAudit();
+    const requestedDealerCode = upper(body.activeDealerId || body.dealerId || body.dealerCode || req.activeDealerId || (incomingRaw[0] && incomingRaw[0].dealerCode));
+    if (req.user && requestedDealerCode) {
+      const access = await auth.validateUserDealerAccess(req.user, requestedDealerCode);
+      if (!access.allowed) {
+        return res.status(403).json({
+          success: false,
+          message: 'Unauthorized dealer access',
+          requestedDealer: access.requestedDealer,
+          userDealerAccess: access.userDealerAccess
+        });
+      }
+    }
+    const mismatchedDealer = incomingRaw.find((item) => {
+      const itemDealer = upper(item.activeDealerId || item.dealerId || item.dealerCode || item.dealer);
+      return itemDealer && requestedDealerCode && itemDealer !== requestedDealerCode;
+    });
+    if (mismatchedDealer) {
+      return res.status(403).json({
+        success: false,
+        message: 'Scan dealer does not match selected dealer',
+        requestedDealer: requestedDealerCode,
+        scanDealer: upper(mismatchedDealer.dealerCode || mismatchedDealer.dealer)
+      });
+    }
+    const activeAudit = await activeAuditForDealer(requestedDealerCode);
     if (!activeAudit) {
-      logSync('request rejected', { reason: 'No active audit', receivedCount: incomingRaw.length });
+      logSync('request rejected', { reason: 'No active audit', requestedDealerCode, receivedCount: incomingRaw.length });
       return res.json({
         success: false,
-        message: 'No active audit found. Please start audit from PC Admin.',
+        message: noActiveAuditMessage(requestedDealerCode),
         activeAudit: null,
         receivedCount: incomingRaw.length,
         failedCount: incomingRaw.length,
@@ -1189,7 +1293,6 @@ async function pushHandler(req, res) {
       });
     }
     const activeAuditPayload = publicAudit(activeAudit);
-    const requestedDealerCode = upper(body.dealerCode || (incomingRaw[0] && incomingRaw[0].dealerCode));
     if (requestedDealerCode && requestedDealerCode !== upper(activeAudit.dealerCode)) {
       const payload = {
         success: false,
@@ -1231,6 +1334,7 @@ async function pushHandler(req, res) {
     }));
     const deviceId = clean(body.deviceId || (incoming[0] && incoming[0].deviceId));
     const dealerCode = upper(activeAudit.dealerCode);
+    const activeAuditId = clean(activeAudit.auditId || activeAudit._id);
     const requestUserContext = await resolveScanUserContext(req, { ...body, deviceId });
     const logs = [];
     const failedRows = [];
@@ -1248,6 +1352,7 @@ async function pushHandler(req, res) {
       // persist batch identifiers and server timezone info on each scan
       scan.syncBatchId = item.syncBatchId || syncBatchId;
       scan.serverTimeZone = item.serverTimeZone || serverTimeZone;
+      scan.qrFingerprint = isManualEntry(scan) ? '' : makeQrFingerprint(scan);
       return { index, scan };
     });
     normalized.forEach(({ scan }) => {
@@ -1270,6 +1375,7 @@ async function pushHandler(req, res) {
       .filter((scan) => scan.scanType === 'FITTED' && scan.dealerCode && scan.partNumber && scan.regdNo && scan.jobCardNo)
       .map((scan) => ({
         dealerCode: upper(scan.dealerCode),
+        auditId: clean(scan.auditId),
         scanType: 'FITTED',
         regdNo: upper(scan.regdNo),
         jobCardNo: upper(scan.jobCardNo),
@@ -1288,14 +1394,14 @@ async function pushHandler(req, res) {
           { uniqueScanId: { $in: normalizedScanIds } },
           { scanId: { $in: normalizedScanIds } },
           { qrFingerprint: { $in: normalizedQrFingerprints } },
-          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawScan: { $in: normalizedRawScans } },
-          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawScanString: { $in: normalizedRawScans } },
-          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawUpi: { $in: normalizedRawScans } },
-          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiNo: { $in: normalizedUpiNos } },
-          { dealerCode, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiId: { $in: normalizedUpiNos } },
+          { dealerCode, auditId: activeAuditId, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawScan: { $in: normalizedRawScans } },
+          { dealerCode, auditId: activeAuditId, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawScanString: { $in: normalizedRawScans } },
+          { dealerCode, auditId: activeAuditId, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawUpi: { $in: normalizedRawScans } },
+          { dealerCode, auditId: activeAuditId, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiNo: { $in: normalizedUpiNos } },
+          { dealerCode, auditId: activeAuditId, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiId: { $in: normalizedUpiNos } },
           ...fittedDuplicateClauses
         ]
-      }).select('uniqueScanId scanId qrFingerprint rawScan rawScanString rawUpi upiNo upiId dealerCode binLocation bin scanType type normalizedPartNumber partNumber part regdNo jobCardNo').lean()
+        }).select('uniqueScanId scanId qrFingerprint rawScan rawScanString rawUpi upiNo upiId dealerCode auditId syncBatchId userId loginId userName staffName binLocation bin scanType type normalizedPartNumber partNumber part regdNo jobCardNo qty quantity mrp scanMRP manualMRP valuationMRP finalMRP valuationSource').lean()
     ]);
     const masterByPart = new Map();
     const masterByDealer = new Map();
@@ -1309,13 +1415,32 @@ async function pushHandler(req, res) {
     const existingScanIds = new Set();
     const existingIdentityByKey = new Map();
     existingScans.forEach((scan) => {
-      const identity = { uniqueScanId: scan.uniqueScanId, scanId: scan.scanId, qrFingerprint: scan.qrFingerprint };
+      const identity = {
+        _id: scan._id,
+        uniqueScanId: scan.uniqueScanId,
+        scanId: scan.scanId,
+        qrFingerprint: scan.qrFingerprint,
+        partNumber: scan.partNumber,
+        part: scan.part,
+        qty: scan.qty,
+        quantity: scan.quantity,
+        mrp: scan.mrp,
+        scanMRP: scan.scanMRP,
+        manualMRP: scan.manualMRP,
+        valuationMRP: scan.valuationMRP,
+        finalMRP: scan.finalMRP,
+        valuationSource: scan.valuationSource
+      };
       const scanDealer = upper(scan.dealerCode);
+      const scanAudit = clean(scan.auditId);
       const scanType = upper(scan.scanType || scan.type);
       const scanBin = upper(scan.binLocation || scan.bin);
+      const scanUser = identityUserKey(scan);
+      const scanSession = identitySessionKey(scan);
       if (scanType === 'FITTED') {
         const fittedKey = [
           scanDealer,
+          scanAudit,
           normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part),
           upper(scan.regdNo),
           upper(scan.jobCardNo),
@@ -1337,12 +1462,12 @@ async function pushHandler(req, res) {
         existingIdentityByKey.set(scan.qrFingerprint, identity);
       }
       [scan.rawScan, scan.rawScanString, scan.rawUpi].filter(Boolean).forEach((raw) => {
-        const key = `${scanDealer}::${scanType}::${scanBin}::RAW::${clean(raw)}`;
+        const key = `${scanDealer}::${scanAudit}::${scanUser}::${scanSession}::${scanType}::${scanBin}::RAW::${clean(raw)}`;
         existingScanIds.add(key);
         existingIdentityByKey.set(key, identity);
       });
       [scan.upiNo, scan.upiId].filter(Boolean).forEach((upi) => {
-        const key = `${scanDealer}::${scanType}::${scanBin}::UPI::${upper(upi)}`;
+        const key = `${scanDealer}::${scanAudit}::${scanUser}::${scanSession}::${scanType}::${scanBin}::UPI::${upper(upi)}`;
         existingScanIds.add(key);
         existingIdentityByKey.set(key, identity);
       });
@@ -1446,6 +1571,7 @@ async function pushHandler(req, res) {
       const fittedKey = scan.scanType === 'FITTED'
         ? [
             upper(scan.dealerCode),
+            clean(scan.auditId),
             normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part),
             upper(scan.regdNo),
             upper(scan.jobCardNo),
@@ -1454,8 +1580,11 @@ async function pushHandler(req, res) {
         : '';
       const identityBin = upper(scan.binLocation || scan.bin);
       const identityType = upper(scan.scanType || scan.type);
-      const rawIdentityKey = !manualEntry && clean(scan.rawScanString) ? `${upper(scan.dealerCode)}::${identityType}::${identityBin}::RAW::${clean(scan.rawScanString)}` : '';
-      const upiIdentityKey = !manualEntry && upper(scan.upiNo || scan.upiId) ? `${upper(scan.dealerCode)}::${identityType}::${identityBin}::UPI::${upper(scan.upiNo || scan.upiId)}` : '';
+      const identityAudit = clean(scan.auditId);
+      const identityUser = identityUserKey(scan);
+      const identitySession = identitySessionKey(scan);
+      const rawIdentityKey = !manualEntry && clean(scan.rawScanString) ? `${upper(scan.dealerCode)}::${identityAudit}::${identityUser}::${identitySession}::${identityType}::${identityBin}::RAW::${clean(scan.rawScanString)}` : '';
+      const upiIdentityKey = !manualEntry && upper(scan.upiNo || scan.upiId) ? `${upper(scan.dealerCode)}::${identityAudit}::${identityUser}::${identitySession}::${identityType}::${identityBin}::UPI::${upper(scan.upiNo || scan.upiId)}` : '';
       const fittedDuplicate = fittedKey && (existingScanIds.has(fittedKey) || duplicateScanIds.has(fittedKey));
       const normalDuplicate = !manualEntry && !fittedKey && (existingScanIds.has(scan.uniqueScanId) || existingScanIds.has(scan.qrFingerprint) || (rawIdentityKey && existingScanIds.has(rawIdentityKey)) || (upiIdentityKey && existingScanIds.has(upiIdentityKey)) || duplicateScanIds.has(scan.uniqueScanId) || duplicateScanIds.has(scan.qrFingerprint) || (rawIdentityKey && duplicateScanIds.has(rawIdentityKey)) || (upiIdentityKey && duplicateScanIds.has(upiIdentityKey)));
       if (fittedDuplicate || normalDuplicate) {
@@ -1464,8 +1593,9 @@ async function pushHandler(req, res) {
         if (fittedKey) duplicateScanIds.add(fittedKey);
         if (rawIdentityKey) duplicateScanIds.add(rawIdentityKey);
         if (upiIdentityKey) duplicateScanIds.add(upiIdentityKey);
-        const existingIdentity = existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(rawIdentityKey) || existingIdentityByKey.get(upiIdentityKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.qrFingerprint) || {};
-        logDuplicateScan(scan, existingIdentity, fittedKey ? 'Fitted part already exists for this vehicle/job card' : 'Duplicate scanId skipped').catch(() => undefined);
+        let existingIdentity = existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(rawIdentityKey) || existingIdentityByKey.get(upiIdentityKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.qrFingerprint) || {};
+        existingIdentity = await backfillDuplicateMrp(existingIdentity, scan, { manualEntry });
+        logDuplicateScan(scan, existingIdentity, fittedKey ? 'Fitted part already exists for this vehicle/job card' : 'Duplicate exact UPI/barcode skipped').catch(() => undefined);
         logSync('duplicate scan skipped', {
           row: index + 1,
           scanId: scan.uniqueScanId,
@@ -1474,7 +1604,7 @@ async function pushHandler(req, res) {
           dealerCode: scan.dealerCode,
           existing: existingIdentity || 'same request batch'
         });
-        logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'duplicate', fittedKey ? 'Fitted part already exists for this vehicle/job card' : 'Duplicate scanId skipped'));
+        logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'duplicate', fittedKey ? 'Fitted part already exists for this vehicle/job card' : 'Duplicate exact UPI/barcode already scanned'));
         return;
       }
       duplicateScanIds.add(scan.uniqueScanId);
@@ -1714,7 +1844,7 @@ async function pushHandler(req, res) {
             row: meta.row || opIndex + 1,
             scanId: doc.uniqueScanId,
             partNumber: doc.partNumber,
-            reason: isDuplicate ? 'Duplicate scanId skipped' : writeError.errmsg || writeError.message || 'Insert failed'
+            reason: isDuplicate ? 'Duplicate exact UPI/barcode or scanId skipped' : writeError.errmsg || writeError.message || 'Insert failed'
           };
           if (isDuplicate) {
             duplicateScanIds.add(doc.uniqueScanId);
@@ -1829,7 +1959,7 @@ async function pushHandler(req, res) {
       if (io) io.emit('device:heartbeat', { deviceId, dealerCode, status: 'online', lastSeen: completedAt });
     }
 
-    const summary = await syncSummary(req.app.locals.activePort);
+    const summary = await syncSummary(req.app.locals.activePort, dealerCode);
     await emitEnterpriseRealtime(io, savedScans);
     const payload = {
       success: !allRowsRejected,
@@ -1920,9 +2050,14 @@ router.post('/mobile', auth.optionalAuth, pushHandler);
 
 router.get('/status', auth.optionalAuth, async (req, res) => {
   try {
+    const dealerCode = auth.normalizeAccessCode(req.query.activeDealerId || req.query.dealerId || req.query.dealerCode || '');
+    if (req.user && dealerCode) {
+      const access = await auth.validateUserDealerAccess(req.user, dealerCode);
+      if (!access.allowed) return res.status(403).json({ success: false, message: 'Unauthorized dealer access', requestedDealer: access.requestedDealer });
+    }
     const [summary, lastLog] = await Promise.all([
-      syncSummary(req.app.locals.activePort),
-      SyncLog.findOne({}).sort({ createdAt: -1 }).lean()
+      syncSummary(req.app.locals.activePort, dealerCode),
+      SyncLog.findOne(dealerCode ? { dealerCode } : {}).sort({ createdAt: -1 }).lean()
     ]);
     res.json({ success: true, ...summary, syncEngineStatus: 'running', lastApiResponse: lastLog || null });
   } catch (error) {

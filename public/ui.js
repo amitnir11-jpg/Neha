@@ -93,9 +93,24 @@
     bootError('unhandled promise rejection observed by ui.js', errorDetails(event.reason));
   });
 
+  const ACTIVE_DEALER_KEY = 'dakshActiveDealerId';
+
+  function userScopedStorageKey(baseKey, user = null) {
+    const currentUser = arguments.length > 1 ? (user || {}) : (state.user || readStoredJson('dakshUser') || {});
+    const keyPart = String(currentUser.id || currentUser.username || currentUser.email || currentUser.name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '_');
+    return keyPart ? `${baseKey}:${keyPart}` : baseKey;
+  }
+
+  const storedUser = readStoredJson('dakshUser');
+
   const state = {
     token: storageGet('dakshToken') || '',
-    user: readStoredJson('dakshUser'),
+    user: storedUser,
+    activeDealerId: String(storageGet(userScopedStorageKey(ACTIVE_DEALER_KEY, storedUser)) || storageGet(ACTIVE_DEALER_KEY) || '').trim().toUpperCase(),
+    assignedDealers: readStoredJson('dakshAssignedDealers') || [],
     dealers: [],
     users: [],
     categories: [],
@@ -349,7 +364,7 @@
 
   function rememberLastSyncTime(...values) {
     const normalized = normalizeLastSyncValue(...values);
-    if (normalized) storageSet(LAST_SYNC_KEY, normalized);
+    if (normalized) storageSet(scopedStorageKey(LAST_SYNC_KEY), normalized);
     return normalized;
   }
 
@@ -626,10 +641,16 @@
 
   function clearSession() {
     bootLog('clearSession called');
+    const scopedActiveDealerKey = userScopedStorageKey(ACTIVE_DEALER_KEY);
     state.token = '';
     state.user = null;
+    state.activeDealerId = '';
+    state.assignedDealers = [];
     storageRemove('dakshToken');
     storageRemove('dakshUser');
+    storageRemove(ACTIVE_DEALER_KEY);
+    storageRemove(scopedActiveDealerKey);
+    storageRemove('dakshAssignedDealers');
   }
 
   function appUrl(path) {
@@ -678,18 +699,74 @@
     return fallback || 'Request failed';
   }
 
+  function isAdminUser() {
+    return state.user && String(state.user.role || '').toLowerCase() === 'admin';
+  }
+
+  function activeDealerId() {
+    return cleanDealerCode(state.activeDealerId || storageGet(userScopedStorageKey(ACTIVE_DEALER_KEY)) || storageGet(ACTIVE_DEALER_KEY) || '');
+  }
+
+  function dealerByCode(dealerCode) {
+    const code = cleanDealerCode(dealerCode || '');
+    return (state.dealers || state.assignedDealers || []).find((dealer) => cleanDealerCode(dealer.dealerCode || dealer.code || dealer.id || '') === code) ||
+      (state.assignedDealers || []).find((dealer) => cleanDealerCode(dealer.dealerCode || dealer.code || dealer.id || '') === code) ||
+      null;
+  }
+
+  function activeDealer() {
+    return dealerByCode(activeDealerId());
+  }
+
+  function shouldAttachDealerScope(path) {
+    if (!state.token || isAdminUser()) return false;
+    const dealerCode = activeDealerId();
+    if (!dealerCode) return false;
+    const url = new URL(String(path || ''), window.location.origin);
+    if (!url.pathname.startsWith('/api/')) return false;
+    return !/^\/api\/auth\//.test(url.pathname) && url.pathname !== '/api/health';
+  }
+
+  function withActiveDealerQuery(path) {
+    if (!shouldAttachDealerScope(path)) return path;
+    const dealerCode = activeDealerId();
+    const isAbsolute = /^https?:\/\//i.test(String(path || ''));
+    const url = new URL(String(path || ''), window.location.origin);
+    if (!url.searchParams.get('activeDealerId')) url.searchParams.set('activeDealerId', dealerCode);
+    if (!url.searchParams.get('dealerCode')) url.searchParams.set('dealerCode', dealerCode);
+    return isAbsolute ? url.href : `${url.pathname}${url.search}${url.hash}`;
+  }
+
+  function withActiveDealerBody(body) {
+    if (!body || isAdminUser()) return body;
+    const dealerCode = activeDealerId();
+    if (!dealerCode) return body;
+    if (body instanceof FormData) {
+      if (!body.has('activeDealerId')) body.append('activeDealerId', dealerCode);
+      if (!body.has('dealerCode') || cleanDealerCode(body.get('dealerCode')) === 'ALL') body.set('dealerCode', dealerCode);
+      return body;
+    }
+    if (typeof body !== 'object' || Array.isArray(body)) return body;
+    const next = { ...body, activeDealerId: body.activeDealerId || dealerCode };
+    const bodyDealer = cleanDealerCode(next.dealerCode || '');
+    if (!bodyDealer || bodyDealer === 'ALL') next.dealerCode = dealerCode;
+    return next;
+  }
+
   async function api(path, options = {}) {
     const headers = options.headers ? { ...options.headers } : {};
-    const isFormData = options.body instanceof FormData;
+    const requestPath = withActiveDealerQuery(path);
+    const requestBody = options.body ? withActiveDealerBody(options.body) : options.body;
+    const isFormData = requestBody instanceof FormData;
     if (!isFormData) headers['Content-Type'] = 'application/json';
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
 
     const isMobileSyncRequest = /^\/api\/mobile\/|^\/api\/sync\//.test(path);
-    if (isMobileSyncRequest && options.body) {
-      const scans = Array.isArray(options.body.scans) ? options.body.scans : Array.isArray(options.body.records) ? options.body.records : [];
+    if (isMobileSyncRequest && requestBody) {
+      const scans = Array.isArray(requestBody.scans) ? requestBody.scans : Array.isArray(requestBody.records) ? requestBody.records : [];
       console.log('[MOBILE SYNC] request sent', {
         path,
-        deviceId: options.body.deviceId || '',
+        deviceId: requestBody.deviceId || '',
         scanCount: scans.length || 1,
         sample: scans.slice(0, 3).map((item) => ({
           scanId: item.scanId || item.uniqueScanId || item.mobileScanId || item.localId || '',
@@ -700,10 +777,10 @@
       });
     }
 
-    const response = await fetch(path, {
+    const response = await fetch(requestPath, {
       ...options,
       headers,
-      body: isFormData ? options.body : options.body ? JSON.stringify(options.body) : undefined
+      body: isFormData ? requestBody : requestBody ? JSON.stringify(requestBody) : undefined
     });
     const data = await parseApiResponse(response);
     if (data && data.invalidJson) {
@@ -739,7 +816,7 @@
   }
 
   async function downloadGet(path, fileName) {
-    const response = await fetch(path, {
+    const response = await fetch(withActiveDealerQuery(path), {
       headers: state.token ? { Authorization: `Bearer ${state.token}` } : {}
     });
     if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
@@ -748,13 +825,13 @@
   }
 
   async function downloadPost(path, body, fileName) {
-    const response = await fetch(path, {
+    const response = await fetch(withActiveDealerQuery(path), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(withActiveDealerBody(body))
     });
     if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
     const blob = await response.blob();
@@ -773,24 +850,29 @@
   }
 
   function formObject(form) {
-    const data = Object.fromEntries(new FormData(form).entries());
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    const dealerAccessValues = formData.getAll('dealerAccess')
+      .flatMap((value) => Array.isArray(value) ? value : String(value || '').split(/[,;\n]+/))
+      .map(cleanDealerCode)
+      .filter(Boolean);
+    if (dealerAccessValues.length) data.dealerAccess = dealerAccessValues;
     if (data.dealerCode) data.dealerCode = cleanDealerCode(data.dealerCode);
     return data;
   }
 
   function cleanDealerCode(value) {
     const text = String(value || '').trim();
-    if (text.toLowerCase() === 'all') return 'all';
+    if (text.toLowerCase() === 'all') return 'ALL';
     const match = text.match(/\(([^()]+)\)\s*$/);
     return (match ? match[1] : text).trim().toUpperCase();
   }
 
   function cleanDealerAccessInput(value) {
-    return String(value || '')
-      .split(/[,;\n]+/)
+    const rawItems = Array.isArray(value) ? value : String(value || '').split(/[,;\n]+/);
+    return Array.from(new Set(rawItems
       .map(cleanDealerCode)
-      .filter(Boolean)
-      .join(', ');
+      .filter(Boolean)));
   }
 
   function isTestDealer(dealer = {}) {
@@ -950,6 +1032,8 @@
   }
 
   function currentDealerCode() {
+    const activeDealer = activeDealerId();
+    if (activeDealer) return activeDealer;
     if (state.activeAudit && state.activeAudit.dealerCode) return cleanDealerCode(state.activeAudit.dealerCode);
     const selected = $$('.dealerSelect').map((select) => select.value).find(Boolean);
     return cleanDealerCode(selected || '');
@@ -987,6 +1071,18 @@
   }
 
   function applyActiveAuditToPayload(payload = {}) {
+    const selectedDealer = activeDealerId();
+    if (selectedDealer) {
+      const dealer = activeDealer() || {};
+      return {
+        ...payload,
+        dealerCode: selectedDealer,
+        activeDealerId: selectedDealer,
+        dealerName: dealer.dealerName || dealer.name || payload.dealerName || '',
+        auditId: (state.activeAudit && state.activeAudit.auditId) || dealer.currentAuditId || payload.auditId || '',
+        syncKey: ''
+      };
+    }
     if (!state.activeAudit || !state.activeAudit.dealerCode) return payload;
     return {
       ...payload,
@@ -998,6 +1094,15 @@
   }
 
   function appendActiveAuditQuery(params = new URLSearchParams()) {
+    const selectedDealer = activeDealerId();
+    if (selectedDealer) {
+      params.set('dealerCode', selectedDealer);
+      params.set('activeDealerId', selectedDealer);
+      const dealer = activeDealer() || {};
+      const auditId = (state.activeAudit && state.activeAudit.auditId) || dealer.currentAuditId || '';
+      if (auditId) params.set('auditId', auditId);
+      return params;
+    }
     if (state.activeAudit && state.activeAudit.dealerCode) {
       params.set('dealerCode', cleanDealerCode(state.activeAudit.dealerCode));
       if (state.activeAudit.auditId) params.set('auditId', String(state.activeAudit.auditId).trim());
@@ -1066,16 +1171,103 @@
     return scans.some(activeAuditMatchesScan);
   }
 
+  function availableActiveDealers() {
+    const source = (state.assignedDealers && state.assignedDealers.length ? state.assignedDealers : state.dealers) || [];
+    return source.filter((dealer) => !isTestDealer(dealer));
+  }
+
+  function setActiveDealerId(dealerCode, options = {}) {
+    const code = cleanDealerCode(dealerCode || '');
+    state.activeDealerId = code;
+    const scopedActiveDealerKey = userScopedStorageKey(ACTIVE_DEALER_KEY);
+    if (code) {
+      storageSet(ACTIVE_DEALER_KEY, code);
+      storageSet(scopedActiveDealerKey, code);
+    } else {
+      storageRemove(ACTIVE_DEALER_KEY);
+      storageRemove(scopedActiveDealerKey);
+    }
+    if (options.persistAssigned !== false && state.assignedDealers) {
+      storageSet('dakshAssignedDealers', JSON.stringify(state.assignedDealers));
+    }
+    $$('.dealerSelect').forEach((select) => {
+      if (select.closest('#reportFilters') && isAdminUser()) return;
+      if (code && Array.from(select.options || []).some((option) => cleanDealerCode(option.value) === code)) {
+        setDealerSelectValue(select, code);
+        syncDealerSelectDisplay(select);
+      }
+    });
+    renderSyncQueue();
+    renderSyncLog();
+    updateSyncBadges();
+    updateActiveAuditUi();
+  }
+
+  function ensureActiveDealerSelection() {
+    if (isAdminUser()) return;
+    const dealers = availableActiveDealers();
+    const current = activeDealerId();
+    if (current && dealers.some((dealer) => cleanDealerCode(dealer.dealerCode || dealer.code || dealer.id || '') === current)) return;
+    if (current) setActiveDealerId('', { persistAssigned: true });
+    if (dealers.length === 1) setActiveDealerId(dealers[0].dealerCode || dealers[0].code || dealers[0].id || '');
+  }
+
+  function renderActiveDealerSwitch() {
+    const select = $('#activeDealerSwitch');
+    if (!select) return;
+    const dealers = availableActiveDealers();
+    select.hidden = isAdminUser() || !dealers.length;
+    if (select.hidden) return;
+    const selected = activeDealerId();
+    select.innerHTML = dealers.length > 1
+      ? '<option value="">Select Dealer</option>'
+      : '';
+    select.innerHTML += dealers.map((dealer) => (
+      `<option value="${escapeHtml(dealer.dealerCode || dealer.code || dealer.id || '')}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
+    )).join('');
+    if (selected) setDealerSelectValue(select, selected);
+  }
+
+  async function switchActiveDealer(dealerCode) {
+    const next = cleanDealerCode(dealerCode || '');
+    if (!next || next === activeDealerId()) return;
+    const counts = syncCounts();
+    if (counts.total && !window.confirm(`Pending scans exist for ${activeDealerId() || 'current dealer'}. Switch dealer now?`)) {
+      renderActiveDealerSwitch();
+      return;
+    }
+    setActiveDealerId(next);
+    state.selectedProductGroupSummary = null;
+    state.productGroupDetailRows = [];
+    state.productGroupDetailTotals = null;
+    renderProductGroupDetails({ rows: [], totals: {} });
+    await Promise.all([
+      loadDashboard().catch((error) => toast(error.message, 'error')),
+      loadScanHistory().catch((error) => toast(error.message, 'error')),
+      loadSyncStatus().catch((error) => toast(error.message, 'error')),
+      loadDevices().catch((error) => toast(error.message, 'error'))
+    ]);
+  }
+
   function updateActiveAuditUi() {
     const audit = state.activeAudit;
-    if (audit && audit.dealerCode) {
+    const selectedDealer = activeDealer();
+    if (selectedDealer) {
+      setLivePill('activeAuditBadge', `${formatDealerDisplay(selectedDealer)}`, true);
+      setLivePill('pairingConnectionStatus', 'Ready', true);
+      setDashboardKpiValue('dashActiveAuditDealer', formatDealerDisplay(selectedDealer));
+      setText('pairingActiveAudit', formatDealerDisplay(selectedDealer));
+      setText('pairingStatusText', 'Mobile sync enabled');
+    } else if (audit && audit.dealerCode) {
       setLivePill('activeAuditBadge', `Active Audit: ${formatDealerDisplay(audit)}`, true);
       setLivePill('pairingConnectionStatus', 'Ready', true);
       setDashboardKpiValue('dashActiveAuditDealer', formatDealerDisplay(audit));
       setText('pairingActiveAudit', formatDealerDisplay(audit));
       setText('pairingStatusText', 'Mobile sync enabled');
       const createUserDealerAccess = $('#createUserForm [name="dealerAccess"]');
-      if (createUserDealerAccess && !String(createUserDealerAccess.value || '').trim()) createUserDealerAccess.value = audit.dealerCode;
+      if (createUserDealerAccess && !Array.from(createUserDealerAccess.selectedOptions || []).length) {
+        setMultiSelectValues(createUserDealerAccess, [audit.dealerCode]);
+      }
       $$('.dealerSelect').forEach((select) => {
         if (select.closest('#reportFilters')) return;
         const current = cleanDealerCode(select.value || '');
@@ -1150,17 +1342,27 @@
     localStorage.setItem(key, JSON.stringify(value));
   }
 
+  function activeAuditIdForScope() {
+    return String((state.activeAudit && state.activeAudit.auditId) || (activeDealer() && activeDealer().currentAuditId) || 'activeAudit').trim() || 'activeAudit';
+  }
+
+  function scopedStorageKey(baseKey) {
+    const dealerCode = activeDealerId();
+    if (!dealerCode) return baseKey;
+    return `${baseKey}:${dealerCode}:${activeAuditIdForScope()}`;
+  }
+
   function getSyncQueue() {
-    return readJsonStorage(SYNC_QUEUE_KEY, []);
+    return readJsonStorage(scopedStorageKey(SYNC_QUEUE_KEY), []);
   }
 
   function saveSyncQueue(queue) {
-    writeJsonStorage(SYNC_QUEUE_KEY, queue);
+    writeJsonStorage(scopedStorageKey(SYNC_QUEUE_KEY), queue);
     renderSyncQueue();
   }
 
   function getSyncLog() {
-    return readJsonStorage(SYNC_LOG_KEY, []);
+    return readJsonStorage(scopedStorageKey(SYNC_LOG_KEY), []);
   }
 
   function addSyncLog(entry) {
@@ -1173,7 +1375,7 @@
       status: entry.status || '',
       errorMessage: entry.errorMessage || ''
     });
-    writeJsonStorage(SYNC_LOG_KEY, logs.slice(0, 200));
+    writeJsonStorage(scopedStorageKey(SYNC_LOG_KEY), logs.slice(0, 200));
     renderSyncLog();
   }
 
@@ -1413,7 +1615,7 @@
     const counts = syncCounts();
     const serverReportedNoSync = hasConnectionStatus(status) && (status.hasSyncData === false || connectionStatus.hasSyncData === false);
     const reportedLastSync = status.completedAt || status.lastSync || status.lastSyncTime || status.lastSuccessfulSyncAt || connectionStatus.lastSync || connectionStatus.lastSyncTime || connectionStatus.lastSuccessfulSyncAt;
-    const lastSync = rememberLastSyncTime(reportedLastSync) || (serverReportedNoSync ? '' : normalizeLastSyncValue(storageGet(LAST_SYNC_KEY)));
+    const lastSync = rememberLastSyncTime(reportedLastSync) || (serverReportedNoSync ? '' : normalizeLastSyncValue(storageGet(scopedStorageKey(LAST_SYNC_KEY))));
     storageSet(AUTO_SYNC_KEY, 'true');
     const serverStatusText = String(connectionStatus.server || connectionStatus.serverStatus || '').toLowerCase();
     const mongoStatusText = String(connectionStatus.db || connectionStatus.mongoStatus || '').toLowerCase();
@@ -1816,7 +2018,7 @@
     });
     const roleName = roleDisplayName(state.user && state.user.role);
     const loginName = userLoginName();
-    setText('userBadge', `${roleName} - ${loginName}`);
+    setText('userBadge', `${roleName} - ${loginName} | ${ensureDeviceId()}`);
     setText('userDropdownLogin', loginName);
     setText('userDropdownRole', roleName);
     $$('.admin-only').forEach((node) => node.classList.toggle('hidden', !state.user || state.user.role !== 'admin'));
@@ -1846,6 +2048,13 @@
       });
       const data = await api('/api/auth/me');
       state.user = data.user || state.user;
+      state.assignedDealers = data.assignedDealers || data.activeDealers || state.assignedDealers || [];
+      storageSet('dakshAssignedDealers', JSON.stringify(state.assignedDealers));
+      if (!isAdminUser()) {
+        const selected = cleanDealerCode(data.activeDealerId || activeDealerId() || '');
+        if (selected) setActiveDealerId(selected, { persistAssigned: true });
+        else if (state.assignedDealers.length === 1) setActiveDealerId(state.assignedDealers[0].dealerCode || state.assignedDealers[0].id || '', { persistAssigned: true });
+      }
       storageSet('dakshUser', JSON.stringify(state.user));
       bootLog('validateSession success', {
         userPresent: Boolean(state.user),
@@ -1864,24 +2073,31 @@
   async function loadDealers() {
     const data = await api('/api/master/dealers');
     state.dealers = data.dealers || [];
+    if (!isAdminUser() && (!state.assignedDealers || !state.assignedDealers.length)) {
+      state.assignedDealers = state.dealers.filter((dealer) => !isTestDealer(dealer));
+      storageSet('dakshAssignedDealers', JSON.stringify(state.assignedDealers));
+    }
     const realDealers = state.dealers.filter((dealer) => !isTestDealer(dealer));
-    const options = '<option value="">All Dealers</option>' + realDealers.map((dealer) => (
-      `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
-    )).join('');
+    ensureActiveDealerSelection();
     $$('.dealerSelect').forEach((select) => {
       const selected = cleanDealerCode(select.value);
-      const firstOption = select.closest('#reportFilters') ? '<option value="">Select Dealer</option>' : (select.id === 'dashboardDealerSelect' ? '<option value="">Active Audit</option>' : (select.classList.contains('bin-transfer-dealer') || select.id === 'binManagementDealer' || select.closest('#binSequenceTab') || select.closest('#reconciliation')) ? '<option value="">Select Dealer</option>' : '<option value="">All Dealers</option>');
+      const firstOption = !isAdminUser()
+        ? '<option value="">Select Dealer</option>'
+        : (select.closest('#reportFilters') ? '<option value="">Select Dealer</option>' : (select.id === 'dashboardDealerSelect' ? '<option value="">Active Audit</option>' : (select.classList.contains('bin-transfer-dealer') || select.id === 'binManagementDealer' || select.closest('#binSequenceTab') || select.closest('#reconciliation')) ? '<option value="">Select Dealer</option>' : '<option value="">All Dealers</option>'));
       select.innerHTML = firstOption + realDealers.map((dealer) => (
         `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
       )).join('');
       const activeDealer = state.activeAudit && state.activeAudit.dealerCode ? cleanDealerCode(state.activeAudit.dealerCode) : '';
       const preferred = selected ||
+        activeDealerId() ||
         (select.id === 'dashboardDealerSelect' ? cleanDealerCode(state.dashboardDealerCode || activeDealer) : '') ||
         (select.id === 'scanHistoryDealer' ? selectedScanDealerCode() || activeDealer : '') ||
         (select.classList.contains('bin-transfer-dealer') ? activeDealer : '');
       select.value = Array.from(select.options).some((option) => option.value === preferred) ? preferred : select.options[0].value;
       syncDealerSelectDisplay(select);
     });
+    renderActiveDealerSwitch();
+    renderDealerAccessOptions();
     updateActiveAuditUi();
     const cleanupOptions = '<option value="">Select Dealer</option>' + state.dealers.map((dealer) => (
       `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
@@ -5796,9 +6012,9 @@
   }
 
   function clearLocalDealerData() {
-    localStorage.removeItem(SYNC_QUEUE_KEY);
-    localStorage.removeItem(SYNC_LOG_KEY);
-    localStorage.removeItem(LAST_SYNC_KEY);
+    localStorage.removeItem(scopedStorageKey(SYNC_QUEUE_KEY));
+    localStorage.removeItem(scopedStorageKey(SYNC_LOG_KEY));
+    localStorage.removeItem(scopedStorageKey(LAST_SYNC_KEY));
     renderSyncQueue();
     renderSyncLog();
     toast('Local sync storage cleared');
@@ -6009,7 +6225,7 @@
     const queue = beforeQueue.filter((record) => !matches(record));
     const log = beforeLog.filter((record) => !matches(record));
     saveSyncQueue(queue);
-    writeJsonStorage(SYNC_LOG_KEY, log);
+    writeJsonStorage(scopedStorageKey(SYNC_LOG_KEY), log);
     renderSyncLog();
     return { localQueueDeleted: beforeQueue.length - queue.length, localLogDeleted: beforeLog.length - log.length };
   }
@@ -6320,7 +6536,7 @@
     const queue = beforeQueue.filter((record) => !matches(record));
     const log = beforeLog.filter((record) => !matches(record));
     saveSyncQueue(queue);
-    writeJsonStorage(SYNC_LOG_KEY, log);
+    writeJsonStorage(scopedStorageKey(SYNC_LOG_KEY), log);
     renderSyncQueue();
     renderSyncLog();
     return { deletedCount: (beforeQueue.length - queue.length) + (beforeLog.length - log.length), queueDeleted: beforeQueue.length - queue.length, logDeleted: beforeLog.length - log.length };
@@ -6376,6 +6592,35 @@
     $('#locationDeletePanel')?.classList.toggle('active', tab === 'location');
   }
 
+  function setMultiSelectValues(select, values = []) {
+    if (!select) return;
+    const selected = new Set(cleanDealerAccessInput(values));
+    Array.from(select.options || []).forEach((option) => {
+      option.selected = selected.has(cleanDealerCode(option.value));
+    });
+  }
+
+  function dealerAccessDisplay(access = []) {
+    const codes = cleanDealerAccessInput(access);
+    if (!codes.length) return '';
+    if (codes.includes('ALL')) return 'All Dealers';
+    return codes.map((code) => {
+      const dealer = dealerByCode(code);
+      return dealer ? formatDealerDisplay(dealer) : code;
+    }).join(', ');
+  }
+
+  function renderDealerAccessOptions() {
+    const dealers = (state.dealers || []).filter((dealer) => !isTestDealer(dealer) && dealer.active !== false);
+    $$('.dealer-access-select').forEach((select) => {
+      const selected = cleanDealerAccessInput(Array.from(select.selectedOptions || []).map((option) => option.value));
+      select.innerHTML = '<option value="ALL">All Dealers</option>' + dealers.map((dealer) => (
+        `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
+      )).join('');
+      setMultiSelectValues(select, selected);
+    });
+  }
+
   async function loadUsers() {
     if (!state.user || state.user.role !== 'admin') return;
     const data = await api('/api/users');
@@ -6391,7 +6636,7 @@
         <td>${escapeHtml(user.username)}</td>
         <td>${escapeHtml(user.email)}</td>
         <td>${escapeHtml(user.role === 'mobile_user' ? 'Mobile User' : user.role)}</td>
-        <td>${escapeHtml((user.dealerAccess || []).join(', '))}</td>
+        <td>${escapeHtml(dealerAccessDisplay(user.dealerAccess || []))}</td>
         <td>${user.approved ? '<span class="status-ok">Approved</span>' : '<span class="status-warn">Pending</span>'}</td>
         <td>${user.active ? '<span class="status-ok">Active</span>' : '<span class="status-warn">Blocked</span>'}</td>
         <td class="user-actions-cell">
@@ -6498,7 +6743,8 @@
     form.elements.username.value = user.username || '';
     form.elements.email.value = user.email || '';
     form.elements.role.value = user.role || 'staff';
-    form.elements.dealerAccess.value = (user.dealerAccess || []).join(', ');
+    renderDealerAccessOptions();
+    setMultiSelectValues(form.elements.dealerAccess, user.dealerAccess || []);
     form.elements.password.value = '';
     form.elements.pin.value = '';
     form.elements.approved.checked = user.approved !== false;
@@ -6788,7 +7034,7 @@
     return rawStillCurrent;
   }
 
-  function scheduleBarcodeAutosave(delay = 120) {
+  function scheduleBarcodeAutosave(delay = 35) {
     const form = $('#barcodeScanForm');
     const raw = String($('#barcodeRaw')?.value || '').trim();
     if (!form || !raw || state.barcodeAutoSaving) return;
@@ -6826,7 +7072,7 @@
       } finally {
         state.barcodeAutoSaving = false;
         const nextRaw = String($('#barcodeRaw')?.value || '').trim();
-        if (nextRaw && normalizePartText(nextRaw) !== normalizedRaw) scheduleBarcodeAutosave(40);
+        if (nextRaw && normalizePartText(nextRaw) !== normalizedRaw) scheduleBarcodeAutosave(20);
       }
     }, delay);
   }
@@ -7138,8 +7384,9 @@
     });
     $('#barcodeScanForm').addEventListener('submit', (event) => {
       event.preventDefault();
+      const raw = String($('#barcodeRaw')?.value || '').trim();
       fillBarcodePartFromRaw();
-      submitScan(event.currentTarget);
+      submitScan(event.currentTarget, { backgroundRefresh: true, expectedRaw: raw });
     });
     $('#focusScanner').addEventListener('click', () => $('#barcodeRaw').focus());
     $('#barcodeRaw').addEventListener('input', () => {
@@ -7148,15 +7395,15 @@
     $('#barcodeRaw').addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
-        scheduleBarcodeAutosave(80);
+        scheduleBarcodeAutosave(20);
       }
     });
-    $('#barcodeRaw').addEventListener('change', () => scheduleBarcodeAutosave(150));
+    $('#barcodeRaw').addEventListener('change', () => scheduleBarcodeAutosave(35));
     $$('#manualScanForm [name="type"], #barcodeScanForm [name="type"]').forEach((select) => {
       updateScanTypeFields(select.closest('form'));
       select.addEventListener('change', () => {
         updateScanTypeFields(select.closest('form'));
-        if (select.closest('#barcodeScanForm')) scheduleBarcodeAutosave(120);
+        if (select.closest('#barcodeScanForm')) scheduleBarcodeAutosave(35);
       });
     });
     $('#manualSyncBtn').addEventListener('click', runSync);
@@ -7166,7 +7413,7 @@
     $('#syncCenterRetryBtn').addEventListener('click', () => syncPendingQueue({ includeFailed: true }).catch((error) => toast(error.message, 'error')));
     $('#syncDebugRefreshBtn')?.addEventListener('click', () => loadLatestSyncDebug().catch((error) => toast(error.message, 'error')));
     $('#clearSyncLogBtn').addEventListener('click', () => {
-      localStorage.removeItem(SYNC_LOG_KEY);
+      localStorage.removeItem(scopedStorageKey(SYNC_LOG_KEY));
       renderSyncLog();
     });
     $('#clearSyncQueue').addEventListener('click', () => { $('#mobileSyncQueue').value = ''; });
@@ -7177,6 +7424,10 @@
     $$('.dealerSelect').forEach((select) => {
       select.addEventListener('change', () => {
         syncDealerSelectDisplay(select);
+        if (select.id === 'activeDealerSwitch') {
+          switchActiveDealer(select.value).catch((error) => toast(error.message, 'error'));
+          return;
+        }
         if (select.id === 'dashboardDealerSelect') {
           state.dashboardDealerCode = cleanDealerCode(select.value || '');
           state.selectedProductGroupSummary = null;
@@ -7706,7 +7957,7 @@
       event.preventDefault();
       try {
         const payload = formObject(event.currentTarget);
-        if (payload.role !== 'admin' && !String(payload.dealerAccess || '').trim()) {
+        if (payload.role !== 'admin' && !cleanDealerAccessInput(payload.dealerAccess).length) {
           payload.dealerAccess = selectedScanDealerCode() || selectedDashboardDealerCode() || (state.activeAudit && state.activeAudit.dealerCode) || '';
         }
         payload.dealerAccess = cleanDealerAccessInput(payload.dealerAccess);
@@ -7716,7 +7967,8 @@
         showCreatedUser(data.user);
         toast('User created');
         event.currentTarget.reset();
-        if (payload.role !== 'admin') event.currentTarget.elements.dealerAccess.value = payload.dealerAccess || '';
+        renderDealerAccessOptions();
+        if (payload.role !== 'admin') setMultiSelectValues(event.currentTarget.elements.dealerAccess, payload.dealerAccess);
         $('[name="approved"]', event.currentTarget).checked = true;
         $('[name="active"]', event.currentTarget).checked = true;
       } catch (error) {

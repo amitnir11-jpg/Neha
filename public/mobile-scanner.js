@@ -5,9 +5,17 @@
   const SESSION_KEY = 'dakshMobileSession';
   const DEVICE_KEY = 'dakshMobileDeviceId';
   const ACTIVE_BIN_KEY = 'dakshMobileActiveBinLocation';
+  const LAST_SYNC_KEY = 'dakshMobileLastSync';
+  const CACHE_VERSION_KEY = 'dakshMobileCacheVersion';
+  const CACHE_VERSION = '20260530-fast-qr-scan';
   const SYNC_INTERVAL_MS = 120000;
   const DUPLICATE_GUARD_MS = 1500;
   const BATCH_SIZE = 50;
+  const SCAN_READY_DELAY_MS = 90;
+  const SCAN_IDLE_DELAY_MS = 140;
+  const SCAN_BLOCKED_DELAY_MS = 220;
+  const DETECTION_REPEAT_SUPPRESS_MS = 1200;
+  const CLEARABLE_CACHE_STATUSES = new Set(['synced', 'failed', 'failed-duplicate', 'duplicate', 'invalid', 'rejected']);
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -21,11 +29,15 @@
     syncTimer: null,
     paused: false,
     syncing: false,
+    syncAgain: false,
+    scanProcessing: false,
+    pendingLogin: null,
     recentRaw: new Map(),
     lastScanAtByRaw: new Map(),
+    scanIdentityKeys: new Set(),
     socket: null,
     manualPart: null,
-    activeBinLocation: upper(localStorage.getItem(ACTIVE_BIN_KEY) || '')
+    activeBinLocation: ''
   };
 
   function clean(value) { return String(value || '').trim(); }
@@ -40,6 +52,45 @@
     return id;
   }
 
+  function sessionUserKey(session = state.session) {
+    const user = session?.user || {};
+    return clean(user.id || user.username || user.email || user.name || session?.userId || session?.loginId).toLowerCase();
+  }
+
+  function sessionAuditId(session = state.session) {
+    return clean(session?.activeAudit?.auditId || session?.auditId || '');
+  }
+
+  function sessionScopeKey(session = state.session) {
+    const dealerCode = upper(session?.dealerCode || '');
+    if (!dealerCode) return '';
+    return [dealerCode, sessionAuditId(session) || 'audit', sessionUserKey(session) || 'user', deviceId()].join('|');
+  }
+
+  function scopedStorageKey(baseKey, session = state.session) {
+    const scope = sessionScopeKey(session);
+    return scope ? `${baseKey}:${scope}` : baseKey;
+  }
+
+  function rowDealerCode(row = {}) {
+    return upper(row.dealerCode || row.dealer || row.dealerId || row.activeDealerId || row.serverAck?.dealerCode || '');
+  }
+
+  function scopeDealerCode(scopeKey = '') {
+    return upper(String(scopeKey || '').split('|')[0] || '');
+  }
+
+  function rowStatus(row = {}) {
+    return clean(row.status || row.syncStatus || '').toLowerCase();
+  }
+
+  function scanIdentityKey(scanIdentity, mode = state.mode, session = state.session) {
+    const scope = sessionScopeKey(session);
+    const identity = normalizeScanIdentity(scanIdentity);
+    const scanMode = upper(mode || state.mode);
+    return scope && identity && scanMode ? `${scope}|${scanMode}|${identity}` : '';
+  }
+
   function readSession() {
     try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (_) { return null; }
   }
@@ -52,6 +103,115 @@
   function clearSession() {
     state.session = null;
     localStorage.removeItem(SESSION_KEY);
+  }
+
+  function rowBelongsToSession(row = {}, session = state.session) {
+    if (!session) return false;
+    const sessionDealer = upper(session.dealerCode || session.activeDealerId || '');
+    if (!sessionDealer) return false;
+    const rowDealer = rowDealerCode(row);
+    const scopedDealer = scopeDealerCode(row.scopeKey);
+    if (rowDealer && rowDealer !== sessionDealer) return false;
+    if (scopedDealer && scopedDealer !== sessionDealer) return false;
+    if (!rowDealer && !scopedDealer) return false;
+    const scope = sessionScopeKey(session);
+    if (row.scopeKey) return row.scopeKey === scope;
+    const currentAuditId = sessionAuditId(session);
+    const rowAuditId = clean(row.auditId || row.serverAck?.auditId);
+    if (currentAuditId && rowAuditId && rowAuditId !== currentAuditId) return false;
+    if (currentAuditId && row.status === 'synced' && !rowAuditId) return false;
+    const possibleUsers = new Set([
+      clean(session.user?.id).toLowerCase(),
+      clean(session.user?.username).toLowerCase(),
+      clean(session.user?.email).toLowerCase(),
+      clean(session.user?.name).toLowerCase()
+    ].filter(Boolean));
+    const rowUser = clean(row.loginId || row.userId || row.userName).toLowerCase();
+    return !rowUser || possibleUsers.has(rowUser);
+  }
+
+  function readActiveBin(session = state.session) {
+    return upper(localStorage.getItem(scopedStorageKey(ACTIVE_BIN_KEY, session)) || '');
+  }
+
+  function authExpired(error) {
+    return error && (
+      error.status === 401 ||
+      /login required|invalid token|jwt expired|token expired/i.test(error.message || '')
+    );
+  }
+
+  function authExpiredMessage() {
+    return 'Auth expired: please login again';
+  }
+
+  function handleAuthExpired(error) {
+    clearInterval(state.syncTimer);
+    state.syncTimer = null;
+    if (state.socket) {
+      state.socket.disconnect();
+      state.socket = null;
+    }
+    clearSession();
+    updateShell();
+    toast(authExpired(error) ? authExpiredMessage() : (error?.message || 'Login required'), 'error');
+  }
+
+  function tokenPayload(token) {
+    try {
+      const payload = String(token || '').split('.')[1] || '';
+      if (!payload) return {};
+      const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function sessionTokenExpired(session = state.session) {
+    const exp = Number(tokenPayload(session?.token).exp || 0);
+    return Boolean(exp && Date.now() >= (exp * 1000 - 30000));
+  }
+
+  function normalizeScanIdentity(value) {
+    return upper(value).replace(/\s+/g, ' ');
+  }
+
+  function recordScanIdentity(row = {}) {
+    return normalizeScanIdentity(row.scanIdentity || row.rawUPI || row.rawScanString || row.rawScan || row.barcode || row.upiId || row.upiNo);
+  }
+
+  function isRetryableSyncError(error) {
+    const status = Number(error?.status || 0);
+    return !status || status === 408 || status === 429 || status >= 500;
+  }
+
+  async function refreshSessionContext() {
+    if (!state.session?.token || !state.session?.dealerCode) return;
+    try {
+      const query = new URLSearchParams({ dealerCode: state.session.dealerCode, deviceId: deviceId() });
+      const data = await api(`/api/mobile/status?${query.toString()}`);
+      if (data.activeAudit || data.auditId) {
+        saveSession({
+          ...state.session,
+          activeAudit: data.activeAudit || state.session.activeAudit || null,
+          auditId: data.activeAudit?.auditId || data.auditId || state.session.auditId || ''
+        });
+      }
+    } catch (error) {
+      if (authExpired(error)) handleAuthExpired(error);
+    }
+  }
+
+  async function purgeOutOfScopeRows() {
+    if (!state.session?.token) return;
+    const rows = await getAllScans();
+    const staleRows = rows.filter((row) => !rowBelongsToSession(row));
+    await Promise.all(staleRows.map((row) => deleteScan(row.scanId)));
+    if (staleRows.length) {
+      localStorage.setItem(CACHE_VERSION_KEY, CACHE_VERSION);
+      state.lastScanAtByRaw.clear();
+    }
   }
 
   function toast(message, type = '') {
@@ -115,30 +275,72 @@
     return requestToPromise(txStore().getAll());
   }
 
+  async function getScan(scanId) {
+    return requestToPromise(txStore().get(scanId));
+  }
+
   async function deleteScan(scanId) {
     await requestToPromise(txStore('readwrite').delete(scanId));
   }
 
+  function rememberScanIdentity(row = {}) {
+    if (rowStatus(row) === 'failed-duplicate') return;
+    const key = scanIdentityKey(recordScanIdentity(row), row.scanType || row.type);
+    if (key) state.scanIdentityKeys.add(key);
+  }
+
+  async function rebuildSessionScanIndex() {
+    state.scanIdentityKeys.clear();
+    if (!state.db || !state.session) return;
+    const rows = await getAllScans();
+    rows.filter((row) => rowBelongsToSession(row)).forEach(rememberScanIdentity);
+  }
+
   async function counts() {
     const rows = await getAllScans();
+    const scopedRows = rows.filter((row) => rowBelongsToSession(row));
     return {
-      rows,
-      pending: rows.filter((row) => row.status === 'pending').length,
-      failed: rows.filter((row) => row.status === 'failed').length,
-      synced: rows.filter((row) => row.status === 'synced').length
+      rows: scopedRows,
+      pending: scopedRows.filter((row) => rowStatus(row) === 'pending').length,
+      failed: scopedRows.filter((row) => rowStatus(row) === 'failed').length,
+      synced: scopedRows.filter((row) => rowStatus(row) === 'synced').length
+    };
+  }
+
+  function withDealerScopePath(path) {
+    if (!state.session?.dealerCode || !String(path || '').startsWith('/api/')) return path;
+    const url = new URL(path, window.location.origin);
+    if (!url.searchParams.get('activeDealerId')) url.searchParams.set('activeDealerId', state.session.dealerCode);
+    if (!url.searchParams.get('dealerCode')) url.searchParams.set('dealerCode', state.session.dealerCode);
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+
+  function withDealerScopeBody(body) {
+    if (!state.session?.dealerCode || !body || typeof body !== 'object' || Array.isArray(body)) return body;
+    return {
+      ...body,
+      activeDealerId: body.activeDealerId || state.session.dealerCode,
+      dealerCode: body.dealerCode || state.session.dealerCode,
+      auditId: body.auditId || sessionAuditId() || ''
     };
   }
 
   function api(path, options = {}) {
     const headers = { 'content-type': 'application/json', ...(options.headers || {}) };
     if (state.session?.token) headers.authorization = `Bearer ${state.session.token}`;
-    return fetch(path, {
+    const body = withDealerScopeBody(options.body);
+    return fetch(withDealerScopePath(path), {
       ...options,
       headers,
-      body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body
+      body: body && typeof body !== 'string' ? JSON.stringify(body) : body
     }).then(async (res) => {
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.success === false) throw new Error(data.message || `HTTP ${res.status}`);
+      if (!res.ok || data.success === false) {
+        const error = new Error(data.message || `HTTP ${res.status}`);
+        error.status = res.status;
+        error.data = data;
+        throw error;
+      }
       return data;
     });
   }
@@ -150,8 +352,62 @@
     if (loggedIn) {
       $('#dealerLabel').textContent = `${state.session.dealerCode} - ${state.session.dealerName || 'Dealer'}`;
       $('#userLabel').textContent = `${state.session.user?.name || state.session.user?.username || 'User'} | ${deviceId()}`;
+      renderDealerSwitch();
     }
     updateSyncUi().catch(() => undefined);
+  }
+
+  function sessionDealers() {
+    return state.session?.assignedDealers || state.session?.activeDealers || [];
+  }
+
+  function dealerOptionLabel(dealer = {}) {
+    const code = upper(dealer.dealerCode || dealer.code || dealer.id || '');
+    const name = clean(dealer.dealerName || dealer.name || '');
+    return code && name ? `${code} - ${name}` : code || name || 'Dealer';
+  }
+
+  function renderDealerSwitch() {
+    const select = $('#mobileDealerSwitch');
+    if (!select) return;
+    const dealers = sessionDealers();
+    select.hidden = dealers.length <= 1;
+    if (select.hidden) return;
+    select.innerHTML = dealers.map((dealer) => {
+      const code = upper(dealer.dealerCode || dealer.code || dealer.id || '');
+      return `<option value="${escapeHtml(code)}">${escapeHtml(dealerOptionLabel(dealer))}</option>`;
+    }).join('');
+    select.value = state.session.dealerCode || '';
+  }
+
+  async function switchDealer(dealerCode) {
+    const nextDealer = upper(dealerCode);
+    if (!nextDealer || !state.session || nextDealer === state.session.dealerCode) return;
+    const summary = await counts();
+    if ((summary.pending || summary.failed) && !window.confirm('Pending scans exist for current dealer. Switch dealer now?')) {
+      renderDealerSwitch();
+      return;
+    }
+    state.paused = true;
+    stopCamera();
+    const dealer = sessionDealers().find((item) => upper(item.dealerCode || item.code || item.id || '') === nextDealer) || {};
+    const data = await api(`/api/mobile/config?dealerCode=${encodeURIComponent(nextDealer)}`).catch(() => ({}));
+    saveSession({
+      ...state.session,
+      dealerCode: nextDealer,
+      activeDealerId: nextDealer,
+      dealerName: dealer.dealerName || dealer.name || nextDealer,
+      activeAudit: data.activeAudit || null,
+      auditId: data.activeAudit?.auditId || dealer.currentAuditId || ''
+    });
+    state.activeBinLocation = readActiveBin();
+    state.recentRaw.clear();
+    state.lastScanAtByRaw.clear();
+    await rebuildSessionScanIndex();
+    state.paused = false;
+    updateShell();
+    await sendHeartbeat().catch(() => undefined);
+    setMode(state.mode);
   }
 
   function updateOnlineUi() {
@@ -184,8 +440,9 @@
 
   function setActiveBin(value) {
     state.activeBinLocation = upper(value);
-    if (state.activeBinLocation) localStorage.setItem(ACTIVE_BIN_KEY, state.activeBinLocation);
-    else localStorage.removeItem(ACTIVE_BIN_KEY);
+    const key = scopedStorageKey(ACTIVE_BIN_KEY);
+    if (state.activeBinLocation) localStorage.setItem(key, state.activeBinLocation);
+    else localStorage.removeItem(key);
     updateBinPanel();
     return state.activeBinLocation;
   }
@@ -207,7 +464,7 @@
     $('#pendingBadge').textContent = `Pending ${summary.pending}`;
     $('#pendingCount').textContent = summary.pending;
     $('#failedCount').textContent = summary.failed;
-    const last = localStorage.getItem('dakshMobileLastSync') || '';
+    const last = localStorage.getItem(scopedStorageKey(LAST_SYNC_KEY)) || '';
     $('#lastSyncTime').textContent = last ? new Date(last).toLocaleString() : 'Never';
     $('#lastSyncLabel').textContent = last ? `Last ${new Date(last).toLocaleTimeString()}` : 'Never synced';
     renderLastScans(summary.rows);
@@ -221,7 +478,7 @@
         <td>${escapeHtml(row.partNumber || '-')}</td>
         <td>${escapeHtml(row.qty || 1)}</td>
         <td>${escapeHtml(row.scanType)}</td>
-        <td>${escapeHtml(row.status)}</td>
+        <td>${escapeHtml(row.status || row.syncStatus)}</td>
       </tr>
     `).join('') : '<tr><td colspan="5">No scans yet</td></tr>';
   }
@@ -261,6 +518,32 @@
     }
   }
 
+  function masterFields(master = {}, scannedMrpProvided = false, scannedMrp = 0, inputDlc = 0) {
+    return {
+      partDescription: master?.partDescription || master?.partName || '',
+      category: master?.productCategory || master?.category || '',
+      productCategory: master?.productCategory || master?.category || '',
+      mrp: scannedMrpProvided ? scannedMrp : Number(master?.mrp || 0),
+      scanMRP: scannedMrpProvided ? scannedMrp : 0,
+      mrpProvided: scannedMrpProvided,
+      dlc: Number(master?.dlc || inputDlc || 0),
+      model: master?.model || '',
+      year: master?.year || master?.manufacturingYear || ''
+    };
+  }
+
+  async function enrichSavedScan(scanId, partNumber, scannedMrpProvided, scannedMrp, inputDlc) {
+    const master = await enrichPart(partNumber);
+    if (!master) return;
+    const row = await getScan(scanId);
+    if (!row || !rowBelongsToSession(row)) return;
+    await putScan({
+      ...row,
+      ...masterFields(master, scannedMrpProvided, scannedMrp, inputDlc)
+    });
+    updateSyncUi().catch(() => undefined);
+  }
+
   async function promptExtraFields(record) {
     if (record.scanType === 'FITTED') {
       record.regdNo = upper(window.prompt('Registration number') || '');
@@ -285,34 +568,38 @@
     const partNumber = upper(input.partNumber || parsed.partNumber);
     if (!partNumber) throw new Error('Part number not found');
     const rawUPI = clean(input.rawUPI || input.rawScan || `${source}:${partNumber}:${Date.now()}`);
+    const scanIdentity = normalizeScanIdentity(rawUPI);
     const now = Date.now();
-    const recentAt = state.lastScanAtByRaw.get(rawUPI);
+    const duplicateScope = scanIdentityKey(scanIdentity, state.mode);
+    const recentAt = state.lastScanAtByRaw.get(duplicateScope);
     if (recentAt && now - recentAt < DUPLICATE_GUARD_MS) {
       beep('bad');
-      toast('Already scanned', 'error');
+      toast('Duplicate: exact same UPI/barcode already scanned', 'error');
       return null;
     }
-    state.lastScanAtByRaw.set(rawUPI, now);
-    const existing = (await getAllScans()).find((row) => row.rawUPI === rawUPI && row.status !== 'failed-duplicate');
-    if (existing) {
+    state.lastScanAtByRaw.set(duplicateScope, now);
+    if (duplicateScope && state.scanIdentityKeys.has(duplicateScope)) {
       beep('bad');
-      toast('Already scanned', 'error');
+      toast('Duplicate: exact same UPI/barcode already scanned', 'error');
       return null;
     }
-    const master = input.master || await enrichPart(partNumber);
     const inputMrp = Number(input.mrp || 0);
     const parsedMrp = Number(parsed.mrp || 0);
     const scannedMrp = parsedMrp || inputMrp;
     const scannedMrpProvided = Boolean(parsed.mrpProvided || input.mrpProvided || scannedMrp);
+    const master = input.master || null;
     let record = {
       scanId: input.scanId || `${deviceId()}-${now}-${Math.random().toString(16).slice(2, 8)}`,
+      scopeKey: sessionScopeKey(),
       userId: state.session.user?.id || state.session.user?.username || '',
       loginId: state.session.user?.username || '',
       userName: state.session.user?.name || state.session.user?.username || '',
       role: state.session.user?.role || '',
       dealerCode: state.session.dealerCode,
       dealerName: state.session.dealerName || '',
+      auditId: sessionAuditId(),
       partNumber,
+      scanIdentity,
       rawUPI,
       rawScan: rawUPI,
       rawScanString: rawUPI,
@@ -327,33 +614,35 @@
       source,
       syncStatus: 'pending',
       status: 'pending',
-      partDescription: master?.partDescription || master?.partName || '',
-      category: master?.productCategory || master?.category || '',
-      productCategory: master?.productCategory || master?.category || '',
-      mrp: scannedMrpProvided ? scannedMrp : Number(master?.mrp || 0),
-      scanMRP: scannedMrpProvided ? scannedMrp : 0,
-      mrpProvided: scannedMrpProvided,
-      dlc: Number(master?.dlc || input.dlc || 0),
-      model: master?.model || '',
-      year: master?.year || master?.manufacturingYear || ''
+      ...masterFields(master, scannedMrpProvided, scannedMrp, input.dlc)
     };
     record = await promptExtraFields(record);
     await putScan(record);
+    rememberScanIdentity(record);
     $('#lastPart').textContent = record.partNumber;
     $('#lastMeta').textContent = `${record.scanType} | Qty ${record.qty} | ${record.status === 'pending' && navigator.onLine ? 'Queued for sync' : 'Offline Saved'}`;
     beep('ok');
     toast(navigator.onLine ? 'Saved locally, syncing' : 'Offline Saved', 'success');
     updateSyncUi().catch(() => undefined);
+    if (!master) enrichSavedScan(record.scanId, partNumber, scannedMrpProvided, scannedMrp, input.dlc).catch(() => undefined);
     if (navigator.onLine) syncPending({ silent: true }).catch(() => undefined);
     return record;
   }
 
   async function syncPending(options = {}) {
-    if (state.syncing || !state.session?.token || !navigator.onLine) return;
+    if (state.syncing) {
+      state.syncAgain = true;
+      return;
+    }
+    if (!state.session?.token || !navigator.onLine) return;
+    if (sessionTokenExpired()) {
+      handleAuthExpired({ status: 401, message: authExpiredMessage() });
+      return;
+    }
     state.syncing = true;
     try {
       const all = await getAllScans();
-      const batch = all.filter((row) => row.status === 'pending' || row.status === 'failed').slice(0, BATCH_SIZE);
+      const batch = all.filter((row) => rowBelongsToSession(row) && (rowStatus(row) === 'pending' || rowStatus(row) === 'failed')).slice(0, BATCH_SIZE);
       if (!batch.length) {
         if (!options.silent) toast('Nothing pending');
         return;
@@ -363,6 +652,8 @@
         body: {
           deviceId: deviceId(),
           deviceName: state.session.deviceName || '',
+          dealerCode: state.session.dealerCode,
+          dealerName: state.session.dealerName || '',
           appVersion: APP_VERSION,
           pendingCount: batch.length,
           batteryPercent: await batteryPercent(),
@@ -371,27 +662,56 @@
       });
       const inserted = new Map((data.insertedRecords || []).map((row) => [clean(row.clientScanId || row.scanId || row.uniqueScanId), row]));
       const duplicateIds = new Set((data.logs || []).filter((log) => log.status === 'duplicate').map((log) => clean(log.clientScanId || log.localId || log.scanId)));
-      const failedIds = new Set((data.logs || []).filter((log) => log.status === 'failed').map((log) => clean(log.clientScanId || log.localId || log.scanId)));
+      const failedLogs = new Map((data.logs || [])
+        .filter((log) => log.status === 'failed' || log.status === 'invalid')
+        .map((log) => [clean(log.clientScanId || log.localId || log.scanId), clean(log.errorMessage || log.reason || 'Server failed this record')]));
       for (const row of batch) {
         const saved = inserted.get(row.scanId) || inserted.get(row.clientScanId);
         if (saved || duplicateIds.has(row.scanId)) {
-          await putScan({ ...row, status: 'synced', syncStatus: 'synced', timestamp: saved?.timestamp || saved?.serverReceivedAt || nowIso(), serverAck: saved || null });
-        } else if (failedIds.has(row.scanId)) {
-          await putScan({ ...row, status: 'failed', syncStatus: 'failed', syncError: 'Server failed this record' });
+          await putScan({ ...row, auditId: saved?.auditId || row.auditId || sessionAuditId(), status: 'synced', syncStatus: 'synced', timestamp: saved?.timestamp || saved?.serverReceivedAt || nowIso(), serverAck: saved || null });
+        } else if (failedLogs.has(row.scanId)) {
+          await putScan({ ...row, status: 'failed', syncStatus: 'failed', syncError: failedLogs.get(row.scanId) });
         } else if (data.success) {
-          await putScan({ ...row, status: 'synced', syncStatus: 'synced', timestamp: nowIso() });
+          await putScan({ ...row, auditId: row.auditId || sessionAuditId(), status: 'synced', syncStatus: 'synced', timestamp: nowIso() });
         }
       }
-      localStorage.setItem('dakshMobileLastSync', nowIso());
+      localStorage.setItem(scopedStorageKey(LAST_SYNC_KEY), nowIso());
       if (!options.silent) toast(data.message || 'Sync complete', 'success');
       sendHeartbeat().catch(() => undefined);
     } catch (error) {
-      const batch = (await getAllScans()).filter((row) => row.status === 'pending').slice(0, BATCH_SIZE);
-      for (const row of batch) await putScan({ ...row, status: 'failed', syncStatus: 'failed', syncError: error.message });
-      if (!options.silent) toast(error.message, 'error');
+      if (authExpired(error)) {
+        handleAuthExpired(error);
+        return;
+      }
+      const batch = (await getAllScans()).filter((row) => rowBelongsToSession(row) && rowStatus(row) === 'pending').slice(0, BATCH_SIZE);
+      const logs = Array.isArray(error.data?.logs) ? error.data.logs : [];
+      if (logs.length) {
+        const failedLogs = new Map(logs
+          .filter((log) => log.status === 'failed' || log.status === 'invalid')
+          .map((log) => [clean(log.clientScanId || log.localId || log.scanId), clean(log.errorMessage || log.reason || error.message)]));
+        const duplicateIds = new Set(logs
+          .filter((log) => log.status === 'duplicate')
+          .map((log) => clean(log.clientScanId || log.localId || log.scanId)));
+        for (const row of batch) {
+          if (duplicateIds.has(row.scanId)) {
+            await putScan({ ...row, status: 'synced', syncStatus: 'synced', syncError: '', timestamp: nowIso() });
+          } else if (failedLogs.has(row.scanId)) {
+            await putScan({ ...row, status: 'failed', syncStatus: 'failed', syncError: failedLogs.get(row.scanId) });
+          }
+        }
+      } else if (isRetryableSyncError(error)) {
+        for (const row of batch) await putScan({ ...row, status: 'pending', syncStatus: 'pending', syncError: `Network/server error: ${error.message}` });
+      } else {
+        for (const row of batch) await putScan({ ...row, status: 'failed', syncStatus: 'failed', syncError: error.message });
+      }
+      if (!options.silent) toast(isRetryableSyncError(error) ? 'Network/server error: scans kept pending' : error.message, 'error');
     } finally {
       state.syncing = false;
       updateSyncUi().catch(() => undefined);
+      if (state.syncAgain && state.session?.token && navigator.onLine) {
+        state.syncAgain = false;
+        setTimeout(() => syncPending({ silent: true }).catch(() => undefined), 0);
+      }
     }
   }
 
@@ -436,9 +756,13 @@
     const constraints = {
       video: {
         facingMode: { ideal: 'environment' },
-        width: { ideal: 960, max: 1280 },
-        height: { ideal: 540, max: 720 },
-        frameRate: { ideal: 12, max: 18 }
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 },
+        frameRate: { ideal: 24, max: 30 },
+        advanced: [
+          { focusMode: 'continuous' },
+          { exposureMode: 'continuous' }
+        ]
       },
       audio: false
     };
@@ -465,18 +789,35 @@
 
   async function scanLoop() {
     clearTimeout(state.scanTimer);
-    if (!state.stream || state.paused || !state.detector) {
-      state.scanTimer = setTimeout(scanLoop, 450);
+    if (!state.stream || state.paused || !state.detector || state.scanProcessing) {
+      state.scanTimer = setTimeout(scanLoop, SCAN_BLOCKED_DELAY_MS);
       return;
     }
+    let nextDelay = SCAN_IDLE_DELAY_MS;
     try {
       const codes = await state.detector.detect($('#cameraPreview'));
       const raw = clean(codes && codes[0] && codes[0].rawValue);
-      if (raw) await saveLocalScan({ rawUPI: raw }, 'mobile');
-    } catch (_) {
-      $('#cameraState').textContent = 'Scanner active. If QR is not detected, use Manual Entry.';
+      if (raw) {
+        const detectedKey = scanIdentityKey(raw, state.mode) || `${state.mode}|${normalizeScanIdentity(raw)}`;
+        const detectedAt = state.recentRaw.get(detectedKey) || 0;
+        if (detectedAt && Date.now() - detectedAt < DETECTION_REPEAT_SUPPRESS_MS) {
+          nextDelay = SCAN_READY_DELAY_MS;
+          return;
+        }
+        state.recentRaw.set(detectedKey, Date.now());
+        state.scanProcessing = true;
+        nextDelay = SCAN_READY_DELAY_MS;
+        saveLocalScan({ rawUPI: raw }, 'mobile')
+          .catch((error) => toast(error.message, 'error'))
+          .finally(() => { state.scanProcessing = false; });
+      }
+    } catch (error) {
+      $('#cameraState').textContent = error.name === 'NotSupportedError'
+        ? 'Barcode scanner unavailable. Use Manual Entry.'
+        : 'Scanner active. If QR is not detected, use Manual Entry.';
+      nextDelay = SCAN_BLOCKED_DELAY_MS;
     } finally {
-      state.scanTimer = setTimeout(scanLoop, 360);
+      state.scanTimer = setTimeout(scanLoop, nextDelay);
     }
   }
 
@@ -500,14 +841,36 @@
     $('#manualJobLabel').classList.toggle('hidden', state.mode !== 'FITTED');
   }
 
+  function showDealerSelection(data, payload) {
+    const dealers = data.assignedDealers || data.activeDealers || [];
+    const select = $('#loginDealerSelect');
+    if (!select || !dealers.length) return false;
+    select.innerHTML = '<option value="">Select Dealer</option>' + dealers.map((dealer) => {
+      const code = upper(dealer.dealerCode || dealer.code || dealer.id || '');
+      const name = clean(dealer.dealerName || dealer.name || '');
+      return `<option value="${escapeHtml(code)}">${escapeHtml(code)}${name ? ` - ${escapeHtml(name)}` : ''}</option>`;
+    }).join('');
+    $('#dealerSelectLabel').hidden = false;
+    $('#dealerCodeInputLabel').hidden = true;
+    state.pendingLogin = { data, payload };
+    $('#loginMessage').textContent = 'Select dealer';
+    return true;
+  }
+
   async function login(event) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const selectedDealer = upper(form.get('selectedDealerCode') || form.get('dealerCode'));
+    if (state.pendingLogin && !selectedDealer) {
+      $('#loginMessage').textContent = 'Select dealer';
+      return;
+    }
     const payload = {
-      username: clean(form.get('username')),
-      password: String(form.get('password') || ''),
-      pin: String(form.get('pin') || ''),
-      dealerCode: upper(form.get('dealerCode')),
+      ...(state.pendingLogin?.payload || {}),
+      username: clean(form.get('username') || state.pendingLogin?.payload?.username),
+      password: String(form.get('password') || state.pendingLogin?.payload?.password || ''),
+      pin: String(form.get('pin') || state.pendingLogin?.payload?.pin || ''),
+      dealerCode: selectedDealer,
       deviceId: deviceId(),
       deviceName: clean(form.get('deviceName')) || 'Android Chrome',
       appVersion: APP_VERSION,
@@ -515,7 +878,16 @@
     };
     $('#loginMessage').textContent = 'Verifying...';
     const data = await api('/api/mobile/login', { method: 'POST', body: payload });
+    if (!data.dealerCode && data.needsDealerSelection && showDealerSelection(data, payload)) return;
+    state.pendingLogin = null;
+    $('#dealerSelectLabel').hidden = true;
+    $('#dealerCodeInputLabel').hidden = false;
     saveSession({ ...data, deviceName: payload.deviceName });
+    state.recentRaw.clear();
+    state.lastScanAtByRaw.clear();
+    state.activeBinLocation = readActiveBin();
+    await purgeOutOfScopeRows();
+    await rebuildSessionScanIndex();
     $('#loginMessage').textContent = '';
     updateShell();
     connectSocket();
@@ -527,7 +899,18 @@
   function logout() {
     stopCamera();
     clearInterval(state.syncTimer);
+    state.syncTimer = null;
+    if (state.socket) {
+      state.socket.disconnect();
+      state.socket = null;
+    }
     clearSession();
+    state.activeBinLocation = '';
+    state.recentRaw.clear();
+    state.lastScanAtByRaw.clear();
+    state.scanIdentityKeys.clear();
+    state.scanProcessing = false;
+    state.syncAgain = false;
     updateShell();
   }
 
@@ -554,8 +937,16 @@
 
   async function clearSynced() {
     const rows = await getAllScans();
-    await Promise.all(rows.filter((row) => row.status === 'synced').map((row) => deleteScan(row.scanId)));
-    toast('Synced local cache cleared', 'success');
+    const clearableRows = rows.filter((row) => rowBelongsToSession(row) && CLEARABLE_CACHE_STATUSES.has(rowStatus(row)));
+    const failedRows = clearableRows.filter((row) => rowStatus(row) === 'failed');
+    if (!clearableRows.length) {
+      toast('No local cache rows to clear for this dealer');
+      return;
+    }
+    if (failedRows.length && !window.confirm('Clear failed local scans for this dealer? They will not be retried after clearing.')) return;
+    await Promise.all(clearableRows.map((row) => deleteScan(row.scanId)));
+    await rebuildSessionScanIndex();
+    toast(`Cleared ${clearableRows.length} local cache row${clearableRows.length === 1 ? '' : 's'}`, 'success');
     updateSyncUi();
   }
 
@@ -626,6 +1017,10 @@
       toast(error.message, 'error');
     }));
     $('#logoutBtn').addEventListener('click', logout);
+    $('#mobileDealerSwitch')?.addEventListener('change', (event) => switchDealer(event.target.value).catch((error) => {
+      toast(error.message, 'error');
+      renderDealerSwitch();
+    }));
     $$('.mode-btn').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
     $('#pauseBtn').addEventListener('click', () => { state.paused = true; $('#cameraState').textContent = 'Paused'; });
     $('#resumeBtn').addEventListener('click', () => { state.paused = false; startCamera().catch((error) => toast(error.message, 'error')); });
@@ -651,7 +1046,7 @@
     });
     $('#retryFailedBtn').addEventListener('click', async () => {
       const rows = await getAllScans();
-      const failedRows = rows.filter((row) => row.status === 'failed');
+      const failedRows = rows.filter((row) => rowBelongsToSession(row) && rowStatus(row) === 'failed');
       const missingBinRows = failedRows.filter((row) => requiresPresetBin(row.scanType || row.type) && !upper(row.binLocation || row.bin));
       if (missingBinRows.length && !state.activeBinLocation) {
         toast('Set bin location, then retry failed scans', 'error');
@@ -680,7 +1075,14 @@
 
   async function init() {
     state.db = await openDb();
+    state.activeBinLocation = readActiveBin();
     bindEvents();
+    if (state.session?.token) {
+      await refreshSessionContext();
+      state.activeBinLocation = readActiveBin();
+      await purgeOutOfScopeRows();
+      await rebuildSessionScanIndex();
+    }
     updateShell();
     if (state.session?.token) {
       connectSocket();
