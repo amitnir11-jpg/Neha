@@ -5260,3 +5260,44 @@ tr:hover td,
   min-height: 32px !important;
   height: 32px !important;
 }
+
+.side .side-link {
+  width: 100% !important;
+  min-height: 40px !important;
+  height: auto !important;
+  max-height: none !important;
+  display: flex !important;
+  justify-content: flex-start !important;
+  white-space: normal !important;
+  overflow: hidden !important;
+  text-overflow: clip !important;
+  word-break: normal !important;
+  overflow-wrap: anywhere !important;
+}
+
+body.sidebar-wide .side .side-link {
+  min-height: 44px !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+}
+
+.side .side-resize-handle {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: auto !important;
+  z-index: 12 !important;
+  width: 12px !important;
+  min-width: 12px !important;
+  max-width: 12px !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  display: block !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  cursor: col-resize !important;
+}

@@ -670,7 +670,7 @@
         <div class="master-tab-panels">
           <section id="partMasterTab" class="master-tab-panel active" role="tabpanel">
             <section class="card">
-              <div class="card-head"><h2>Master Catalogue</h2><div class="actions"><span id="uploadStats" class="muted"></span><button id="downloadCatalogueWarningsBtn" class="btn light admin-only" type="button" hidden>Download Warnings</button><button id="deleteCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete Old Catalogue</button><button id="reprocessProductGroupBtn" class="btn light admin-only" type="button">Reprocess Product Group</button><button id="reprocessMasterDataBtn" class="btn light admin-only" type="button">Reprocess Catalogue Data</button><button id="reprocessScanCatalogueBtn" class="btn light admin-only" type="button">Reprocess Scan History with Catalogue</button></div></div>
+              <div class="card-head"><h2>Master Catalogue</h2><div class="actions"><span id="partMasterRecordCount" class="muted">Part master records: 0</span><span id="uploadStats" class="muted"></span><button id="downloadCatalogueWarningsBtn" class="btn light admin-only" type="button" hidden>Download Warnings</button><button id="deleteCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete Old Catalogue</button><button id="reprocessProductGroupBtn" class="btn light admin-only" type="button">Reprocess Product Group</button><button id="reprocessMasterDataBtn" class="btn light admin-only" type="button">Reprocess Catalogue Data</button><button id="reprocessScanCatalogueBtn" class="btn light admin-only" type="button">Reprocess Scan History with Catalogue</button></div></div>
               <form id="partUploadForm" class="inline-form"><input name="file" type="file" accept=".xlsx,.xls,.csv" required><button class="btn primary admin-only" type="submit">Upload Master Catalogue</button><button id="deleteReuploadCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete & Reupload Catalogue</button></form>
             </section>
 
@@ -689,7 +689,7 @@
                   <button id="partExportSearchBtn" class="btn light" type="button">Export Search Result</button>
                 </div>
               </form>
-              <div id="partSearchMessage" class="form-message">Use filters and click Show to view master details.</div>
+              <div id="partSearchMessage" class="form-message">Click Show to view all parts, or use filters to narrow master details.</div>
             </section>
 
             <section id="partMasterResultsCard" class="card" hidden>

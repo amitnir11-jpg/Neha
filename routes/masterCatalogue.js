@@ -427,12 +427,15 @@ async function importCatalogue(file) {
   await MasterCatalogue.syncIndexes();
   await PartPriceHistory.syncIndexes();
   rebuildMovementSummaries({ partNumbers: valid.map((row) => row.normalizedPartNumber) }).catch((error) => console.warn('[movement-summary] rebuild after catalogue upload failed', error.message));
+  const currentMasterRecordCount = await MasterCatalogue.countDocuments({});
 
   return {
     uploadedRowsCount: rows.length,
     totalRowsUploaded: rows.length,
     importedCount: valid.length,
     uniquePartsCount: valid.length,
+    currentMasterRecordCount,
+    masterCatalogueCount: currentMasterRecordCount,
     priceHistoryRowsCount: priceRows.length,
     updatedDuplicateCount: valid.filter((row) => existingSet.has(row.normalizedPartNumber)).length,
     duplicateSkippedRows,
@@ -459,7 +462,7 @@ router.delete('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
       PartPriceHistory.deleteMany({})
     ]);
     req.io.emit('master:update');
-    res.json({ success: true, deletedOldRowsCount: result.deletedCount || 0, deletedPriceHistoryRowsCount: priceResult.deletedCount || 0 });
+    res.json({ success: true, deletedOldRowsCount: result.deletedCount || 0, deletedPriceHistoryRowsCount: priceResult.deletedCount || 0, currentMasterRecordCount: 0, masterCatalogueCount: 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

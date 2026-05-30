@@ -154,6 +154,7 @@
     validatorInvalidRows: [],
     validatorMapIndex: null,
     catalogueWarningRows: [],
+    masterCatalogueCount: 0,
     masterSearch: { q: '', page: 1, limit: 25, total: 0 },
     masterSearchRows: [],
     activeAudit: null,
@@ -4332,7 +4333,7 @@
     state.reconLoaded = true;
   }
 
-  function clearPartSearch(message = 'Use filters and click Show to view master details.') {
+  function clearPartSearch(message = 'Click Show to view all parts, or use filters to narrow master details.') {
     state.masterSearch = { q: '', page: 1, limit: 25, total: 0 };
     state.masterSearchRows = [];
     $('#partMasterRows').innerHTML = '';
@@ -4366,16 +4367,12 @@
   }
 
   async function loadParts(page = 1) {
-    if (!hasPartSearchFilter()) {
-      clearPartSearch();
-      return;
-    }
     const params = partSearchParams(page);
     state.masterSearch = { ...state.masterSearch, q: params.get('partNumber') || '', page, limit: state.masterSearch.limit || 25 };
     const box = $('#partSearchMessage');
     if (box) {
       box.className = 'form-message loading';
-      box.textContent = 'Searching master data...';
+      box.textContent = hasPartSearchFilter() ? 'Searching master data...' : 'Loading all master parts...';
     }
     const data = await api(`/api/master/search?${params.toString()}`);
     state.masterSearchRows = data.parts || [];
@@ -4400,12 +4397,20 @@
     $('#partNextPageBtn').disabled = page >= totalPages;
     if (box) {
       box.className = state.masterSearchRows.length ? 'form-message success' : 'form-message error';
-      box.textContent = state.masterSearchRows.length ? `${data.total || 0} master part(s) found.` : 'No matching master parts found';
+      box.textContent = state.masterSearchRows.length ? `${wholeNumber(data.total || 0)} master part(s) found.` : 'No master parts found';
     }
+  }
+
+  function setPartMasterRecordCount(count) {
+    const numeric = Math.max(Number(count || 0), 0);
+    state.masterCatalogueCount = numeric;
+    const node = $('#partMasterRecordCount');
+    if (node) node.textContent = `Part master records: ${wholeNumber(numeric)}`;
   }
 
   async function loadPartSearchFilters() {
     const data = await api('/api/master/filters');
+    setPartMasterRecordCount(data.totalParts || data.masterCatalogueCount || 0);
     const fill = (id, values = [], label) => {
       const select = $(`#${id}`);
       if (!select) return;
@@ -4472,13 +4477,16 @@
     state.catalogueWarningRows = data.warningReportRows || [];
     const warningButton = $('#downloadCatalogueWarningsBtn');
     if (warningButton) warningButton.hidden = !state.catalogueWarningRows.length;
+    const currentCount = Number(data.currentMasterRecordCount ?? data.masterCatalogueCount ?? data.uniquePartsCount ?? data.importedCount ?? 0);
+    setPartMasterRecordCount(currentCount);
     $('#uploadStats').textContent = [
-      `Rows ${data.totalRowsUploaded ?? data.uploadedRowsCount ?? 0}`,
-      `Unique parts ${data.uniquePartsCount ?? data.importedCount ?? 0}`,
-      `Price history ${data.priceHistoryRowsCount ?? 0}`,
-      `Duplicates skipped ${data.duplicateSkippedRows ?? data.updatedDuplicateCount ?? 0}`,
-      `Invalid ${data.skippedInvalidRowsCount ?? 0}`,
-      `Overlaps ${data.overlapWarningCount ?? 0}`
+      `Rows ${wholeNumber(data.totalRowsUploaded ?? data.uploadedRowsCount ?? 0)}`,
+      `Unique parts ${wholeNumber(data.uniquePartsCount ?? data.importedCount ?? 0)}`,
+      `Current records ${wholeNumber(currentCount)}`,
+      `Price history ${wholeNumber(data.priceHistoryRowsCount ?? 0)}`,
+      `Duplicates skipped ${wholeNumber(data.duplicateSkippedRows ?? data.updatedDuplicateCount ?? 0)}`,
+      `Invalid ${wholeNumber(data.skippedInvalidRowsCount ?? 0)}`,
+      `Overlaps ${wholeNumber(data.overlapWarningCount ?? 0)}`
     ].join(' | ');
   }
 
@@ -7525,7 +7533,7 @@
         const data = await api('/api/master-catalogue/upload', { method: 'POST', body: new FormData(event.currentTarget) });
         updateCatalogueUploadStats(data);
         toast(`Master catalogue uploaded: ${data.uniquePartsCount || data.importedCount || 0} unique parts, ${data.priceHistoryRowsCount || 0} price rows`);
-        if (hasPartSearchFilter()) await loadParts(state.masterSearch.page || 1);
+        if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
       } catch (error) {
         toast(error.message, 'error');
       }
@@ -7534,6 +7542,7 @@
       if (!window.confirm('Are you sure you want to delete old catalogue? Scan and audit data will not be deleted.')) return;
       const data = await api('/api/master-catalogue', { method: 'DELETE', body: {} });
       $('#uploadStats').textContent = `Deleted old rows ${data.deletedOldRowsCount || 0} | Deleted price history ${data.deletedPriceHistoryRowsCount || 0}`;
+      setPartMasterRecordCount(data.currentMasterRecordCount || 0);
       state.catalogueWarningRows = [];
       if ($('#downloadCatalogueWarningsBtn')) $('#downloadCatalogueWarningsBtn').hidden = true;
       clearPartSearch('Old catalogue deleted. Scan and audit data was not deleted.');
@@ -7547,7 +7556,7 @@
       const data = await api('/api/master-catalogue/delete-and-reupload', { method: 'POST', body: new FormData(form) });
       updateCatalogueUploadStats(data);
       toast('Catalogue deleted, reuploaded and reports reprocessed');
-      if (hasPartSearchFilter()) await loadParts(state.masterSearch.page || 1);
+      if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
     });
     $('#partSearchForm').addEventListener('submit', (event) => {
       event.preventDefault();
@@ -7959,8 +7968,8 @@
     socket.on('dealers:update', () => loadDealers().catch(console.warn));
     socket.on('master:update', () => {
       state.reportFilterDropdownsLoadedAt = 0;
-      const jobs = [loadBins(), loadCategories()];
-      if (hasPartSearchFilter()) jobs.push(loadParts(state.masterSearch.page || 1));
+      const jobs = [loadBins(), loadCategories(), loadPartSearchFilters()];
+      if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) jobs.push(loadParts(state.masterSearch.page || 1));
       Promise.all(jobs).catch(console.warn);
     });
   }

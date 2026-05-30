@@ -3497,7 +3497,7 @@ function addStockSummarySheet(workbook, data) {
   });
 
   applyRange(1, footerStart + footerRows.length - 1);
-  sheet.views = [{ state: 'frozen', ySplit: subHeadRow }];
+  sheet.views = [{ showGridLines: false, topLeftCell: 'A1', activeCell: 'A1' }];
   return sheet;
 }
 

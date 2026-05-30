@@ -658,7 +658,8 @@ router.get('/filters', auth.requireAuth, async (req, res) => {
       masterProductCategories,
       models,
       years,
-      groupPairs
+      groupPairs,
+      totalParts
     ] = await Promise.all([
       MasterCatalogue.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
       MasterCatalogue.distinct('productGroup', { productGroup: { $nin: [null, ''] } }),
@@ -671,7 +672,8 @@ router.get('/filters', auth.requireAuth, async (req, res) => {
       MasterPart.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
       MasterCatalogue.distinct('model', { model: { $nin: [null, ''] } }),
       MasterCatalogue.distinct('year', { year: { $nin: [null, ''] } }),
-      MasterCatalogue.find({ productGroup: { $nin: [null, ''] } }).select('productGroup partSubGroup').lean()
+      MasterCatalogue.find({ productGroup: { $nin: [null, ''] } }).select('productGroup partSubGroup').lean(),
+      MasterCatalogue.countDocuments({})
     ]);
     const cleanList = (items) => Array.from(new Set(items.map((item) => String(item || '').trim()).filter(Boolean)))
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
@@ -693,7 +695,9 @@ router.get('/filters', auth.requireAuth, async (req, res) => {
       subGroups: cleanList([].concat(catalogueSubGroups, inventorySubGroups)),
       groupSubGroups,
       models: cleanList(models),
-      years: cleanList(years)
+      years: cleanList(years),
+      totalParts,
+      masterCatalogueCount: totalParts
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
