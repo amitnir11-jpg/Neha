@@ -6386,80 +6386,82 @@
         <td>${escapeHtml((user.dealerAccess || []).join(', '))}</td>
         <td>${user.approved ? '<span class="status-ok">Approved</span>' : '<span class="status-warn">Pending</span>'}</td>
         <td>${user.active ? '<span class="status-ok">Active</span>' : '<span class="status-warn">Blocked</span>'}</td>
-        <td>
-          <div class="row-actions">
-            <button class="btn light editUserBtn" data-id="${escapeHtml(user.id)}" type="button">Edit</button>
-            <button class="btn light approveUserBtn" data-id="${escapeHtml(user.id)}" type="button">Approve</button>
-            <button class="btn light toggleUserBtn" data-id="${escapeHtml(user.id)}" data-active="${user.active ? 'false' : 'true'}" type="button">${user.active ? 'Block' : 'Activate'}</button>
-            <button class="btn light editUserEmailBtn" data-id="${escapeHtml(user.id)}" data-email="${escapeHtml(user.email)}" type="button">Email</button>
-            <button class="btn light sendUserResetBtn" data-id="${escapeHtml(user.id)}" type="button">Send OTP</button>
-            <button class="btn danger-soft adminResetUserBtn" data-id="${escapeHtml(user.id)}" type="button">Reset</button>
-            <button class="btn danger-soft deleteUserBtn" data-id="${escapeHtml(user.id)}" data-username="${escapeHtml(user.username)}" type="button">Delete</button>
-          </div>
+        <td class="user-actions-cell">
+          <select class="app-action-dropdown user-action-dropdown" data-id="${escapeHtml(user.id)}" data-active="${user.active ? 'false' : 'true'}" data-email="${escapeHtml(user.email)}" data-username="${escapeHtml(user.username)}" aria-label="Actions for ${escapeHtml(user.username || user.name || 'user')}">
+            <option value="">Actions</option>
+            <option value="edit">Edit</option>
+            <option value="approve">Approve</option>
+            <option value="toggle">${user.active ? 'Block' : 'Activate'}</option>
+            <option value="email">Email</option>
+            <option value="send-reset">Send OTP</option>
+            <option value="reset-password">Reset</option>
+            <option value="delete">Delete</option>
+          </select>
         </td>
       </tr>
     `).join('');
 
-    $$('.editUserBtn').forEach((button) => {
-      button.addEventListener('click', () => openEditUserModal(button.dataset.id));
-    });
-
-    $$('.approveUserBtn').forEach((button) => {
-      button.addEventListener('click', async () => {
-        await api(`/api/users/${button.dataset.id}/approve`, { method: 'PUT', body: {} });
-        toast('User approved');
-        await loadUsers();
+    $$('.user-action-dropdown').forEach((select) => {
+      select.addEventListener('change', () => {
+        const action = select.value;
+        select.value = '';
+        if (!action) return;
+        handleUserAction(select, action).catch((error) => toast(error.message, 'error'));
       });
     });
+  }
 
-    $$('.toggleUserBtn').forEach((button) => {
-      button.addEventListener('click', async () => {
-        await api(`/api/users/${button.dataset.id}/block`, { method: 'PUT', body: { active: button.dataset.active } });
-        toast(button.dataset.active === 'true' ? 'User activated' : 'User blocked');
-        await loadUsers();
-      });
-    });
-
-    $$('.editUserEmailBtn').forEach((button) => {
-      button.addEventListener('click', async () => {
-        const email = window.prompt('Enter new email ID for OTP reset', button.dataset.email || '');
-        if (!email) return;
-        await api(`/api/auth/users/${button.dataset.id}/email`, { method: 'POST', body: { email } });
-        toast('User email updated');
-        await loadUsers();
-      });
-    });
-
-    $$('.sendUserResetBtn').forEach((button) => {
-      button.addEventListener('click', async () => {
-        const data = await api(`/api/auth/users/${button.dataset.id}/send-reset`, { method: 'POST', body: {} });
-        toast(data.message || 'OTP reset link sent', data.mailSent === false ? 'error' : 'success');
-      });
-    });
-
-    $$('.adminResetUserBtn').forEach((button) => {
-      button.addEventListener('click', async () => {
-        const password = window.prompt('Enter new password for this user');
-        if (!password) return;
-        await api(`/api/auth/users/${button.dataset.id}/reset-password`, { method: 'POST', body: { password } });
-        toast('Password reset by admin');
-        await loadUsers();
-      });
-    });
-
-    $$('.deleteUserBtn').forEach((button) => {
-      button.addEventListener('click', async () => {
-        if (state.user && String(state.user.id) === String(button.dataset.id)) {
-          toast('You cannot delete your own logged-in admin user', 'error');
-          return;
-        }
-        const username = button.dataset.username || 'this user';
-        if (!window.confirm(`Delete user "${username}" permanently? This user will not be able to login.`)) return;
-        await api(`/api/users/${button.dataset.id}`, { method: 'DELETE', body: {} });
-        toast('User deleted. Login blocked for that user.');
-        await loadUsers();
-      });
-    });
+  async function handleUserAction(select, action) {
+    const id = select.dataset.id;
+    if (!id) return;
+    if (action === 'edit') {
+      openEditUserModal(id);
+      return;
+    }
+    if (action === 'approve') {
+      await api(`/api/users/${id}/approve`, { method: 'PUT', body: {} });
+      toast('User approved');
+      await loadUsers();
+      return;
+    }
+    if (action === 'toggle') {
+      await api(`/api/users/${id}/block`, { method: 'PUT', body: { active: select.dataset.active } });
+      toast(select.dataset.active === 'true' ? 'User activated' : 'User blocked');
+      await loadUsers();
+      return;
+    }
+    if (action === 'email') {
+      const email = window.prompt('Enter new email ID for OTP reset', select.dataset.email || '');
+      if (!email) return;
+      await api(`/api/auth/users/${id}/email`, { method: 'POST', body: { email } });
+      toast('User email updated');
+      await loadUsers();
+      return;
+    }
+    if (action === 'send-reset') {
+      const data = await api(`/api/auth/users/${id}/send-reset`, { method: 'POST', body: {} });
+      toast(data.message || 'OTP reset link sent', data.mailSent === false ? 'error' : 'success');
+      return;
+    }
+    if (action === 'reset-password') {
+      const password = window.prompt('Enter new password for this user');
+      if (!password) return;
+      await api(`/api/auth/users/${id}/reset-password`, { method: 'POST', body: { password } });
+      toast('Password reset by admin');
+      await loadUsers();
+      return;
+    }
+    if (action === 'delete') {
+      if (state.user && String(state.user.id) === String(id)) {
+        toast('You cannot delete your own logged-in admin user', 'error');
+        return;
+      }
+      const username = select.dataset.username || 'this user';
+      if (!window.confirm(`Delete user "${username}" permanently? This user will not be able to login.`)) return;
+      await api(`/api/users/${id}`, { method: 'DELETE', body: {} });
+      toast('User deleted. Login blocked for that user.');
+      await loadUsers();
+    }
   }
 
   function showCreatedUser(user) {

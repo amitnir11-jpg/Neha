@@ -5219,3 +5219,44 @@ tr:hover td,
   background: #000000 !important;
   color: #ffffff !important;
 }
+
+.user-management-table-wrap {
+  max-height: 420px !important;
+}
+
+.user-management-table {
+  min-width: 1060px !important;
+  table-layout: fixed !important;
+}
+
+.user-management-table th {
+  min-height: 38px !important;
+  height: 38px !important;
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+
+.user-management-table tbody td {
+  height: 38px !important;
+  max-height: 38px !important;
+  padding: 3px 8px !important;
+}
+
+.user-management-table th:nth-child(8),
+.user-management-table td:nth-child(8) {
+  width: 136px !important;
+  min-width: 136px !important;
+  max-width: 136px !important;
+}
+
+.user-actions-cell {
+  text-align: left !important;
+}
+
+.user-action-dropdown.app-action-dropdown {
+  width: 118px !important;
+  min-width: 118px !important;
+  max-width: 118px !important;
+  min-height: 32px !important;
+  height: 32px !important;
+}
