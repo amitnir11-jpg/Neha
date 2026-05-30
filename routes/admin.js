@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const Inventory = require('../models/Inventory');
 const MasterPart = require('../models/MasterPart');
+const MasterCatalogue = require('../models/MasterCatalogue');
 const Bin = require('../models/Bin');
 const Dealer = require('../models/Dealer');
 const Device = require('../models/Device');
@@ -16,6 +17,15 @@ const { decorateScanValue } = require('../utils/inventoryValueEngine');
 
 const router = express.Router();
 const DELETE_MESSAGE = 'Are you sure you want to delete this data? This action cannot be undone.';
+
+function numberValue(value, fallback = 0) {
+  const parsed = Number(String(value ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function masterMrp(master = {}) {
+  return numberValue(master.currentCatalogueMRP ?? master.currentCatalogueMrp ?? master.mrp, 0);
+}
 
 function publicMobileDevice(device = {}) {
   return {
@@ -290,9 +300,13 @@ async function reprocessScans(req, res) {
     });
     if (masterOperations.length) await MasterPart.bulkWrite(masterOperations, { ordered: false });
 
-    const [scans, masters] = await Promise.all([Inventory.find({}).lean(), MasterPart.find({}).lean()]);
+    const [scans, masters, catalogues] = await Promise.all([Inventory.find({}).lean(), MasterPart.find({}).lean(), MasterCatalogue.find({}).lean()]);
     const masterByDealer = new Map();
     const masterByPart = new Map();
+    catalogues.forEach((master) => {
+      const partNo = normalizedPartNumber(master.normalizedPartNumber || master.partNo || master.partNumber);
+      if (partNo && !masterByPart.has(partNo)) masterByPart.set(partNo, master);
+    });
     masters.forEach((master) => {
       const partNo = normalizedPartNumber(master.normalizedPartNumber || master.partNo || master.partNumber);
       const code = dealerCode(master.dealerCode);
@@ -315,12 +329,17 @@ async function reprocessScans(req, res) {
         isMasterMatched: Boolean(master)
       };
       const valued = decorateScanValue({ ...scan, partNumber: partNo, normalizedPartNumber: partNo });
-      update.mrp = Number(valued.valuationMRP || 0);
+      const fallbackMrp = masterMrp(master);
+      const valuedMrp = Number(valued.valuationMRP || 0);
+      const finalMrp = valuedMrp > 0 ? valuedMrp : fallbackMrp;
+      const finalSource = valuedMrp > 0 ? (valued.valuationSource || 'NO_SCANNED_OR_MANUAL_MRP') : (fallbackMrp > 0 ? 'CATALOGUE_MRP_FALLBACK' : 'NO_SCANNED_OR_MANUAL_MRP');
+      const qty = Number(scan.qty ?? scan.quantity ?? 0) || 0;
+      update.mrp = Number(finalMrp || 0);
       update.scanMRP = Number(valued.scanMRP || 0);
       update.manualMRP = Number(valued.manualMRP || 0);
-      update.valuationMRP = Number(valued.valuationMRP || 0);
-      update.valuationSource = valued.valuationSource || 'NO_SCANNED_OR_MANUAL_MRP';
-      update.finalInventoryValue = Number(valued.finalInventoryValue || 0);
+      update.valuationMRP = Number(finalMrp || 0);
+      update.valuationSource = finalSource;
+      update.finalInventoryValue = qty * Number(finalMrp || 0);
       if (master) {
         matchedCount += 1;
         update.partName = master.partDescription || master.partName || '';
