@@ -7,7 +7,7 @@
   const ACTIVE_BIN_KEY = 'dakshMobileActiveBinLocation';
   const LAST_SYNC_KEY = 'dakshMobileLastSync';
   const CACHE_VERSION_KEY = 'dakshMobileCacheVersion';
-  const CACHE_VERSION = '20260530-fast-qr-scan';
+  const CACHE_VERSION = '20260530-sync-mrp-fix';
   const SYNC_INTERVAL_MS = 120000;
   const DUPLICATE_GUARD_MS = 1500;
   const BATCH_SIZE = 50;
@@ -82,6 +82,25 @@
 
   function rowStatus(row = {}) {
     return clean(row.status || row.syncStatus || '').toLowerCase();
+  }
+
+  function numberValue(value, fallback = 0) {
+    const parsed = Number(String(value ?? '').replace(/,/g, '').trim());
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  function scanMrp(row = {}) {
+    const values = [row.mrp, row.valuationMRP, row.finalMRP, row.scanMRP, row.serverAck?.mrp, row.serverAck?.valuationMRP];
+    for (const value of values) {
+      const parsed = numberValue(value, 0);
+      if (parsed > 0) return parsed;
+    }
+    return 0;
+  }
+
+  function money(value) {
+    const amount = numberValue(value, 0);
+    return amount ? amount.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '-';
   }
 
   function scanIdentityKey(scanIdentity, mode = state.mode, session = state.session) {
@@ -477,10 +496,32 @@
         <td>${new Date(row.mobileCreatedAt).toLocaleTimeString()}</td>
         <td>${escapeHtml(row.partNumber || '-')}</td>
         <td>${escapeHtml(row.qty || 1)}</td>
+        <td>${escapeHtml(money(scanMrp(row)))}</td>
         <td>${escapeHtml(row.scanType)}</td>
         <td>${escapeHtml(row.status || row.syncStatus)}</td>
       </tr>
-    `).join('') : '<tr><td colspan="5">No scans yet</td></tr>';
+    `).join('') : '<tr><td colspan="6">No scans yet</td></tr>';
+  }
+
+  function lastScanMeta(record = {}) {
+    const mrp = scanMrp(record);
+    return `${record.scanType} | Qty ${record.qty || 1}${mrp > 0 ? ` | MRP ${money(mrp)}` : ''} | ${rowStatus(record) === 'pending' && navigator.onLine ? 'Queued for sync' : rowStatus(record) === 'synced' ? 'Synced' : 'Offline Saved'}`;
+  }
+
+  function updateLastScanCard(record = {}) {
+    $('#lastPart').textContent = record.partNumber || '-';
+    $('#lastMeta').textContent = lastScanMeta(record);
+  }
+
+  function serverPriceFields(saved = {}) {
+    const mrp = scanMrp(saved);
+    return mrp > 0 ? {
+      mrp,
+      valuationMRP: numberValue(saved.valuationMRP, 0) > 0 ? numberValue(saved.valuationMRP, mrp) : mrp,
+      scanMRP: numberValue(saved.scanMRP, 0),
+      manualMRP: numberValue(saved.manualMRP, 0),
+      valuationSource: saved.valuationSource || 'CATALOGUE_MRP_FALLBACK'
+    } : {};
   }
 
   function escapeHtml(value) {
@@ -537,10 +578,12 @@
     if (!master) return;
     const row = await getScan(scanId);
     if (!row || !rowBelongsToSession(row)) return;
-    await putScan({
+    const updated = {
       ...row,
       ...masterFields(master, scannedMrpProvided, scannedMrp, inputDlc)
-    });
+    };
+    await putScan(updated);
+    if ($('#lastPart').textContent === updated.partNumber) updateLastScanCard(updated);
     updateSyncUi().catch(() => undefined);
   }
 
@@ -619,8 +662,7 @@
     record = await promptExtraFields(record);
     await putScan(record);
     rememberScanIdentity(record);
-    $('#lastPart').textContent = record.partNumber;
-    $('#lastMeta').textContent = `${record.scanType} | Qty ${record.qty} | ${record.status === 'pending' && navigator.onLine ? 'Queued for sync' : 'Offline Saved'}`;
+    updateLastScanCard(record);
     beep('ok');
     toast(navigator.onLine ? 'Saved locally, syncing' : 'Offline Saved', 'success');
     updateSyncUi().catch(() => undefined);
@@ -668,11 +710,15 @@
       for (const row of batch) {
         const saved = inserted.get(row.scanId) || inserted.get(row.clientScanId);
         if (saved || duplicateIds.has(row.scanId)) {
-          await putScan({ ...row, auditId: saved?.auditId || row.auditId || sessionAuditId(), status: 'synced', syncStatus: 'synced', timestamp: saved?.timestamp || saved?.serverReceivedAt || nowIso(), serverAck: saved || null });
+          const syncedRow = { ...row, ...serverPriceFields(saved || {}), auditId: saved?.auditId || row.auditId || sessionAuditId(), status: 'synced', syncStatus: 'synced', timestamp: saved?.timestamp || saved?.serverReceivedAt || nowIso(), serverAck: saved || null };
+          await putScan(syncedRow);
+          if ($('#lastPart').textContent === syncedRow.partNumber) updateLastScanCard(syncedRow);
         } else if (failedLogs.has(row.scanId)) {
           await putScan({ ...row, status: 'failed', syncStatus: 'failed', syncError: failedLogs.get(row.scanId) });
         } else if (data.success) {
-          await putScan({ ...row, auditId: row.auditId || sessionAuditId(), status: 'synced', syncStatus: 'synced', timestamp: nowIso() });
+          const syncedRow = { ...row, auditId: row.auditId || sessionAuditId(), status: 'synced', syncStatus: 'synced', timestamp: nowIso() };
+          await putScan(syncedRow);
+          if ($('#lastPart').textContent === syncedRow.partNumber) updateLastScanCard(syncedRow);
         }
       }
       localStorage.setItem(scopedStorageKey(LAST_SYNC_KEY), nowIso());

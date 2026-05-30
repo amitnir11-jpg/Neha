@@ -41,12 +41,8 @@ const BIN_REQUIRED_MESSAGE = 'Please enter/select bin location first.';
  *   1. Manual MRP (if user entered manually)
  *   2. Scanned UPI MRP (if from QR/barcode)
  *   3. Parsed MRP from raw scan payload
- *   4. Stored valuationMRP only with correct source flag
- *
- * NEVER USE:
- *   - Latest master MRP
- *   - Current catalogue MRP
- *   - Master part default MRP
+ *   4. Current catalogue/master MRP fallback when QR has no price
+ *   5. Stored valuationMRP only with correct source flag
  *
  * ENFORCEMENT:
  *   - decorateScanValue() from inventoryValueEngine.js sets valuationMRP
@@ -56,7 +52,7 @@ const BIN_REQUIRED_MESSAGE = 'Please enter/select bin location first.';
  *
  * VALIDATION:
  *   - All valuationMRP values must have corresponding valuationSource
- *   - valuationSource must be 'MANUAL_ENTERED_MRP' or 'UPI_SCANNED_MRP'
+ *   - valuationSource must be 'MANUAL_ENTERED_MRP', 'UPI_SCANNED_MRP', or 'CATALOGUE_MRP_FALLBACK'
  *   - If valuationMRP = 0, valuationSource must be 'NO_SCANNED_OR_MANUAL_MRP'
  *
  * ====================================================================
@@ -410,6 +406,11 @@ function scanPublicDebug(scan = {}) {
     timestamp: scan.timestamp,
     scanTime: scan.scanTime || scan.timestamp,
     createdAt: scan.createdAt,
+    mrp: Number(scan.mrp || 0),
+    scanMRP: Number(scan.scanMRP || 0),
+    manualMRP: Number(scan.manualMRP || 0),
+    valuationMRP: Number(scan.valuationMRP || scan.mrp || 0),
+    valuationSource: scan.valuationSource || '',
     warnings: scan.warnings || [],
     masterFound: Boolean(scan.masterFound || scan.masterMatch || scan.isMasterMatched)
   };
@@ -470,7 +471,15 @@ function optionalNumber(value) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function valuationFields({ scan = {}, rawScanText = '', scannedMrp, mrpProvided = false, manualEntry = false } = {}) {
+function masterMrp(master = {}) {
+  return optionalNumber(
+    master.currentCatalogueMRP !== undefined ? master.currentCatalogueMRP
+      : master.currentCatalogueMrp !== undefined ? master.currentCatalogueMrp
+        : master.mrp
+  );
+}
+
+function valuationFields({ scan = {}, rawScanText = '', scannedMrp, mrpProvided = false, manualEntry = false, master = null } = {}) {
   const source = normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, manualEntry ? 'manual' : 'mobile');
   const valued = decorateScanValue({
     rawScan: rawScanText,
@@ -480,6 +489,16 @@ function valuationFields({ scan = {}, rawScanText = '', scannedMrp, mrpProvided 
     scanMRP: !manualEntry && mrpProvided ? scannedMrp : undefined,
     manualMRP: manualEntry && mrpProvided ? scannedMrp : undefined
   });
+  const fallbackMrp = masterMrp(master || {});
+  if (!(Number(valued.valuationMRP || 0) > 0) && fallbackMrp !== undefined && Number(fallbackMrp) > 0) {
+    return {
+      mrp: Number(fallbackMrp || 0),
+      scanMRP: 0,
+      manualMRP: 0,
+      valuationMRP: Number(fallbackMrp || 0),
+      valuationSource: 'CATALOGUE_MRP_FALLBACK'
+    };
+  }
   return {
     mrp: Number(valued.valuationMRP || 0),
     scanMRP: Number(valued.scanMRP || 0),
@@ -652,7 +671,9 @@ function normalizeScan(item = {}) {
     : (explicitScanId || makeScanId(idSource, timestamp));
   const itemMrpValue = firstValue(item, ['mrp', 'scanMRP', 'scanMrp', 'scannedMRP', 'scannedMrp', 'upiMRP', 'upiMrp', 'valuationMRP', 'valuationMrp', 'finalMRP', 'finalMrp']);
   const itemMrpNumber = optionalNumber(itemMrpValue);
-  const itemMrpProvided = item.mrpProvided === true || String(item.mrpProvided).toLowerCase() === 'true' || itemMrpNumber !== undefined;
+  const itemMrpFlag = item.mrpProvided === true || String(item.mrpProvided).toLowerCase() === 'true';
+  const itemMrpSuppressed = item.mrpProvided === false || String(item.mrpProvided).toLowerCase() === 'false';
+  const itemMrpProvided = itemMrpFlag || (!itemMrpSuppressed && itemMrpNumber !== undefined && Number(itemMrpNumber) > 0);
   const parsedMrpProvided = parsed.mrpProvided === true || String(parsed.mrpProvided).toLowerCase() === 'true';
   const mrpProvided = itemMrpProvided || parsedMrpProvided;
 
@@ -930,7 +951,7 @@ async function saveNormalizedScan(scan, req) {
   const dealer = scan.dealerCode ? await Dealer.findOne({ dealerCode: scan.dealerCode }).lean() : null;
   const manualEntry = isManualEntry(scan);
   const scannedMrp = scan.mrpProvided ? optionalNumber(scan.mrp) : undefined;
-  const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: scan.mrpProvided, manualEntry });
+  const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: scan.mrpProvided, manualEntry, master });
   const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(scan.partNumber, scan.timestamp || scan.serverReceivedAt, valueFields.valuationMRP) : null;
   const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
 
@@ -1565,7 +1586,7 @@ async function pushHandler(req, res) {
           rawScanString: scan.rawScanString,
           errors: rowErrors
         });
-        return;
+        continue;
       }
 
       const fittedKey = scan.scanType === 'FITTED'
@@ -1605,7 +1626,7 @@ async function pushHandler(req, res) {
           existing: existingIdentity || 'same request batch'
         });
         logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'duplicate', fittedKey ? 'Fitted part already exists for this vehicle/job card' : 'Duplicate exact UPI/barcode already scanned'));
-        return;
+        continue;
       }
       duplicateScanIds.add(scan.uniqueScanId);
       scan.qrFingerprint = manualEntry || fittedKey ? '' : makeQrFingerprint(scan);
@@ -1617,7 +1638,7 @@ async function pushHandler(req, res) {
       const finalQty = Number(scan.quantity || 1);
       const finalBin = scan.binLocation;
       const scannedMrp = scan.mrpProvided ? optionalNumber(scan.mrp) : undefined;
-      const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: scan.mrpProvided, manualEntry });
+      const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: scan.mrpProvided, manualEntry, master });
       const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(scan.partNumber, scan.timestamp || scan.serverReceivedAt, valueFields.valuationMRP) : null;
       const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
       const warnings = master ? [] : [manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`];
