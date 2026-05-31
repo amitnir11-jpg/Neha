@@ -1207,18 +1207,20 @@ function isManualScanRecord(scan = {}) {
 async function updateManualMrp(req, res) {
   try {
     const mrp = optionalNumber(firstValue(req.body || {}, ['mrp', 'newMrp', 'new_mrp', 'manualMRP', 'manualMrp']));
+    const dlc = optionalNumber(firstValue(req.body || {}, ['dlc', 'newDlc', 'new_dlc', 'manualDLC', 'manualDlc']));
     if (!(Number(mrp || 0) > 0)) {
       return res.status(400).json({ success: false, message: 'MRP is mandatory for manual part entry.' });
     }
-    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
-    if (!scan) return res.status(404).json({ success: false, message: 'Manual scan record not found' });
-    if (!isManualScanRecord(scan)) {
-      return res.status(400).json({ success: false, message: 'MRP can be edited only for manually entered parts.' });
+    if (dlc !== undefined && dlc < 0) {
+      return res.status(400).json({ success: false, message: 'DLC must be zero or greater.' });
     }
+    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+    if (!scan) return res.status(404).json({ success: false, message: 'Scan record not found' });
 
     const now = new Date();
     const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 1);
     const oldMrp = numberValue(scan.manualMRP || scan.valuationMRP || scan.mrp || 0, 0);
+    const oldDlc = numberValue(scan.dlc, 0);
     const pricePeriod = await findPricePeriod(scan.partNumber || scan.part, scan.timestamp || scan.scanTime || now, mrp).catch(() => null);
     const update = {
       mrp,
@@ -1232,13 +1234,14 @@ async function updateManualMrp(req, res) {
       mrpPendingUpdatedAt: now,
       ...pricePeriodPayload(pricePeriod, mrp)
     };
+    if (dlc !== undefined) update.dlc = dlc;
     const updated = await Inventory.findByIdAndUpdate(scan._id, { $set: update }, { new: true }).lean();
     const actor = req.user || {};
     await AuditLog.create({
-      eventType: 'manual_mrp.updated',
+      eventType: 'scan_pricing.updated',
       module: 'inventory',
       severity: 'info',
-      message: `Manual MRP updated for ${scan.partNumber || scan.part || ''}`,
+      message: `Scan pricing updated for ${scan.partNumber || scan.part || ''}`,
       actorId: String(actor.id || actor._id || actor.username || actor.email || ''),
       actorName: String(actor.name || actor.username || actor.email || ''),
       actorRole: String(actor.role || ''),
@@ -1252,6 +1255,8 @@ async function updateManualMrp(req, res) {
       metadata: {
         old_mrp: oldMrp,
         new_mrp: mrp,
+        old_dlc: oldDlc,
+        new_dlc: dlc !== undefined ? dlc : oldDlc,
         updated_by: String(actor.username || actor.name || actor.email || actor.id || ''),
         updated_at: now
       }
@@ -1263,14 +1268,14 @@ async function updateManualMrp(req, res) {
       req.io.emit('mrp:updated', publicRow);
       req.io.emit('scan:saved', publicRow);
       req.io.emit('reports:update', {
-        reason: 'manual-mrp-update',
+        reason: 'scan-pricing-update',
         scan: publicRow,
         dealerCode: publicRow.dealerCode || '',
         auditId: publicRow.auditId || '',
         at: now
       });
     }
-    return res.json({ success: true, scan: publicRow, message: 'MRP updated successfully' });
+    return res.json({ success: true, scan: publicRow, message: dlc !== undefined ? 'MRP/DLC updated successfully' : 'MRP updated successfully' });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -1355,6 +1360,7 @@ async function saveScanRequest(req, res) {
     );
     const manualEntryMode = isManualEntryMode(req.body, rawScanText, upiId);
     const bodyMrpCandidate = optionalNumber(firstValue(req.body, ['mrp', 'manualMRP', 'manualMrp', 'manualEnteredMRP', 'valuationMRP', 'finalMRP']));
+    const bodyDlcCandidate = optionalNumber(firstValue(req.body, ['dlc', 'manualDLC', 'manualDlc', 'manualEnteredDLC', 'manualEnteredDlc']));
     const preBodyMrpProvided = booleanFlag(req.body.mrpProvided) || (manualEntryMode && bodyMrpCandidate !== undefined);
     const preParsedMrpProvided = booleanFlag(parsed.mrpProvided);
     const preMrpProvided = preBodyMrpProvided || preParsedMrpProvided;
@@ -1512,13 +1518,18 @@ async function saveScanRequest(req, res) {
 
     const qty = preQty;
     const bodyMrpProvided = preBodyMrpProvided;
-    const bodyDlcProvided = booleanFlag(req.body.dlcProvided);
+    const bodyDlcProvided = booleanFlag(req.body.dlcProvided) || bodyDlcCandidate !== undefined;
     const parsedMrpProvided = preParsedMrpProvided;
     const parsedDlcProvided = booleanFlag(parsed.dlcProvided);
     const mrpProvided = preMrpProvided;
     const dlcProvided = bodyDlcProvided || parsedDlcProvided;
     const scannedMrp = preScannedMrp;
-    const scannedDlc = dlcProvided ? optionalNumber(bodyDlcProvided ? req.body.dlc : parsed.dlc) : undefined;
+    const scannedDlc = dlcProvided ? optionalNumber(bodyDlcProvided ? bodyDlcCandidate : parsed.dlc) : undefined;
+    const finalDlc = scannedDlc !== undefined
+      ? scannedDlc
+      : master && master.dlc !== undefined
+        ? Number(master.dlc || 0)
+        : numberValue(parsed.dlc, 0);
     const valueFields = valuationFields({ rawScanText, scannedMrp, mrpProvided, entrySource, manualEntryMode });
     const finalMRP = Number(valueFields.valuationMRP || 0);
     const defaultMRP = 0;
@@ -1619,7 +1630,7 @@ async function saveScanRequest(req, res) {
       mrpStatus,
       mrpPendingUpdatedAt: mrpStatus === 'UPDATED' ? timestamp : null,
       ...pricePeriodFields,
-      dlc: master ? Number(master.dlc || 0) : numberValue(req.body.dlc || parsed.dlc),
+      dlc: finalDlc,
       bin: binLocation,
       binLocation,
       autoDetectedBin,
@@ -2034,14 +2045,20 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           userName: item.userName || item.staffName || ''
         });
         const itemMrpCandidate = optionalNumber(firstValue(item, ['mrp', 'manualMRP', 'manualMrp', 'manualEnteredMRP', 'valuationMRP', 'finalMRP']));
+        const itemDlcCandidate = optionalNumber(firstValue(item, ['dlc', 'manualDLC', 'manualDlc', 'manualEnteredDLC', 'manualEnteredDlc']));
         const itemMrpProvided = booleanFlag(item.mrpProvided) || (manualEntryMode && itemMrpCandidate !== undefined);
-        const itemDlcProvided = booleanFlag(item.dlcProvided);
+        const itemDlcProvided = booleanFlag(item.dlcProvided) || itemDlcCandidate !== undefined;
         const parsedMrpProvided = booleanFlag(parsed.mrpProvided);
         const parsedDlcProvided = booleanFlag(parsed.dlcProvided);
         const mrpProvided = itemMrpProvided || parsedMrpProvided;
         const dlcProvided = itemDlcProvided || parsedDlcProvided;
         const scannedMrp = mrpProvided ? optionalNumber(itemMrpProvided ? itemMrpCandidate : parsed.mrp) : undefined;
-        const scannedDlc = dlcProvided ? optionalNumber(itemDlcProvided ? item.dlc : parsed.dlc) : undefined;
+        const scannedDlc = dlcProvided ? optionalNumber(itemDlcProvided ? itemDlcCandidate : parsed.dlc) : undefined;
+        const finalDlc = scannedDlc !== undefined
+          ? scannedDlc
+          : master && master.dlc !== undefined
+            ? Number(master.dlc || 0)
+            : numberValue(parsed.dlc, 0);
         if (manualEntryMode && !(Number(scannedMrp || 0) > 0)) {
           failed.push({ message: 'MRP is mandatory for manual part entry.', item });
           continue;
@@ -2149,7 +2166,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           valuationSource: valueFields.valuationSource,
           finalInventoryValue: numberValue(firstValue(item, ['qty', 'quantity', 'count']) || parsed.qty, 1) * Number(valueFields.valuationMRP || 0),
           ...pricePeriodFields,
-          dlc: master && master.dlc ? Number(master.dlc || 0) : numberValue(item.dlc || parsed.dlc),
+          dlc: finalDlc,
           bin: binLocation,
           binLocation,
           type,

@@ -258,7 +258,8 @@
             <form id="manualScanForm" class="grid-form">
               <label>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
               <label>Part Number<div class="suggest-wrap"><input name="part" class="partSuggestInput" autocomplete="off" required><div class="suggest-menu"></div></div></label>
-              <label>MRP<input name="mrp" data-fill="mrp" type="number" step="0.01" min="0.01" required></label>
+              <label>MRP<input name="mrp" data-fill="mrp" type="number" step="0.01" min="0.01" placeholder="Enter MRP if not showing" required></label>
+              <label>DLC<input name="dlc" data-fill="dlc" type="number" step="0.01" min="0" placeholder="Enter DLC if not showing"></label>
               <label>Part Description<input name="partName" data-fill="partName" readonly></label>
               <label>Bin<input name="bin" data-fill="bin"></label>
               <label>Category<input name="category" data-fill="category"></label>
@@ -1357,7 +1358,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260531-scan-row-action-menu" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260601-scan-pricing-update" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {

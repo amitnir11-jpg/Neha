@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260521-frontend-diagnostics';
+  const UI_BOOT_VERSION = '20260601-scan-pricing-update';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -1504,7 +1504,7 @@
     const manualPayload = /\bmanual\b/i.test([payload.source, payload.scanMode, payload.entryMode].filter(Boolean).join(' '));
     const mrpProvided = parsedRaw.mrpProvided === true || payload.mrpProvided === true || payload.mrpProvided === 'true' || (manualPayload && payloadMrp !== undefined);
     const payloadDlc = optionalScanNumber(payload.dlc);
-    const dlcProvided = payload.dlcProvided === true || payload.dlcProvided === 'true';
+    const dlcProvided = payload.dlcProvided === true || payload.dlcProvided === 'true' || (manualPayload && payloadDlc !== undefined);
     const payloadQty = optionalScanNumber(payload.qty);
     const payloadQuantity = optionalScanNumber(payload.quantity);
     const parsedQty = parsedRaw.qtyProvided ? optionalScanNumber(parsedRaw.qty) : undefined;
@@ -2470,23 +2470,19 @@
     bindScanHistoryActions();
   }
 
-  function canEditManualMrp(scan = {}) {
-    const sourceText = [scan.source, scan.entryMode, scan.scanMode, scan.scanSourceLabel, scan.scanSource].filter(Boolean).join(' ');
-    const rawText = [scan.rawScan, scan.rawScanString, scan.rawUpi].filter(Boolean).join(' ');
-    return /\bmanual\b/i.test(sourceText)
-      || /^MANUAL:/i.test(rawText)
-      || /MANUAL_ENTERED_MRP/i.test(String(scan.valuationSource || ''))
-      || Number(scan.manualMRP || 0) > 0;
+  function canEditScanPricing(scan = {}) {
+    return Boolean(scan);
   }
 
   function scanHistoryRow(scan = {}) {
     const id = scan.scanId || scan.uniqueScanId || scan._id || '';
     const currentMrp = scan.manualMRP || scan.valuationMRP || scan.mrp || '';
-    const canEditMrp = canEditManualMrp(scan);
-    const editOption = '<option value="edit">Edit MRP</option>';
+    const currentDlc = scan.dlc || '';
+    const canEditPricing = canEditScanPricing(scan);
+    const editOption = canEditPricing ? '<option value="edit">Update MRP / DLC</option>' : '';
     const deleteOption = isAdminUser() ? '<option value="delete">Delete Row</option>' : '';
     const actionDropdown = editOption || deleteOption
-      ? `<select class="app-action-dropdown scan-row-action" data-id="${escapeHtml(id)}" data-mrp="${escapeHtml(currentMrp)}" data-manual-edit="${canEditMrp ? 'true' : 'false'}" aria-label="Scan row action"><option value="">Edit / Delete</option>${editOption}${deleteOption}</select>`
+      ? `<select class="app-action-dropdown scan-row-action" data-id="${escapeHtml(id)}" data-mrp="${escapeHtml(currentMrp)}" data-dlc="${escapeHtml(currentDlc)}" data-pricing-edit="${canEditPricing ? 'true' : 'false'}" aria-label="Scan row action"><option value="">Edit / Delete</option>${editOption}${deleteOption}</select>`
       : '<span class="muted">No action</span>';
     return `
       <tr>
@@ -2519,7 +2515,7 @@
         const action = select.value;
         select.value = '';
         if (action === 'edit') {
-          editManualMrp(select.dataset.id, select.dataset.mrp).catch((error) => toast(error.message, 'error'));
+          editScanPricing(select.dataset.id, select.dataset.mrp, select.dataset.dlc).catch((error) => toast(error.message, 'error'));
         }
         if (action === 'delete') {
           deleteSingleScan(select.dataset.id).catch((error) => toast(error.message, 'error'));
@@ -2563,10 +2559,15 @@
   function fillPart(form, part) {
     const partInput = $('.partSuggestInput', form);
     if (partInput) partInput.value = part.partNumber || part.partNo || '';
-    ['partName', 'bin', 'mrp', 'category'].forEach((key) => {
+    ['partName', 'bin', 'mrp', 'dlc', 'category'].forEach((key) => {
       const node = `[data-fill="${key}"]`;
       const input = $(node, form) || $(`[name="${key}"]`, form);
-      if (input) input.value = key === 'bin' ? part.binLocation || part.bin || '' : part[key] || '';
+      if (input) {
+        const value = key === 'bin' ? part.binLocation || part.bin || '' : part[key];
+        input.value = ['mrp', 'dlc'].includes(key) && !(Number(value || 0) > 0)
+          ? ''
+          : value === undefined || value === null ? '' : value;
+      }
     });
   }
 
@@ -2745,7 +2746,7 @@
     if (staffInput) staffInput.value = staffName;
     const qtyInput = $('[name="qty"]', form);
     if (qtyInput) qtyInput.value = 1;
-    ['part', 'partName', 'bin', 'mrp', 'category', 'rawScan'].forEach((name) => {
+    ['part', 'partName', 'bin', 'mrp', 'dlc', 'category', 'rawScan'].forEach((name) => {
       const input = $(`[name="${name}"]`, form);
       if (input) input.value = '';
     });
@@ -6276,27 +6277,38 @@
     await Promise.all([loadDashboard(), loadScanHistory(), loadDealers(), loadCategories(), loadSyncStatus()].map((job) => job.catch ? job : Promise.resolve(job)));
   }
 
-  async function editManualMrp(scanId, currentMrp = '') {
+  async function editScanPricing(scanId, currentMrp = '', currentDlc = '') {
     if (!scanId) {
-      toast('Select a manual scan first', 'error');
+      toast('Select a scan first', 'error');
       return;
     }
-    const value = window.prompt('Edit MRP', String(currentMrp || ''));
-    if (value === null) return;
-    const mrp = Number(String(value).replace(/,/g, '').trim());
+    const mrpValue = window.prompt('Update MRP', String(currentMrp || ''));
+    if (mrpValue === null) return;
+    const mrp = Number(String(mrpValue).replace(/,/g, '').trim());
     if (!Number.isFinite(mrp) || mrp <= 0) {
-      toast('MRP is mandatory for manual part entry.', 'error');
+      toast('MRP is mandatory for price update.', 'error');
       return;
     }
-    if (!window.confirm(`Save MRP ${money(mrp)} for this manual entry part?`)) return;
+    const dlcValue = window.prompt('Update DLC (optional)', String(currentDlc || ''));
+    if (dlcValue === null) return;
+    const dlcText = String(dlcValue).replace(/,/g, '').trim();
+    const dlc = dlcText ? Number(dlcText) : undefined;
+    if (dlc !== undefined && (!Number.isFinite(dlc) || dlc < 0)) {
+      toast('DLC must be zero or greater.', 'error');
+      return;
+    }
+    const dlcMessage = dlc !== undefined ? ` and DLC ${money(dlc)}` : '';
+    if (!window.confirm(`Save MRP ${money(mrp)}${dlcMessage} for this scan part?`)) return;
+    const body = { mrp, deviceId: ensureDeviceId() };
+    if (dlc !== undefined) body.dlc = dlc;
     const data = await api(`/api/scans/${encodeURIComponent(scanId)}/mrp`, {
       method: 'PATCH',
-      body: { mrp, deviceId: ensureDeviceId() }
+      body
     });
-    toast(data.message || 'MRP updated');
+    toast(data.message || 'MRP/DLC updated');
     if (data.scan) {
       addScanToStream(data.scan);
-      queueRealtimeReportRefresh('manual MRP update');
+      queueRealtimeReportRefresh('scan pricing update');
     }
     await loadScanHistory();
     if (state.reportHasRun && activeReportType()) {
@@ -8213,7 +8225,7 @@
     socket.on('mrp:updated', (scan = {}) => {
       state.lastRealtimeAt = Date.now();
       prependScanHistory(scan);
-      queueRealtimeReportRefresh('manual MRP update');
+      queueRealtimeReportRefresh('scan pricing update');
       if (state.reportHasRun && activeReportType()) {
         loadReport({ forceRefresh: true, showLoading: false }).catch(console.warn);
       }

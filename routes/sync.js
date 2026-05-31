@@ -660,6 +660,13 @@ function normalizeScan(item = {}) {
   const itemMrpProvided = itemMrpFlag || (!itemMrpSuppressed && itemMrpNumber !== undefined && Number(itemMrpNumber) > 0);
   const parsedMrpProvided = parsed.mrpProvided === true || String(parsed.mrpProvided).toLowerCase() === 'true';
   const mrpProvided = itemMrpProvided || parsedMrpProvided;
+  const itemDlcValue = firstValue(item, ['dlc', 'manualDLC', 'manualDlc', 'manualEnteredDLC', 'manualEnteredDlc']);
+  const itemDlcNumber = optionalNumber(itemDlcValue);
+  const itemDlcFlag = item.dlcProvided === true || String(item.dlcProvided).toLowerCase() === 'true';
+  const itemDlcSuppressed = item.dlcProvided === false || String(item.dlcProvided).toLowerCase() === 'false';
+  const itemDlcProvided = itemDlcFlag || (!itemDlcSuppressed && itemDlcNumber !== undefined);
+  const parsedDlcProvided = parsed.dlcProvided === true || String(parsed.dlcProvided).toLowerCase() === 'true';
+  const dlcProvided = itemDlcProvided || parsedDlcProvided;
 
   return {
     source: item,
@@ -689,6 +696,8 @@ function normalizeScan(item = {}) {
     quantity,
     mrp: mrpProvided ? inventory.numberValue(itemMrpProvided && itemMrpNumber !== undefined ? itemMrpNumber : parsed.mrp, 0) : undefined,
     mrpProvided,
+    dlc: dlcProvided ? inventory.numberValue(itemDlcProvided && itemDlcNumber !== undefined ? itemDlcNumber : parsed.dlc, 0) : undefined,
+    dlcProvided,
     scanType,
     upiId,
     upiNo,
@@ -920,6 +929,7 @@ async function saveNormalizedScan(scan, req) {
   const dealer = scan.dealerCode ? await Dealer.findOne({ dealerCode: scan.dealerCode }).lean() : null;
   const manualEntry = isManualEntry(scan);
   const scannedMrp = scan.mrpProvided ? optionalNumber(scan.mrp) : undefined;
+  const scannedDlc = scan.dlcProvided ? optionalNumber(scan.dlc) : undefined;
   const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: scan.mrpProvided, manualEntry, master });
   const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(scan.partNumber, scan.timestamp || scan.serverReceivedAt, valueFields.valuationMRP) : null;
   const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
@@ -1004,8 +1014,14 @@ async function saveNormalizedScan(scan, req) {
   if (master && !master.activeStatus) warnings.push('Inactive part');
   if (master && scan.mrpProvided && pricePeriod && Math.abs(Number(valueFields.valuationMRP || 0) - Number(pricePeriod.mrp || 0)) > 0.01) warnings.push('MRP mismatch against price history period');
   if (master && scan.mrpProvided && !pricePeriod) warnings.push('No matching price history period for scanned MRP');
+  if (master && scan.dlcProvided && scannedDlc !== undefined && Math.abs(Number(scannedDlc || 0) - Number(master.dlc || 0)) > 0.01) warnings.push('DLC mismatch');
   const finalQty = Number(scan.quantity || 1);
   const finalBin = scan.binLocation;
+  const finalDlc = scannedDlc !== undefined
+    ? scannedDlc
+    : master && master.dlc !== undefined
+      ? Number(master.dlc || 0)
+      : inventory.numberValue(scan.source.dlc, 0);
 
   // Ensure final saved scan time is server time (serverReceivedAt)
   const finalSavedTime = scan.serverReceivedAt instanceof Date && !Number.isNaN(scan.serverReceivedAt.getTime()) ? scan.serverReceivedAt : new Date();
@@ -1096,7 +1112,7 @@ async function saveNormalizedScan(scan, req) {
     finalMRP: Number(valueFields.valuationMRP || 0),
     mrpStatus: Number(valueFields.valuationMRP || 0) > 0 ? 'AVAILABLE' : 'PENDING',
     ...pricePeriodFields,
-    dlc: master && master.dlc !== undefined ? master.dlc : inventory.numberValue(scan.source.dlc, 0),
+    dlc: finalDlc,
     bin: finalBin,
     binLocation: finalBin,
     autoDetectedBin: Boolean(scan.autoDetectedBin),
@@ -1613,12 +1629,19 @@ async function pushHandler(req, res) {
       const finalQty = Number(scan.quantity || 1);
       const finalBin = scan.binLocation;
       const scannedMrp = scan.mrpProvided ? optionalNumber(scan.mrp) : undefined;
+      const scannedDlc = scan.dlcProvided ? optionalNumber(scan.dlc) : undefined;
       const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: scan.mrpProvided, manualEntry, master });
       const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(scan.partNumber, scan.timestamp || scan.serverReceivedAt, valueFields.valuationMRP) : null;
       const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
       const warnings = master ? [] : [manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`];
       if (master && scan.mrpProvided && pricePeriod && Math.abs(Number(valueFields.valuationMRP || 0) - Number(pricePeriod.mrp || 0)) > 0.01) warnings.push('MRP mismatch against price history period');
       if (master && scan.mrpProvided && !pricePeriod) warnings.push('No matching price history period for scanned MRP');
+      if (master && scan.dlcProvided && scannedDlc !== undefined && Math.abs(Number(scannedDlc || 0) - Number(master.dlc || 0)) > 0.01) warnings.push('DLC mismatch');
+      const finalDlc = scannedDlc !== undefined
+        ? scannedDlc
+        : master && master.dlc !== undefined
+          ? Number(master.dlc || 0)
+          : inventory.numberValue(scan.source.dlc, 0);
       const doc = {
         uniqueScanId: scan.uniqueScanId,
         scanId: scan.uniqueScanId,
@@ -1646,7 +1669,7 @@ async function pushHandler(req, res) {
         finalMRP: Number(valueFields.valuationMRP || 0),
         mrpStatus: Number(valueFields.valuationMRP || 0) > 0 ? 'AVAILABLE' : 'PENDING',
         ...pricePeriodFields,
-        dlc: master && master.dlc !== undefined ? master.dlc : inventory.numberValue(scan.source.dlc, 0),
+        dlc: finalDlc,
         bin: finalBin,
         binLocation: finalBin,
         autoDetectedBin: Boolean(scan.autoDetectedBin),

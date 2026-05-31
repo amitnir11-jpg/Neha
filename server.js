@@ -78,7 +78,7 @@ const QRPairService = require('./services/QRPairService');
 const OfflineSyncService = require('./services/OfflineSyncService');
 
 const app = express();
-app.locals.reportRoutesVersion = 'scan-register-20260524';
+app.locals.reportRoutesVersion = 'scan-pricing-20260601';
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
