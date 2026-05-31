@@ -300,6 +300,10 @@ const SCAN_REGISTER_COLUMNS = [
   { header: 'PART NUMBER', key: 'partNumber', width: 18 },
   { header: 'PART DESCRIPTION', key: 'partDescription', width: 34 },
   { header: 'QTY', key: 'quantity', width: 10 },
+  { header: 'MRP', key: 'mrp', width: 12 },
+  { header: 'SCAN UPI MRP', key: 'scanUPIMRP', width: 18 },
+  { header: 'MANUAL MRP', key: 'manualMRP', width: 14 },
+  { header: 'FINAL INVENTORY VALUE', key: 'finalInventoryValue', width: 22 },
   { header: 'BIN LOCATION', key: 'binLocation', width: 16 },
   { header: 'REGD NO', key: 'regdNo', width: 16 },
   { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
@@ -519,6 +523,7 @@ function scanRegisterInventoryRow(scan) {
   const syncStatus = scan.syncStatus || (scan.synced || scan.isSynced ? 'synced' : 'pending');
   const status = registerScanStatus({ scanStatus: scan.scanStatus, syncStatus });
   const isFitted = (scan.scanType || scan.type) === 'FITTED' || scan.isFitted;
+  const valueRow = scanValueRow(scan);
   return {
     scanTime: scan.timestamp,
     scanStatus: status,
@@ -528,6 +533,10 @@ function scanRegisterInventoryRow(scan) {
     partNumber: scan.partNumber || scan.part || '',
     partDescription: scan.partDescription || scan.partName || '',
     quantity: Number(scan.qty || scan.quantity || 0),
+    mrp: Number(valueRow.valuationMRP || 0),
+    scanUPIMRP: valueRow.valuationSource === 'UPI_SCANNED_MRP' ? Number(valueRow.valuationMRP || 0) : '',
+    manualMRP: valueRow.valuationSource === 'MANUAL_ENTERED_MRP' ? Number(valueRow.valuationMRP || 0) : '',
+    finalInventoryValue: Number(valueRow.finalInventoryValue || 0),
     binLocation: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin || ''),
     regdNo: scan.regdNo || '',
     jobCardNo: scan.jobCardNo || '',
@@ -556,6 +565,10 @@ function scanRegisterDuplicateRow(row) {
     partNumber: row.partNumber || '',
     partDescription: row.partDescription || '',
     quantity: 0,
+    mrp: '',
+    scanUPIMRP: '',
+    manualMRP: '',
+    finalInventoryValue: '',
     binLocation: row.duplicateBin || row.binLocation || '',
     fittedStatus: 'Not Fitted',
     rawQrUpi: row.duplicateRawBarcodeUpi || row.rawScan || '',
@@ -579,6 +592,10 @@ function scanRegisterRejectedRow(row) {
     partNumber: row.partNumber || '',
     partDescription: '',
     quantity: 0,
+    mrp: '',
+    scanUPIMRP: '',
+    manualMRP: '',
+    finalInventoryValue: '',
     binLocation: row.binLocation || '',
     fittedStatus: 'Not Fitted',
     rawQrUpi: row.rawQrUpi || '',

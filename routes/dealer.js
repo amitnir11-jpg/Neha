@@ -18,8 +18,16 @@ function buildAuditId(dealerCode, auditName) {
 
 router.get('/', auth.requireAuth, async (req, res) => {
   try {
-    const dealers = await Dealer.find({ dealerCode: { $not: /^SYNC/i }, dealerName: { $not: /Sync Test/i } }).sort({ dealerName: 1 }).lean();
-    const audits = await Audit.find({}).sort({ createdAt: -1 }).lean();
+    const userAccess = await auth.userDealerAccessCodes(req.user);
+    const canSeeAll = req.user.role === 'admin' || userAccess.includes('ALL');
+    const dealerFilter = { dealerCode: { $not: /^SYNC/i }, dealerName: { $not: /Sync Test/i } };
+    const auditFilter = {};
+    if (!canSeeAll) {
+      dealerFilter.dealerCode = userAccess.length ? { $in: userAccess } : '__none__';
+      auditFilter.dealerCode = userAccess.length ? { $in: userAccess } : '__none__';
+    }
+    const dealers = await Dealer.find(dealerFilter).sort({ dealerName: 1 }).lean();
+    const audits = await Audit.find(auditFilter).sort({ createdAt: -1 }).lean();
     res.json({ success: true, dealers, audits });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -87,6 +95,10 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 router.get('/:dealerCode', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = cleanCode(req.params.dealerCode);
+    const access = await auth.validateUserDealerAccess(req.user, dealerCode);
+    if (!access.allowed) {
+      return res.status(403).json({ success: false, message: 'Unauthorized dealer access', requestedDealer: access.requestedDealer });
+    }
     const dealer = await Dealer.findOne({ dealerCode }).lean();
     const audits = await Audit.find({ dealerCode }).sort({ createdAt: -1 }).lean();
     if (!dealer) {

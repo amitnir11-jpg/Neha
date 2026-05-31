@@ -374,6 +374,16 @@ body:not(.dashboard-view-active) .topbar {
   font-size: 11px;
 }
 
+.topbar .active-dealer-switch {
+  width: clamp(180px, 18vw, 300px);
+  min-height: 30px;
+  height: 30px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .row-actions {
   gap: 6px;
 }
@@ -5218,6 +5228,17 @@ tr:hover td,
 .report-table-wrap[data-report-type="stock-summary"] .stock-summary-net-footer-row .stock-summary-footer-value {
   background: #000000 !important;
   color: #ffffff !important;
+}
+
+.dealer-access-select[multiple] {
+  min-height: 168px;
+  padding: 6px;
+  line-height: 1.45;
+  overflow-y: auto;
+}
+
+.dealer-access-select[multiple] option {
+  padding: 7px 9px;
 }
 
 .user-management-table-wrap {

@@ -571,6 +571,7 @@ router.get('/parts/suggest', auth.requireAuth, async (req, res) => {
           ]
         }
       : {};
+    if (req.query.dealerCode || req.query.activeDealerId) filter.dealerCode = normalizePart(req.query.dealerCode || req.query.activeDealerId);
     const catalogueParts = await MasterCatalogue.find(q ? {
       $or: [
         { partNumber: partContains },
@@ -706,6 +707,9 @@ router.get('/filters', auth.requireAuth, async (req, res) => {
 
 router.get('/dealers', auth.requireAuth, async (req, res) => {
   try {
+    const userAccess = await auth.userDealerAccessCodes(req.user);
+    const canSeeAll = req.user.role === 'admin' || userAccess.includes('ALL');
+    const allowedDealerSet = new Set(userAccess);
     const [dealerRows, masterDealerCodes, scanDealerCodes, binDealerCodes] = await Promise.all([
       Dealer.find({}).sort({ dealerName: 1 }).lean(),
       MasterPart.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
@@ -725,7 +729,7 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
     });
     const dealers = Array.from(dealerMap.values()).sort((a, b) =>
       String(a.dealerName || a.dealerCode || '').localeCompare(String(b.dealerName || b.dealerCode || ''))
-    );
+    ).filter((dealer) => canSeeAll || allowedDealerSet.has(normalizePart(dealer.dealerCode)));
     res.json({ success: true, dealers });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1090,6 +1094,7 @@ router.get('/parts/search', auth.requireAuth, async (req, res) => {
           ]
         }
       : {};
+    if (req.query.dealerCode || req.query.activeDealerId) filter.dealerCode = normalizePart(req.query.dealerCode || req.query.activeDealerId);
 
     const parts = await MasterPart.find(filter).sort({ partNo: 1 }).limit(limit).lean();
     const formattedParts = parts.map(formatPart);

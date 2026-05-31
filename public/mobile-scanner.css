@@ -76,7 +76,8 @@ label {
   font-weight: 700;
 }
 
-input {
+input,
+select {
   width: 100%;
   min-height: 44px;
   border: 1px solid #9aa8ba;
@@ -113,6 +114,14 @@ input[name="password"], input[name="pin"] { text-transform: none; }
 }
 
 .mobile-topbar span { display: block; color: var(--muted); font-size: 12px; }
+
+#mobileDealerSwitch {
+  max-width: 44vw;
+  min-height: 36px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
 
 .sync-strip {
   position: sticky;

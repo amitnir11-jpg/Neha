@@ -117,6 +117,7 @@
       <h2>Manual Entry</h2>
       <label>Part Number<input name="partNumber" id="manualPartNumber" autocapitalize="characters" required></label>
       <div id="partSuggestions" class="suggestions"></div>
+      <label>MRP *<input name="mrp" id="manualMrp" inputmode="decimal" type="number" min="0.01" step="0.01" required></label>
       <label>Quantity<input name="qty" inputmode="numeric" type="number" min="1" value="1" required></label>
       <label id="manualBinLabel">Bin Location *<input name="binLocation" autocapitalize="characters"></label>
       <label id="manualRegLabel" class="hidden">Registration Number<input name="regdNo" autocapitalize="characters"></label>
@@ -130,6 +131,6 @@
   </dialog>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/mobile-scanner.js?v=20260530-sync-mrp-fix"></script>
+  <script src="/mobile-scanner.js?v=20260531-manual-mrp"></script>
 </body>
 </html>

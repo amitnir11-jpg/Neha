@@ -7,7 +7,7 @@
   const ACTIVE_BIN_KEY = 'dakshMobileActiveBinLocation';
   const LAST_SYNC_KEY = 'dakshMobileLastSync';
   const CACHE_VERSION_KEY = 'dakshMobileCacheVersion';
-  const CACHE_VERSION = '20260530-sync-mrp-fix';
+  const CACHE_VERSION = '20260531-manual-mrp';
   const SYNC_INTERVAL_MS = 120000;
   const DUPLICATE_GUARD_MS = 1500;
   const BATCH_SIZE = 50;
@@ -515,12 +515,13 @@
 
   function serverPriceFields(saved = {}) {
     const mrp = scanMrp(saved);
+    const source = saved.valuationSource || (numberValue(saved.manualMRP, 0) > 0 ? 'MANUAL_ENTERED_MRP' : numberValue(saved.scanMRP, 0) > 0 ? 'UPI_SCANNED_MRP' : '');
     return mrp > 0 ? {
       mrp,
       valuationMRP: numberValue(saved.valuationMRP, 0) > 0 ? numberValue(saved.valuationMRP, mrp) : mrp,
       scanMRP: numberValue(saved.scanMRP, 0),
       manualMRP: numberValue(saved.manualMRP, 0),
-      valuationSource: saved.valuationSource || 'CATALOGUE_MRP_FALLBACK'
+      valuationSource: source
     } : {};
   }
 
@@ -659,6 +660,14 @@
       status: 'pending',
       ...masterFields(master, scannedMrpProvided, scannedMrp, input.dlc)
     };
+    if (source === 'manual' && scannedMrp > 0) {
+      record.mrp = scannedMrp;
+      record.manualMRP = scannedMrp;
+      record.scanMRP = 0;
+      record.valuationMRP = scannedMrp;
+      record.valuationSource = 'MANUAL_ENTERED_MRP';
+      record.mrpProvided = true;
+    }
     record = await promptExtraFields(record);
     await putScan(record);
     rememberScanIdentity(record);
@@ -1000,6 +1009,7 @@
     configureManualFields();
     $('#manualForm').reset();
     $('#manualBinLabel input').value = requiresPresetBin() ? state.activeBinLocation : '';
+    $('#manualMrp').value = '';
     state.manualPart = null;
     $('#manualPartMeta').textContent = '';
     $('#partSuggestions').innerHTML = '';
@@ -1010,7 +1020,13 @@
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const partNumber = upper(form.get('partNumber'));
+    const mrp = Number(String(form.get('mrp') || '').replace(/,/g, '').trim());
     const binLocation = upper(form.get('binLocation') || (requiresPresetBin() ? state.activeBinLocation : ''));
+    if (!Number.isFinite(mrp) || mrp <= 0) {
+      toast('MRP is mandatory for manual part entry.', 'error');
+      $('#manualMrp').focus();
+      return;
+    }
     if (requiresPresetBin() && !binLocation) {
       toast('Bin location is mandatory for manual inward/damage entry', 'error');
       $('#manualBinLabel input').focus();
@@ -1018,6 +1034,9 @@
     }
     await saveLocalScan({
       partNumber,
+      mrp,
+      manualMRP: mrp,
+      mrpProvided: true,
       qty: Number(form.get('qty') || 1),
       binLocation,
       regdNo: upper(form.get('regdNo')),
@@ -1048,6 +1067,7 @@
             button.addEventListener('click', () => {
               state.manualPart = parts[Number(button.dataset.index)];
               $('#manualPartNumber').value = upper(state.manualPart.partNumber || state.manualPart.partNo);
+              $('#manualMrp').value = Number(state.manualPart.mrp || 0) > 0 ? state.manualPart.mrp : '';
               $('#manualPartMeta').textContent = [state.manualPart.partDescription || state.manualPart.partName, state.manualPart.productCategory || state.manualPart.category, state.manualPart.model, state.manualPart.year || state.manualPart.manufacturingYear, `MRP ${state.manualPart.mrp || 0}`, `DLC ${state.manualPart.dlc || 0}`].filter(Boolean).join(' | ');
               $('#partSuggestions').innerHTML = '';
             });

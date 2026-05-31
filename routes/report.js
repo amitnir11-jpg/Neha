@@ -3826,9 +3826,13 @@ async function professionalAliasEmail(req, res, kind) {
 
 router.get('/main-inventory-audit', auth.requireAuth, (req, res) => professionalAlias(req, res, 'main'));
 router.get('/compile-audit', auth.requireAuth, (req, res) => professionalAlias(req, res, 'compile'));
+router.get('/compiled-audit', auth.requireAuth, (req, res) => professionalAlias(req, res, 'compile'));
+router.get('/complile-audit', auth.requireAuth, (req, res) => professionalAlias(req, res, 'compile'));
 router.get('/consolidated-final', auth.requireAuth, (req, res) => professionalAlias(req, res, 'consolidated'));
 router.post('/main-inventory-audit/email', auth.requireAuth, auth.requireAdmin, (req, res) => professionalAliasEmail(req, res, 'main'));
 router.post('/compile-audit/email', auth.requireAuth, auth.requireAdmin, (req, res) => professionalAliasEmail(req, res, 'compile'));
+router.post('/compiled-audit/email', auth.requireAuth, auth.requireAdmin, (req, res) => professionalAliasEmail(req, res, 'compile'));
+router.post('/complile-audit/email', auth.requireAuth, auth.requireAdmin, (req, res) => professionalAliasEmail(req, res, 'compile'));
 router.post('/consolidated-final/email', auth.requireAuth, auth.requireAdmin, (req, res) => professionalAliasEmail(req, res, 'consolidated'));
 
 router.get('/data', auth.requireAuth, async (req, res) => {

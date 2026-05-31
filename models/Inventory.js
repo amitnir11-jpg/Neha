@@ -136,7 +136,7 @@ const inventorySchema = new mongoose.Schema(
     },
     valuationSource: {
       type: String,
-      enum: ['UPI_SCANNED_MRP', 'MANUAL_ENTERED_MRP', 'NO_SCANNED_OR_MANUAL_MRP', ''],
+      enum: ['UPI_SCANNED_MRP', 'MANUAL_ENTERED_MRP', 'NO_SCANNED_OR_MANUAL_MRP', 'CATALOGUE_MRP_FALLBACK', ''],
       default: '',
       index: true
     },
@@ -502,11 +502,18 @@ inventorySchema.index({ syncKey: 1 });
 inventorySchema.index({ upiId: 1, dealerCode: 1 });
 inventorySchema.index({ upiNo: 1, dealerCode: 1 });
 inventorySchema.index({ rawScan: 1, dealerCode: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, userId: 1, scanType: 1, rawUpi: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, loginId: 1, scanType: 1, rawUpi: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, userId: 1, scanType: 1, upiNo: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, loginId: 1, scanType: 1, upiNo: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, userId: 1, scanType: 1, rawScanString: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, loginId: 1, scanType: 1, rawScanString: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, userId: 1, scanType: 1, rawScan: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, loginId: 1, scanType: 1, rawScan: 1 });
 inventorySchema.index(
-  { rawUpi: 1, dealerCode: 1, auditId: 1 },
+  { rawUpi: 1, dealerCode: 1, auditId: 1, scanType: 1, userId: 1, syncBatchId: 1 },
   {
-    name: 'unique_accepted_raw_upi_by_audit',
-    unique: true,
+    name: 'raw_upi_scan_identity_lookup',
     partialFilterExpression: {
       rawUpi: { $type: 'string', $gt: '' },
       scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] },

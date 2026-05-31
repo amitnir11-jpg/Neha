@@ -10,7 +10,11 @@ router.use(auth.requireAuth, auth.requireAdmin);
 router.get('/', async (req, res) => {
   try {
     const users = await User.find({}).sort({ approved: 1, createdAt: -1 }).lean();
-    res.json({ success: true, users: users.map(auth.cleanPublicUser) });
+    const cleaned = await Promise.all(users.map(async (user) => ({
+      ...auth.cleanPublicUser(user),
+      dealerAccess: await auth.userDealerAccessCodes(user)
+    })));
+    res.json({ success: true, users: cleaned });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -26,7 +30,8 @@ router.post(['/', '/create'], async (req, res) => {
       approved,
       approvedBy: req.user.username || req.user.name || 'admin'
     });
-    res.status(201).json({ success: true, user: auth.cleanPublicUser(user) });
+    const dealerAccess = await auth.userDealerAccessCodes(user);
+    res.status(201).json({ success: true, user: { ...auth.cleanPublicUser(user), dealerAccess } });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -53,7 +58,9 @@ router.put('/:id', async (req, res) => {
     if (!update.email) delete update.email;
     const user = await User.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    return res.json({ success: true, user: auth.cleanPublicUser(user) });
+    await auth.syncUserDealerMappings(user._id, update.dealerAccess);
+    const dealerAccess = await auth.userDealerAccessCodes(user);
+    return res.json({ success: true, user: { ...auth.cleanPublicUser(user), dealerAccess } });
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }

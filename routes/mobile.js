@@ -87,13 +87,9 @@ function signMobileToken(user) {
   return jwt.sign(auth.publicUser(user), JWT_SECRET, { expiresIn: '12h' });
 }
 
-function dealerAccessForUser(user, dealerCode) {
+async function dealerAccessForUser(user, dealerCode) {
   const requestedDealer = auth.normalizeAccessCode(dealerCode);
-  const access = auth.dealerAccessIncludes(user.dealerAccess, requestedDealer);
-  if (user.role === 'admin') {
-    return { ...access, requestedDealer, allowed: true, userDealerAccess: ['ALL'] };
-  }
-  return { ...access, requestedDealer };
+  return auth.validateUserDealerAccess(user, requestedDealer);
 }
 
 function compactDealer(row) {
@@ -240,10 +236,9 @@ router.post('/login', async (req, res) => {
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
     const password = String(req.body.password || '');
     const pin = String(req.body.pin || '').trim();
-    const dealerCode = auth.normalizeAccessCode(req.body.dealerCode);
+    const dealerCode = auth.normalizeAccessCode(req.body.dealerCode || req.body.activeDealerId);
     const deviceId = clean(req.body.deviceId);
 
-    if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer code is required' });
     if (!username) return res.status(400).json({ success: false, message: 'User ID is required' });
     if (!password && !pin) return res.status(400).json({ success: false, message: 'Password or PIN is required' });
 
@@ -252,7 +247,31 @@ router.post('/login', async (req, res) => {
     if (!userIsApproved(user)) return res.status(403).json({ success: false, message: 'Login not approved. Please contact administrator.' });
     if (!userIsActive(user)) return res.status(403).json({ success: false, message: 'User is blocked/inactive. Please contact administrator.' });
 
-    const access = dealerAccessForUser(user, dealerCode);
+    let valid = false;
+    if (password) valid = await compareSecret(user, password, ['passwordHash', 'password']);
+    if (!valid && pin) valid = await compareSecret(user, pin, ['pinHash', 'pin']);
+    if (!valid) return res.status(401).json({ success: false, message: 'Invalid username, password, or PIN' });
+
+    const assignedDealers = await auth.activeDealersForUser(user);
+    const selectedDealer = dealerCode || (assignedDealers.length === 1 ? assignedDealers[0].dealerCode : '');
+    const dealerAccess = await auth.userDealerAccessCodes(user);
+    const publicUser = { ...auth.publicUser(user), dealerAccess };
+    const token = signMobileToken(user);
+    if (!selectedDealer) {
+      return res.json({
+        success: true,
+        token,
+        expiresIn: '12h',
+        user: publicUser,
+        assignedDealers,
+        activeDealers: assignedDealers,
+        needsDealerSelection: true,
+        appVersion: MOBILE_APP_VERSION,
+        message: 'Select dealer first'
+      });
+    }
+
+    const access = await dealerAccessForUser(user, selectedDealer);
     if (!access.allowed) {
       return res.status(403).json({
         success: false,
@@ -262,19 +281,15 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    let valid = false;
-    if (password) valid = await compareSecret(user, password, ['passwordHash', 'password']);
-    if (!valid && pin) valid = await compareSecret(user, pin, ['pinHash', 'pin']);
-    if (!valid) return res.status(401).json({ success: false, message: 'Invalid username, password, or PIN' });
-
     const existingDevice = deviceId ? await Device.findOne({ deviceId }).lean() : null;
     if (existingDevice && existingDevice.approved === false) {
       return res.status(403).json({ success: false, message: 'This mobile device is blocked by admin.' });
     }
 
-    const dealer = await Dealer.findOne({ dealerCode: access.requestedDealer }).lean();
-    const publicUser = auth.publicUser(user);
-    const token = signMobileToken(user);
+    const [dealer, activeAudit] = await Promise.all([
+      Dealer.findOne({ dealerCode: access.requestedDealer }).lean(),
+      getActiveAudit({ dealerCode: access.requestedDealer }).catch(() => null)
+    ]);
     if (deviceId) {
       await Device.findOneAndUpdate(
         { deviceId },
@@ -287,6 +302,7 @@ router.post('/login', async (req, res) => {
           approved: true,
           dealerCode: access.requestedDealer,
           dealerName: dealer?.dealerName || '',
+          auditId: activeAudit ? activeAudit.auditId : '',
           userId: String(publicUser.id || ''),
           loginId: publicUser.username || '',
           userName: publicUser.name || publicUser.username || '',
@@ -312,7 +328,12 @@ router.post('/login', async (req, res) => {
       expiresIn: '12h',
       user: publicUser,
       dealerCode: access.requestedDealer,
+      activeDealerId: access.requestedDealer,
       dealerName: dealer?.dealerName || '',
+      assignedDealers,
+      activeDealers: assignedDealers,
+      activeAudit: activeAudit ? publicAudit(activeAudit) : null,
+      auditId: activeAudit ? clean(activeAudit.auditId) : '',
       appVersion: MOBILE_APP_VERSION,
       message: 'Login verified'
     });
@@ -336,7 +357,7 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
 router.get('/config', auth.optionalAuth, async (req, res) => {
   try {
     const info = serverInfo(req.app.locals.activePort);
-    const activeAudit = await getActiveAudit().catch(() => null);
+    const activeAudit = await getActiveAudit({ dealerCode: req.query.dealerCode }).catch(() => null);
     return res.json({
       success: true,
       appName: 'Daksh Inventory',
@@ -363,12 +384,12 @@ router.post('/device-register', auth.requireAuth, async (req, res) => {
     const dealerCode = auth.normalizeAccessCode(req.body.dealerCode);
     if (!deviceId) return res.status(400).json({ success: false, message: 'Device ID is required' });
     if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer code is required' });
-    const access = dealerAccessForUser(req.user, dealerCode);
+    const access = await dealerAccessForUser(req.user, dealerCode);
     if (!access.allowed) return res.status(403).json({ success: false, message: 'Dealer access not assigned' });
 
     const [dealer, activeAudit] = await Promise.all([
       Dealer.findOne({ dealerCode: access.requestedDealer }).lean(),
-      getActiveAudit().catch(() => null)
+      getActiveAudit({ dealerCode: access.requestedDealer }).catch(() => null)
     ]);
     const now = new Date();
     const device = await Device.findOneAndUpdate(
@@ -421,7 +442,7 @@ router.post('/realtime-scan', auth.requireAuth, sync.pushHandler);
 router.get('/status', auth.optionalAuth, async (req, res) => {
   try {
     const info = serverInfo(req.app.locals.activePort);
-    const activeAudit = await getActiveAudit().catch(() => null);
+    const activeAudit = await getActiveAudit({ dealerCode: req.query.dealerCode }).catch(() => null);
     const status = await mobileDeviceStatus(clean(req.query.deviceId));
     return res.json({
       success: true,

@@ -36,9 +36,24 @@
     }
   }
 
+  const ACTIVE_DEALER_KEY = 'dakshActiveDealerId';
+
+  function userScopedStorageKey(baseKey, user = null) {
+    const currentUser = arguments.length > 1 ? (user || {}) : (state.user || storageJson('dakshUser') || {});
+    const keyPart = String(currentUser.id || currentUser.username || currentUser.email || currentUser.name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '_');
+    return keyPart ? `${baseKey}:${keyPart}` : baseKey;
+  }
+
+  const storedUser = storageJson('dakshUser');
+
   const state = {
     token: storageGet('dakshToken') || '',
-    user: storageJson('dakshUser'),
+    user: storedUser,
+    assignedDealers: storageJson('dakshAssignedDealers') || [],
+    pendingDealerLogin: null,
     dealers: [],
     audits: [],
     deleteAction: null,
@@ -309,17 +324,30 @@
   }
 
   function clearSession() {
+    const scopedActiveDealerKey = userScopedStorageKey(ACTIVE_DEALER_KEY);
     state.token = '';
     state.user = null;
+    state.assignedDealers = [];
+    state.pendingDealerLogin = null;
     storageRemove('dakshToken');
     storageRemove('dakshUser');
+    storageRemove('dakshAssignedDealers');
+    storageRemove(ACTIVE_DEALER_KEY);
+    storageRemove(scopedActiveDealerKey);
   }
 
-  function saveSession(payload) {
+  function saveSession(payload, dealerCode = '') {
     state.token = payload.token;
     state.user = payload.user;
+    state.assignedDealers = payload.assignedDealers || payload.activeDealers || state.assignedDealers || [];
     storageSet('dakshToken', payload.token);
     storageSet('dakshUser', JSON.stringify(payload.user));
+    storageSet('dakshAssignedDealers', JSON.stringify(state.assignedDealers));
+    const selectedDealer = cleanDealerCode(dealerCode || payload.activeDealerId || payload.dealerCode || '');
+    if (selectedDealer) {
+      storageSet(ACTIVE_DEALER_KEY, selectedDealer);
+      storageSet(userScopedStorageKey(ACTIVE_DEALER_KEY, payload.user), selectedDealer);
+    }
   }
 
   function logout() {
@@ -362,9 +390,48 @@
 
   function cleanDealerCode(value) {
     const text = String(value || '').trim();
-    if (text.toLowerCase() === 'all') return 'all';
+    if (text.toLowerCase() === 'all') return 'ALL';
     const match = text.match(/\(([^()]+)\)\s*$/);
     return (match ? match[1] : text).trim().toUpperCase();
+  }
+
+  function dealerLabel(dealer = {}) {
+    const code = cleanDealerCode(dealer.dealerCode || dealer.code || dealer.id || '');
+    const name = String(dealer.dealerName || dealer.name || '').trim();
+    return code && name ? `${code} - ${name}` : code || name || 'Dealer';
+  }
+
+  function showDealerSelection(payload) {
+    state.pendingDealerLogin = payload;
+    const dealers = payload.assignedDealers || payload.activeDealers || [];
+    const form = $('#dealerSelectLoginForm');
+    const select = $('#loginDealerSelect');
+    if (!form || !select || !dealers.length) return false;
+    select.innerHTML = '<option value="">Select Dealer</option>' + dealers.map((dealer) => (
+      `<option value="${escapeHtml(dealer.dealerCode || dealer.code || dealer.id || '')}">${escapeHtml(dealerLabel(dealer))}</option>`
+    )).join('');
+    $$('.login-form').forEach((item) => item.classList.remove('active'));
+    form.classList.add('active');
+    return true;
+  }
+
+  function finishLogin(payload, dealerCode = '') {
+    saveSession(payload, dealerCode);
+    navigateTo('/dashboard');
+  }
+
+  function handleLoginSuccess(data, message) {
+    const dealers = data.assignedDealers || data.activeDealers || [];
+    if (data.activeDealerId || data.dealerCode || dealers.length <= 1 || data.user?.role === 'admin') {
+      finishLogin(data, data.activeDealerId || data.dealerCode || (dealers[0] && (dealers[0].dealerCode || dealers[0].id)) || '');
+      return;
+    }
+    if (showDealerSelection(data)) {
+      message.className = 'form-message success';
+      message.textContent = 'Select dealer';
+      return;
+    }
+    finishLogin(data);
   }
 
   function queryFromForm(form) {
@@ -390,7 +457,23 @@
     try {
       const data = await api('/api/auth/me');
       state.user = data.user || state.user;
+      state.assignedDealers = data.assignedDealers || data.activeDealers || state.assignedDealers || [];
       storageSet('dakshUser', JSON.stringify(state.user));
+      storageSet('dakshAssignedDealers', JSON.stringify(state.assignedDealers));
+      let selectedDealer = cleanDealerCode(storageGet(userScopedStorageKey(ACTIVE_DEALER_KEY)) || storageGet(ACTIVE_DEALER_KEY) || '');
+      const canUseSelectedDealer = !selectedDealer || state.assignedDealers.some((dealer) => (
+        cleanDealerCode(dealer.dealerCode || dealer.code || dealer.id || '') === selectedDealer
+      ));
+      if (!canUseSelectedDealer) {
+        storageRemove(ACTIVE_DEALER_KEY);
+        storageRemove(userScopedStorageKey(ACTIVE_DEALER_KEY));
+        selectedDealer = '';
+      }
+      if (selectedDealer) storageSet(ACTIVE_DEALER_KEY, selectedDealer);
+      if (state.user && state.user.role !== 'admin' && state.assignedDealers.length > 1 && !selectedDealer) {
+        showDealerSelection({ token: state.token, user: state.user, assignedDealers: state.assignedDealers });
+        return false;
+      }
       return true;
     } catch (error) {
       clearSession();
@@ -447,10 +530,7 @@
         console.log("Login request:", payload);
         const data = await api('/api/auth/login', { method: 'POST', body: payload });
         console.log("Login response:", data);
-        saveSession(data);
-        message.className = 'form-message success';
-        message.innerHTML = `Login successful. <a href="${escapeHtml(appUrl('/dashboard'))}">Open dashboard</a>`;
-        navigateTo('/dashboard');
+        handleLoginSuccess(data, message);
       } catch (error) {
         message.className = 'form-message error';
         message.textContent = error.message;
@@ -465,14 +545,23 @@
         console.log("Login request:", payload);
         const data = await api('/api/auth/login', { method: 'POST', body: payload });
         console.log("Login response:", data);
-        saveSession(data);
-        message.className = 'form-message success';
-        message.innerHTML = `Login successful. <a href="${escapeHtml(appUrl('/dashboard'))}">Open dashboard</a>`;
-        navigateTo('/dashboard');
+        handleLoginSuccess(data, message);
       } catch (error) {
         message.className = 'form-message error';
         message.textContent = error.message;
       }
+    });
+
+    $('#dealerSelectLoginForm')?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const message = $('#loginMessage');
+      const dealerCode = cleanDealerCode($('#loginDealerSelect')?.value || '');
+      if (!dealerCode) {
+        message.className = 'form-message error';
+        message.textContent = 'Select dealer';
+        return;
+      }
+      finishLogin(state.pendingDealerLogin || {}, dealerCode);
     });
 
     $('#registerLoginForm').addEventListener('submit', async (event) => {

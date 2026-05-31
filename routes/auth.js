@@ -3,6 +3,8 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Dealer = require('../models/Dealer');
+const UserDealerMapping = require('../models/UserDealerMapping');
 const Setting = require('../models/Setting');
 const smtpConfig = require('../utils/smtpConfig');
 
@@ -38,6 +40,8 @@ async function optionalAuth(req, res, next) {
   try {
     const header = req.headers.authorization || '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : req.query.token;
+    req.authTokenPresent = Boolean(token);
+    req.authError = null;
     if (!token) {
       req.user = null;
       return next();
@@ -46,6 +50,7 @@ async function optionalAuth(req, res, next) {
     return next();
   } catch (error) {
     req.user = null;
+    req.authError = error;
     return next();
   }
 }
@@ -56,7 +61,7 @@ async function requireAuth(req, res, next) {
     if (!req.user) {
       return res.status(401).json({
         success: false,
-        message: 'Login required'
+        message: req.authTokenPresent ? 'Auth expired: please login again' : 'Login required'
       });
     }
     const freshUser = await User.findOne({ _id: req.user.id, approved: { $ne: false } }).lean();
@@ -66,7 +71,27 @@ async function requireAuth(req, res, next) {
         message: 'User is inactive or not approved'
       });
     }
-    req.user = publicUser(freshUser);
+    const dealerAccess = await userDealerAccessCodes(freshUser);
+    req.user = { ...publicUser({ ...freshUser, dealerAccess }), dealerAccess };
+    const requestedDealer = extractRequestDealer(req);
+    if (requestedDealer && requestedDealer !== 'ALL') {
+      const access = await validateUserDealerAccess(req.user, requestedDealer);
+      if (!access.allowed) {
+        return res.status(403).json({
+          success: false,
+          message: 'Unauthorized dealer access',
+          requestedDealer: access.requestedDealer,
+          userDealerAccess: access.userDealerAccess
+        });
+      }
+      applyRequestDealer(req, access.requestedDealer);
+    } else if (req.user.role !== 'admin' && isDealerScopedRequest(req)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Select dealer first',
+        userDealerAccess: dealerAccess
+      });
+    }
     return next();
   } catch (error) {
     console.error('Auth database check failed', {
@@ -143,6 +168,109 @@ function dealerAccessIncludes(dealerAccess, dealerCode) {
     userDealerAccess: normalizedAccess,
     allowed: normalizedAccess.includes('ALL') || normalizedAccess.includes(requestedDealer)
   };
+}
+
+async function syncUserDealerMappings(userId, dealerAccess = []) {
+  const normalized = normalizeDealerAccess(dealerAccess);
+  if (!userId) return normalized;
+  await UserDealerMapping.updateMany({ userId }, { $set: { isActive: false } });
+  const dealerCodes = normalized.filter((code) => code && code !== 'ALL');
+  if (dealerCodes.length) {
+    await Promise.all(dealerCodes.map((dealerCode) => UserDealerMapping.findOneAndUpdate(
+      { userId, dealerId: dealerCode, auditId: '' },
+      { userId, dealerId: dealerCode, auditId: '', isActive: true },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    )));
+  }
+  return normalized;
+}
+
+async function userDealerAccessCodes(user = {}) {
+  const userId = user._id || user.id;
+  const legacyAccess = normalizeDealerAccess(user.dealerAccess);
+  if (!userId) return legacyAccess;
+  const mappings = await UserDealerMapping.find({ userId, isActive: true }).select('dealerId').lean();
+  const mappedAccess = normalizeDealerAccess(mappings.map((row) => row.dealerId));
+  if (mappedAccess.length) return mappedAccess;
+  if (legacyAccess.length) await syncUserDealerMappings(userId, legacyAccess).catch(() => null);
+  return legacyAccess;
+}
+
+async function activeDealersForUser(user = {}) {
+  const access = await userDealerAccessCodes(user);
+  const canSeeAll = user.role === 'admin' || access.includes('ALL');
+  const filter = {
+    dealerCode: { $not: /^SYNC/i },
+    dealerName: { $not: /Sync Test/i },
+    active: { $ne: false }
+  };
+  if (!canSeeAll) filter.dealerCode = access.length ? { $in: access } : '__none__';
+  const dealers = await Dealer.find(filter).sort({ dealerName: 1, dealerCode: 1 }).lean();
+  return dealers.map((dealer) => ({
+    id: dealer.dealerCode,
+    dealerId: dealer.dealerCode,
+    dealerCode: dealer.dealerCode,
+    dealerName: dealer.dealerName || dealer.dealerCode,
+    currentAuditId: dealer.currentAuditId || '',
+    auditId: dealer.currentAuditId || '',
+    brand: dealer.brand || '',
+    location: dealer.location || ''
+  }));
+}
+
+function extractRequestDealer(req) {
+  const sources = [
+    req.query && (req.query.activeDealerId || req.query.dealerId || req.query.dealerCode || req.query.dealer),
+    req.body && (req.body.activeDealerId || req.body.dealerId || req.body.dealerCode || req.body.dealer),
+    req.params && (req.params.dealerId || req.params.dealerCode)
+  ];
+  return normalizeAccessCode(sources.find(Boolean) || '');
+}
+
+function isDealerScopedRequest(req) {
+  const base = String(req.baseUrl || '').toLowerCase();
+  const path = String(req.path || '').toLowerCase();
+  if (base === '/api/auth' || base === '/api/users') return false;
+  if (base === '/api/master' && ['/dealers', '/filters', '/suggestions'].includes(path)) return false;
+  if (base === '/api/dealers' && req.method === 'GET') return false;
+  if (base === '/api/mobile' && req.method === 'GET' && ['/dealers', '/config'].includes(path)) return false;
+  return [
+    '/api/scans',
+    '/api/inventory',
+    '/api/dashboard',
+    '/api/reports',
+    '/api/reconciliation',
+    '/api/bin',
+    '/api/bin-master',
+    '/api/bin-transfer',
+    '/api/devices',
+    '/api/qr',
+    '/api/sync',
+    '/api/mobile',
+    '/api/audit-backup',
+    '/api/audit',
+    '/api/master-parts'
+  ].includes(base);
+}
+
+async function validateUserDealerAccess(user, dealerCode) {
+  const requestedDealer = normalizeAccessCode(dealerCode);
+  const userDealerAccess = await userDealerAccessCodes(user);
+  const allowed = user.role === 'admin' || userDealerAccess.includes('ALL') || userDealerAccess.includes(requestedDealer);
+  return { requestedDealer, userDealerAccess, allowed };
+}
+
+function applyRequestDealer(req, dealerCode) {
+  const cleanDealer = normalizeAccessCode(dealerCode);
+  if (!cleanDealer || cleanDealer === 'ALL') return;
+  req.activeDealerId = cleanDealer;
+  req.query = req.query || {};
+  req.query.activeDealerId = req.query.activeDealerId || cleanDealer;
+  req.query.dealerCode = req.query.dealerCode || cleanDealer;
+  if (req.body && typeof req.body === 'object' && !(req.body instanceof Buffer)) {
+    req.body.activeDealerId = req.body.activeDealerId || cleanDealer;
+    req.body.dealerCode = req.body.dealerCode || cleanDealer;
+  }
 }
 
 function isBcryptHash(value) {
@@ -345,6 +473,7 @@ async function createUserFromPayload(payload, defaults = {}) {
   if (!user.passwordHash && !user.pinHash && !user.password && !user.pin) throw new Error('Password or 4-digit PIN is required');
 
   await user.save();
+  await syncUserDealerMappings(user._id, user.dealerAccess);
   return user;
 }
 
@@ -407,10 +536,16 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid username or password' });
     }
 
+    const dealerAccess = await userDealerAccessCodes(user);
+    const assignedDealers = await activeDealersForUser(user);
     return res.json({
       success: true,
       token: signToken(user),
-      user: publicUser(user)
+      user: { ...publicUser(user), dealerAccess },
+      assignedDealers,
+      activeDealers: assignedDealers,
+      needsDealerSelection: user.role !== 'admin' && assignedDealers.length > 1,
+      activeDealerId: user.role !== 'admin' && assignedDealers.length === 1 ? assignedDealers[0].dealerCode : ''
     });
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });
@@ -419,30 +554,51 @@ router.post('/login', async (req, res) => {
 
 router.post('/mobile-login', async (req, res) => {
   try {
-    const dealerCode = normalizeAccessCode(req.body.dealerCode);
+    const dealerCode = normalizeAccessCode(req.body.dealerCode || req.body.activeDealerId);
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
     const password = String(req.body.password || '');
     const pin = String(req.body.pin || '').trim();
-    if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer code is required' });
     if (!username) return res.status(400).json({ success: false, message: 'User ID is required' });
     const user = await findUserByLogin(username);
     const ruleError = loginRuleError(user, ['staff', 'mobile_user']);
     if (ruleError) return res.status(401).json({ success: false, message: ruleError });
-    const accessCheck = dealerAccessIncludes(user.dealerAccess, dealerCode);
-    if (!accessCheck.userDealerAccess.length || !accessCheck.allowed) {
-      return res.status(403).json({
-        success: false,
-        error: 'Dealer access not assigned',
-        message: 'Dealer access not assigned',
-        requestedDealer: accessCheck.requestedDealer,
-        userDealerAccess: accessCheck.userDealerAccess
-      });
-    }
     let valid = false;
     if (password) valid = await compareAndUpgradeSecret(user, password, ['passwordHash', 'password']);
     if (!valid && pin) valid = await compareAndUpgradeSecret(user, pin, ['pinHash', 'pin']);
     if (!valid) return res.status(401).json({ success: false, message: 'Invalid password or PIN' });
-    return res.json({ success: true, token: signToken(user), user: publicUser(user), dealerCode: accessCheck.requestedDealer });
+    const dealerAccess = await userDealerAccessCodes(user);
+    const assignedDealers = await activeDealersForUser(user);
+    const selectedDealer = dealerCode || (assignedDealers.length === 1 ? assignedDealers[0].dealerCode : '');
+    if (selectedDealer) {
+      const accessCheck = await validateUserDealerAccess(user, selectedDealer);
+      if (!accessCheck.userDealerAccess.length || !accessCheck.allowed) {
+        return res.status(403).json({
+          success: false,
+          error: 'Dealer access not assigned',
+          message: 'Dealer access not assigned',
+          requestedDealer: accessCheck.requestedDealer,
+          userDealerAccess: accessCheck.userDealerAccess
+        });
+      }
+      return res.json({
+        success: true,
+        token: signToken(user),
+        user: { ...publicUser(user), dealerAccess },
+        dealerCode: accessCheck.requestedDealer,
+        activeDealerId: accessCheck.requestedDealer,
+        assignedDealers,
+        activeDealers: assignedDealers
+      });
+    }
+    return res.json({
+      success: true,
+      token: signToken(user),
+      user: { ...publicUser(user), dealerAccess },
+      assignedDealers,
+      activeDealers: assignedDealers,
+      needsDealerSelection: true,
+      message: 'Select dealer first'
+    });
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });
   }
@@ -463,7 +619,7 @@ router.post('/pin-login', async (req, res) => {
     const user = await findUserByLogin(username);
     const ruleError = loginRuleError(user, ['staff', 'mobile_user']);
     if (ruleError) return res.status(401).json({ success: false, message: ruleError });
-    const accessCheck = dealerAccessIncludes(user.dealerAccess, dealerCode);
+    const accessCheck = await validateUserDealerAccess(user, dealerCode);
     if (!accessCheck.userDealerAccess.length || !accessCheck.allowed) {
       return res.status(403).json({
         success: false,
@@ -478,11 +634,16 @@ router.post('/pin-login', async (req, res) => {
     if (valid) {
       console.log("User found:", safeLogUser(user));
       console.log("Password match: true");
+      const dealerAccess = await userDealerAccessCodes(user);
+      const assignedDealers = await activeDealersForUser(user);
       return res.json({
         success: true,
         token: signToken(user),
-        user: publicUser(user),
-        dealerCode: accessCheck.requestedDealer
+        user: { ...publicUser(user), dealerAccess },
+        dealerCode: accessCheck.requestedDealer,
+        activeDealerId: accessCheck.requestedDealer,
+        assignedDealers,
+        activeDealers: assignedDealers
       });
     }
 
@@ -494,8 +655,19 @@ router.post('/pin-login', async (req, res) => {
   }
 });
 
-router.get('/me', requireAuth, (req, res) => {
-  res.json({ success: true, user: req.user });
+router.get('/me', requireAuth, async (req, res) => {
+  try {
+    const assignedDealers = await activeDealersForUser(req.user);
+    res.json({
+      success: true,
+      user: req.user,
+      assignedDealers,
+      activeDealers: assignedDealers,
+      activeDealerId: req.activeDealerId || ''
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
 router.post('/register', async (req, res) => {
@@ -603,7 +775,11 @@ router.post('/reset-password', async (req, res) => {
 router.get('/users', requireAuth, requireAdmin, async (req, res) => {
   try {
     const users = await User.find({}).sort({ approved: 1, createdAt: -1 }).lean();
-    res.json({ success: true, users: users.map(cleanPublicUser) });
+    const cleaned = await Promise.all(users.map(async (user) => ({
+      ...cleanPublicUser(user),
+      dealerAccess: await userDealerAccessCodes(user)
+    })));
+    res.json({ success: true, users: cleaned });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -618,7 +794,8 @@ router.post(['/users', '/users/create'], requireAuth, requireAdmin, async (req, 
       approved,
       approvedBy: req.user.username || req.user.name || 'admin'
     });
-    res.status(201).json({ success: true, user: cleanPublicUser(user) });
+    const dealerAccess = await userDealerAccessCodes(user);
+    res.status(201).json({ success: true, user: { ...cleanPublicUser(user), dealerAccess } });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -882,5 +1059,9 @@ module.exports.normalizePermissions = normalizePermissions;
 module.exports.normalizeAccessCode = normalizeAccessCode;
 module.exports.normalizeDealerAccess = normalizeDealerAccess;
 module.exports.dealerAccessIncludes = dealerAccessIncludes;
+module.exports.syncUserDealerMappings = syncUserDealerMappings;
+module.exports.userDealerAccessCodes = userDealerAccessCodes;
+module.exports.activeDealersForUser = activeDealersForUser;
+module.exports.validateUserDealerAccess = validateUserDealerAccess;
 module.exports.publicUser = publicUser;
 module.exports.ROLES = ROLES;

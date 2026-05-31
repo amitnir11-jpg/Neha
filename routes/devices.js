@@ -608,7 +608,8 @@ async function connectHandler(req, res) {
       ipAddress: requestIp(req)
     });
     const info = serverInfo(req.app.locals.activePort);
-    const activeAudit = await getActiveAudit();
+    const requestedDealerCode = clean(req.body.dealerCode || req.query.dealerCode);
+    const activeAudit = await getActiveAudit(requestedDealerCode ? { dealerCode: requestedDealerCode } : {});
     const payload = cleanDevicePayload(req, {
       deviceName: 'Mobile Scanner',
       serverUrl: info.serverUrl,
@@ -674,7 +675,8 @@ async function heartbeatHandler(req, res) {
       return res.status(403).json({ success: false, approved: false, status: 'blocked', message: 'This mobile device is blocked by admin.' });
     }
     const info = serverInfo(req.app.locals.activePort);
-    const activeAudit = await getActiveAudit();
+    const requestedDealerCode = clean(req.body.dealerCode || req.query.dealerCode);
+    const activeAudit = await getActiveAudit(requestedDealerCode ? { dealerCode: requestedDealerCode } : {});
     const payload = cleanDevicePayload(req, {
       serverUrl: info.serverUrl,
       deviceType: 'mobile',

@@ -1099,15 +1099,15 @@ io.on('connection', (socket) => {
         if (!isBrowser && deviceType && deviceType !== 'web') {
           const device = await scannerManager.register(payload, { socket });
           socket.data.deviceId = device.deviceId;
-          socket.emit('audit:active', publicAudit(await getActiveAudit()));
+          socket.emit('audit:active', publicAudit(await getActiveAudit(payload.dealerCode ? { dealerCode: payload.dealerCode } : {})));
           return;
         }
         socket.data.deviceId = '';
-        socket.emit('audit:active', publicAudit(await getActiveAudit()));
+        socket.emit('audit:active', publicAudit(await getActiveAudit(payload.dealerCode ? { dealerCode: payload.dealerCode } : {})));
         return;
       }
       const deviceId = String(payload.deviceId || socket.id).trim();
-      const activeAudit = await getActiveAudit();
+      const activeAudit = await getActiveAudit(payload.dealerCode ? { dealerCode: payload.dealerCode } : {});
       socket.data.deviceId = deviceId;
       console.log('[SOCKET] device:hello', { socketId: socket.id, deviceId, deviceType, activeAudit: Boolean(activeAudit) });
       const ipAddress = socket.handshake.address ? socket.handshake.address.replace('::ffff:', '') : '';
@@ -1156,7 +1156,7 @@ io.on('connection', (socket) => {
       }
       const deviceId = String(payload.deviceId || socket.data.deviceId || '').trim();
       if (!deviceId) return;
-      const activeAudit = await getActiveAudit();
+      const activeAudit = await getActiveAudit(payload.dealerCode ? { dealerCode: payload.dealerCode } : {});
       socket.data.deviceId = deviceId;
       console.log('[SOCKET] device:heartbeat', { socketId: socket.id, deviceId, pendingCount: payload.pendingCount || 0, syncStatus: payload.syncStatus || '' });
       const device = await Device.findOneAndUpdate(
@@ -1359,7 +1359,11 @@ async function fixInventoryIndexes() {
       const isOldUpiUnique = index.name === 'upiId_1_dealerCode_1' && index.unique;
       const isOldRawUpiUnique = index.name === 'unique_accepted_raw_upi'
         || index.name === 'unique_accepted_raw_upi_by_audit'
-        || (index.unique && index.key && index.key.rawUpi === 1 && !index.key.dealerCode);
+        || (
+          index.name === 'unique_accepted_raw_upi_by_audit'
+          && (!index.key || index.key.rawUpi !== 1 || index.key.dealerCode !== 1 || index.key.auditId !== 1)
+        )
+        || (index.unique && index.key && index.key.rawUpi === 1 && (!index.key.dealerCode || !index.key.auditId));
       const isNonUniqueScanId = index.name === 'scanId_1' && !index.unique;
       if (isOldSyncUnique || isOldUpiUnique || isOldRawUpiUnique || isNonUniqueScanId) {
         await collection.dropIndex(index.name);
@@ -1384,10 +1388,9 @@ async function fixInventoryIndexes() {
       }
     );
     await collection.createIndex(
-      { rawUpi: 1, dealerCode: 1, auditId: 1 },
+      { rawUpi: 1, dealerCode: 1, auditId: 1, scanType: 1, userId: 1, syncBatchId: 1 },
       {
-        name: 'unique_accepted_raw_upi_by_audit',
-        unique: true,
+        name: 'raw_upi_scan_identity_lookup',
         partialFilterExpression: {
           rawUpi: { $type: 'string', $gt: '' },
           scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] },
@@ -1405,10 +1408,11 @@ async function fixUserIndexes() {
     const collection = mongoose.connection.db.collection('users');
     const indexes = await collection.indexes();
     for (const index of indexes) {
-      const isUniqueEmailIndex = index.unique && index.key && Object.keys(index.key).length === 1 && index.key.email === 1;
-      if (isUniqueEmailIndex) {
+      const isEmailOnlyIndex = index.key && Object.keys(index.key).length === 1 && index.key.email === 1;
+      const isOldEmailIndex = isEmailOnlyIndex && (index.unique || index.name !== 'email_1' || index.sparse !== true);
+      if (isOldEmailIndex) {
         await collection.dropIndex(index.name);
-        console.log(`Dropped old duplicate-blocking user email index: ${index.name}`);
+        console.log(`Dropped old user email index so email can be shared: ${index.name}`);
       }
     }
     await collection.createIndex({ username: 1 }, { name: 'username_1', unique: true, sparse: true });
