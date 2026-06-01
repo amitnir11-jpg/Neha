@@ -7,14 +7,9 @@ const reportModule = require('./report');
 const auth = require('./auth');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const RejectedScan = require('../models/RejectedScan');
-const Inventory = require('../models/Inventory');
-const MasterPart = require('../models/MasterPart');
-const MasterCatalogue = require('../models/MasterCatalogue');
-const PartPriceHistory = require('../models/PartPriceHistory');
 const { formatDateLikeFields } = require('../utils/time');
-const { scanValueRow, summarizeMovementBucket } = require('../utils/inventoryValueEngine');
+const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
-const { cataloguePayload } = require('../utils/catalogue');
 
 const autoTable = autoTableModule.default || autoTableModule;
 
@@ -267,26 +262,6 @@ const SCAN_COLUMNS = [
   { header: 'ENTRY CHANNEL', key: 'entryChannel', width: 18 },
   { header: 'ENTRY SOURCE', key: 'scanSourceLabel', width: 24 },
   { header: 'SYNC STATUS', key: 'syncStatus', width: 16 }
-];
-
-const MOVEMENT_VALUE_COLUMNS = [
-  { header: 'Part Number', key: 'partNumber', width: 18 },
-  { header: 'Part Description', key: 'partDescription', width: 34 },
-  { header: 'Product Category', key: 'productCategory', width: 22 },
-  { header: 'Product Group', key: 'productGroup', width: 20 },
-  { header: 'Scan Qty', key: 'scanQty', width: 14 },
-  { header: 'Manual Qty', key: 'manualQty', width: 14 },
-  { header: 'Scan UPI MRP', key: 'scanUPIMRP', width: 18 },
-  { header: 'Manual MRP', key: 'manualMRP', width: 14 },
-  { header: 'Current Catalogue MRP', key: 'currentCatalogueMRP', width: 22 },
-  { header: 'Average Scanned MRP', key: 'averageScannedMRP', width: 22 },
-  { header: 'Min Scanned MRP', key: 'minScannedMRP', width: 18 },
-  { header: 'Max Scanned MRP', key: 'maxScannedMRP', width: 18 },
-  { header: 'Price Period From', key: 'pricePeriodFrom', width: 20 },
-  { header: 'Price Period To', key: 'pricePeriodTo', width: 20 },
-  { header: 'Price Ageing Days', key: 'priceAgeingDays', width: 18 },
-  { header: 'Final Inventory Value', key: 'finalInventoryValue', width: 22 },
-  { header: 'Remarks', key: 'remarks', width: 36 }
 ];
 
 const SCAN_REGISTER_COLUMNS = [
@@ -714,201 +689,6 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
   }).sort((a, b) => Number(b.scanCount || 0) - Number(a.scanCount || 0) || String(a.userName || a.dealerName || a.deviceName || '').localeCompare(String(b.userName || b.dealerName || b.deviceName || '')));
 }
 
-function movementDate(value) {
-  if (!value) return null;
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function movementDateText(value) {
-  const date = movementDate(value);
-  return date ? date.toISOString().slice(0, 10) : '';
-}
-
-function masterPartNumber(row = {}) {
-  return normalizePartNumber(row.normalizedPartNumber || row.partNumber || row.partNo || row.part || '');
-}
-
-function movementScanFilter(query = {}) {
-  const filter = {
-    syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] },
-    isDuplicate: { $ne: true }
-  };
-  if (query.dealerCode) filter.dealerCode = upper(query.dealerCode);
-  if (query.auditId) filter.auditId = clean(query.auditId);
-  if (query.partNumber) {
-    const part = normalizePartNumber(query.partNumber);
-    appendAnd(filter, { $or: [
-      { normalizedPartNumber: regex(part) },
-      { partNumber: regex(part) },
-      { part: regex(part) }
-    ] });
-  }
-  if (query.scanType || query.type) filter.scanType = upper(query.scanType || query.type);
-  if (query.syncStatus) filter.syncStatus = clean(query.syncStatus).toLowerCase();
-  if (query.scanStatus) filter.scanStatus = upper(query.scanStatus);
-  if (query.bin || query.binLocation) appendAnd(filter, { $or: [{ binLocation: regex(query.bin || query.binLocation) }, { bin: regex(query.bin || query.binLocation) }] });
-  applyCommonMetadataFilters(filter, query);
-  if (query.fromDate || query.dateFrom || query.from || query.toDate || query.dateTo || query.to) {
-    filter.timestamp = {};
-    const from = parseFilterDate(query.fromDate || query.dateFrom || query.from || '');
-    const to = parseFilterDate(query.toDate || query.dateTo || query.to || '', true);
-    if (from) filter.timestamp.$gte = from;
-    if (to) filter.timestamp.$lte = to;
-  }
-  return filter;
-}
-
-function valueRowWithManualFallback(scan = {}, catalogue = {}) {
-  const row = scanValueRow(scan);
-  const sourceText = [
-    scan.valuationSource,
-    scan.source,
-    scan.scanSource,
-    scan.scanMode,
-    scan.entryMode
-  ].map((value) => clean(value).toLowerCase()).join(' ');
-  const manual = /\bmanual\b/.test(sourceText);
-  const catalogueMrp = Number(catalogue.mrp || catalogue.currentCatalogueMRP || catalogue.currentCatalogueMrp || 0);
-  if (manual && row.valuationMRP <= 0 && catalogueMrp > 0) {
-    const qty = Number(row.qty || 0);
-    return {
-      ...row,
-      mrp: money(catalogueMrp),
-      valuationMRP: money(catalogueMrp),
-      valuationSource: 'MANUAL_ENTERED_MRP',
-      manualQty: qty,
-      scannedQty: 0,
-      totalManualValue: money(qty * catalogueMrp),
-      totalScanValue: 0,
-      finalInventoryValue: money(qty * catalogueMrp)
-    };
-  }
-  return row;
-}
-
-function priceHistoryMatch(priceRows = [], mrp = 0) {
-  const amount = Number(mrp || 0);
-  if (amount <= 0) return null;
-  return priceRows.find((row) => Math.abs(Number(row.mrp || 0) - amount) <= 0.01) || null;
-}
-
-function averageMasterMRP(catalogue = {}, priceRows = []) {
-  const values = [];
-  const catalogueMrp = Number(catalogue.mrp || catalogue.currentCatalogueMRP || catalogue.currentCatalogueMrp || 0);
-  if (catalogueMrp > 0) values.push(catalogueMrp);
-  priceRows.forEach((row) => {
-    const mrp = Number(row && row.mrp || 0);
-    if (mrp > 0) values.push(mrp);
-  });
-  const uniqueValues = Array.from(new Set(values.map((value) => Number(value).toFixed(2)))).map(Number);
-  return uniqueValues.length
-    ? uniqueValues.reduce((sum, value) => sum + value, 0) / uniqueValues.length
-    : 0;
-}
-
-async function movementValueRowsFromScans(scans = [], query = {}) {
-  const groups = new Map();
-  const partNumbers = Array.from(new Set(scans.map((scan) => normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)).filter(Boolean)));
-  const [catalogueRows, legacyRows, priceRows] = partNumbers.length ? await Promise.all([
-    MasterCatalogue.find({ normalizedPartNumber: { $in: partNumbers } }).lean(),
-    MasterPart.find({ $or: [{ normalizedPartNumber: { $in: partNumbers } }, { partNo: { $in: partNumbers } }, { partNumber: { $in: partNumbers } }] }).lean(),
-    PartPriceHistory.find({ normalizedPartNumber: { $in: partNumbers } }).sort({ normalizedPartNumber: 1, effectiveFrom: -1 }).lean()
-  ]) : [[], [], []];
-  const catalogueByPart = new Map(catalogueRows.map((row) => [masterPartNumber(row), cataloguePayload(row)]).filter(([part]) => part));
-  legacyRows.forEach((row) => {
-    const part = masterPartNumber(row);
-    if (part && !catalogueByPart.has(part)) catalogueByPart.set(part, row);
-  });
-  const priceByPart = new Map();
-  priceRows.forEach((row) => {
-    const part = masterPartNumber(row);
-    if (!part) return;
-    const list = priceByPart.get(part) || [];
-    list.push(row);
-    priceByPart.set(part, list);
-  });
-  scans.forEach((scan) => {
-    const partNumber = upper(scan.normalizedPartNumber || scan.partNumber || scan.part);
-    if (!partNumber) return;
-    const catalogue = catalogueByPart.get(partNumber) || {};
-    const valueRow = valueRowWithManualFallback(scan, catalogue);
-    const scanUpiMrp = valueRow.valuationSource === 'UPI_SCANNED_MRP' ? Number(valueRow.valuationMRP || 0) : 0;
-    const manualMrp = valueRow.valuationSource === 'MANUAL_ENTERED_MRP' ? Number(valueRow.valuationMRP || 0) : 0;
-    const bucketMrp = scanUpiMrp || manualMrp || 0;
-    const key = [upper(scan.dealerCode), clean(scan.auditId), partNumber, Number(scanUpiMrp || 0).toFixed(2), Number(manualMrp || 0).toFixed(2)].join('::');
-    const group = groups.get(key) || {
-      dealerCode: upper(scan.dealerCode),
-      auditId: clean(scan.auditId),
-      partNumber,
-      scanUPIMRP: scanUpiMrp,
-      manualMRP: manualMrp,
-      scans: [],
-      valueRows: []
-    };
-    group.scans.push(scan);
-    group.valueRows.push(valueRow);
-    if (!group.scanUPIMRP && scanUpiMrp) group.scanUPIMRP = scanUpiMrp;
-    if (!group.manualMRP && manualMrp) group.manualMRP = manualMrp;
-    group.bucketMrp = bucketMrp;
-    groups.set(key, group);
-  });
-
-  return Array.from(groups.values()).map((group) => {
-    const rows = group.scans;
-    const first = rows[0] || {};
-    const partNumber = group.partNumber;
-    const catalogue = catalogueByPart.get(partNumber) || {};
-    const hasMaster = Boolean(masterPartNumber(catalogue));
-    const valueRows = group.valueRows;
-    const scanQty = valueRows.reduce((sum, row) => sum + Number(row.scannedQty || 0), 0);
-    const manualQty = valueRows.reduce((sum, row) => sum + Number(row.manualQty || 0), 0);
-    const scannedMrps = valueRows.filter((row) => row.valuationSource === 'UPI_SCANNED_MRP' && Number(row.valuationMRP || 0) > 0);
-    const manualMrps = valueRows.filter((row) => row.valuationSource === 'MANUAL_ENTERED_MRP' && Number(row.valuationMRP || 0) > 0);
-    const finalInventoryValue = money(valueRows.reduce((sum, row) => sum + Number(row.finalInventoryValue || 0), 0));
-    const averageScannedMRP = scannedMrps.length
-      ? money(scannedMrps.reduce((sum, row) => sum + Number(row.valuationMRP || 0) * Number(row.qty || 0), 0) / Math.max(1, scannedMrps.reduce((sum, row) => sum + Number(row.qty || 0), 0)))
-      : 0;
-    const minScannedMRP = scannedMrps.length ? Math.min(...scannedMrps.map((row) => Number(row.valuationMRP || 0))) : 0;
-    const maxScannedMRP = scannedMrps.length ? Math.max(...scannedMrps.map((row) => Number(row.valuationMRP || 0))) : 0;
-    const masterAverageMRP = averageMasterMRP(catalogue, priceByPart.get(partNumber) || []);
-    const fallbackSummary = summarizeMovementBucket(rows, {
-      masterAverageMRP,
-      currentCatalogueMRP: Number(catalogue.mrp || 0)
-    });
-    const priceMatch = group.scanUPIMRP ? priceHistoryMatch(priceByPart.get(partNumber) || [], group.scanUPIMRP) : null;
-    const priceAgeingDays = priceMatch && priceMatch.effectiveFrom
-      ? Math.max(0, Math.floor((Date.now() - new Date(priceMatch.effectiveFrom).getTime()) / 86400000))
-      : Number(fallbackSummary.priceAgeingDays || fallbackSummary.ageingDays || 0);
-    const remarks = [];
-    if (!hasMaster) remarks.push('UNKNOWN / NOT FOUND IN MASTER');
-    if (group.scanUPIMRP && !priceMatch) remarks.push('MRP NOT FOUND IN MASTER');
-    return {
-      partNumber,
-      partDescription: catalogue.partDescription || first.partDescription || first.partName || 'UNKNOWN / NOT FOUND IN MASTER',
-      productCategory: catalogue.productCategory || first.productCategory || first.category || 'UNKNOWN',
-      productGroup: catalogue.productGroup || first.productGroup || first.partGroup || 'UNKNOWN',
-      scanQty,
-      manualQty,
-      scanUPIMRP: group.scanUPIMRP || 0,
-      manualMRP: manualMrps.length ? Array.from(new Set(manualMrps.map((row) => Number(row.valuationMRP || 0).toFixed(2)))).join(', ') : '',
-      currentCatalogueMRP: Number(catalogue.mrp || first.currentCatalogueMRP || 0),
-      averageScannedMRP,
-      minScannedMRP,
-      maxScannedMRP,
-      pricePeriodFrom: priceMatch ? priceMatch.effectiveFrom : (group.scanUPIMRP ? 'MRP NOT FOUND IN MASTER' : ''),
-      pricePeriodTo: priceMatch ? (priceMatch.effectiveTo || '') : '',
-      priceAgeingDays,
-      finalInventoryValue,
-      remarks: remarks.join(' ; ')
-    };
-  }).sort((a, b) => String(a.partNumber).localeCompare(String(b.partNumber)) || Number(a.scanUPIMRP || 0) - Number(b.scanUPIMRP || 0));
-}
-
-function movementValueRows(scans = []) {
-  return [];
-}
-
 function selectRows(data, type) {
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') {
     const binScans = data.scans.filter((scan) => String(scan.scanType || scan.type || '').toUpperCase() !== 'FITTED');
@@ -975,7 +755,6 @@ function selectRows(data, type) {
   }
 
   if (type === 'valid-scans') return data.scans.map(validScanRow);
-  if (type === 'movement-scans') return movementValueRows(data.scans);
   if (type === 'device-wise') {
     return groupedScanSummary(
       data.scans,
@@ -1005,7 +784,6 @@ function columnsForRows(rows) {
 
 function columnsForReport(type, rows) {
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') return BIN_COLUMNS;
-  if (type === 'movement-scans') return MOVEMENT_VALUE_COLUMNS;
   if (type === 'valid-scans') return SCAN_COLUMNS;
   if (type === 'scan-register') return SCAN_REGISTER_COLUMNS;
   if (type === 'user-dealer-wise') return USER_DEALER_COLUMNS;
@@ -1063,9 +841,7 @@ async function buildExcelBuffer(title, rows, type, query = {}) {
 
 function sendPdf(res, title, rows, type, query = {}) {
   const doc = new jsPDF({ orientation: 'landscape' });
-  const columns = type === 'movement-scans'
-    ? selectedColumns(columnsForReport(type, rows), query)
-    : selectedColumns(columnsForReport(type, rows), query).slice(0, 12);
+  const columns = selectedColumns(columnsForReport(type, rows), query).slice(0, 12);
   const bodyRows = (rows.length ? rows : [{ message: 'No data found' }]).slice(0, 200);
   doc.setFontSize(14);
   doc.text(`DAKSH INVENTORY SYSTEM - ${title}`, 14, 15);
@@ -1087,9 +863,7 @@ function sendPdf(res, title, rows, type, query = {}) {
 
 function buildPdfBuffer(title, rows, type, query = {}) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-  const columns = type === 'movement-scans'
-    ? selectedColumns(columnsForReport(type, rows), query)
-    : selectedColumns(columnsForReport(type, rows), query).slice(0, 12);
+  const columns = selectedColumns(columnsForReport(type, rows), query).slice(0, 12);
   const bodyRows = (rows.length ? rows : [{ message: 'No data found' }]).slice(0, 500);
   doc.setFontSize(14);
   doc.text(`DAKSH INVENTORY SYSTEM - ${title}`, 24, 24);
@@ -1127,23 +901,6 @@ async function handleReport(req, res, type, title) {
         message: rows.length ? '' : 'No scan register data found for selected filter'
       });
     }
-    if (type === 'movement-scans') {
-      const scanFilter = movementScanFilter(query);
-      const scans = await Inventory.find(scanFilter).sort({ timestamp: 1, createdAt: 1 }).lean();
-      const rows = await movementValueRowsFromScans(scans, query);
-      if (query.format === 'excel') return sendExcel(res, title, rows, type, query);
-      if (query.format === 'pdf') return sendPdf(res, title, rows, type, query);
-      return res.json({
-        success: true,
-        type,
-        title,
-        summary: { totalRows: rows.length, scannedRows: scans.length },
-        columns: columnsForReport(type, rows).map(({ header, key }) => ({ header, key })),
-        rows,
-        totalRows: rows.length,
-        message: rows.length ? '' : 'No movement scan data found for selected filter'
-      });
-    }
     const data = await reportModule.buildReportData(query);
     const rows = selectRows(data, type);
     if (query.format === 'excel') return sendExcel(res, title, rows, type, query);
@@ -1179,9 +936,6 @@ async function emailReport(req, res, type, title) {
     let rows;
     if (type === 'scan-register') {
       rows = await scanRegisterRows(req.body.filters || {});
-    } else if (type === 'movement-scans') {
-      const filters = req.body.filters || {};
-      rows = await movementValueRowsFromScans(await Inventory.find(movementScanFilter(filters)).sort({ timestamp: 1, createdAt: 1 }).lean(), filters);
     } else {
       rows = selectRows(await reportModule.buildReportData(req.body.filters || {}), type);
     }
@@ -1218,7 +972,6 @@ async function emailReport(req, res, type, title) {
 const REPORTS = {
   'bin-wise-stock': ['bin-wise-stock', 'Bin Wise Stock Report'],
   'user-dealer-wise': ['user-dealer-wise', 'User & Dealer Wise Report'],
-  'movement-scans': ['movement-scans', 'Movement Scan Report'],
   'raw-upi': ['raw-upi', 'Raw UPI Report'],
   'scan-register': ['scan-register', 'Scan Register Report'],
   'valid-scans': ['scan-register', 'Scan Register Report'],

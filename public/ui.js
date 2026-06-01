@@ -250,7 +250,6 @@
   const REPORT_TITLES = {
     'bin-wise-stock': 'Bin Wise Stock Report',
     'user-dealer-wise': 'User & Dealer Wise Report',
-    'movement-scans': 'Movement Scan Report',
     'raw-upi': 'Raw UPI Report',
     'scan-register': 'Scan Register Report',
     'wrong-not-found-master': 'Rejected Report',
@@ -3170,7 +3169,7 @@
   }
 
   function defaultReportColumnLimit(reportType = activeReportType()) {
-    return ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary', 'movement-scans'].includes(reportType) ? 0 : 18;
+    return ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary'].includes(reportType) ? 0 : 18;
   }
 
   function defaultReportColumns(available, reportType = activeReportType(), defaultLimit = defaultReportColumnLimit(reportType)) {
