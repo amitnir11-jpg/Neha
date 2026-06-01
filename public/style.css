@@ -5229,9 +5229,10 @@ tr:hover td,
   color: #008000 !important;
 }
 
-.report-table-wrap[data-report-type="stock-summary"] .stock-summary-net-footer-row .stock-summary-footer-value {
-  background: #000000 !important;
+.report-table-wrap[data-report-type="stock-summary"] #reportRows .stock-summary-net-footer-row td.stock-summary-footer-value {
+  background: #1f2937 !important;
   color: #ffffff !important;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45) !important;
 }
 
 .dealer-access-select[multiple] {
