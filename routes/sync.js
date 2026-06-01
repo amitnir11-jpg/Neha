@@ -23,7 +23,6 @@ const masterValidation = require('../utils/masterValidation');
 const { dateDebugPayload, formatIstDateTime, validDate: validTimestamp } = require('../utils/time');
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { findPricePeriod, pricePeriodPayload } = require('../utils/priceHistory');
-const { scheduleMovementSummaryRefresh } = require('../services/inventoryMovementSummary');
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
@@ -340,7 +339,8 @@ function logSync(stage, details = {}) {
   if (!SYNC_VERBOSE_LOGS) return;
   const safeDetails = { ...details };
   if (Array.isArray(safeDetails.sample)) safeDetails.sample = safeDetails.sample.slice(0, 3);
-  console.log(`[MOBILE SYNC] ${stage}`, safeDetails);
+  void stage;
+  void safeDetails;
 }
 
 async function logMasterValidationFailure(scan = {}, reason = 'Not Found In Master') {
@@ -1174,7 +1174,6 @@ async function saveNormalizedScan(scan, req) {
 
   logSync('DB insert success', { id: doc._id, deviceId: doc.deviceId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, syncKey: doc.syncKey });
   logSync('saved valid scan', { id: doc._id, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'mobile' });
-  scheduleMovementSummaryRefresh(doc);
   await emitEnterpriseRealtime(req.io || req.app.get('io'), [doc]);
   return { status: 'synced', scan: doc, error: '' };
 }
@@ -1905,7 +1904,6 @@ async function pushHandler(req, res) {
       : [];
     savedScans.push(...manualUpdatedScans);
     const verifiedInsertedCount = savedScans.length;
-    if (savedScans.length) scheduleMovementSummaryRefresh(savedScans);
     if (insertedCount !== verifiedInsertedCount) {
       logSync('DB insert verification mismatch', {
         reportedInsertedCount: insertedCount,

@@ -157,7 +157,6 @@ const CLOUD_SYNC_COLLECTIONS = [
   { name: 'mastercatalogues', identity: ['normalizedPartNumber'] },
   { name: 'partpricehistories', identity: ['normalizedPartNumber', 'mrp', 'effectiveFrom', 'effectiveTo'] },
   { name: 'masterparts', identity: ['partNo'] },
-  { name: 'inventorymovementsummaries', identity: ['summaryKey'] },
   { name: 'inventories', identity: ['scanId'] },
   { name: 'rejectedscans', identity: ['originalScanId'] },
   { name: 'duplicatescanlogs', identity: ['uniqueScanId'] },
@@ -184,7 +183,7 @@ mongoose.connection.on('disconnected', () => {
   scheduleMongoReconnect(15000);
 });
 mongoose.connection.on('reconnected', () => {
-  console.log(`MongoDB reconnected: ${mongoose.connection.name}`);
+  cloudSyncState.status = 'atlas active';
 });
 
 app.use(cors({ origin: '*' }));
@@ -214,7 +213,6 @@ function configureMongoDnsServers() {
 
   try {
     dns.setServers(servers);
-    console.log(`MongoDB DNS servers: ${servers.join(', ')}`);
   } catch (error) {
     console.warn(`Invalid MONGO_DNS_SERVERS value: ${error.message}`);
   }
@@ -536,7 +534,6 @@ async function syncConfiguredLocalFallbackToActiveAtlas() {
     localConnection = await openMongoCandidateConnection(localCandidate);
     const needsSync = await localFallbackNeedsAtlasSync(localConnection.db, mongoose.connection.db);
     if (needsSync) {
-      console.log('Local fallback has data not present in Atlas. Syncing local data to Atlas.');
       await syncDatabasesToAtlas(localConnection.db, mongoose.connection.db);
     } else if (cloudSyncState.status !== 'atlas active') {
       cloudSyncState.status = 'atlas active';
@@ -562,7 +559,6 @@ async function promoteActiveConnectionToAtlas(candidate) {
     cloudSyncState.lastPromotionAt = new Date().toISOString();
     io.emit('database:status', mongoHealthDetails());
     io.emit('stats:update');
-    console.log('MongoDB active connection promoted back to Atlas.');
   } catch (error) {
     markMongoCandidate(candidate, { connected: false, status: 'failed', message: error.message });
     console.error(`Atlas promotion failed: ${error.message}`);
@@ -616,8 +612,6 @@ async function connectMongoCandidate(candidate) {
     throw new Error(`Refusing local MongoDB URI from ${candidate.source || 'configuration'} in production. Railway needs a hosted MongoDB URI, not 127.0.0.1.`);
   }
   configureMongoDnsServers();
-  const source = candidate.source ? ` from ${candidate.source}` : '';
-  console.log(`Connecting MongoDB (${candidate.label}${source}): ${maskMongoUri(candidate.uri)}`);
   await mongoose.connect(candidate.uri, mongoConnectOptions(candidate.uri));
   activeMongoUri = candidate.uri;
   activeMongoLabel = candidate.label;
@@ -634,7 +628,6 @@ async function connectMongoCandidate(candidate) {
   } else if (mongoCandidateKey(candidate) === 'local') {
     cloudSyncState.status = 'queued locally';
   }
-  console.log(`MongoDB connected (${candidate.label}): ${mongoose.connection.name}`);
   return candidate;
 }
 
@@ -778,7 +771,6 @@ function startMobileDiscoveryServer(activePort) {
     } catch (error) {
       console.warn(`Mobile discovery broadcast option failed: ${error.message}`);
     }
-    console.log(`Mobile auto-discovery listening on UDP ${MOBILE_DISCOVERY_PORT}`);
   });
 }
 
@@ -793,31 +785,6 @@ app.use((req, res, next) => {
   req.io = io;
   next();
 });
-app.use((req, res, next) => {
-  if (req.path.startsWith('/api/mobile') || req.path.startsWith('/api/sync')) {
-    const body = req.body || {};
-    const scans = Array.isArray(body) ? body : Array.isArray(body.scans) ? body.scans : Array.isArray(body.records) ? body.records : [];
-    console.log('[MOBILE API] request received', {
-      method: req.method,
-      url: req.originalUrl,
-      ip: req.ip || req.socket.remoteAddress,
-      deviceId: body.deviceId || (scans[0] && scans[0].deviceId) || '',
-      scanCount: scans.length || (Object.keys(body).length ? 1 : 0),
-      bodyKeys: Object.keys(body).slice(0, 20)
-    });
-  }
-  next();
-});
-app.use((req, res, next) => {
-  const startedAt = Date.now();
-  res.on('finish', () => {
-    if (req.path.startsWith('/api')) {
-      console.log(`${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - startedAt}ms`);
-    }
-  });
-  next();
-});
-
 app.use((req, res, next) => {
   if (/\.(html|js|css)$/i.test(req.path) || req.path === '/' || req.path === '/dashboard' || req.path === '/report') {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -1084,11 +1051,6 @@ app.use((req, res) => {
 });
 
 io.on('connection', (socket) => {
-  console.log('[SOCKET] connect', {
-    socketId: socket.id,
-    ip: socket.handshake.address ? socket.handshake.address.replace('::ffff:', '') : '',
-    transport: socket.conn && socket.conn.transport ? socket.conn.transport.name : ''
-  });
   socket.emit('server:ready', { app: 'Daksh Inventory v2', socketId: socket.id, recovered: socket.recovered });
 
   socket.on('device:hello', async (payload = {}) => {
@@ -1109,7 +1071,6 @@ io.on('connection', (socket) => {
       const deviceId = String(payload.deviceId || socket.id).trim();
       const activeAudit = await getActiveAudit(payload.dealerCode ? { dealerCode: payload.dealerCode } : {});
       socket.data.deviceId = deviceId;
-      console.log('[SOCKET] device:hello', { socketId: socket.id, deviceId, deviceType, activeAudit: Boolean(activeAudit) });
       const ipAddress = socket.handshake.address ? socket.handshake.address.replace('::ffff:', '') : '';
       const device = await Device.findOneAndUpdate(
         { deviceId },
@@ -1158,7 +1119,6 @@ io.on('connection', (socket) => {
       if (!deviceId) return;
       const activeAudit = await getActiveAudit(payload.dealerCode ? { dealerCode: payload.dealerCode } : {});
       socket.data.deviceId = deviceId;
-      console.log('[SOCKET] device:heartbeat', { socketId: socket.id, deviceId, pendingCount: payload.pendingCount || 0, syncStatus: payload.syncStatus || '' });
       const device = await Device.findOneAndUpdate(
         { deviceId },
         {
@@ -1196,12 +1156,6 @@ io.on('connection', (socket) => {
     try {
       const deviceId = String(payload.deviceId || socket.data.deviceId || socket.id).trim();
       socket.data.deviceId = deviceId;
-      console.log('[SOCKET] scanData received', {
-        socketId: socket.id,
-        deviceId,
-        partNumber: payload.partNumber || payload.partNo || payload.part || '',
-        scanId: payload.scanId || payload.uniqueScanId || payload.mobileScanId || payload.localId || ''
-      });
       const result = await syncRoutes.saveNormalizedScan(syncRoutes.normalizeScan({ ...payload, deviceId }), {
         io,
         app,
@@ -1229,7 +1183,6 @@ io.on('connection', (socket) => {
       const records = Array.isArray(payload.records) ? payload.records : Array.isArray(payload.scans) ? payload.scans : Array.isArray(payload) ? payload : [payload];
       const deviceId = String(payload.deviceId || socket.data.deviceId || (records[0] && records[0].deviceId) || socket.id).trim();
       socket.data.deviceId = deviceId;
-      console.log('[SOCKET] syncData received', { socketId: socket.id, deviceId, count: records.length });
       const results = [];
       for (const record of records) {
         const result = await syncRoutes.saveNormalizedScan(syncRoutes.normalizeScan({ ...record, deviceId: record.deviceId || deviceId }), {
@@ -1271,7 +1224,6 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', async () => {
-    console.log('[SOCKET] disconnect', { socketId: socket.id, deviceId: socket.data.deviceId || '' });
     if (!socket.data.deviceId) return;
     try {
       const device = await Device.findOneAndUpdate(
@@ -1327,7 +1279,6 @@ async function createDefaultAdmin() {
     isActive: true
   });
 
-  console.log('Default admin created: admin / admin');
 }
 
 async function fixInventoryIndexes() {
@@ -1349,9 +1300,7 @@ async function fixInventoryIndexes() {
         }
       ]
     });
-    if (cleanupResult.deletedCount) {
-      console.log(`Cleaned invalid inventory records: ${cleanupResult.deletedCount}`);
-    }
+    void cleanupResult;
 
     const indexes = await collection.indexes();
     for (const index of indexes) {
@@ -1367,7 +1316,6 @@ async function fixInventoryIndexes() {
       const isNonUniqueScanId = index.name === 'scanId_1' && !index.unique;
       if (isOldSyncUnique || isOldUpiUnique || isOldRawUpiUnique || isNonUniqueScanId) {
         await collection.dropIndex(index.name);
-        console.log(`Dropped old duplicate-blocking inventory index: ${index.name}`);
       }
     }
     await collection.createIndex(
@@ -1412,7 +1360,6 @@ async function fixUserIndexes() {
       const isOldEmailIndex = isEmailOnlyIndex && (index.unique || index.name !== 'email_1' || index.sparse !== true);
       if (isOldEmailIndex) {
         await collection.dropIndex(index.name);
-        console.log(`Dropped old user email index so email can be shared: ${index.name}`);
       }
     }
     await collection.createIndex({ username: 1 }, { name: 'username_1', unique: true, sparse: true });
@@ -1490,16 +1437,6 @@ async function start() {
     fs.writeFileSync(path.join(__dirname, 'server_port.txt'), String(activePort));
     startMobileDiscoveryServer(activePort);
 
-    const info = serverInfo(activePort);
-    console.log(`Server running on port ${PORT}`);
-    console.log(`Daksh running on port ${activePort}`);
-    console.log(`Daksh backend running on http://${HOST}:${activePort}`);
-    console.log('Daksh Inventory v2 is running');
-    console.log(`Daksh server running on port ${activePort}`);
-    console.log(`Listening host: ${HOST}`);
-    console.log(`Local development URL: http://localhost:${activePort}`);
-    console.log(`Public API URL: ${info.serverUrl}`);
-    console.log(`Mobile scanner cloud URL: ${info.serverUrl}`);
     if (!mongoConnected) {
       console.warn('Daksh is running with MongoDB offline. Health will show mongoStatus=offline until Atlas allows this IP.');
     }

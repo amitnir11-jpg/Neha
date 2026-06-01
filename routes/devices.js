@@ -26,7 +26,7 @@ async function markExpiredDevicesOffline() {
     { deviceType: 'mobile', status: 'online', lastSeen: { $lt: liveCutoff() }, removedAt: null },
     { $set: { status: 'offline', disconnectedAt: new Date(), disconnectedBy: 'heartbeat-timeout' } }
   );
-  if (result.modifiedCount) console.log('Device online/offline update', { offlineCount: result.modifiedCount });
+  if (result.modifiedCount) void ('Device online/offline update', { offlineCount: result.modifiedCount });
 }
 
 function clean(value) {
@@ -596,17 +596,6 @@ router.post('/bluetooth/clear-ghosts', auth.requireAuth, auth.requireAdmin, asyn
 
 async function connectHandler(req, res) {
   try {
-    console.log('Mobile connect request', {
-      deviceId: req.body.deviceId,
-      deviceName: req.body.deviceName,
-      model: req.body.model,
-      appVersion: req.body.appVersion || req.body.version,
-      userId: req.body.userId || req.body.loginId || req.body.username,
-      userName: req.body.userName || req.body.staffName,
-      role: req.body.role,
-      serverUrl: req.body.serverUrl,
-      ipAddress: requestIp(req)
-    });
     const info = serverInfo(req.app.locals.activePort);
     const requestedDealerCode = clean(req.body.dealerCode || req.query.dealerCode);
     const activeAudit = await getActiveAudit(requestedDealerCode ? { dealerCode: requestedDealerCode } : {});
@@ -631,17 +620,6 @@ async function connectHandler(req, res) {
 
     req.io.emit('devices:update');
     req.io.emit('device:connected', device);
-    console.log('Device saved', {
-      deviceId: device.deviceId,
-      deviceName: device.deviceName,
-      ipAddress: device.ipAddress,
-      status: device.status,
-      approved: device.approved,
-      dealerCode: device.dealerCode,
-      userId: device.userId,
-      userName: device.userName,
-      role: device.role
-    });
     res.json({
       success: true,
       approved: true,
@@ -702,15 +680,6 @@ async function heartbeatHandler(req, res) {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    console.log('Heartbeat received', {
-      deviceId: device.deviceId,
-      userId: device.userId,
-      userName: device.userName,
-      role: device.role,
-      ipAddress: device.ipAddress,
-      status: device.status,
-      lastSeen: device.lastSeen
-    });
     req.io.emit('devices:update');
     req.io.emit('device:heartbeat', device);
     req.io.emit('device:connected', device);

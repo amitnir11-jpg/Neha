@@ -527,9 +527,7 @@
       const message = $('#loginMessage');
       try {
         const payload = formValues(event.currentTarget);
-        console.log("Login request:", payload);
         const data = await api('/api/auth/login', { method: 'POST', body: payload });
-        console.log("Login response:", data);
         handleLoginSuccess(data, message);
       } catch (error) {
         message.className = 'form-message error';
@@ -542,9 +540,7 @@
       const message = $('#loginMessage');
       try {
         const payload = formValues(event.currentTarget);
-        console.log("Login request:", payload);
         const data = await api('/api/auth/login', { method: 'POST', body: payload });
-        console.log("Login response:", data);
         handleLoginSuccess(data, message);
       } catch (error) {
         message.className = 'form-message error';
@@ -1455,6 +1451,15 @@
     const selectedDealerCode = cleanDealerCode($('#reportDealerFilter')?.value || '');
     const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === selectedDealerCode);
     const dealerCode = selectedDealer?.dealerCode || selectedDealerCode || '';
+    if (!dealerCode) {
+      renderReport({ summary: {}, finalRows: [] });
+      const message = $('#legacyReportMessage');
+      if (message) {
+        message.className = 'form-message error';
+        message.textContent = 'Select dealer code first to view report.';
+      }
+      return;
+    }
     const params = Object.fromEntries(new URLSearchParams(queryFromForm($('#reportFilterForm'))).entries());
     const hasFilter = Object.values(params).some((value) => String(value || '').trim());
     if (!hasFilter) {
@@ -1467,11 +1472,8 @@
       return;
     }
     params.dealerCode = dealerCode;
-    console.log("Selected dealer value:", selectedDealerCode);
-    console.log("Report params:", params);
     const query = new URLSearchParams(params).toString();
     const url = `/api/reports/data?${query}`;
-    console.log("Report API URL:", url);
     const message = $('#legacyReportMessage');
     if (message) {
       message.className = 'form-message loading';

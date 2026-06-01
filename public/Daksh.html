@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAKSH INVENTORY SYSTEM</title>
-  <link rel="stylesheet" href="/style.css?v=20260526-stock-summary" onload="console.log('[DAKSH_DASHBOARD_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/style.css?v=20260601-scan-history-fix" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -29,7 +29,6 @@
           details: details || {}
         };
         window.__DAKSH_DASHBOARD_BOOT__.markers.push(entry);
-        console.log('[DAKSH_DASHBOARD_BOOT] ' + label, entry);
       }
 
       window.addEventListener('error', function (event) {
@@ -329,7 +328,7 @@
           </div>
           <div class="table-wrap scan-history-wrap">
             <table class="scan-history-table">
-              <thead><tr><th><input id="scanHistorySelectAll" type="checkbox"></th><th>Time</th><th>Part Number</th><th>Part Description</th><th>Product Category</th><th>MRP</th><th>DLC</th><th>Product Group</th><th>Model</th><th>Year</th><th>Qty</th><th>Type</th><th>Bin</th><th>Dealer</th><th>Device</th><th>Status</th><th>Action</th></tr></thead>
+              <thead><tr><th><input id="scanHistorySelectAll" type="checkbox"></th><th>Time</th><th>Part Number</th><th>Part Description</th><th>Product Category</th><th>MRP</th><th>DLC</th><th>Product Group</th><th>Model</th><th>Year</th><th>Qty</th><th>Total Qty</th><th>Type</th><th>Bin</th><th>Dealer</th><th>Device</th><th>Status</th><th>Action</th></tr></thead>
               <tbody id="scanHistoryRows"></tbody>
             </table>
           </div>
@@ -338,7 +337,7 @@
 
       <section id="reports" class="view">
         <section class="card">
-          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Manual Refresh</button><button id="movementAnalysisRefresh" class="btn light hidden" type="button" disabled>Refresh Movement Analysis</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button></div></div>
+          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Manual Refresh</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button></div></div>
           <form id="reportFilters" class="filter-grid">
             <label>Report Type<select name="reportType" id="reportTypeSelect" required>
               <option value="">Select report</option>
@@ -1358,7 +1357,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260601-scan-pricing-update" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260601-scan-history-fix" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {

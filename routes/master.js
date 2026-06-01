@@ -352,10 +352,8 @@ async function parsePartsFromUpload(file, body) {
   const lowerName = String(file.originalname || '').toLowerCase();
   if (lowerName.endsWith('.csv') || file.mimetype === 'text/csv') {
     const rows = parseCsvText(file.buffer.toString('utf8'));
-    console.log('[master-import] uploaded rows count:', rows.length);
     const parts = rows.map(partFromObject).filter(Boolean);
-    console.log('[master-import] parsed master rows count:', parts.length);
-    if (parts[0]) console.log('[master-import] sample imported record:', parts[0]);
+    if (parts[0]) void ('[master-import] sample imported record:', parts[0]);
     return parts;
   }
 
@@ -368,9 +366,7 @@ async function parsePartsFromUpload(file, body) {
     headerMap[normalizeHeader(cellValue(cell))] = colNumber;
   });
   const headers = Object.keys(headerMap);
-  console.log("Excel headers:", headers);
   const mapping = fieldMappingFromHeaders(headers);
-  console.log("Master mapping:", mapping);
   const parts = [];
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
@@ -399,10 +395,9 @@ async function parsePartsFromUpload(file, body) {
       quantity: qty,
       qty
     };
-    console.log("Mapped row:", mappedRow);
     parts.push(mappedRow);
   });
-  if (parts.length > 0) console.log("FIRST MAPPED ROW:", parts[0]);
+  if (parts.length > 0) void ("FIRST MAPPED ROW:", parts[0]);
   return parts;
 }
 
@@ -428,7 +423,6 @@ async function importParts(parts) {
     return { successCount: 0, duplicateCount: 0, failedCount: failed.length, failed };
   }
 
-  console.log('[master-import] uploaded rows count:', parts.length);
   const existing = await MasterPart.find({ normalizedPartNumber: { $in: cleanParts.map((part) => part.normalizedPartNumber || part.partNo) } }).select('partNo normalizedPartNumber').lean();
   const existingSet = new Set(existing.map((part) => part.partNo));
   const operations = cleanParts.map((part) => ({
@@ -452,8 +446,7 @@ async function importParts(parts) {
     { upsert: true, setDefaultsOnInsert: true }
   )));
 
-  console.log('[master-import] inserted/updated master rows count:', cleanParts.length);
-  if (cleanParts[0]) console.log('[master-import] sample imported record:', cleanParts[0]);
+  if (cleanParts[0]) void ('[master-import] sample imported record:', cleanParts[0]);
 
   return {
     successCount: cleanParts.length,
@@ -470,7 +463,6 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, upload.single('file'
       return res.status(400).json({ success: false, message: 'No valid master parts found' });
     }
     const cleared = (await MasterPart.deleteMany({})).deletedCount || 0;
-    console.log('[master-import] cleared old master rows count:', cleared);
     const result = await importParts(parts);
     req.io.emit('master:update');
     res.json({ success: true, imported: result.successCount, clearedMasterRows: cleared, ...result });
@@ -486,7 +478,6 @@ router.post('/parts/upload', auth.requireAuth, auth.requireAdmin, upload.single(
       return res.status(400).json({ success: false, message: 'No valid part master rows found' });
     }
     const cleared = (await MasterPart.deleteMany({})).deletedCount || 0;
-    console.log('[master-import] cleared old master rows count:', cleared);
     const result = await importParts(parts);
     req.io.emit('master:update');
     res.json({ success: true, clearedMasterRows: cleared, ...result });
@@ -500,7 +491,6 @@ router.get('/parts', auth.requireAuth, async (req, res) => {
     const filter = {};
     if (req.query.q) {
       const q = String(req.query.q).trim();
-      console.log("Search query:", q);
       const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       filter.$or = [
         { partNo: { $regex: safeQ, $options: 'i' } },
@@ -516,7 +506,6 @@ router.get('/parts', auth.requireAuth, async (req, res) => {
     if (req.query.dealerCode) filter.dealerCode = normalizePart(req.query.dealerCode);
     const limit = Math.min(Number(req.query.limit || 500), 2000);
     const result = (await MasterPart.find(filter).sort({ partNo: 1 }).limit(limit).lean()).map(formatPart);
-    console.log("Search result:", result);
     res.json({ success: true, parts: result });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -548,7 +537,6 @@ router.post('/parts', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 router.get('/parts/suggest', auth.requireAuth, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
-    console.log("Search query:", q);
     const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const safePartQ = normalizePartNumber(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const limit = Math.min(Number(req.query.limit || 12), 30);
@@ -603,7 +591,6 @@ router.get('/parts/suggest', auth.requireAuth, async (req, res) => {
         return aPart.localeCompare(bPart);
       })
       .slice(0, limit);
-    console.log("Search result:", formatted);
     res.json({ success: true, suggestions: formatted, parts: formatted });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1079,7 +1066,6 @@ router.get('/search', auth.requireAuth, async (req, res) => {
 router.get('/parts/search', auth.requireAuth, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
-    console.log("Search query:", q);
     const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const limit = Math.min(Number(req.query.limit || 50), 100);
     const filter = q
@@ -1098,7 +1084,6 @@ router.get('/parts/search', auth.requireAuth, async (req, res) => {
 
     const parts = await MasterPart.find(filter).sort({ partNo: 1 }).limit(limit).lean();
     const formattedParts = parts.map(formatPart);
-    console.log("Search result:", formattedParts);
     res.json({ success: true, parts: formattedParts });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1164,7 +1149,6 @@ function scheduleNightlyMigration() {
   setTimeout(async () => {
     try {
       const migratedCount = await runMigration();
-      console.log(`Nightly auto-migration complete. Normalized ${migratedCount} parts.`);
     } catch (error) {
       console.error(`Nightly auto-migration failed: ${error.message}`);
     } finally {

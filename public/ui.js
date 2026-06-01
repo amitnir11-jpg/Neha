@@ -762,20 +762,6 @@
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
 
     const isMobileSyncRequest = /^\/api\/mobile\/|^\/api\/sync\//.test(path);
-    if (isMobileSyncRequest && requestBody) {
-      const scans = Array.isArray(requestBody.scans) ? requestBody.scans : Array.isArray(requestBody.records) ? requestBody.records : [];
-      console.log('[MOBILE SYNC] request sent', {
-        path,
-        deviceId: requestBody.deviceId || '',
-        scanCount: scans.length || 1,
-        sample: scans.slice(0, 3).map((item) => ({
-          scanId: item.scanId || item.uniqueScanId || item.mobileScanId || item.localId || '',
-          partNumber: item.partNumber || item.partNo || item.part || '',
-          dealerCode: item.dealerCode || '',
-          syncKey: item.syncKey || ''
-        }))
-      });
-    }
 
     const response = await fetch(requestPath, {
       ...options,
@@ -797,14 +783,6 @@
       throw error;
     }
     if (isMobileSyncRequest) {
-      console.log('[MOBILE SYNC] response received', {
-        path,
-        success: data && data.success,
-        insertedCount: data && data.insertedCount,
-        duplicateCount: data && data.duplicateCount,
-        failedCount: data && data.failedCount,
-        message: data && data.message
-      });
       if (data && data.success === false) {
         const error = new Error(data.message || 'Mobile sync failed');
         error.status = response.status;
@@ -1191,7 +1169,6 @@
       storageSet('dakshAssignedDealers', JSON.stringify(state.assignedDealers));
     }
     $$('.dealerSelect').forEach((select) => {
-      if (select.closest('#reportFilters') && isAdminUser()) return;
       if (code && Array.from(select.options || []).some((option) => cleanDealerCode(option.value) === code)) {
         setDealerSelectValue(select, code);
         syncDealerSelectDisplay(select);
@@ -1253,6 +1230,11 @@
     const audit = state.activeAudit;
     const selectedDealer = activeDealer();
     if (selectedDealer) {
+      $$('.dealerSelect').forEach((select) => {
+        if (select.closest('#reportFilters') && isAdminUser()) return;
+        setDealerSelectValue(select, selectedDealer.dealerCode || selectedDealer.code || selectedDealer.id || '');
+        syncDealerSelectDisplay(select);
+      });
       setLivePill('activeAuditBadge', `${formatDealerDisplay(selectedDealer)}`, true);
       setLivePill('pairingConnectionStatus', 'Ready', true);
       setDashboardKpiValue('dashActiveAuditDealer', formatDealerDisplay(selectedDealer));
@@ -2092,11 +2074,14 @@
         `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
       )).join('');
       const activeDealer = state.activeAudit && state.activeAudit.dealerCode ? cleanDealerCode(state.activeAudit.dealerCode) : '';
-      const preferred = selected ||
-        activeDealerId() ||
-        (select.id === 'dashboardDealerSelect' ? cleanDealerCode(state.dashboardDealerCode || activeDealer) : '') ||
-        (select.id === 'scanHistoryDealer' ? selectedScanDealerCode() || activeDealer : '') ||
-        (select.classList.contains('bin-transfer-dealer') ? activeDealer : '');
+      const scopedDealer = activeDealerId();
+      const preferred = select.id === 'scanHistoryDealer'
+        ? (scopedDealer || activeDealer || selected)
+        : select.closest('#reportFilters')
+          ? (selected || scopedDealer || activeDealer)
+          : select.id === 'dashboardDealerSelect'
+            ? (cleanDealerCode(state.dashboardDealerCode || '') || scopedDealer || activeDealer || selected)
+            : (scopedDealer || selected || (select.classList.contains('bin-transfer-dealer') ? activeDealer : ''));
       select.value = Array.from(select.options).some((option) => option.value === preferred) ? preferred : select.options[0].value;
       syncDealerSelectDisplay(select);
     });
@@ -2206,21 +2191,30 @@
     return value !== undefined && value !== null && value !== '' ? value : fallback;
   }
 
+  function scanHistoryPartNumber(scan = {}) {
+    return normalizePartText(scan.partNumber || scan.part || scan.normalizedPartNumber || '');
+  }
+
+  function scanHistoryQuantity(scan = {}, fallback = 1) {
+    const qty = Number(scanQuantity(scan, fallback));
+    return Number.isFinite(qty) && qty > 0 ? qty : fallback;
+  }
+
   function scanHistorySummary(records = [], summary = {}) {
-    const visibleTotalQty = records.reduce((sum, scan) => sum + Number(scanQuantity(scan, 0) || 0), 0);
-    const visibleParts = new Set(records.map((scan) => normalizePartText(scan.partNumber || scan.part || '')).filter(Boolean));
+    const visibleTotalQty = records.reduce((sum, scan) => sum + scanHistoryQuantity(scan, 1), 0);
+    const visibleParts = new Set(records.map(scanHistoryPartNumber).filter(Boolean));
     return {
-      totalRows: Number(summary.totalRecords ?? summary.totalRows ?? records.length),
-      totalQty: Number(summary.totalQuantity ?? summary.totalQty ?? visibleTotalQty),
+      scanRows: Number(summary.scanRows ?? summary.totalRecords ?? summary.totalRows ?? records.length),
+      partsScanned: Number(summary.partsScanned ?? summary.totalQuantity ?? visibleTotalQty),
       uniqueParts: Number(summary.uniqueParts ?? summary.uniquePartCount ?? visibleParts.size),
-      visibleRows: records.length
+      visibleRows: Number(summary.visibleRows ?? records.length)
     };
   }
 
   function updateScanHistorySummary(records = [], summary = {}) {
     const totals = scanHistorySummary(records, summary);
-    setText('scanHistoryTotalQty', wholeNumber(totals.totalQty));
-    setText('scanHistoryTotalRows', wholeNumber(totals.totalRows));
+    setText('scanHistoryTotalQty', wholeNumber(totals.partsScanned));
+    setText('scanHistoryTotalRows', wholeNumber(totals.scanRows));
     setText('scanHistoryUniqueParts', wholeNumber(totals.uniqueParts));
     setText('scanHistoryVisibleRows', wholeNumber(totals.visibleRows));
   }
@@ -2399,10 +2393,6 @@
 
   async function handleNewScan(scan = {}) {
     if (!activeAuditMatchesScan(scan)) {
-      console.log('[DASHBOARD] ignored scan outside active audit', {
-        dealerCode: scan.dealerCode || '',
-        auditId: scan.auditId || ''
-      });
       return;
     }
     const realtimeId = scan.scanId || scan.uniqueScanId || scan._id || scan.syncKey || '';
@@ -2464,8 +2454,10 @@
     const query = params.toString();
     const data = await api(`/api/scans/history?${query}`);
     const records = data.records || [];
+    state.scanHistoryRecords = records;
+    state.scanHistorySummary = data.summary || {};
     updateScanHistorySummary(records, data.summary || {});
-    $('#scanHistoryRows').innerHTML = records.map(scanHistoryRow).join('') || '<tr><td colspan="17" class="muted">No scan history found</td></tr>';
+    $('#scanHistoryRows').innerHTML = records.map(scanHistoryRow).join('') || '<tr><td colspan="18" class="muted">No scan history found</td></tr>';
     enhanceCoreTables();
     bindScanHistoryActions();
   }
@@ -2478,6 +2470,7 @@
     const id = scan.scanId || scan.uniqueScanId || scan._id || '';
     const currentMrp = scan.manualMRP || scan.valuationMRP || scan.mrp || '';
     const currentDlc = scan.dlc || '';
+    const totalQty = scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1);
     const canEditPricing = canEditScanPricing(scan);
     const editOption = canEditPricing ? '<option value="edit">Update MRP / DLC</option>' : '';
     const deleteOption = isAdminUser() ? '<option value="delete">Delete Row</option>' : '';
@@ -2497,6 +2490,7 @@
         <td>${escapeHtml(scan.model || '')}</td>
         <td>${escapeHtml(scan.manufacturingYear || scan.year || '')}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
+        <td>${escapeHtml(totalQty)}</td>
         <td>${escapeHtml(scan.type)}</td>
         <td>${escapeHtml(scan.bin)}</td>
         <td>${escapeHtml(scan.dealerName || scan.dealerCode)}</td>
@@ -2535,12 +2529,28 @@
     if (existingBox) {
       const row = existingBox.closest('tr');
       if (row) row.outerHTML = scanHistoryRow(scan);
+      state.scanHistoryRecords = (state.scanHistoryRecords || []).map((item) => {
+        const itemId = item.scanId || item.uniqueScanId || item._id || '';
+        return itemId === id ? scan : item;
+      });
+      updateScanHistorySummary(state.scanHistoryRecords || [], {
+        ...(state.scanHistorySummary || {}),
+        scanRows: Number(state.scanHistorySummary?.scanRows || state.scanHistorySummary?.totalRecords || state.scanHistoryRecords.length || 0)
+      });
       bindScanHistoryActions();
       enhanceCoreTables();
       return;
     }
     body.insertAdjacentHTML('afterbegin', scanHistoryRow(scan));
     Array.from(body.querySelectorAll('tr')).slice(500).forEach((row) => row.remove());
+    state.scanHistoryRecords = [scan].concat(state.scanHistoryRecords || []).slice(0, 500);
+    const previousRows = Number(state.scanHistorySummary?.scanRows ?? state.scanHistorySummary?.totalRecords ?? Math.max(0, state.scanHistoryRecords.length - 1));
+    state.scanHistorySummary = {
+      ...(state.scanHistorySummary || {}),
+      scanRows: previousRows + 1,
+      totalRecords: previousRows + 1
+    };
+    updateScanHistorySummary(state.scanHistoryRecords, state.scanHistorySummary);
     bindScanHistoryActions();
     enhanceCoreTables();
   }
@@ -2633,7 +2643,6 @@
     const chooseItem = async (item) => {
       if (!item) return;
       const part = JSON.parse(item.dataset.part);
-      console.log("Autocomplete selected:", part);
       input.value = part.partNumber || part.partNo || '';
       menu.style.display = 'none';
       activeIndex = -1;
@@ -3370,17 +3379,14 @@
   }
 
   function updateReportButtons() {
+    const oldMovementButton = $('#movementAnalysisRefresh');
+    if (oldMovementButton) oldMovementButton.remove();
     const reportType = activeReportType();
     const canShow = Boolean(reportType) && validateReportSelection(false);
     const isCsvReport = CSV_REPORT_TYPES.has(reportType);
     const isExcelOnlyReport = EXCEL_ONLY_REPORT_TYPES.has(reportType);
     $('#reportShow').disabled = !canShow || state.reportLoading;
     $('#reportRefresh').disabled = !canShow || state.reportLoading;
-    const movementRefresh = $('#movementAnalysisRefresh');
-    if (movementRefresh) {
-      movementRefresh.classList.toggle('hidden', reportType !== 'movement-scans');
-      movementRefresh.disabled = reportType !== 'movement-scans' || !canShow || state.reportLoading;
-    }
     $('#reportExcel').disabled = isCsvReport || !canShow || state.reportLoading;
     if ($('#reportPdf')) $('#reportPdf').disabled = isCsvReport || isExcelOnlyReport || !state.reportLoaded || state.reportLoading;
     if ($('#reportEmail')) $('#reportEmail').disabled = isCsvReport || isExcelOnlyReport || !state.reportLoaded || state.reportLoading;
@@ -4100,24 +4106,6 @@
         state.reportLoading = false;
         state.reportAbortController = null;
       }
-      updateReportButtons();
-    }
-  }
-
-  async function refreshMovementAnalysis() {
-    if (!validateReportSelection(true)) return;
-    const params = reportParams();
-    const button = $('#movementAnalysisRefresh');
-    if (button) button.disabled = true;
-    try {
-      const data = await api('/api/reports/movement-analysis/refresh', {
-        method: 'POST',
-        body: params
-      });
-      state.reportCache.clear();
-      toast(data.message || 'Movement analysis refreshed');
-      if (activeReportType() === 'movement-scans') await loadReport({ forceRefresh: true });
-    } finally {
       updateReportButtons();
     }
   }
@@ -5128,8 +5116,6 @@
   async function loadBinTransferParts(form = activeBinTransferForm()) {
     const { dealerCode, fromBin } = binTransferCriteria(form);
     const partNumber = String($('[name="partNumber"]', form)?.value || '').trim();
-    console.log('SELECTED_DEALER', dealerCode);
-    console.log('SELECTED_SOURCE_BIN', fromBin);
     if (!dealerCode || (!fromBin && !partNumber)) {
       renderBinTransferParts([], 'Select Dealer Code, or enter Part Number to find available bin.');
       return;
@@ -5143,7 +5129,6 @@
     if (fromBin) query.set('sourceBin', fromBin);
     if (partNumber) query.set('partNumber', partNumber);
     const data = await api(`/api/bin-transfer/parts?${query.toString()}`);
-    console.log('API_RESPONSE', data);
     const responseParts = normalizeBinTransferPartsResponse(data);
     state.binTransferLoadedParts = responseParts;
     filterRenderedBinTransferParts();
@@ -7589,7 +7574,6 @@
       }
     });
     $('#binTransferShowPartsBtn')?.addEventListener('click', () => {
-      console.log('SHOW_PARTS_CLICKED');
       loadBinTransferParts($('#binTransferForm')).catch((error) => toast(error.message, 'error'));
     });
     $('#binTransferPartSearch')?.addEventListener('input', () => filterRenderedBinTransferParts());
@@ -7655,6 +7639,15 @@
     });
     $('#binTransferSubmitSelectedBtn')?.addEventListener('click', () => submitUnifiedBinTransfer().catch((error) => toast(error.message, 'error')));
     $('#scanHistorySearchBtn').addEventListener('click', () => loadScanHistory().catch((error) => toast(error.message, 'error')));
+    let scanHistoryFilterTimer = null;
+    $$('#scanHistoryFilters input, #scanHistoryFilters select').forEach((field) => {
+      field.addEventListener(field.tagName === 'SELECT' ? 'change' : 'input', () => {
+        clearTimeout(scanHistoryFilterTimer);
+        scanHistoryFilterTimer = setTimeout(() => {
+          loadScanHistory().catch((error) => toast(error.message, 'error'));
+        }, field.tagName === 'SELECT' ? 0 : 250);
+      });
+    });
     $('#scanHistorySelectAll')?.addEventListener('change', (event) => {
       $$('.scan-history-checkbox').forEach((box) => { box.checked = event.target.checked; });
     });
@@ -7706,11 +7699,13 @@
     });
     $('#reportProductSubGroupFilter')?.addEventListener('change', updateReportButtons);
     $('[name="dealerCode"]', $('#reportFilters')).addEventListener('change', () => {
+      state.reportCache.clear();
       updateReportButtons();
       if (!reportParams().dealerCode) {
         resetReportPreview('Select dealer code first to view report.');
         return;
       }
+      resetReportPreview('Click Submit to load the selected dealer report.');
     });
     $('[name="showScannedPartsOnly"]', $('#reportFilters'))?.addEventListener('change', (event) => {
       if (event.target.checked) $('[name="showFullMasterWithZeroScan"]', $('#reportFilters')).checked = false;
@@ -7720,7 +7715,6 @@
     });
     $('#reportShow').addEventListener('click', () => loadReport().catch((error) => toast(error.message, 'error')));
     $('#reportRefresh')?.addEventListener('click', () => loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error')));
-    $('#movementAnalysisRefresh')?.addEventListener('click', () => refreshMovementAnalysis().catch((error) => toast(error.message, 'error')));
     $('#reportFilterSettingsOpen')?.addEventListener('click', openReportFilterSettings);
     $('#reportResultSettingsOpen')?.addEventListener('click', openReportFilterSettings);
     $('#reportColumnSettingsOpen')?.addEventListener('click', openReportFilterSettings);
@@ -8159,7 +8153,6 @@
     state.dashboardSocket = socket;
     socket.on('connect', () => {
       state.lastRealtimeAt = Date.now();
-      console.log('[DASHBOARD] socket connected', { socketId: socket.id });
       socket.emit('device:hello', { deviceId: ensureDeviceId(), deviceName: 'Dashboard Browser', deviceType: 'web' });
       addConnectionLog('Device connected', 'success');
     });
@@ -8282,12 +8275,6 @@
     });
     socket.on('syncData', (payload = {}) => {
       state.lastRealtimeAt = Date.now();
-      console.log('[DASHBOARD] syncData received', {
-        success: payload.success,
-        insertedCount: payload.insertedCount,
-        duplicateCount: payload.duplicateCount,
-        failedCount: payload.failedCount
-      });
       updateSyncBadges(payload || {});
       refreshAfterSync(payload || {}).catch(console.warn);
     });

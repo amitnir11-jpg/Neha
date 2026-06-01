@@ -8,7 +8,6 @@ const auth = require('./auth');
 const { cleanText, normalizePartNumber, numberValue } = require('../utils/normalize');
 const { cataloguePayload, reprocessScansWithCatalogue } = require('../utils/catalogue');
 const { applyProductGroup } = require('../utils/productGroupClassifier');
-const { rebuildMovementSummaries } = require('../services/inventoryMovementSummary');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -426,7 +425,6 @@ async function importCatalogue(file) {
   }
   await MasterCatalogue.syncIndexes();
   await PartPriceHistory.syncIndexes();
-  rebuildMovementSummaries({ partNumbers: valid.map((row) => row.normalizedPartNumber) }).catch((error) => console.warn('[movement-summary] rebuild after catalogue upload failed', error.message));
   const currentMasterRecordCount = await MasterCatalogue.countDocuments({});
 
   return {

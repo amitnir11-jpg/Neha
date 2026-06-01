@@ -21,7 +21,6 @@ const { getActiveAudit, publicAudit } = require('../utils/audit');
 const { dateDebugPayload, formatIstDateTime, validDate } = require('../utils/time');
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { findPricePeriod, pricePeriodPayload } = require('../utils/priceHistory');
-const { scheduleMovementSummaryRefresh } = require('../services/inventoryMovementSummary');
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
@@ -58,7 +57,7 @@ let bluetoothScanQueue = Promise.resolve();
 const realtimeDashboardTimers = new Map();
 
 function scanDebug(...args) {
-  if (SCAN_VERBOSE_LOGS) console.log(...args);
+  if (SCAN_VERBOSE_LOGS) void args;
 }
 
 function clean(value) {
@@ -1262,7 +1261,6 @@ async function updateManualMrp(req, res) {
       }
     }).catch(() => undefined);
 
-    scheduleMovementSummaryRefresh(updated);
     const publicRow = publicScan(updated);
     if (req.io) {
       req.io.emit('mrp:updated', publicRow);
@@ -1737,7 +1735,6 @@ async function saveScanRequest(req, res) {
     scanDebug('SAVED_VALID_SCAN', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode });
     scanDebug("Matched category:", scan.category || '');
     scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
-    scheduleMovementSummaryRefresh(scan);
     emitScanUpdate(req, scan).catch((error) => console.warn('[MANUAL SCAN] realtime refresh failed', error.message));
     res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
   } catch (error) {
@@ -2213,10 +2210,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
       }
     }
 
-    if (saved.length) {
-      scheduleMovementSummaryRefresh(saved);
-      await emitScanUpdate(req, saved[saved.length - 1]);
-    }
+    if (saved.length) await emitScanUpdate(req, saved[saved.length - 1]);
 
     const [pending, totalSynced] = await Promise.all([
       Inventory.countDocuments({ synced: false }),
@@ -2265,9 +2259,63 @@ router.get('/history', auth.requireAuth, async (req, res) => {
         { dealerName: { $regex: dealer, $options: 'i' } }
       ];
     }
-    const records = await Inventory.find(filter).sort({ timestamp: -1 }).limit(500).lean();
+    const [records, totalRecords, totals] = await Promise.all([
+      Inventory.find(filter).sort({ timestamp: -1, createdAt: -1 }).limit(500).lean(),
+      Inventory.countDocuments(filter),
+      Inventory.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            uniqueParts: {
+              $addToSet: {
+                $ifNull: ['$normalizedPartNumber', { $ifNull: ['$partNumber', '$part'] }]
+              }
+            },
+            totalQuantity: {
+              $sum: {
+                $cond: [
+                  { $ne: ['$qty', null] },
+                  '$qty',
+                  {
+                    $cond: [
+                      { $ne: ['$quantity', null] },
+                      '$quantity',
+                      1
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ])
+    ]);
     if (req.query.repair === '1' || req.query.repair === 'true') await repairParsedFields(records);
-    res.json({ success: true, records: records.map(publicScan) });
+    const publicRecords = records.map(publicScan);
+    const aggregateTotals = totals[0] || {};
+    const uniqueParts = (aggregateTotals.uniqueParts || []).map((part) => normalizePartNumber(part || '')).filter(Boolean);
+    const visibleQuantity = publicRecords.reduce((sum, row) => {
+      const qty = Number(row.qty !== undefined && row.qty !== null ? row.qty : row.quantity);
+      return sum + (Number.isFinite(qty) && qty > 0 ? qty : 1);
+    }, 0);
+    const partsScanned = Number(aggregateTotals.totalQuantity || 0);
+    res.json({
+      success: true,
+      records: publicRecords,
+      summary: {
+        scanRows: totalRecords,
+        totalRows: totalRecords,
+        totalRecords,
+        visibleRows: publicRecords.length,
+        uniqueParts: new Set(uniqueParts).size,
+        visibleUniqueParts: new Set(publicRecords.map((row) => normalizePartNumber(row.partNumber || row.part || '')).filter(Boolean)).size,
+        partsScanned,
+        visiblePartsScanned: visibleQuantity,
+        totalQuantity: partsScanned,
+        databaseQuantity: partsScanned
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

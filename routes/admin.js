@@ -229,7 +229,6 @@ async function cleanupDeleteByScope(scope, code = '') {
 async function deleteDealerData(req, res, scope) {
   try {
     const code = dealerCode(req.params.dealerCode);
-    console.log("Deleting dealer data:", code);
     if (!code) return res.status(400).json({ success: false, message: 'Dealer code is required' });
 
     const result = { dealerCode: code, scansDeleted: 0, duplicateLogsDeleted: 0, masterPartsDeleted: 0, binsDeleted: 0, dealersDeleted: 0 };
@@ -620,9 +619,6 @@ router.post('/reprocess-master-data', auth.requireAuth, auth.requireAdmin, async
       return { updateOne: { filter: { _id: scan._id }, update: { $set: update } } };
     });
     if (scanOperations.length) await Inventory.bulkWrite(scanOperations, { ordered: false });
-    console.log('[master-reprocess] master rows normalized:', operations.length);
-    console.log('[master-reprocess] report lookup scans refreshed:', scanOperations.length);
-    console.log('[master-reprocess] unmatched scan part numbers count:', scans.length - matchedCount);
     await emitRefresh(req);
     res.json({ success: true, updatedCount: operations.length, scansUpdatedCount: scanOperations.length, matchedCount, unmatchedCount: scans.length - matchedCount });
   } catch (error) {
@@ -725,7 +721,6 @@ router.delete('/part/master', auth.requireAuth, auth.requireAdmin, async (req, r
   try {
     const partNo = normalizedPartNumber(req.body.partNumber || req.query.partNumber);
     const code = dealerCode(req.body.dealerCode || req.query.dealerCode);
-    console.log("Deleting part:", partNo);
     const result = await MasterPart.deleteMany(partMatch(partNo, code));
     await emitRefresh(req);
     res.json({ success: true, deletedCount: result.deletedCount || 0 });
@@ -800,7 +795,6 @@ router.delete('/part/scans', auth.requireAuth, auth.requireAdmin, async (req, re
   try {
     const partNo = normalizedPartNumber(req.body.partNumber || req.query.partNumber);
     const code = dealerCode(req.body.dealerCode || req.query.dealerCode);
-    console.log("Deleting part:", partNo);
     const result = await Inventory.deleteMany(partMatch(partNo, code));
     await emitRefresh(req);
     res.json({ success: true, deletedCount: result.deletedCount || 0 });
@@ -813,7 +807,6 @@ router.delete('/part/all', auth.requireAuth, auth.requireAdmin, async (req, res)
   try {
     const partNo = normalizedPartNumber(req.body.partNumber || req.query.partNumber);
     const code = dealerCode(req.body.dealerCode || req.query.dealerCode);
-    console.log("Deleting part:", partNo);
     const [masterResult, scanResult] = await Promise.all([
       MasterPart.deleteMany(partMatch(partNo, code)),
       Inventory.deleteMany(partMatch(partNo, code))

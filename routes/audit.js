@@ -5,7 +5,7 @@ const Audit = require('../models/Audit');
 const Dealer = require('../models/Dealer');
 const Inventory = require('../models/Inventory');
 const auth = require('./auth');
-const { compactClosedAuditRawScans, rebuildMovementSummaries } = require('../services/inventoryMovementSummary');
+const { compactClosedAuditRawScans } = require('../services/AuditArchiveService');
 const {
   clean,
   cleanCode,
@@ -138,7 +138,6 @@ router.post('/:auditId/close', auth.requireAuth, auth.requireAdmin, async (req, 
     if (!audit) return res.status(404).json({ success: false, message: 'Audit not found' });
     await syncDealerWithAudit(audit);
     const backupArchive = await createClosedAuditBackup(audit.toObject ? audit.toObject() : audit, completedByUser);
-    const movementSummary = await rebuildMovementSummaries({ dealerCode: audit.dealerCode, auditId: audit.auditId });
     const rawArchive = await compactClosedAuditRawScans({ dealerCode: audit.dealerCode, auditId: audit.auditId });
 
     const io = req.io || req.app.get('io');
@@ -147,7 +146,7 @@ router.post('/:auditId/close', auth.requireAuth, auth.requireAdmin, async (req, 
       io.emit('dealers:update');
     }
 
-    return res.json({ success: true, audit, backupArchive, movementSummary, rawArchive });
+    return res.json({ success: true, audit, backupArchive, rawArchive });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

@@ -11,12 +11,10 @@ const Inventory = require('../models/Inventory');
 const MasterPart = require('../models/MasterPart');
 const MasterCatalogue = require('../models/MasterCatalogue');
 const PartPriceHistory = require('../models/PartPriceHistory');
-const InventoryMovementSummary = require('../models/InventoryMovementSummary');
 const { formatDateLikeFields } = require('../utils/time');
 const { scanValueRow, summarizeMovementBucket } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
-const { rebuildMovementSummaries } = require('../services/inventoryMovementSummary');
 
 const autoTable = autoTableModule.default || autoTableModule;
 
@@ -809,27 +807,14 @@ function averageMasterMRP(catalogue = {}, priceRows = []) {
     : 0;
 }
 
-function mergeCachedSummary(current = {}, cached = {}) {
-  return {
-    ...current,
-    remainingQty: Number(cached.remainingQty ?? current.remainingQty ?? 0),
-    priceAgeingDays: Number(cached.priceAgeingDays || cached.ageingDays || current.priceAgeingDays || current.ageingDays || 0)
-  };
-}
-
 async function movementValueRowsFromScans(scans = [], query = {}) {
   const groups = new Map();
   const partNumbers = Array.from(new Set(scans.map((scan) => normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)).filter(Boolean)));
-  const [catalogueRows, legacyRows, priceRows, cachedRows] = partNumbers.length ? await Promise.all([
+  const [catalogueRows, legacyRows, priceRows] = partNumbers.length ? await Promise.all([
     MasterCatalogue.find({ normalizedPartNumber: { $in: partNumbers } }).lean(),
     MasterPart.find({ $or: [{ normalizedPartNumber: { $in: partNumbers } }, { partNo: { $in: partNumbers } }, { partNumber: { $in: partNumbers } }] }).lean(),
-    PartPriceHistory.find({ normalizedPartNumber: { $in: partNumbers } }).sort({ normalizedPartNumber: 1, effectiveFrom: -1 }).lean(),
-    InventoryMovementSummary.find({
-      normalizedPartNumber: { $in: partNumbers },
-      ...(query.dealerCode ? { dealerCode: upper(query.dealerCode) } : {}),
-      ...(query.auditId ? { auditId: clean(query.auditId) } : {})
-    }).lean()
-  ]) : [[], [], [], []];
+    PartPriceHistory.find({ normalizedPartNumber: { $in: partNumbers } }).sort({ normalizedPartNumber: 1, effectiveFrom: -1 }).lean()
+  ]) : [[], [], []];
   const catalogueByPart = new Map(catalogueRows.map((row) => [masterPartNumber(row), cataloguePayload(row)]).filter(([part]) => part));
   legacyRows.forEach((row) => {
     const part = masterPartNumber(row);
@@ -843,12 +828,6 @@ async function movementValueRowsFromScans(scans = [], query = {}) {
     list.push(row);
     priceByPart.set(part, list);
   });
-  const cacheByBucket = new Map();
-  cachedRows.forEach((row) => {
-    const key = [upper(row.dealerCode), clean(row.auditId), masterPartNumber(row), Number(row.mrp || 0).toFixed(2)].join('::');
-    cacheByBucket.set(key, row);
-  });
-
   scans.forEach((scan) => {
     const partNumber = upper(scan.normalizedPartNumber || scan.partNumber || scan.part);
     if (!partNumber) return;
@@ -897,18 +876,13 @@ async function movementValueRowsFromScans(scans = [], query = {}) {
       masterAverageMRP,
       currentCatalogueMRP: Number(catalogue.mrp || 0)
     });
-    const cacheKey = [upper(first.dealerCode), clean(first.auditId), partNumber, Number(group.scanUPIMRP || group.manualMRP || 0).toFixed(2)].join('::');
-    const cached = cacheByBucket.get(cacheKey);
-    const summary = mergeCachedSummary(fallbackSummary, cached || {});
     const priceMatch = group.scanUPIMRP ? priceHistoryMatch(priceByPart.get(partNumber) || [], group.scanUPIMRP) : null;
-    const priceFound = !group.scanUPIMRP || Boolean(priceMatch);
     const priceAgeingDays = priceMatch && priceMatch.effectiveFrom
       ? Math.max(0, Math.floor((Date.now() - new Date(priceMatch.effectiveFrom).getTime()) / 86400000))
-      : Number(summary.priceAgeingDays || summary.ageingDays || 0);
+      : Number(fallbackSummary.priceAgeingDays || fallbackSummary.ageingDays || 0);
     const remarks = [];
     if (!hasMaster) remarks.push('UNKNOWN / NOT FOUND IN MASTER');
     if (group.scanUPIMRP && !priceMatch) remarks.push('MRP NOT FOUND IN MASTER');
-    if (!cached) remarks.push('Calculated from scan data');
     return {
       partNumber,
       partDescription: catalogue.partDescription || first.partDescription || first.partName || 'UNKNOWN / NOT FOUND IN MASTER',
@@ -1140,7 +1114,6 @@ async function handleReport(req, res, type, title) {
     if (type === 'scan-register' && /\/valid-scans$/i.test(req.path)) query.scanStatus = 'Accepted';
     if (type === 'scan-register' && /\/duplicate-scans$/i.test(req.path)) query.scanStatus = 'Duplicate';
     if (!selectedDealerCode(query)) return requireDealerSelection(res);
-    console.log("REPORT API:", req.path, query);
     if (type === 'scan-register') {
       const rows = await scanRegisterRows(query);
       if (query.format === 'excel') return sendExcel(res, title, rows, type, query);
@@ -1195,7 +1168,6 @@ async function handleReport(req, res, type, title) {
 async function emailReport(req, res, type, title) {
   try {
     if (!selectedDealerCode(req.body.filters || {})) return requireDealerSelection(res);
-    console.log("REPORT API:", req.path, req.body.filters || {});
     const to = String(req.body.to || req.body.email || '').trim();
     const cc = String(req.body.cc || '').trim();
     const subject = String(req.body.subject || `Daksh Inventory - ${title}`).trim();
@@ -1259,23 +1231,6 @@ const REPORTS = {
   'compile-audit': ['compile-audit', 'Compile Audit Report'],
   'consolidated-final': ['consolidated-final', 'Consolidated Final Report']
 };
-
-router.post('/movement-analysis/refresh', auth.requireAuth, async (req, res) => {
-  try {
-    const filters = { ...(req.body || {}), ...(req.query || {}) };
-    if (!selectedDealerCode(filters)) return requireDealerSelection(res);
-    const result = await rebuildMovementSummaries({
-      dealerCode: filters.dealerCode,
-      auditId: filters.auditId,
-      partNumbers: filters.partNumber ? [filters.partNumber] : undefined
-    });
-    const io = req.app && req.app.get ? req.app.get('io') : null;
-    if (io) io.emit('reports:update', { type: 'movement-scans', refreshedAt: new Date() });
-    return res.json({ success: true, message: 'Movement analysis refreshed', ...result });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
 
 Object.entries(REPORTS).forEach(([path, [type, title]]) => {
   if (type === 'wrong-not-found-master') return;

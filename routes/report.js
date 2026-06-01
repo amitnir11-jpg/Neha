@@ -653,7 +653,6 @@ async function sendSelectedColumnsWorkbook(res, filename, sheetName, columns, ro
 
 async function buildLegacyReportData(query = {}) {
   query = normalizeReportQuery(query);
-  console.log("REPORT API:", '/api/reports', query);
   const filter = reportFilter(query);
   const masterFilter = {};
   if (query.category) masterFilter.category = String(query.category).trim();
@@ -1596,17 +1595,11 @@ function enrichScan(scan = {}, master = {}) {
     dmsQty: hasMaster ? masterQty(master) : 0,
     systemQty: hasMaster ? masterQty(master) : 0
   };
-  console.log("Report part:", enriched.partNumber);
-  console.log("Scan normalized:", enriched.normalizedPartNumber);
-  console.log("Master found:", hasMaster);
-  console.log("Master data:", hasMaster ? master : null);
-  console.log("Final report row:", enriched);
   return enriched;
 }
 
 function scanBasedFilter(query = {}) {
   query = normalizeReportQuery(query);
-  console.log("Report dealerCode:", query.dealerCode || 'All');
   const filter = inventoryRoute.buildListQuery(query);
   inventoryRoute.applyTestScanMode(filter, 'real');
   if (!query.scanStatus) {
@@ -1908,7 +1901,6 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     lastScanTime: group.lastScanTime,
     rawScanProof: group.scans.map((scan) => scan.rawUpi || scan.rawScan).filter(Boolean).slice(0, 5).join(' | ')
   };
-  console.log("Final report row:", row);
   return row;
 }
 
@@ -2027,7 +2019,6 @@ async function enrichScanUsers(scans = []) {
 
 async function buildReportData(query = {}) {
   query = normalizeReportQuery(query);
-  console.log("REPORT API:", '/api/reports', query);
   let [rawScans, dealers, audits] = await Promise.all([
     Inventory.find(scanBasedFilter(query)).sort({ timestamp: -1 }).lean(),
     Dealer.find({}).sort({ dealerName: 1 }).lean(),
@@ -2035,7 +2026,6 @@ async function buildReportData(query = {}) {
   ]);
   rawScans = rawScans.map(inventoryRoute.publicScan);
   rawScans = await enrichScanUsers(rawScans);
-  console.log("Report scan count:", rawScans.length);
   const realScansForLookup = rawScans.filter((scan) => !/^SYNC/i.test(normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)));
   const partNumbers = Array.from(new Set(realScansForLookup.map((scan) => normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)).filter(Boolean)));
   const [catalogueMasters, priceHistoryRows] = partNumbers.length ? await Promise.all([
@@ -2080,8 +2070,6 @@ async function buildReportData(query = {}) {
     return enrichScan(scan, masterByDealer.get(masterKey(partNo, dealerCode)) || masterByPart.get(partNo) || null);
   });
   const matchedCount = scans.filter((scan) => scan.masterFound).length;
-  console.log("Matched master:", matchedCount);
-  console.log("[report-join] unmatched scan part numbers count:", partNumbers.length - new Set(scans.filter((scan) => scan.masterFound).map((scan) => scan.normalizedPartNumber)).size);
   scans = scans.filter((scan) => scan.masterFound);
   if (query.category) scans = scans.filter((scan) => new RegExp(escapeRegExp(query.category), 'i').test(scan.category || ''));
 
@@ -2102,8 +2090,6 @@ async function buildReportData(query = {}) {
     priceHistoryByPart.get(group.partNo) || []
   )).sort((a, b) => sortText(a.partNo, b.partNo));
   const finalRows = applyVarianceFilter(allFinalRows, query.varianceType).filter((row) => row.physicalQty > 0);
-  console.log("Report rows:", finalRows.length);
-  console.log("First report row:", finalRows[0]);
 
   const categoryMap = new Map();
   finalRows.forEach((row) => {
@@ -2504,7 +2490,6 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     binLocation: query.bin || 'All'
   };
 
-  console.log('[partwise-inventory-audit] validation:', validationLog);
   return { rows, columns: partwiseInventoryAuditColumns(), summary, validationLog, selectedDealer, selectedAudit };
 }
 
@@ -2712,7 +2697,6 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     grandTotalMRP: grandTotal.sumVarianceOnMRP,
     grandTotalDLC: grandTotal.sumVarianceOnDLC
   };
-  console.log('[category-wise-variance-summary] validation:', validationLog);
   return { rows, grandTotal, validationLog, summary: partwise.summary, selectedDealer: partwise.selectedDealer, selectedAudit: partwise.selectedAudit };
   }
 
@@ -2825,7 +2809,6 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     action: actionFilter || 'All'
   };
 
-  console.log('[category-wise-variance-summary] validation:', validationLog);
   return { rows, grandTotal, validationLog, summary, selectedDealer, selectedAudit };
 }
 
@@ -3743,7 +3726,6 @@ async function professionalAlias(req, res, kind) {
   try {
     const report = PROFESSIONAL_REPORTS[kind];
     const reportQuery = requireDealerForReport(req.query);
-    console.log("REPORT API:", req.path, req.query);
     if (reportQuery.format === 'excel') {
       if (hasRequestedReportColumns(reportQuery)) {
         const data = await buildReportData(reportQuery);

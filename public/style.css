@@ -30,6 +30,10 @@
   box-sizing: border-box;
 }
 
+#movementAnalysisRefresh {
+  display: none !important;
+}
+
 body {
   margin: 0;
   color: var(--text);

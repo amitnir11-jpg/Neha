@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Daksh Inventory v2 Login</title>
-  <link rel="stylesheet" href="/css/style.css" onload="console.log('[DAKSH_LOGIN_ASSET] style.css loaded', this.href)" onerror="console.error('[DAKSH_LOGIN_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/css/style.css" onerror="console.error('[DAKSH_LOGIN_ASSET] style.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -29,7 +29,6 @@
           details: details || {}
         };
         window.__DAKSH_LOGIN_BOOT__.markers.push(entry);
-        console.log('[DAKSH_LOGIN_BOOT] ' + label, entry);
       }
 
       window.addEventListener('error', function (event) {
@@ -182,6 +181,6 @@
     </section>
   </main>
 
-  <script src="/js/app.js?v=20260527-login-redirect" onload="console.log('[DAKSH_LOGIN_ASSET] app.js loaded', this.src)" onerror="console.error('[DAKSH_LOGIN_ASSET] app.js failed', this.src)"></script>
+  <script src="/js/app.js?v=20260527-login-redirect" onerror="console.error('[DAKSH_LOGIN_ASSET] app.js failed', this.src)"></script>
 </body>
 </html>

@@ -262,9 +262,23 @@ async function buildUploadedStockReport(query = {}) {
   const dealerCode = upper(query.dealerCode);
   if (!dealerCode || dealerCode === 'ALL') return { summary: {}, rows: [], stockCount: 0, message: 'Select Dealer Code to view reconciliation report' };
   const filters = compactParams(query);
-  const [stockRows, scannedRows] = await Promise.all([
+  const scanScope = {
+    dealerCode,
+    syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] },
+    isDuplicate: { $ne: true }
+  };
+  const [stockRows, scannedRows, inventoryLocationCount, vehicleInventoryCount] = await Promise.all([
     DealerStock.find({ dealerCode }).sort({ partNumber: 1 }).lean(),
-    physicalRows(dealerCode, filters)
+    physicalRows(dealerCode, filters),
+    Inventory.countDocuments({
+      ...scanScope,
+      scanType: { $ne: 'FITTED' },
+      $or: [{ binLocation: { $nin: ['', null] } }, { bin: { $nin: ['', null] } }]
+    }),
+    Inventory.countDocuments({
+      ...scanScope,
+      $or: [{ scanType: 'FITTED' }, { type: 'FITTED' }, { isFitted: true }]
+    })
   ]);
   const physicalByPart = new Map(scannedRows.map((row) => [normalizePart(row._id || row.partNumber), row]));
   const usedPhysicalKeys = new Set();
@@ -334,7 +348,11 @@ async function buildUploadedStockReport(query = {}) {
   });
 
   rows.sort((a, b) => String(a.partNo || '').localeCompare(String(b.partNo || ''), undefined, { numeric: true, sensitivity: 'base' }));
+  const mismatchRecords = rows.filter((row) => Number(row.netDifference || 0) !== 0);
   const summary = {
+    inventoryLocationCount,
+    vehicleInventoryCount,
+    mismatchCount: mismatchRecords.length,
     dmsStock: rows.reduce((sum, row) => sum + Number(row.dmsStock || 0), 0),
     physicalStock: rows.reduce((sum, row) => sum + Number(row.physicalStock || 0), 0),
     excess: rows.reduce((sum, row) => sum + Number(row.excess || 0), 0),
@@ -343,7 +361,13 @@ async function buildUploadedStockReport(query = {}) {
     varianceMrp: rows.reduce((sum, row) => sum + Number(row.varianceMrp || 0), 0),
     varianceDlc: rows.reduce((sum, row) => sum + Number(row.varianceDlc || 0), 0)
   };
-  return { summary, rows, stockCount: stockRows.length, message: stockRows.length ? '' : 'No dealer DMS stock uploaded for selected dealer' };
+  return {
+    summary,
+    rows,
+    mismatchRecords,
+    stockCount: stockRows.length,
+    message: stockRows.length ? '' : 'No dealer DMS stock uploaded for selected dealer'
+  };
 }
 
 function exportColumns() {

@@ -500,9 +500,7 @@ router.post('/login', async (req, res) => {
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
     const password = String(req.body.password || '');
     const pin = String(req.body.pin || '').trim();
-    console.log("Login attempt:", username);
     const user = await findUserByLogin(username);
-    console.log("User found:", safeLogUser(user));
 
     const ruleError = loginRuleError(user, ['admin', 'staff']);
     if (ruleError) return res.status(401).json({ success: false, message: ruleError });
@@ -531,7 +529,6 @@ router.post('/login', async (req, res) => {
       if (!valid && pin) valid = await compareAndUpgradeSecret(user, pin, ['pinHash', 'pin']);
     }
 
-    console.log("Password match:", valid);
     if (!valid) {
       return res.status(401).json({ success: false, message: 'Invalid username or password' });
     }
@@ -609,7 +606,6 @@ router.post('/pin-login', async (req, res) => {
     const pin = String(req.body.pin || '').trim();
     const dealerCode = normalizeAccessCode(req.body.dealerCode);
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
-    console.log("Login attempt:", 'PIN login', username);
     if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer code is required' });
     if (!/^\d{4}$/.test(pin)) {
       return res.status(400).json({ success: false, message: 'Enter a valid 4-digit PIN' });
@@ -632,8 +628,6 @@ router.post('/pin-login', async (req, res) => {
     if (!user.pinHash && !user.pin) return res.status(400).json({ success: false, message: 'PIN login is not enabled for this user' });
     const valid = await compareAndUpgradeSecret(user, pin, ['pinHash', 'pin']);
     if (valid) {
-      console.log("User found:", safeLogUser(user));
-      console.log("Password match: true");
       const dealerAccess = await userDealerAccessCodes(user);
       const assignedDealers = await activeDealersForUser(user);
       return res.json({
@@ -647,8 +641,6 @@ router.post('/pin-login', async (req, res) => {
       });
     }
 
-    console.log("User found:", null);
-    console.log("Password match: false");
     return res.status(401).json({ success: false, message: 'Invalid staff PIN' });
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });
@@ -1043,7 +1035,6 @@ setTimeout(async () => {
         pinHash: await bcrypt.hash('1234', 10),
         pin: await bcrypt.hash('1234', 10)
       });
-      console.log('Default admin (admin/admin) and staff (PIN 1234) created');
     }
   } catch (error) {}
 }, 2500);

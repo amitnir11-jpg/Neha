@@ -474,9 +474,6 @@ router.get('/parts', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = upper(req.query.dealerCode);
     const fromBin = /^all$/i.test(clean(req.query.binLocation || req.query.sourceBin || req.query.fromBin)) ? '' : clean(req.query.binLocation || req.query.sourceBin || req.query.fromBin);
-    console.log('BIN_TRANSFER_PARTS_API_CALLED');
-    console.log('DEALER_RECEIVED', dealerCode);
-    console.log('SOURCE_BIN_RECEIVED', fromBin);
     const partNumber = normalizePart(req.query.partNumber);
     if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer required' });
     if (!fromBin && !partNumber && !/^all$/i.test(clean(req.query.sourceBin || req.query.fromBin || req.query.binLocation))) {
@@ -486,7 +483,6 @@ router.get('/parts', auth.requireAuth, async (req, res) => {
       if (!partNumber) return true;
       return normalizePart(part.partNumber).includes(partNumber);
     });
-    console.log('PARTS_FOUND_COUNT', parts.length);
     if (req.query.format === 'excel') {
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet('Available Scanned Parts');

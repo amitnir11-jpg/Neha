@@ -91,7 +91,6 @@ async function main() {
     await Inventory.deleteMany({ _id: { $in: duplicates.map((scan) => scan._id) } });
   }
 
-  console.log(JSON.stringify({ success: true, dryRun, fittedRowsScanned: rows.length, duplicateGroups, archivedCount }, null, 2));
   await mongoose.disconnect();
 }
 

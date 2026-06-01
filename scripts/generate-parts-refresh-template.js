@@ -148,8 +148,6 @@ async function main() {
   });
 
   fs.writeFileSync(outputPath, `${csvRows.join('\r\n')}\r\n`, 'utf8');
-  console.log(`Created ${outputPath}`);
-  console.log(`Parts: ${rows.length}`);
 }
 
 main()
