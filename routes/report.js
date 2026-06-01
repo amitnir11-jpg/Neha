@@ -81,21 +81,6 @@ function stripRemovedReportFields(row = {}) {
   return cleanRow;
 }
 
-const PROFESSIONAL_REPORTS = {
-  main: {
-    title: 'Main Inventory Audit Report',
-    fileName: 'Main_Inventory_Audit_Report'
-  },
-  compile: {
-    title: 'Compile Audit Report',
-    fileName: 'Compile_Audit_Report'
-  },
-  consolidated: {
-    title: 'Consolidated Final Report',
-    fileName: 'Consolidated_Final_Report'
-  }
-};
-
 function money(value) {
   return Math.round(Number(value || 0) * 100) / 100;
 }
@@ -1127,10 +1112,6 @@ async function createWorkbook(query) {
   return { workbook, data };
 }
 
-function professionalReport(kind) {
-  return PROFESSIONAL_REPORTS[kind] ? kind : null;
-}
-
 function mainAuditColumns() {
   return [
     { header: 'PART NUMBER', key: 'partNumber', width: 18 },
@@ -1155,14 +1136,6 @@ function mainAuditColumns() {
   ];
 }
 
-function compileAuditColumns() {
-  return mainAuditColumns();
-}
-
-function consolidatedColumns() {
-  return mainAuditColumns();
-}
-
 function mainAuditRows(data) {
   return data.finalRows.map((row) => ({
     partNumber: row.partNumber || row.partNo,
@@ -1185,20 +1158,6 @@ function mainAuditRows(data) {
     actionRemarks: row.actionRemarks || row.action || '',
     binLocations: row.binLocations || [row.binLoc1, row.binLoc2, row.binLoc3, row.otherBinLocations, row.binLocation, row.bin].filter(Boolean).join(', ')
   }));
-}
-
-function compileAuditRows(data) {
-  return mainAuditRows(data);
-}
-
-function consolidatedRows(data) {
-  return mainAuditRows(data);
-}
-
-function previewForReport(kind, data) {
-  if (kind === 'compile') return { columns: compileAuditColumns(), rows: compileAuditRows(data) };
-  if (kind === 'consolidated') return { columns: consolidatedColumns(), rows: consolidatedRows(data) };
-  return { columns: mainAuditColumns(), rows: mainAuditRows(data) };
 }
 
 function addFormulaSheet(workbook, name, columns, rows) {
@@ -1428,77 +1387,6 @@ function addCompileSupportSheets(workbook, data) {
     { header: 'Date Created', key: 'dateCreated', width: 22 },
     { header: 'Date Modified', key: 'dateModified', width: 22 }
   ], damageRows(data));
-}
-
-async function createProfessionalWorkbook(kind, query) {
-  const data = await buildReportData(query);
-  const categoryVarianceData = await buildCategoryWiseVarianceSummary(query);
-  const report = PROFESSIONAL_REPORTS[kind];
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Daksh Inventory';
-  workbook.created = new Date();
-
-  if (kind === 'main') {
-    addFormulaSheet(workbook, report.title, mainAuditColumns(), mainAuditRows(data));
-    addMainSupportSheets(workbook, data, categoryVarianceData);
-  } else if (kind === 'compile') {
-    addFormulaSheet(workbook, report.title, compileAuditColumns(), compileAuditRows(data));
-    addCompileSupportSheets(workbook, data);
-  } else {
-    addFormulaSheet(workbook, 'Main Inventory Audit Report', mainAuditColumns(), mainAuditRows(data));
-    addFormulaSheet(workbook, 'Compile Audit Report', compileAuditColumns(), compileAuditRows(data));
-    addFormulaSheet(workbook, 'Consolidated Final Report', consolidatedColumns(), consolidatedRows(data));
-    addCategoryWiseVarianceSheet(workbook, categoryVarianceData);
-  }
-
-  return { workbook, data };
-}
-
-function pdfColumnsFor(kind) {
-  if (kind === 'compile') return compileAuditColumns();
-  if (kind === 'consolidated') return consolidatedColumns();
-  return mainAuditColumns();
-}
-
-function pdfRowsFor(kind, data) {
-  if (kind === 'compile') return compileAuditRows(data);
-  if (kind === 'consolidated') return consolidatedRows(data);
-  return mainAuditRows(data);
-}
-
-function buildProfessionalPdfBuffer(kind, data) {
-  const report = PROFESSIONAL_REPORTS[kind];
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a3' });
-  const summary = data.summary[0] || {};
-  const sections = kind === 'consolidated'
-    ? [
-      { title: 'Main Inventory Audit Report', columns: mainAuditColumns(), rows: mainAuditRows(data) },
-      { title: 'Compile Audit Report', columns: compileAuditColumns(), rows: compileAuditRows(data) },
-      { title: 'Consolidated Final Report', columns: consolidatedColumns(), rows: consolidatedRows(data) }
-    ]
-    : [{ title: report.title, columns: pdfColumnsFor(kind), rows: pdfRowsFor(kind, data) }];
-
-  sections.forEach((section, index) => {
-    if (index) doc.addPage();
-    doc.setFontSize(15);
-    doc.text(section.title, 28, 30);
-    doc.setFontSize(8);
-    doc.text(`Dealer: ${summary.dealerName || 'All'} | Code: ${summary.dealerCode || 'All'} | Date: ${summary.fromDate || 'All'} to ${summary.toDate || 'All'} | Generated: ${summary.generatedAt || ''}`, 28, 46);
-    autoTable(doc, {
-      startY: 62,
-      head: [section.columns.map((column) => column.header)],
-      body: section.rows.slice(0, 500).map((row) => section.columns.map((column) => {
-        const value = row[column.key];
-        return value instanceof Date ? formatDate(value) : String(value ?? '');
-      })),
-      styles: { fontSize: section.columns.length > 18 ? 5 : 7, cellPadding: 2, overflow: 'linebreak' },
-      headStyles: { fillColor: [21, 58, 91], textColor: [255, 255, 255] },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
-      margin: { left: 18, right: 18 }
-    });
-  });
-
-  return Buffer.from(doc.output('arraybuffer'));
 }
 
 function masterKey(partNumber, dealerCode = '') {
@@ -3635,187 +3523,6 @@ router.post('/partwise-inventory-audit/email', auth.requireAuth, auth.requireAdm
     return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
   }
 });
-
-router.get('/professional/:kind', auth.requireAuth, async (req, res) => {
-  try {
-    const kind = professionalReport(req.params.kind);
-    if (!kind) return res.status(404).json({ success: false, message: 'Report type not found' });
-    const reportQuery = requireDealerForReport(req.query);
-
-    const report = PROFESSIONAL_REPORTS[kind];
-    if (reportQuery.format === 'excel') {
-      if (hasRequestedReportColumns(reportQuery)) {
-        const data = await buildReportData(reportQuery);
-        const preview = previewForReport(kind, data);
-        return sendSelectedColumnsWorkbook(res, `${report.fileName}.xlsx`, report.title, preview.columns, preview.rows, reportQuery);
-      }
-      const { workbook } = await createProfessionalWorkbook(kind, reportQuery);
-      const buffer = await workbook.xlsx.writeBuffer();
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', `attachment; filename="${report.fileName}.xlsx"`);
-      return res.send(Buffer.from(buffer));
-    }
-
-    const data = await buildReportData(reportQuery);
-    if (reportQuery.format === 'pdf') {
-      const pdf = buildProfessionalPdfBuffer(kind, data);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${report.fileName}.pdf"`);
-      return res.send(pdf);
-    }
-
-    const preview = previewForReport(kind, data);
-    return res.json({
-      success: true,
-      reportType: kind,
-      title: report.title,
-      summary: data.summary[0],
-      columns: preview.columns.map(({ header, key }) => ({ header, key })),
-      rows: preview.rows.slice(0, 500),
-      totalRows: preview.rows.length
-    });
-  } catch (error) {
-    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
-  }
-});
-
-router.post('/professional/:kind/email', auth.requireAuth, async (req, res) => {
-  try {
-    const kind = professionalReport(req.params.kind);
-    if (!kind) return res.status(404).json({ success: false, message: 'Report type not found' });
-
-    const to = String(req.body.email || '').trim();
-    if (!to) return res.status(400).json({ success: false, message: 'Email ID is required' });
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      return res.status(400).json({ success: false, message: 'SMTP_USER and SMTP_PASS must be configured in .env' });
-    }
-
-    const report = PROFESSIONAL_REPORTS[kind];
-    const reportFilters = requireDealerForReport(req.body.filters || {});
-    const { workbook, data } = await createProfessionalWorkbook(kind, reportFilters);
-    const excelBuffer = Buffer.from(await workbook.xlsx.writeBuffer());
-    const pdfBuffer = buildProfessionalPdfBuffer(kind, data);
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT || 587),
-      secure: Number(process.env.SMTP_PORT || 587) === 465,
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
-      }
-    });
-
-    await transporter.sendMail({
-      from: process.env.REPORT_EMAIL || process.env.SMTP_USER,
-      to,
-      subject: `Daksh Inventory - ${report.title}`,
-      text: `Please find attached the ${report.title}.`,
-      attachments: [
-        { filename: `${report.fileName}.xlsx`, content: excelBuffer },
-        { filename: `${report.fileName}.pdf`, content: pdfBuffer }
-      ]
-    });
-
-    return res.json({ success: true, message: 'Report email sent' });
-  } catch (error) {
-    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
-  }
-});
-
-async function professionalAlias(req, res, kind) {
-  try {
-    const report = PROFESSIONAL_REPORTS[kind];
-    const reportQuery = requireDealerForReport(req.query);
-    if (reportQuery.format === 'excel') {
-      if (hasRequestedReportColumns(reportQuery)) {
-        const data = await buildReportData(reportQuery);
-        const preview = previewForReport(kind, data);
-        return sendSelectedColumnsWorkbook(res, `${report.fileName}.xlsx`, report.title, preview.columns, preview.rows, reportQuery);
-      }
-      const { workbook } = await createProfessionalWorkbook(kind, reportQuery);
-      const buffer = await workbook.xlsx.writeBuffer();
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', `attachment; filename="${report.fileName}.xlsx"`);
-      return res.send(Buffer.from(buffer));
-    }
-
-    const data = await buildReportData(reportQuery);
-    if (reportQuery.format === 'pdf') {
-      const pdf = buildProfessionalPdfBuffer(kind, data);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${report.fileName}.pdf"`);
-      return res.send(pdf);
-    }
-
-    const preview = previewForReport(kind, data);
-    return res.json({
-      success: true,
-      reportType: kind,
-      title: report.title,
-      summary: data.summary[0],
-      columns: preview.columns.map(({ header, key }) => ({ header, key })),
-      rows: preview.rows.slice(0, 500),
-      totalRows: preview.rows.length,
-      message: preview.rows.length ? '' : 'No report data found for selected filter'
-    });
-  } catch (error) {
-    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
-  }
-}
-
-async function professionalAliasEmail(req, res, kind) {
-  try {
-    const to = String(req.body.to || req.body.email || '').trim();
-    const cc = String(req.body.cc || '').trim();
-    const attachmentType = String(req.body.attachmentType || 'Excel').toLowerCase();
-    if (!to) return res.status(400).json({ success: false, message: 'Email To is required' });
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      return res.status(400).json({ success: false, message: 'SMTP_USER and SMTP_PASS must be configured in .env' });
-    }
-
-    const report = PROFESSIONAL_REPORTS[kind];
-    const filters = requireDealerForReport(req.body.filters || {});
-    const { workbook, data } = await createProfessionalWorkbook(kind, filters);
-    const attachments = [];
-    if (attachmentType === 'excel' || attachmentType === 'both') {
-      attachments.push({ filename: `${report.fileName}.xlsx`, content: Buffer.from(await workbook.xlsx.writeBuffer()) });
-    }
-    if (attachmentType === 'pdf' || attachmentType === 'both') {
-      attachments.push({ filename: `${report.fileName}.pdf`, content: buildProfessionalPdfBuffer(kind, data) });
-    }
-
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT || 587),
-      secure: Number(process.env.SMTP_PORT || 587) === 465,
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-    });
-
-    await transporter.sendMail({
-      from: process.env.REPORT_EMAIL || process.env.SMTP_USER,
-      to,
-      cc: cc || undefined,
-      subject: req.body.subject || `Daksh Inventory - ${report.title}`,
-      text: req.body.message || `Please find attached the ${report.title}.`,
-      attachments
-    });
-
-    return res.json({ success: true, message: 'Report email sent' });
-  } catch (error) {
-    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
-  }
-}
-
-router.get('/main-inventory-audit', auth.requireAuth, (req, res) => professionalAlias(req, res, 'main'));
-router.get('/compile-audit', auth.requireAuth, (req, res) => professionalAlias(req, res, 'compile'));
-router.get('/compiled-audit', auth.requireAuth, (req, res) => professionalAlias(req, res, 'compile'));
-router.get('/complile-audit', auth.requireAuth, (req, res) => professionalAlias(req, res, 'compile'));
-router.get('/consolidated-final', auth.requireAuth, (req, res) => professionalAlias(req, res, 'consolidated'));
-router.post('/main-inventory-audit/email', auth.requireAuth, auth.requireAdmin, (req, res) => professionalAliasEmail(req, res, 'main'));
-router.post('/compile-audit/email', auth.requireAuth, auth.requireAdmin, (req, res) => professionalAliasEmail(req, res, 'compile'));
-router.post('/compiled-audit/email', auth.requireAuth, auth.requireAdmin, (req, res) => professionalAliasEmail(req, res, 'compile'));
-router.post('/complile-audit/email', auth.requireAuth, auth.requireAdmin, (req, res) => professionalAliasEmail(req, res, 'compile'));
-router.post('/consolidated-final/email', auth.requireAuth, auth.requireAdmin, (req, res) => professionalAliasEmail(req, res, 'consolidated'));
 
 router.get('/data', auth.requireAuth, async (req, res) => {
   try {

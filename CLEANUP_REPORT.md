@@ -124,7 +124,6 @@ Completed after cleanup:
 | Dashboard API `/api/dashboard/stats` | 401 Unauthorized, expected without login token; route is alive. |
 | Scan API `/api/inventory/live` | 200 OK. |
 | Scan save API `/api/inventory/scan` | 400 Bad Request for empty test body, expected; route is alive. |
-| Reports API `/api/reports/main-inventory-audit` | 401 Unauthorized, expected without login token; route is alive. |
 | Users API `/api/users` | 401 Unauthorized, expected without login token; route is alive. |
 | Dealer setup API `/api/dealers` | 401 Unauthorized, expected without login token; route is alive. |
 | Mobile device status `/api/mobile/status/test-device` | 200 OK. |

@@ -254,9 +254,6 @@
     'raw-upi': 'Raw UPI Report',
     'scan-register': 'Scan Register Report',
     'wrong-not-found-master': 'Rejected Report',
-    'main-inventory-audit': 'Main Inventory Audit Report',
-    'compile-audit': 'Compile Audit Report',
-    'consolidated-final': 'Consolidated Final Report',
     'stock-summary': 'Stock Summary',
     'category-wise-variance-summary': 'Category Wise Variance Summary',
     'partwise-inventory-audit': 'Partwise Inventory Audit Report',
@@ -270,7 +267,6 @@
     'bin-stock': 'bin_wise_report_layout',
     'bin-wise': 'bin_wise_report_layout',
     'category-wise-variance-summary': 'category_variance_report_layout',
-    'consolidated-final': 'consolidated_report_layout',
     'wrong-not-found-master': 'wrong_not_found_master_report_layout'
   };
   const VIEW_TITLES = {

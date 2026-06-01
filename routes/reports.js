@@ -991,7 +991,6 @@ function selectRows(data, type) {
   }
 
   if (type === 'raw-upi') return data.rawLogRows;
-  if (['main-inventory-audit', 'compile-audit', 'consolidated-final'].includes(type)) return data.finalRows.map(auditRow);
   return data.finalRows.map(auditRow);
 }
 
@@ -1005,7 +1004,6 @@ function columnsForRows(rows) {
 }
 
 function columnsForReport(type, rows) {
-  if (['main-inventory-audit', 'compile-audit', 'consolidated-final'].includes(type)) return AUDIT_COLUMNS;
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') return BIN_COLUMNS;
   if (type === 'movement-scans') return MOVEMENT_VALUE_COLUMNS;
   if (type === 'valid-scans') return SCAN_COLUMNS;
@@ -1226,10 +1224,7 @@ const REPORTS = {
   'valid-scans': ['scan-register', 'Scan Register Report'],
   'device-wise': ['scan-register', 'Scan Register Report'],
   'duplicate-scans': ['scan-register', 'Scan Register Report'],
-  'wrong-not-found-master': ['wrong-not-found-master', 'Rejected Report'],
-  'main-inventory-audit': ['main-inventory-audit', 'Main Inventory Audit Report'],
-  'compile-audit': ['compile-audit', 'Compile Audit Report'],
-  'consolidated-final': ['consolidated-final', 'Consolidated Final Report']
+  'wrong-not-found-master': ['wrong-not-found-master', 'Rejected Report']
 };
 
 Object.entries(REPORTS).forEach(([path, [type, title]]) => {
