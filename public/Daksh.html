@@ -338,7 +338,7 @@
 
       <section id="reports" class="view">
         <section class="card">
-          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Manual Refresh</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button></div></div>
+          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Manual Show</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button></div></div>
           <form id="reportFilters" class="filter-grid">
             <label>Report Type<select name="reportType" id="reportTypeSelect" required>
               <option value="">Select report</option>
@@ -348,6 +348,9 @@
               <option value="scan-register">Scan Register Report</option>
               <option value="wrong-not-found-master">Rejected Report</option>
               <option value="stock-summary">Stock Summary</option>
+              <option value="short">Short Report</option>
+              <option value="excess">Excess Report</option>
+              <option value="damage">Damage Report</option>
               <option value="category-wise-variance-summary">Category Wise Variance Summary</option>
               <option value="partwise-inventory-audit">Partwise Inventory Audit Report</option>
               <option value="parts-inventory-refresh-template">Part Inventory Refresh Template CSV</option>
@@ -1354,7 +1357,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260602-inventory-logic" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260602-dealer-report-dlc" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {

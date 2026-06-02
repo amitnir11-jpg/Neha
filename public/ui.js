@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260601-scan-pricing-update';
+  const UI_BOOT_VERSION = '20260602-dealer-report-dlc';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -202,7 +202,11 @@
   const REPORT_SCAN_MODE_DEFAULT_VERSION = 4;
   const REPORT_FILTER_DEFAULTS = ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'syncStatus'];
   const REPORT_FILTER_DEFAULTS_BY_TYPE = {
-    'scan-register': ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'deviceName', 'syncStatus', 'entryMode']
+    'scan-register': ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'deviceName', 'syncStatus', 'entryMode'],
+    'partwise-inventory-audit': ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation', 'varianceType', 'scanModeOptions'],
+    short: ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
+    excess: ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
+    damage: ['dealer', 'dateRange', 'scanType', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation']
   };
   const REPORT_FILTER_OPTIONS = [
     ['dealer', 'Dealer'],
@@ -254,6 +258,9 @@
     'scan-register': 'Scan Register Report',
     'wrong-not-found-master': 'Rejected Report',
     'stock-summary': 'Stock Summary',
+    short: 'Short Report',
+    excess: 'Excess Report',
+    damage: 'Damage Report',
     'category-wise-variance-summary': 'Category Wise Variance Summary',
     'partwise-inventory-audit': 'Partwise Inventory Audit Report',
     'parts-inventory-refresh-template': 'Part Inventory Refresh Template CSV'
@@ -262,6 +269,9 @@
   const EXCEL_ONLY_REPORT_TYPES = new Set(['stock-summary']);
   const REPORT_LAYOUT_KEYS = {
     'partwise-inventory-audit': 'partwise_inventory_audit_report_layout_v2',
+    short: 'short_report_layout',
+    excess: 'excess_report_layout',
+    damage: 'damage_report_layout',
     'bin-wise-stock': 'bin_wise_report_layout',
     'bin-stock': 'bin_wise_report_layout',
     'bin-wise': 'bin_wise_report_layout',
@@ -702,6 +712,7 @@
   }
 
   function activeDealerId() {
+    if (isAdminUser()) return '';
     return cleanDealerCode(state.activeDealerId || storageGet(userScopedStorageKey(ACTIVE_DEALER_KEY)) || storageGet(ACTIVE_DEALER_KEY) || '');
   }
 
@@ -1010,9 +1021,12 @@
   function currentDealerCode() {
     const activeDealer = activeDealerId();
     if (activeDealer) return activeDealer;
+    const selected = $$('.dealerSelect')
+      .map((select) => cleanDealerCode(select.value || ''))
+      .find((value) => value && value !== 'ALL');
+    if (selected) return selected;
     if (state.activeAudit && state.activeAudit.dealerCode) return cleanDealerCode(state.activeAudit.dealerCode);
-    const selected = $$('.dealerSelect').map((select) => select.value).find(Boolean);
-    return cleanDealerCode(selected || '');
+    return '';
   }
 
   function setDealerSelectValue(select, dealerCode, fallback = '') {
@@ -1212,6 +1226,8 @@
       return;
     }
     setActiveDealerId(next);
+    state.dashboardDealerCode = next;
+    syncScanDealerScope(next);
     state.selectedProductGroupSummary = null;
     state.productGroupDetailRows = [];
     state.productGroupDetailTotals = null;
@@ -2443,8 +2459,17 @@
         if (select !== sourceSelect) setDealerSelectValue(select, cleanCode);
       });
     }
+    const dashboardDealer = $('#dashboardDealerSelect');
+    if (dashboardDealer && dashboardDealer !== sourceSelect && cleanCode && cleanCode !== 'ALL') {
+      setDealerSelectValue(dashboardDealer, cleanCode);
+      syncDealerSelectDisplay(dashboardDealer);
+      state.dashboardDealerCode = cleanCode;
+    }
     const reportDealer = $('[name="dealerCode"]', $('#reportFilters'));
-    if (reportDealer) setDealerSelectValue(reportDealer, cleanCode, 'all');
+    if (reportDealer && reportDealer !== sourceSelect && cleanCode) {
+      setDealerSelectValue(reportDealer, cleanCode, 'all');
+      syncDealerSelectDisplay(reportDealer);
+    }
   }
 
   async function loadScanHistory() {
@@ -7543,11 +7568,18 @@
         }
         if (select.id === 'dashboardDealerSelect') {
           state.dashboardDealerCode = cleanDealerCode(select.value || '');
+          syncScanDealerScope(state.dashboardDealerCode, select);
           state.selectedProductGroupSummary = null;
           state.productGroupDetailRows = [];
           state.productGroupDetailTotals = null;
           renderProductGroupDetails({ rows: [], totals: {} });
-          loadDashboard().catch((error) => toast(error.message, 'error'));
+          Promise.all([
+            loadDashboard(),
+            loadScanHistory(),
+            state.reportHasRun || ($('#reports')?.classList.contains('active') && reportParams().reportType && reportParams().dealerCode)
+              ? loadReport({ forceRefresh: true, showLoading: $('#reports')?.classList.contains('active') })
+              : Promise.resolve()
+          ]).catch((error) => toast(error.message, 'error'));
           return;
         }
         if (select.closest('#binLabelForm')) {
@@ -7738,6 +7770,9 @@
     });
     $('#reportTypeSelect').addEventListener('change', (event) => {
       setReportTab(event.target.value);
+      if (reportParams().dealerCode) {
+        loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error'));
+      }
     });
     $('#reportCategoryFilter')?.addEventListener('change', updateReportButtons);
     $('#reportProductGroupFilter')?.addEventListener('change', () => {
@@ -7745,14 +7780,15 @@
       updateReportButtons();
     });
     $('#reportProductSubGroupFilter')?.addEventListener('change', updateReportButtons);
-    $('[name="dealerCode"]', $('#reportFilters')).addEventListener('change', () => {
+    $('[name="dealerCode"]', $('#reportFilters')).addEventListener('change', (event) => {
       state.reportCache.clear();
       updateReportButtons();
       if (!reportParams().dealerCode) {
         resetReportPreview('Select dealer code first to view report.');
         return;
       }
-      resetReportPreview('Click Submit to load the selected dealer report.');
+      syncScanDealerScope(reportParams().dealerCode, event.currentTarget);
+      loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error'));
     });
     $('[name="showScannedPartsOnly"]', $('#reportFilters'))?.addEventListener('change', (event) => {
       if (event.target.checked) $('[name="showFullMasterWithZeroScan"]', $('#reportFilters')).checked = false;

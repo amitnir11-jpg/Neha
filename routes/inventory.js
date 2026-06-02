@@ -4,6 +4,7 @@ const { randomUUID } = require('crypto');
 const Inventory = require('../models/Inventory');
 const Bin = require('../models/Bin');
 const MasterPart = require('../models/MasterPart');
+const MasterCatalogue = require('../models/MasterCatalogue');
 const Dealer = require('../models/Dealer');
 const Device = require('../models/Device');
 const BluetoothDevice = require('../models/BluetoothDevice');
@@ -14,7 +15,7 @@ const VerificationLog = require('../models/VerificationLog');
 const AuditLog = require('../models/AuditLog');
 const auth = require('./auth');
 const { normalizePartNumber } = require('../utils/normalize');
-const { findCataloguePart, reprocessScansWithCatalogue } = require('../utils/catalogue');
+const { findCataloguePart, cataloguePayload, reprocessScansWithCatalogue } = require('../utils/catalogue');
 const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentity');
 const masterValidation = require('../utils/masterValidation');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
@@ -677,16 +678,75 @@ async function dashboardStats(filter) {
   return stats;
 }
 
+function masterPartNumber(record = {}) {
+  return normalizePartNumber(record.normalizedPartNumber || record.partNumber || record.partNo || record.part || '');
+}
+
+async function masterLookupForScans(scans = []) {
+  const partNumbers = Array.from(new Set(scans.map(masterPartNumber).filter(Boolean)));
+  if (!partNumbers.length) {
+    return { byPart: new Map(), byDealer: new Map(), catalogueParts: new Set() };
+  }
+
+  const [catalogues, legacyMasters] = await Promise.all([
+    MasterCatalogue.find({ normalizedPartNumber: { $in: partNumbers } }).lean(),
+    MasterPart.find({
+      $or: [
+        { normalizedPartNumber: { $in: partNumbers } },
+        { partNo: { $in: partNumbers } },
+        { partNumber: { $in: partNumbers } }
+      ]
+    }).lean()
+  ]);
+
+  const byPart = new Map();
+  const byDealer = new Map();
+  const catalogueParts = new Set();
+
+  catalogues.forEach((row) => {
+    const payload = cataloguePayload(row);
+    const partNo = masterPartNumber(payload);
+    if (!partNo) return;
+    byPart.set(partNo, payload);
+    catalogueParts.add(partNo);
+  });
+
+  legacyMasters.forEach((row) => {
+    const payload = cataloguePayload(row);
+    const partNo = masterPartNumber(payload);
+    if (!partNo) return;
+    const code = normalizeDealerCode(row.dealerCode);
+    if (code) byDealer.set(`${partNo}::${code}`, payload);
+    if (!byPart.has(partNo)) byPart.set(partNo, payload);
+  });
+
+  return { byPart, byDealer, catalogueParts };
+}
+
+function masterForScan(scan = {}, lookup = {}) {
+  const partNo = masterPartNumber(scan);
+  if (!partNo) return null;
+  const byPart = lookup.byPart || new Map();
+  const byDealer = lookup.byDealer || new Map();
+  const catalogueParts = lookup.catalogueParts || new Set();
+  if (catalogueParts.has(partNo)) return byPart.get(partNo) || null;
+  const code = normalizeDealerCode(scan.dealerCode);
+  return (code ? byDealer.get(`${partNo}::${code}`) : null) || byPart.get(partNo) || null;
+}
+
 async function dashboardProductGroupSummary({ limit = 100, q = '', filter = {} } = {}) {
   const search = String(q || '').trim();
   const regex = search ? new RegExp(escapeRegex(search), 'i') : null;
   const records = await Inventory.find(applyTestScanMode({ ...(filter || {}) }, 'real'))
-    .select('part partNumber normalizedPartNumber productGroup partGroup productCategory category partSubGroup productSubGroup productType qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue rawScan rawScanString rawUpi source scanMode entryMode dlc')
+    .select('part partNumber normalizedPartNumber dealerCode productGroup partGroup productCategory category partSubGroup productSubGroup productType qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue rawScan rawScanString rawUpi source scanMode entryMode dlc')
     .lean();
+  const scans = records.map(publicScan);
+  const masterLookup = await masterLookupForScans(scans);
   const groups = new Map();
-  records.map(publicScan).forEach((scan) => {
-    const productGroup = clean(scan.productGroup || scan.partGroup || scan.productCategory || scan.category || 'OTHERS') || 'OTHERS';
-    const partSubGroup = clean(scan.partSubGroup || scan.productSubGroup || scan.productType || 'GENERAL') || 'GENERAL';
+  scans.forEach((scan) => {
+    const master = masterForScan(scan, masterLookup) || {};
+    const productGroup = clean(master.productGroup || scan.productGroup || scan.partGroup || scan.productCategory || scan.category || 'OTHERS') || 'OTHERS';
+    const partSubGroup = clean(master.partSubGroup || scan.partSubGroup || scan.productSubGroup || scan.productType || 'GENERAL') || 'GENERAL';
     if (regex && !regex.test(productGroup) && !regex.test(partSubGroup)) return;
     const key = `${productGroup}::${partSubGroup}`;
     const group = groups.get(key) || {
@@ -707,7 +767,7 @@ async function dashboardProductGroupSummary({ limit = 100, q = '', filter = {} }
     group.qty = group.totalQuantity;
     if (scan.partNumber) group.uniquePartSet.add(scan.partNumber);
     group.totalMrpValue += Number(scan.finalInventoryValue || 0);
-    group.totalDlcValue += qty * Number(scan.dlc || 0);
+    group.totalDlcValue += qty * Number(master.dlc !== undefined ? master.dlc : scan.dlc || 0);
     groups.set(key, group);
   });
   const rows = Array.from(groups.values()).map((row) => {
@@ -722,12 +782,15 @@ async function dashboardProductGroupDetails({ productGroup = '', partSubGroup = 
   const group = String(productGroup || 'OTHERS').trim() || 'OTHERS';
   const subGroup = String(partSubGroup || 'GENERAL').trim() || 'GENERAL';
   const records = await Inventory.find(applyTestScanMode({ ...(filter || {}) }, 'real'))
-    .select('part partNumber normalizedPartNumber partDescription partName productGroup partGroup productCategory category partSubGroup productSubGroup productType binLocation bin qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue rawScan rawScanString rawUpi source scanMode entryMode')
+    .select('part partNumber normalizedPartNumber dealerCode partDescription partName productGroup partGroup productCategory category partSubGroup productSubGroup productType binLocation bin qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue rawScan rawScanString rawUpi source scanMode entryMode')
     .lean();
+  const scans = records.map(publicScan);
+  const masterLookup = await masterLookupForScans(scans);
   const groups = new Map();
-  records.map(publicScan).forEach((scan) => {
-    const productGroupText = clean(scan.productGroup || scan.partGroup || scan.productCategory || scan.category || 'OTHERS') || 'OTHERS';
-    const partSubGroupText = clean(scan.partSubGroup || scan.productSubGroup || scan.productType || 'GENERAL') || 'GENERAL';
+  scans.forEach((scan) => {
+    const master = masterForScan(scan, masterLookup) || {};
+    const productGroupText = clean(master.productGroup || scan.productGroup || scan.partGroup || scan.productCategory || scan.category || 'OTHERS') || 'OTHERS';
+    const partSubGroupText = clean(master.partSubGroup || scan.partSubGroup || scan.productSubGroup || scan.productType || 'GENERAL') || 'GENERAL';
     if (!new RegExp(`^${escapeRegex(group)}$`, 'i').test(productGroupText)) return;
     if (!new RegExp(`^${escapeRegex(subGroup)}$`, 'i').test(partSubGroupText)) return;
     const key = [scan.partNumber, scan.partDescription || scan.partName, scan.binLocation || scan.bin, scan.valuationMRP || 0].join('::');
@@ -834,6 +897,7 @@ function publicScan(scan = {}) {
     qty,
     quantity: qty,
     mrp,
+    dlc: numberValue(scan.dlc, 0),
     scanMRP: valued.scanMRP || 0,
     manualMRP: valued.manualMRP || 0,
     valuationMRP: mrp,
@@ -870,6 +934,27 @@ function publicScan(scan = {}) {
     entryMode: labels.entryMode,
     entryChannel: labels.entryChannel,
     scanSourceLabel: labels.scanSourceLabel
+  };
+}
+
+function publicScanWithMaster(record = {}, masterLookup = {}) {
+  const scan = publicScan(record);
+  const master = masterForScan(scan, masterLookup) || null;
+  if (!master) return scan;
+  const scanDlc = numberValue(scan.dlc, 0);
+  const masterDlc = numberValue(master.dlc, 0);
+  return {
+    ...scan,
+    partName: scan.partName || master.partName || master.partDescription || '',
+    partDescription: scan.partDescription || master.partDescription || master.partName || '',
+    category: scan.category || master.productCategory || master.category || '',
+    productCategory: scan.productCategory || master.productCategory || master.category || '',
+    productGroup: scan.productGroup || master.productGroup || '',
+    partSubGroup: scan.partSubGroup || master.partSubGroup || master.productSubGroup || '',
+    model: scan.model || master.model || '',
+    year: scan.year || master.year || master.manufacturingYear || '',
+    manufacturingYear: scan.manufacturingYear || master.manufacturingYear || master.year || '',
+    dlc: scanDlc > 0 ? scanDlc : masterDlc
   };
 }
 
@@ -2490,7 +2575,8 @@ router.get('/history', auth.requireAuth, async (req, res) => {
       ])
     ]);
     if (req.query.repair === '1' || req.query.repair === 'true') await repairParsedFields(records);
-    const publicRecords = records.map(publicScan);
+    const masterLookup = await masterLookupForScans(records);
+    const publicRecords = records.map((record) => publicScanWithMaster(record, masterLookup));
     const aggregateTotals = totals[0] || {};
     const uniqueParts = (aggregateTotals.uniqueParts || []).map((part) => normalizePartNumber(part || '')).filter(Boolean);
     const visibleQuantity = publicRecords.reduce((sum, row) => {

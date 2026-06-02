@@ -2231,6 +2231,30 @@ function applyPartwiseFilters(rows, query = {}) {
     const action = displayAction(query.action) || cleanText(query.action);
     filtered = filtered.filter((row) => cleanText(row.action).toUpperCase() === cleanText(action).toUpperCase());
   }
+  switch (cleanText(query.varianceType).toLowerCase()) {
+    case 'matched':
+      filtered = filtered.filter((row) => ['MATCHED', 'INVENTORY MATCHED'].includes(cleanText(row.status).toUpperCase()) || Number(row.varianceQty || 0) === 0);
+      break;
+    case 'short':
+      filtered = filtered.filter((row) => Number(row.shortQty || 0) > 0 || Number(row.varianceQty || 0) < 0);
+      break;
+    case 'excess':
+      filtered = filtered.filter((row) => Number(row.excessQty || 0) > 0 || Number(row.varianceQty || 0) > 0);
+      break;
+    case 'extra':
+    case 'inventory-addition':
+      filtered = filtered.filter((row) => Number(row.systemQty || 0) <= 0 && Number(row.physicalQty || 0) > 0);
+      break;
+    case 'not-scanned':
+    case 'non-moving':
+      filtered = filtered.filter((row) => Number(row.systemQty || 0) > 0 && Number(row.physicalQty || 0) === 0);
+      break;
+    case 'damage':
+      filtered = filtered.filter((row) => Number(row.damageQty || 0) > 0);
+      break;
+    default:
+      break;
+  }
   if (query.bin || query.binLocation) {
     const bin = cleanText(query.bin || query.binLocation);
     filtered = filtered.filter((row) => [row.binLoc1, row.binLoc2, row.binLoc3, row.otherBinLocations, row.systemBinLoc1, row.systemBinLoc2, row.systemBinLoc3].some((item) => new RegExp(escapeRegExp(bin), 'i').test(item || '')));
@@ -3100,7 +3124,7 @@ async function buildStockSummaryReport(query = {}) {
     const latestPrice = latestPriceForReport(priceHistories);
     const valueSummary = rowValueSummary(physical.scans || [], catalogue, priceHistories);
     const mrp = finalMrpForReport(valueSummary, detail, priceHistories, physical.scans || []);
-    const dlc = numberValue(firstPresent(stock.dlc, catalogue.dlc, firstScan.dlc), 0);
+    const dlc = numberValue(firstPresent(catalogue.dlc, stock.dlc, firstScan.dlc), 0);
     const systemQty = numberValue(firstPresent(stock.systemQty, stock.dmsStock), 0);
     const physicalQty = numberValue(physical.physicalQty, 0);
     const fittedQty = numberValue(physical.fittedQty, 0);
@@ -3479,6 +3503,45 @@ router.get('/partwise-inventory-audit', auth.requireAuth, async (req, res) => {
     return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
   }
 });
+
+async function handlePartwiseVarianceReport(req, res, varianceType, title, type = varianceType) {
+  try {
+    const forceFullMaster = ['short', 'not-scanned', 'non-moving'].includes(varianceType);
+    const reportQuery = requireDealerForReport({
+      ...req.query,
+      varianceType,
+      showFullMasterWithZeroScan: forceFullMaster ? 'on' : req.query.showFullMasterWithZeroScan
+    });
+    const data = await buildPartwiseInventoryAuditReport(reportQuery);
+    const fileBase = title.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'Report';
+    if (req.query.format === 'excel') {
+      return sendSelectedColumnsWorkbook(res, `${fileBase}.xlsx`, title, data.columns, data.rows, reportQuery);
+    }
+    if (req.query.format === 'pdf') {
+      const pdf = buildPartwiseInventoryAuditPdfBuffer({ ...data, summary: { ...data.summary, title } });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileBase}.pdf"`);
+      return res.send(pdf);
+    }
+    return res.json({
+      success: true,
+      type,
+      title,
+      columns: data.columns.map(({ header, key }) => ({ header, key })),
+      rows: data.rows,
+      summary: data.summary,
+      validationLog: data.validationLog,
+      totalRows: data.rows.length,
+      message: data.rows.length ? '' : 'No report data found for selected filter'
+    });
+  } catch (error) {
+    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
+  }
+}
+
+router.get('/short', auth.requireAuth, (req, res) => handlePartwiseVarianceReport(req, res, 'short', 'Short Report', 'short'));
+router.get('/excess', auth.requireAuth, (req, res) => handlePartwiseVarianceReport(req, res, 'excess', 'Excess Report', 'excess'));
+router.get('/damage', auth.requireAuth, (req, res) => handlePartwiseVarianceReport(req, res, 'damage', 'Damage Report', 'damage'));
 
 router.post('/partwise-inventory-audit/email', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
