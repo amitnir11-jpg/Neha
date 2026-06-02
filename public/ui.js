@@ -393,7 +393,10 @@
     const wrapper = $('#dashboardDealerFilters');
     select.style.width = `${width}px`;
     select.style.maxWidth = '100%';
-    if (wrapper) wrapper.style.width = `min(${width}px, 100%)`;
+    if (wrapper) {
+      const actionWidth = Math.ceil(($('#dashboardViewReportBtn')?.getBoundingClientRect().width || 118) + 12);
+      wrapper.style.width = `min(${width + actionWidth}px, 100%)`;
+    }
   }
 
   function syncDealerSelectDisplay(select) {
@@ -1227,6 +1230,11 @@
     if (selectedDealer) {
       $$('.dealerSelect').forEach((select) => {
         if (select.closest('#reportFilters') && isAdminUser()) return;
+        if (select.id === 'dashboardDealerSelect' && state.dashboardDealerCode) {
+          setDealerSelectValue(select, state.dashboardDealerCode);
+          syncDealerSelectDisplay(select);
+          return;
+        }
         setDealerSelectValue(select, selectedDealer.dealerCode || selectedDealer.code || selectedDealer.id || '');
         syncDealerSelectDisplay(select);
       });
@@ -7469,6 +7477,15 @@
     });
     $('#manualSyncBtn').addEventListener('click', runSync);
     $('#homeManualSyncBtn').addEventListener('click', runSync);
+    $('#dashboardViewReportBtn')?.addEventListener('click', () => {
+      const select = $('#dashboardDealerSelect');
+      state.dashboardDealerCode = cleanDealerCode((select && select.value) || state.dashboardDealerCode || '');
+      state.selectedProductGroupSummary = null;
+      state.productGroupDetailRows = [];
+      state.productGroupDetailTotals = null;
+      renderProductGroupDetails({ rows: [], totals: {} });
+      loadDashboard().catch((error) => toast(error.message, 'error'));
+    });
     $('#repairSyncStatusBtn')?.addEventListener('click', () => repairSyncStatus().catch((error) => toast(error.message, 'error')));
     $('#syncCenterManualBtn').addEventListener('click', runSync);
     $('#syncCenterRetryBtn').addEventListener('click', () => syncPendingQueue({ includeFailed: true }).catch((error) => toast(error.message, 'error')));

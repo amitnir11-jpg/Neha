@@ -706,6 +706,7 @@ body:not(.dashboard-view-active) .topbar {
 .dashboard-dealer-filters {
   --field-min: min(360px, 100%);
   width: min(760px, 100%);
+  align-items: end;
   gap: 6px;
 }
 
@@ -726,6 +727,11 @@ body:not(.dashboard-view-active) .topbar {
   width: auto;
   min-width: min(360px, 100%);
   max-width: 100%;
+}
+
+.dashboard-view-report-btn {
+  min-height: 34px;
+  white-space: nowrap;
 }
 
 .dashboard-kpi-summary-wrap {
