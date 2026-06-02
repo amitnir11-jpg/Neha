@@ -25,7 +25,9 @@ const { findPricePeriod, pricePeriodPayload } = require('../utils/priceHistory')
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
 const BIN_REQUIRED_MESSAGE = 'Please enter/select bin location first.';
-const NO_OUTWARD_STOCK_MESSAGE = 'No available stock found for this part in any bin.';
+const NO_OUTWARD_STOCK_MESSAGE = 'Part not available in inward stock.';
+const VERIFICATION_FOUND_MESSAGE = 'Part Found';
+const VERIFICATION_NOT_FOUND_MESSAGE = 'Part Not Found';
 const SCAN_VERBOSE_LOGS = process.env.SCAN_VERBOSE_LOGS === 'true';
 const realtimeRefreshDelay = Number(process.env.REALTIME_SCAN_REFRESH_DELAY_MS || 900);
 const REALTIME_SCAN_REFRESH_DELAY_MS = Number.isFinite(realtimeRefreshDelay) && realtimeRefreshDelay >= 100
@@ -70,7 +72,7 @@ function upper(value) {
 
 function normalizeScanType(value) {
   const type = upper(value || 'INWARD');
-  if (type === 'VERIFICATION') return 'AUDIT';
+  if (type === 'VERIFY') return 'VERIFICATION';
   return type;
 }
 
@@ -80,6 +82,15 @@ function rawIdentity(input = {}) {
 
 function acceptedStatuses() {
   return ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'];
+}
+
+function nonVerificationScanClause() {
+  return { $nor: [{ scanType: 'VERIFICATION' }, { type: 'VERIFICATION' }] };
+}
+
+function applyTransactionScanFilter(filter = {}) {
+  filter.$and = (filter.$and || []).concat([nonVerificationScanClause()]);
+  return filter;
 }
 
 function normalizeCategory(value) {
@@ -553,11 +564,12 @@ function testScanClause() {
 
 function applyTestScanMode(filter = {}, mode = 'real') {
   const selected = String(mode || 'real').trim().toLowerCase();
-  if (selected === 'all') return filter;
-  filter.$and = (filter.$and || []).concat([
-    selected === 'test' ? testScanClause() : { $nor: testScanClause().$or },
+  const clauses = [nonVerificationScanClause()];
+  if (selected !== 'all') clauses.push(selected === 'test' ? testScanClause() : { $nor: testScanClause().$or });
+  clauses.push(
     masterValidation.validScanClause()
-  ]);
+  );
+  filter.$and = (filter.$and || []).concat(clauses);
   return filter;
 }
 
@@ -653,10 +665,8 @@ async function dashboardStats(filter) {
     stats.totalScannedQuantity += qty;
     if (scan.type === 'INWARD') stats.totalInward += qty;
     if (scan.type === 'OUTWARD') stats.totalOutward += qty;
-    if (scan.type === 'FITTED' || scan.type === 'VERIFICATION' || scan.type === 'AUDIT') {
-      stats.fittedCount += qty;
-      stats.auditCount += qty;
-    }
+    if (scan.type === 'FITTED') stats.fittedCount += qty;
+    if (scan.type === 'AUDIT') stats.auditCount += qty;
     if (scan.type === 'DAMAGE') stats.damageCount += qty;
     if (!record.synced) stats.pendingSync += 1;
     if ((record.warnings || []).some((warning) => /mismatch|inactive|not found/i.test(warning))) stats.mismatchCount += 1;
@@ -873,7 +883,7 @@ function scanIdentityScope(filter = {}, dealerCode = '', auditId = '') {
 
 function inboundAcceptedFilter(raw, dealerCode = '', auditId = '') {
   return scanIdentityScope({
-    scanType: { $in: ['AUDIT', 'INWARD', 'VERIFICATION', 'FITTED'] },
+    scanType: 'INWARD',
     scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] },
     $or: [
       { rawScan: raw },
@@ -937,11 +947,131 @@ function stockQtyExpression() {
   return {
     $switch: {
       branches: [
-        { case: { $in: [type, ['OUTWARD', 'DAMAGE']] }, then: { $multiply: [qty, -1] } },
-        { case: { $eq: [type, 'FITTED'] }, then: 0 }
+        { case: { $eq: [type, 'INWARD'] }, then: { $abs: qty } },
+        { case: { $in: [type, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: qty }, -1] } },
+        { case: { $eq: [type, 'VERIFICATION'] }, then: 0 }
       ],
-      default: qty
+      default: 0
     }
+  };
+}
+
+function inwardQtyExpression() {
+  const qty = {
+    $convert: {
+      input: { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] },
+      to: 'double',
+      onError: 0,
+      onNull: 0
+    }
+  };
+  const type = { $toUpper: { $toString: { $ifNull: ['$scanType', { $ifNull: ['$type', ''] }] } } };
+  return {
+    $cond: [
+      { $eq: [type, 'INWARD'] },
+      { $abs: qty },
+      0
+    ]
+  };
+}
+
+function partStockMatch({ dealerCode = '', auditId = '', partNumber = '', rawScan = '' } = {}) {
+  const dealer = normalizeDealerCode(dealerCode);
+  const audit = clean(auditId);
+  const part = normalizePartNumber(partNumber);
+  const raw = clean(rawScan);
+  const rawUpper = upper(raw);
+  const identityTerms = [];
+  if (part) identityTerms.push({ normalizedPartNumber: part }, { partNumber: part }, { part });
+  if (raw) {
+    identityTerms.push(
+      { rawScan: raw },
+      { rawScanString: raw },
+      { rawBarcode: raw },
+      { rawQR: raw },
+      { rawUpi: raw },
+      { upiNo: rawUpper },
+      { upiId: raw }
+    );
+  }
+  const match = {
+    scanStatus: { $in: acceptedStatuses() },
+    syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] },
+    isDuplicate: { $ne: true },
+    $and: [nonVerificationScanClause()]
+  };
+  if (dealer) match.dealerCode = dealer;
+  if (audit) match.auditId = audit;
+  if (identityTerms.length) match.$and.push({ $or: identityTerms });
+  return match;
+}
+
+async function availableInwardStock(input = {}) {
+  const match = partStockMatch(input);
+  if (!match.$and || !match.$and.some((clause) => clause.$or)) return { availableQty: 0, inwardQty: 0, bins: [] };
+  const rows = await Inventory.aggregate([
+    { $match: match },
+    {
+      $addFields: {
+        _stockBin: {
+          $trim: {
+            input: { $toString: { $ifNull: ['$binLocation', { $ifNull: ['$bin', ''] }] } }
+          }
+        },
+        _stockQty: stockQtyExpression(),
+        _inwardQty: inwardQtyExpression()
+      }
+    },
+    {
+      $group: {
+        _id: '$_stockBin',
+        availableQty: { $sum: '$_stockQty' },
+        inwardQty: { $sum: '$_inwardQty' },
+        oldestScanTime: { $min: '$timestamp' },
+        oldestCreatedAt: { $min: '$createdAt' }
+      }
+    },
+    { $match: { inwardQty: { $gt: 0 }, availableQty: { $gt: 0 } } },
+    { $sort: { oldestScanTime: 1, oldestCreatedAt: 1, _id: 1 } }
+  ]);
+  return {
+    availableQty: rows.reduce((sum, row) => sum + Number(row.availableQty || 0), 0),
+    inwardQty: rows.reduce((sum, row) => sum + Number(row.inwardQty || 0), 0),
+    bins: rows.map((row) => ({
+      binLocation: upper(row._id),
+      availableQty: Number(row.availableQty || 0),
+      inwardQty: Number(row.inwardQty || 0),
+      oldestScanTime: row.oldestScanTime,
+      oldestCreatedAt: row.oldestCreatedAt
+    })).filter((row) => row.binLocation)
+  };
+}
+
+async function verifyPartOnly({ rawScan = '', partNumber = '', dealerCode = '', auditId = '' } = {}) {
+  const parsed = parseRawScan(rawScan || partNumber);
+  const part = normalizePartNumber(partNumber || parsed.part || '');
+  const stock = await availableInwardStock({
+    rawScan,
+    partNumber: part,
+    dealerCode,
+    auditId
+  });
+  const found = stock.availableQty > 0;
+  return {
+    success: true,
+    verification: true,
+    transactional: false,
+    found,
+    scanned: found,
+    partNumber: part,
+    rawScan,
+    dealerCode: normalizeDealerCode(dealerCode),
+    auditId: clean(auditId),
+    availableQty: stock.availableQty,
+    inwardQty: stock.inwardQty,
+    bins: stock.bins,
+    color: found ? 'yellow' : '',
+    message: found ? VERIFICATION_FOUND_MESSAGE : VERIFICATION_NOT_FOUND_MESSAGE
   };
 }
 
@@ -968,12 +1098,13 @@ async function autoDetectOutwardBin({ dealerCode, auditId, partNumber }) {
     {
       $addFields: {
         _bin: { $trim: { input: { $toString: { $ifNull: ['$binLocation', { $ifNull: ['$bin', ''] }] } } } },
-        _qty: stockQtyExpression()
+        _qty: stockQtyExpression(),
+        _inwardQty: inwardQtyExpression()
       }
     },
     { $match: { _bin: { $nin: ['', 'NULL', 'UNDEFINED'] } } },
-    { $group: { _id: '$_bin', availableQty: { $sum: '$_qty' }, oldestScanTime: { $min: '$timestamp' }, oldestCreatedAt: { $min: '$createdAt' } } },
-    { $match: { availableQty: { $gt: 0 } } }
+    { $group: { _id: '$_bin', availableQty: { $sum: '$_qty' }, inwardQty: { $sum: '$_inwardQty' }, oldestScanTime: { $min: '$timestamp' }, oldestCreatedAt: { $min: '$createdAt' } } },
+    { $match: { inwardQty: { $gt: 0 }, availableQty: { $gt: 0 } } }
   ]);
   if (!rows.length) return null;
   const binCodes = rows.map((row) => upper(row._id)).filter(Boolean);
@@ -1142,6 +1273,7 @@ async function validateScan(payload, master, timestamp, pricePeriod = null) {
 
 async function logValidationFailure(payload = {}, reason = 'Not Found In Master', timestamp = new Date()) {
   try {
+    if (upper(payload.scanType || payload.type || '') === 'VERIFICATION') return;
     if (!masterValidation.isManualRejectedSource(payload)) return;
     const now = timestamp instanceof Date && !Number.isNaN(timestamp.getTime()) ? timestamp : new Date();
     const rawScannedValue = String(payload.rawScan || payload.rawScanString || payload.rawUpi || payload.upiNo || payload.upiId || '').trim();
@@ -1313,6 +1445,16 @@ async function saveScanRequest(req, res) {
     const auditId = String(req.body.auditId || (dealer ? dealer.currentAuditId : '') || '').trim();
     const type = normalizeScanType(req.body.type || req.body.scanType || req.body.action || parsed.type || 'INWARD');
     const timestamp = new Date();
+    if (type === 'VERIFICATION') {
+      if (!part) return res.status(400).json({ success: false, message: 'Part number is required' });
+      const result = await verifyPartOnly({
+        rawScan: String(rawScanInput || parsed.rawScan || part),
+        partNumber: part,
+        dealerCode,
+        auditId
+      });
+      return res.json(result);
+    }
     const mobileTime = firstValue(req.body, ['timestamp', 'scanTime', 'scannedAt', 'scanDateTime', 'dateTime', 'createdAt', 'localCreatedAt', 'localTimestamp']);
     scanDebug('[SCAN TIME] web/server scan received', {
       deviceId: req.body.deviceId || '',
@@ -1983,6 +2125,32 @@ router.post('/bluetooth', auth.optionalAuth, async (req, res) => {
   return res.status(410).json({ success: false, disabled: true, message: 'Bluetooth scanner features are disabled.' });
 });
 
+async function verifyPartRequest(req, res) {
+  try {
+    const rawScan = firstValue(req.body || {}, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText', 'value'])
+      || firstValue(req.query || {}, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText', 'value']);
+    const parsed = parseRawScan(rawScan);
+    const partNumber = upper(parsed.part || firstValue(req.body || {}, ['part', 'partNumber', 'partNo', 'sku', 'itemCode'])
+      || firstValue(req.query || {}, ['part', 'partNumber', 'partNo', 'sku', 'itemCode']));
+    const dealerCode = normalizeDealerCode(firstValue(req.body || {}, ['dealerCode', 'dealer'])
+      || firstValue(req.query || {}, ['dealerCode', 'dealer']));
+    const auditId = clean(firstValue(req.body || {}, ['auditId', 'audit'])
+      || firstValue(req.query || {}, ['auditId', 'audit']));
+    if (!rawScan && !partNumber) return res.status(400).json({ success: false, message: 'Part number is required' });
+    const result = await verifyPartOnly({
+      rawScan: String(rawScan || parsed.rawScan || partNumber),
+      partNumber,
+      dealerCode,
+      auditId
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+router.get('/verify', auth.optionalAuth, verifyPartRequest);
+router.post('/verify', auth.optionalAuth, verifyPartRequest);
 router.post('/scan', auth.optionalAuth, saveScanRequest);
 router.post('/manual', auth.optionalAuth, saveScanRequest);
 router.post('/', auth.optionalAuth, saveScanRequest);
@@ -2002,6 +2170,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
     const incoming = Array.isArray(req.body.scans) ? req.body.scans : [];
     const failed = [];
     const saved = [];
+    const verificationResults = [];
     let skipped = 0;
 
     for (const item of incoming) {
@@ -2013,7 +2182,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
         const master = part ? await findMasterPart(normalizedPartNumber, item.dealerCode || parsed.dealerCode) : null;
 
         const dealerCode = upper(item.dealerCode || item.dealer || parsed.dealerCode || (master ? master.dealerCode : ''));
-        const type = upper(item.type || item.scanType || item.action || parsed.type || 'INWARD');
+        const type = normalizeScanType(item.type || item.scanType || item.action || parsed.type || 'INWARD');
         const timestamp = scanTimestamp(item);
         const binLocation = String(firstValue(item, ['binLocation', 'bin', 'location']) || parsed.bin || '').trim().toUpperCase();
         const upiId = extractUpiId(item, parsed);
@@ -2028,6 +2197,15 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
         const uniqueScanId = scanIdentity({ ...item, syncKey }, parsed);
         const dealer = dealerCode ? await Dealer.findOne({ dealerCode }).lean() : null;
         const auditId = String(item.auditId || (dealer ? dealer.currentAuditId : '') || '').trim();
+        if (type === 'VERIFICATION') {
+          verificationResults.push(await verifyPartOnly({
+            rawScan: rawScanText,
+            partNumber: part,
+            dealerCode,
+            auditId
+          }));
+          continue;
+        }
         const qrFingerprint = makeQrFingerprint({
           ...item,
           dealerCode,
@@ -2063,8 +2241,23 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
         const valueFields = valuationFields({ rawScanText, scannedMrp, mrpProvided, entrySource, manualEntryMode });
         const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(part, timestamp, valueFields.valuationMRP) : null;
         const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
+        let finalBinLocation = binLocation;
+        let autoDetectedBin = false;
+        let binSelectionMode = ['INWARD', 'DAMAGE'].includes(type) ? 'MANUAL' : '';
+        let stockDeductedFromBin = '';
+        if (type === 'OUTWARD') {
+          const detected = await autoDetectOutwardBin({ dealerCode, auditId, partNumber: part });
+          if (!detected || !detected.binLocation) {
+            failed.push({ uniqueScanId, message: NO_OUTWARD_STOCK_MESSAGE, item });
+            continue;
+          }
+          finalBinLocation = detected.binLocation;
+          autoDetectedBin = true;
+          binSelectionMode = 'AUTO';
+          stockDeductedFromBin = detected.binLocation;
+        }
         const duplicateUserKey = String(item.userId || item.loginId || item.userName || item.staffName || '').trim();
-        const duplicateQuery = duplicateScanFilter(uniqueScanId, qrFingerprint, dealerCode, rawScanText, upiNo, binLocation, auditId, duplicateUserKey, type);
+        const duplicateQuery = duplicateScanFilter(uniqueScanId, qrFingerprint, dealerCode, rawScanText, upiNo, finalBinLocation, auditId, duplicateUserKey, type);
         const duplicate = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
         if (duplicate) {
           await logDuplicateScan({
@@ -2074,7 +2267,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
       qrFingerprint,
             partNumber: part,
             dealerCode,
-            binLocation,
+            binLocation: finalBinLocation,
             scanType: type,
             rawScan: rawScanText,
             upiNo
@@ -2086,7 +2279,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
 
         if (!part) warnings.push('Part number missing');
         if (part && !isValidPartNumber(part)) warnings.push('Invalid part number format');
-        if (!binLocation) warnings.push(BIN_REQUIRED_MESSAGE);
+        if (['INWARD', 'DAMAGE'].includes(type) && !finalBinLocation) warnings.push(BIN_REQUIRED_MESSAGE);
         if (!dealerCode) warnings.push('Dealer code missing');
         if (!VALID_TYPES.includes(type)) warnings.push('Invalid scan type');
         if (!master) warnings.push(`Part number not found in master: ${part}`);
@@ -2095,7 +2288,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
         if (master && mrpProvided && !pricePeriod) warnings.push('No matching price history period for scanned MRP');
         if (master && dlcProvided && approxMismatch(scannedDlc, master.dlc)) warnings.push('DLC mismatch');
 
-        if (!part || !isValidPartNumber(part) || !binLocation || !dealerCode || !VALID_TYPES.includes(type) || (!master && manualEntryMode)) {
+        if (!part || !isValidPartNumber(part) || (['INWARD', 'DAMAGE'].includes(type) && !finalBinLocation) || !dealerCode || !VALID_TYPES.includes(type) || (!master && manualEntryMode)) {
           if (!master && part && manualEntryMode) {
             await logValidationFailure({
               ...item,
@@ -2103,7 +2296,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
               part,
               dealerCode,
               scanType: type,
-              binLocation,
+              binLocation: finalBinLocation,
               rawScan: rawScanText,
               upiNo,
               upiId,
@@ -2119,7 +2312,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
               extractedPartNumber: part,
               dealerCode,
               scanType: type,
-              binLocation,
+              binLocation: finalBinLocation,
               rawScannedValue: rawScanText,
               rawScan: rawScanText,
               originalScanId: uniqueScanId,
@@ -2164,8 +2357,11 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           finalInventoryValue: numberValue(firstValue(item, ['qty', 'quantity', 'count']) || parsed.qty, 1) * Number(valueFields.valuationMRP || 0),
           ...pricePeriodFields,
           dlc: finalDlc,
-          bin: binLocation,
-          binLocation,
+          bin: finalBinLocation,
+          binLocation: finalBinLocation,
+          autoDetectedBin,
+          binSelectionMode,
+          stockDeductedFromBin,
           type,
           scanType: type,
           upiId,
@@ -2184,6 +2380,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           timestamp,
           synced: true,
           isSynced: true,
+          scanStatus: type === 'OUTWARD' ? 'OUTWARD_DONE' : 'ACCEPTED',
           syncStatus: 'synced',
           syncError: '',
           syncKey,
@@ -2225,7 +2422,8 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
       pending,
       failed: failed.length,
       failedItems: failed,
-      skippedDuplicates: skipped
+      skippedDuplicates: skipped,
+      verificationResults
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2631,6 +2829,8 @@ module.exports.parseRawScan = parseRawScan;
 module.exports.buildListQuery = buildListQuery;
 module.exports.testScanClause = testScanClause;
 module.exports.applyTestScanMode = applyTestScanMode;
+module.exports.applyTransactionScanFilter = applyTransactionScanFilter;
+module.exports.nonVerificationScanClause = nonVerificationScanClause;
 module.exports.cleanupTestScans = cleanupTestScans;
 module.exports.buildSyncKey = buildSyncKey;
 module.exports.extractUpiId = extractUpiId;
@@ -2642,3 +2842,5 @@ module.exports.dashboardStats = dashboardStats;
 module.exports.publicScan = publicScan;
 module.exports.fittedIdentityFilter = fittedIdentityFilter;
 module.exports.prepareFittedScan = prepareFittedScan;
+module.exports.availableInwardStock = availableInwardStock;
+module.exports.verifyPartOnly = verifyPartOnly;

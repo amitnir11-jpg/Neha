@@ -77,8 +77,8 @@ class LocalDatabase {
     final db = await database;
     final rows = await db.query(
       'scans',
-      where: 'status IN (?, ?)',
-      whereArgs: ['Pending', 'Failed'],
+      where: 'status IN (?, ?) AND scanType != ?',
+      whereArgs: ['Pending', 'Failed', 'VERIFICATION'],
       orderBy: 'createdAt ASC',
       limit: limit,
     );
@@ -87,15 +87,19 @@ class LocalDatabase {
 
   Future<List<ScanRecord>> lastScans({int limit = 10}) async {
     final db = await database;
-    final rows =
-        await db.query('scans', orderBy: 'createdAt DESC', limit: limit);
+    final rows = await db.query('scans',
+        where: 'scanType != ?',
+        whereArgs: ['VERIFICATION'],
+        orderBy: 'createdAt DESC',
+        limit: limit);
     return rows.map(ScanRecord.fromMap).toList();
   }
 
   Future<int> countByStatus(String status) async {
     final db = await database;
-    final result = Sqflite.firstIntValue(await db
-        .rawQuery('SELECT COUNT(*) FROM scans WHERE status = ?', [status]));
+    final result = Sqflite.firstIntValue(await db.rawQuery(
+        'SELECT COUNT(*) FROM scans WHERE status = ? AND scanType != ?',
+        [status, 'VERIFICATION']));
     return result ?? 0;
   }
 

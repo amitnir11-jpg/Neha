@@ -57,7 +57,7 @@ const SYNC_VERBOSE_LOGS = process.env.SYNC_VERBOSE_LOGS === 'true';
  *
  * ====================================================================
  */
-const NO_OUTWARD_STOCK_MESSAGE = 'No available stock found for this part in any bin.';
+const NO_OUTWARD_STOCK_MESSAGE = 'Part not available in inward stock.';
 
 function clean(value) {
   return String(value || '').trim();
@@ -82,10 +82,11 @@ function newestDate(...values) {
 async function latestSuccessfulSyncTime(dealerCode = '') {
   const dealer = upper(dealerCode);
   const syncFilter = dealer ? { dealerCode: dealer } : {};
+  const inventoryFilter = { ...syncFilter, $and: [nonVerificationScanClause()] };
   const [lastLog, lastDevice, lastInventory] = await Promise.all([
     SyncLog.findOne({ ...syncFilter, status: { $in: ['success', 'partial'] } }).sort({ updatedAt: -1, createdAt: -1 }).select('updatedAt createdAt').lean(),
     Device.findOne({ ...syncFilter, lastSyncTime: { $exists: true, $ne: null } }).sort({ lastSyncTime: -1 }).select('lastSyncTime').lean(),
-    Inventory.findOne({ ...syncFilter, $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }).sort({ updatedAt: -1, timestamp: -1 }).select('updatedAt timestamp').lean()
+    Inventory.findOne({ ...inventoryFilter, $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }).sort({ updatedAt: -1, timestamp: -1 }).select('updatedAt timestamp').lean()
   ]);
   return newestDate(
     lastLog && (lastLog.updatedAt || lastLog.createdAt),
@@ -171,6 +172,10 @@ function acceptedStatuses() {
   return ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'];
 }
 
+function nonVerificationScanClause() {
+  return { $nor: [{ scanType: 'VERIFICATION' }, { type: 'VERIFICATION' }] };
+}
+
 function scanQtyExpression() {
   const qty = {
     $convert: {
@@ -184,11 +189,31 @@ function scanQtyExpression() {
   return {
     $switch: {
       branches: [
-        { case: { $in: [type, ['OUTWARD', 'DAMAGE']] }, then: { $multiply: [qty, -1] } },
-        { case: { $eq: [type, 'FITTED'] }, then: 0 }
+        { case: { $eq: [type, 'INWARD'] }, then: { $abs: qty } },
+        { case: { $in: [type, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: qty }, -1] } },
+        { case: { $eq: [type, 'VERIFICATION'] }, then: 0 }
       ],
-      default: qty
+      default: 0
     }
+  };
+}
+
+function inwardQtyExpression() {
+  const qty = {
+    $convert: {
+      input: { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] },
+      to: 'double',
+      onError: 0,
+      onNull: 0
+    }
+  };
+  const type = { $toUpper: { $toString: { $ifNull: ['$scanType', { $ifNull: ['$type', ''] }] } } };
+  return {
+    $cond: [
+      { $eq: [type, 'INWARD'] },
+      { $abs: qty },
+      0
+    ]
   };
 }
 
@@ -215,6 +240,7 @@ async function autoDetectOutwardBin(scan = {}) {
       }
     ]
   };
+  match.$and = (match.$and || []).concat([nonVerificationScanClause()]);
   if (scan.auditId) match.auditId = clean(scan.auditId);
   const rows = await Inventory.aggregate([
     { $match: match },
@@ -225,7 +251,8 @@ async function autoDetectOutwardBin(scan = {}) {
             input: { $toString: { $ifNull: ['$binLocation', { $ifNull: ['$bin', ''] }] } }
           }
         },
-        _outwardQty: scanQtyExpression()
+        _outwardQty: scanQtyExpression(),
+        _inwardQty: inwardQtyExpression()
       }
     },
     { $match: { _outwardBin: { $nin: ['', 'NULL', 'UNDEFINED'] } } },
@@ -233,11 +260,12 @@ async function autoDetectOutwardBin(scan = {}) {
       $group: {
         _id: '$_outwardBin',
         availableQty: { $sum: '$_outwardQty' },
+        inwardQty: { $sum: '$_inwardQty' },
         oldestScanTime: { $min: '$timestamp' },
         oldestCreatedAt: { $min: '$createdAt' }
       }
     },
-    { $match: { availableQty: { $gt: 0 } } }
+    { $match: { inwardQty: { $gt: 0 }, availableQty: { $gt: 0 } } }
   ]);
   if (!rows.length) return null;
   const binCodes = rows.map((row) => upper(row._id)).filter(Boolean);
@@ -289,7 +317,7 @@ function noActiveAuditMessage(dealerCode = '') {
 
 function inboundAcceptedFilter(raw, scan = {}) {
   return scanIdentityScope({
-    scanType: { $in: ['AUDIT', 'INWARD', 'VERIFICATION', 'FITTED'] },
+    scanType: 'INWARD',
     scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] },
     $or: [
       { rawScan: raw },
@@ -345,6 +373,7 @@ function logSync(stage, details = {}) {
 
 async function logMasterValidationFailure(scan = {}, reason = 'Not Found In Master') {
   try {
+    if (upper(scan.scanType || scan.type || '') === 'VERIFICATION') return;
     if (!masterValidation.isManualRejectedSource({
       ...scan,
       source: normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, 'mobile'),
@@ -907,6 +936,15 @@ async function saveNormalizedScan(scan, req) {
   }
   applyActiveAudit(scan, activeAudit);
   applyUserContext(scan, await resolveScanUserContext(req, scan));
+  if (scan.scanType === 'VERIFICATION') {
+    const result = await inventory.verifyPartOnly({
+      rawScan: scan.rawScanString,
+      partNumber: scan.partNumber,
+      dealerCode: scan.dealerCode,
+      auditId: scan.auditId
+    });
+    return { status: 'verification', scan: result, error: result.message };
+  }
   const validation = await masterValidation.validatePartAgainstMaster({
     partNumber: scan.normalizedPartNumber || scan.partNumber,
     dealerCode: scan.dealerCode,
@@ -1182,10 +1220,11 @@ async function syncSummary(activePort, dealerCode = '') {
   await Device.updateMany({ status: 'online', lastSeen: { $lt: liveCutoff() } }, { status: 'offline' });
   const dealer = upper(dealerCode);
   const scope = dealer ? { dealerCode: dealer } : {};
+  const transactionScope = { ...scope, $and: [nonVerificationScanClause()] };
   const [pendingRecords, failedRecords, totalSynced, connectedDevices, lastSyncAt] = await Promise.all([
-    Inventory.countDocuments({ ...scope, $or: [{ syncStatus: 'pending' }, { isSynced: false }] }),
-    Inventory.countDocuments({ ...scope, syncStatus: 'failed' }),
-    Inventory.countDocuments({ ...scope, $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }),
+    Inventory.countDocuments({ ...transactionScope, $or: [{ syncStatus: 'pending' }, { isSynced: false }] }),
+    Inventory.countDocuments({ ...transactionScope, syncStatus: 'failed' }),
+    Inventory.countDocuments({ ...transactionScope, $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }),
     Device.countDocuments({ ...scope, status: 'online', lastSeen: { $gte: liveCutoff() } }),
     latestSuccessfulSyncTime(dealer)
   ]);
@@ -1354,7 +1393,7 @@ async function pushHandler(req, res) {
       logSync('socket broadcast success', { event: 'sync:started', count: incoming.length, deviceId });
     }
 
-    const normalized = incoming.map((item, index) => {
+    let normalized = incoming.map((item, index) => {
       const scan = applyActiveAudit(normalizeScan({ ...item, deviceId: item.deviceId || deviceId }), activeAudit);
       applyUserContext(scan, requestUserContext);
       // persist batch identifiers and server timezone info on each scan
@@ -1366,6 +1405,45 @@ async function pushHandler(req, res) {
     normalized.forEach(({ scan }) => {
       if (isManualEntry(scan)) scan.qrFingerprint = '';
     });
+    const verificationResults = [];
+    const transactionRows = [];
+    for (const item of normalized) {
+      if (item.scan.scanType === 'VERIFICATION') {
+        verificationResults.push(await inventory.verifyPartOnly({
+          rawScan: item.scan.rawScanString,
+          partNumber: item.scan.partNumber,
+          dealerCode: item.scan.dealerCode,
+          auditId: item.scan.auditId
+        }));
+      } else {
+        transactionRows.push(item);
+      }
+    }
+    normalized = transactionRows;
+    if (!normalized.length) {
+      return res.json({
+        success: true,
+        activeAudit: activeAuditPayload,
+        dealerCode: activeAuditPayload.dealerCode,
+        dealerName: activeAuditPayload.dealerName,
+        auditId: activeAuditPayload.auditId,
+        receivedCount: 0,
+        insertedCount: 0,
+        syncedCount: 0,
+        duplicateCount: 0,
+        failedCount: 0,
+        failedRows: [],
+        invalidCleanedCount: 0,
+        insertedRecords: [],
+        verifiedInsertedCount: 0,
+        synced: 0,
+        duplicates: 0,
+        failed: 0,
+        logs: [],
+        verificationResults,
+        message: verificationResults[0]?.message || 'Verification completed'
+      });
+    }
     const partNumbers = Array.from(new Set(normalized.map((item) => item.scan.partNumber).filter(Boolean)));
     const dealerCodes = Array.from(new Set(normalized.map((item) => item.scan.dealerCode).filter(Boolean)));
     const normalizedScanIds = normalized.map((item) => item.scan.uniqueScanId).filter(Boolean);
@@ -1932,7 +2010,8 @@ async function pushHandler(req, res) {
     const duplicateCount = logs.filter((log) => log.status === 'duplicate').length;
     const failedCount = failedRows.filter((row) => row.status !== 'invalid').length;
     const acceptedCount = insertedCount + duplicateCount;
-    const allRowsRejected = incomingRaw.length > 0 && acceptedCount === 0 && (failedCount > 0 || invalidCleanedCount > 0);
+    const transactionReceivedCount = normalized.length;
+    const allRowsRejected = transactionReceivedCount > 0 && acceptedCount === 0 && (failedCount > 0 || invalidCleanedCount > 0);
     const completedAt = new Date();
     logSync('DB batch result', {
       collection: Inventory.collection.name,
@@ -1985,7 +2064,7 @@ async function pushHandler(req, res) {
       dealerCode: activeAuditPayload.dealerCode,
       dealerName: activeAuditPayload.dealerName,
       auditId: activeAuditPayload.auditId,
-      receivedCount: incomingRaw.length,
+      receivedCount: transactionReceivedCount,
       insertedCount,
       startedAt,
       completedAt,
@@ -2010,6 +2089,7 @@ async function pushHandler(req, res) {
       ].filter(Boolean),
       errors,
       logs,
+      verificationResults,
       verificationResult: {
         backendAccepted: !allRowsRejected,
         exactInsertedCount: insertedCount,
@@ -2038,7 +2118,7 @@ async function pushHandler(req, res) {
       auditId: activeAuditPayload.auditId,
       route: req.originalUrl,
       status: allRowsRejected ? 'failed' : failedCount ? 'partial' : 'success',
-      receivedCount: incomingRaw.length,
+      receivedCount: transactionReceivedCount,
       insertedCount,
       duplicateCount,
       failedCount,
@@ -2098,7 +2178,7 @@ router.get('/logs', auth.requireAuth, async (req, res) => {
 
 router.get('/pending', auth.requireAuth, async (req, res) => {
   try {
-    const records = await Inventory.find({ $or: [{ syncStatus: 'pending' }, { syncStatus: 'failed' }, { isSynced: false }] })
+    const records = await Inventory.find({ $and: [nonVerificationScanClause()], $or: [{ syncStatus: 'pending' }, { syncStatus: 'failed' }, { isSynced: false }] })
       .sort({ createdAt: 1 })
       .limit(500)
       .lean();
@@ -2116,6 +2196,7 @@ router.get('/debug/latest', auth.requireAuth, auth.requireAdmin, async (req, res
     const filter = {};
     if (dealerCode) filter.dealerCode = dealerCode;
     if (auditId) filter.auditId = auditId;
+    filter.$and = (filter.$and || []).concat([nonVerificationScanClause()]);
     const [totalRecords, syncedRecords, latestRecords] = await Promise.all([
       Inventory.countDocuments(filter),
       Inventory.countDocuments({ ...filter, $or: [{ syncStatus: 'synced' }, { synced: true }, { isSynced: true }] }),

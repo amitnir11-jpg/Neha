@@ -44,17 +44,14 @@ function physicalBinQuantityExpression() {
   const qtyAbs = { $abs: qtyValue };
   const typeValue = scanTypeExpression();
   return {
-    $cond: [
-      { $in: [typeValue, ['OUTWARD', 'DAMAGE']] },
-      { $multiply: [qtyAbs, -1] },
-      {
-        $cond: [
-          { $eq: [typeValue, 'FITTED'] },
-          0,
-          qtyAbs
-        ]
-      }
-    ]
+    $switch: {
+      branches: [
+        { case: { $eq: [typeValue, 'INWARD'] }, then: qtyAbs },
+        { case: { $in: [typeValue, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [qtyAbs, -1] } },
+        { case: { $eq: [typeValue, 'VERIFICATION'] }, then: 0 }
+      ],
+      default: 0
+    }
   };
 }
 
@@ -98,6 +95,7 @@ async function main() {
       $match: {
         $and: [
           { $nor: testScanClause().$or },
+          { $nor: [{ scanType: 'VERIFICATION' }, { type: 'VERIFICATION' }] },
           validScanClause(),
           { syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] } },
           { isDuplicate: { $ne: true } }
@@ -121,7 +119,7 @@ async function main() {
 
   const preparedRows = rows.map((row) => ({
     partNumber: row.partNumber || row._id,
-    quantity: Number(row.physicalBinQty || 0) + Number(row.fittedQty || 0),
+    quantity: Number(row.physicalBinQty || 0),
     physicalBinQty: Number(row.physicalBinQty || 0),
     fittedQty: Number(row.fittedQty || 0),
     fittedRegdNo: Array.from(new Set((row.fittedRegdNos || []).map((item) => String(item || '').trim()).filter(Boolean))).sort().join(', '),

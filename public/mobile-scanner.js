@@ -84,6 +84,10 @@
     return clean(row.status || row.syncStatus || '').toLowerCase();
   }
 
+  function isVerificationRow(row = {}) {
+    return upper(row.scanType || row.type) === 'VERIFICATION';
+  }
+
   function numberValue(value, fallback = 0) {
     const parsed = Number(String(value ?? '').replace(/,/g, '').trim());
     return Number.isFinite(parsed) ? parsed : fallback;
@@ -237,7 +241,7 @@
     const node = $('#toast');
     node.textContent = message;
     node.hidden = false;
-    node.style.background = type === 'error' ? '#b42318' : type === 'success' ? '#087443' : '#101828';
+    node.style.background = type === 'error' ? '#b42318' : type === 'success' ? '#087443' : type === 'warning' ? '#a16207' : '#101828';
     clearTimeout(node._timer);
     node._timer = setTimeout(() => { node.hidden = true; }, 2600);
   }
@@ -317,7 +321,7 @@
 
   async function counts() {
     const rows = await getAllScans();
-    const scopedRows = rows.filter((row) => rowBelongsToSession(row));
+    const scopedRows = rows.filter((row) => rowBelongsToSession(row) && !isVerificationRow(row));
     return {
       rows: scopedRows,
       pending: scopedRows.filter((row) => rowStatus(row) === 'pending').length,
@@ -513,6 +517,24 @@
     $('#lastMeta').textContent = lastScanMeta(record);
   }
 
+  function showVerificationResult(result = {}, partNumber = '') {
+    const found = result.found === true || result.scanned === true;
+    const message = result.message || (found ? 'Part Found' : 'Part Not Found');
+    const cameraState = $('#cameraState');
+    if (cameraState) {
+      cameraState.textContent = `${message}${partNumber ? `: ${partNumber}` : ''}`;
+      cameraState.classList.toggle('verification-found', found);
+      cameraState.classList.toggle('verification-missing', !found);
+      clearTimeout(cameraState._verificationTimer);
+      cameraState._verificationTimer = setTimeout(() => {
+        cameraState.classList.remove('verification-found', 'verification-missing');
+        if (cameraState.textContent === `${message}${partNumber ? `: ${partNumber}` : ''}`) cameraState.textContent = 'Scanning';
+      }, 1800);
+    }
+    beep(found ? 'ok' : 'bad');
+    toast(message, found ? 'warning' : 'error');
+  }
+
   function serverPriceFields(saved = {}) {
     const mrp = scanMrp(saved);
     const source = saved.valuationSource || (numberValue(saved.manualMRP, 0) > 0 ? 'MANUAL_ENTERED_MRP' : numberValue(saved.scanMRP, 0) > 0 ? 'UPI_SCANNED_MRP' : '');
@@ -612,6 +634,17 @@
     const partNumber = upper(input.partNumber || parsed.partNumber);
     if (!partNumber) throw new Error('Part number not found');
     const rawUPI = clean(input.rawUPI || input.rawScan || `${source}:${partNumber}:${Date.now()}`);
+    if (state.mode === 'VERIFICATION') {
+      if (!state.session?.token || !navigator.onLine) {
+        beep('bad');
+        toast('Verification requires server connection', 'error');
+        return null;
+      }
+      const query = new URLSearchParams({ value: rawUPI || partNumber, dealerCode: state.session.dealerCode || '' });
+      const result = await api(`/api/mobile/reports/verify-scan?${query.toString()}`);
+      showVerificationResult(result, result.partNumber || partNumber);
+      return null;
+    }
     const scanIdentity = normalizeScanIdentity(rawUPI);
     const now = Date.now();
     const duplicateScope = scanIdentityKey(scanIdentity, state.mode);
@@ -693,7 +726,7 @@
     state.syncing = true;
     try {
       const all = await getAllScans();
-      const batch = all.filter((row) => rowBelongsToSession(row) && (rowStatus(row) === 'pending' || rowStatus(row) === 'failed')).slice(0, BATCH_SIZE);
+      const batch = all.filter((row) => rowBelongsToSession(row) && !isVerificationRow(row) && (rowStatus(row) === 'pending' || rowStatus(row) === 'failed')).slice(0, BATCH_SIZE);
       if (!batch.length) {
         if (!options.silent) toast('Nothing pending');
         return;
@@ -738,7 +771,7 @@
         handleAuthExpired(error);
         return;
       }
-      const batch = (await getAllScans()).filter((row) => rowBelongsToSession(row) && rowStatus(row) === 'pending').slice(0, BATCH_SIZE);
+      const batch = (await getAllScans()).filter((row) => rowBelongsToSession(row) && !isVerificationRow(row) && rowStatus(row) === 'pending').slice(0, BATCH_SIZE);
       const logs = Array.isArray(error.data?.logs) ? error.data.logs : [];
       if (logs.length) {
         const failedLogs = new Map(logs
@@ -890,8 +923,13 @@
 
   function configureManualFields() {
     const needsBin = requiresPresetBin();
+    const verificationMode = state.mode === 'VERIFICATION';
     $('#manualBinLabel').classList.toggle('hidden', !needsBin);
     $('#manualBinLabel input').required = needsBin;
+    $('#manualMrp').closest('label')?.classList.toggle('hidden', verificationMode);
+    $('#manualMrp').required = !verificationMode;
+    $('[name="qty"]', $('#manualForm')).closest('label')?.classList.toggle('hidden', verificationMode);
+    $('[name="qty"]', $('#manualForm')).required = !verificationMode;
     $('#manualRegLabel').classList.toggle('hidden', state.mode !== 'FITTED');
     $('#manualJobLabel').classList.toggle('hidden', state.mode !== 'FITTED');
   }
@@ -1022,6 +1060,14 @@
     const partNumber = upper(form.get('partNumber'));
     const mrp = Number(String(form.get('mrp') || '').replace(/,/g, '').trim());
     const binLocation = upper(form.get('binLocation') || (requiresPresetBin() ? state.activeBinLocation : ''));
+    if (state.mode === 'VERIFICATION') {
+      await saveLocalScan({
+        partNumber,
+        rawUPI: partNumber
+      }, 'manual');
+      $('#manualDialog').close();
+      return;
+    }
     if (!Number.isFinite(mrp) || mrp <= 0) {
       toast('MRP is mandatory for manual part entry.', 'error');
       $('#manualMrp').focus();

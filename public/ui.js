@@ -873,7 +873,7 @@
     const node = $(`#${id}`);
     if (!node) return;
     node.textContent = text;
-    node.classList.remove('green-dot', 'red-dot', 'orange-dot', 'blue-dot');
+    node.classList.remove('green-dot', 'red-dot', 'orange-dot', 'blue-dot', 'yellow-dot');
     node.classList.add(ok ? 'green-dot' : 'red-dot');
   }
 
@@ -881,7 +881,7 @@
     const node = $(`#${id}`);
     if (!node) return;
     node.textContent = text;
-    node.classList.remove('green-dot', 'red-dot', 'orange-dot', 'blue-dot');
+    node.classList.remove('green-dot', 'red-dot', 'orange-dot', 'blue-dot', 'yellow-dot');
     node.classList.add(`${status}-dot`);
   }
 
@@ -1543,6 +1543,7 @@
 
   function enqueueScan(payload, errorMessage = 'Pending local sync') {
     const normalized = normalizeScanPayload(payload);
+    if (String(normalized.scanType || normalized.type || '').toUpperCase() === 'VERIFICATION') return normalized;
     const queue = getSyncQueue();
     const exists = queue.some((item) => item.syncKey === normalized.syncKey || (normalized.upiId && item.upiId === normalized.upiId && item.dealerCode === normalized.dealerCode));
     if (!exists) {
@@ -1566,7 +1567,7 @@
   }
 
   function syncCounts() {
-    const queue = getSyncQueue();
+    const queue = getSyncQueue().filter((item) => String(item.scanType || item.type || '').toUpperCase() !== 'VERIFICATION');
     return {
       pending: queue.filter((item) => item.localStatus !== 'failed').length,
       failed: queue.filter((item) => item.localStatus === 'failed').length,
@@ -2395,6 +2396,7 @@
   }
 
   async function handleNewScan(scan = {}) {
+    if (String(scan.scanType || scan.type || '').trim().toUpperCase() === 'VERIFICATION') return;
     if (!activeAuditMatchesScan(scan)) {
       return;
     }
@@ -2810,6 +2812,37 @@
     normalized.bin = normalized.binLocation;
     normalized.source = isBarcodeForm ? 'barcode' : (normalized.source || 'manual');
     normalized.scanMode = isBarcodeForm ? 'Barcode/Web Scan' : (normalized.scanMode || 'Manual');
+    if (normalized.scanType === 'VERIFICATION') {
+      if (!validPartText(normalized.partNumber || normalized.part)) {
+        playScanTone('error');
+        toast('Invalid part number format', 'error');
+        return;
+      }
+      try {
+        const data = await api('/api/scans/verify', { method: 'POST', body: normalized });
+        playScanTone(data.found ? 'success' : 'error');
+        toast(data.message || (data.found ? 'Part Found' : 'Part Not Found'), data.found ? 'success' : 'error');
+        if (isBarcodeForm) {
+          resetBarcodeScanFields(form, normalized, options.expectedRaw);
+          setStatusPill('barcodeReadyStatus', data.message || (data.found ? 'Part Found' : 'Part Not Found'), data.found ? 'yellow' : 'red');
+          setTimeout(() => {
+            setLivePill('barcodeReadyStatus', 'Ready for Scan', true);
+            $('#barcodeRaw')?.focus();
+          }, 1200);
+        } else {
+          resetManualScanFields(form);
+        }
+      } catch (error) {
+        playScanTone('error');
+        toast(error.message, 'error');
+        if (isBarcodeForm) {
+          setLivePill('barcodeReadyStatus', 'Verification failed', false);
+          resetBarcodeScanFields(form, normalized, options.expectedRaw);
+          setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+        }
+      }
+      return;
+    }
     if (!isBarcodeForm && !(Number(normalized.mrp || 0) > 0)) {
       playScanTone('error');
       toast('MRP is mandatory for manual part entry.', 'error');
@@ -2973,7 +3006,9 @@
     }
 
     const queue = getSyncQueue();
-    const records = queue.filter((item) => options.includeFailed || item.localStatus !== 'failed');
+    const records = queue
+      .filter((item) => String(item.scanType || item.type || '').toUpperCase() !== 'VERIFICATION')
+      .filter((item) => options.includeFailed || item.localStatus !== 'failed');
     if (!records.length) {
       updateSyncBadges();
       setHeaderSyncStatus('Synced', true);

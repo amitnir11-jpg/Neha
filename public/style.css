@@ -508,6 +508,16 @@ body:not(.dashboard-view-active) .topbar {
   background: #f59e0b;
 }
 
+.live-pill.yellow-dot {
+  color: #854d0e;
+  border-color: #fde68a;
+  background: #fef9c3;
+}
+
+.live-pill.yellow-dot::before {
+  background: #eab308;
+}
+
 .live-pill.blue-dot {
   color: var(--blue);
   border-color: #bfdbfe;
@@ -4556,6 +4566,12 @@ body:not(.dashboard-view-active) .topbar {
   color: #b54708;
   border-color: #fedf89;
   background: #fffcf5;
+}
+
+.live-pill.yellow-dot {
+  color: #854d0e;
+  border-color: #fde68a;
+  background: #fef9c3;
 }
 
 .live-pill.blue-dot {

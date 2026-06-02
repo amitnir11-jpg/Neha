@@ -80,6 +80,25 @@ function normalizePart(partNo) {
   return normalizer.normalizePartNumber(partNo);
 }
 
+function nonVerificationScanClause() {
+  return { $nor: [{ scanType: 'VERIFICATION' }, { type: 'VERIFICATION' }] };
+}
+
+function stockQtyExpression() {
+  const qty = { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] };
+  const type = { $toUpper: { $ifNull: ['$scanType', { $ifNull: ['$type', ''] }] } };
+  return {
+    $switch: {
+      branches: [
+        { case: { $eq: [type, 'INWARD'] }, then: { $abs: qty } },
+        { case: { $in: [type, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: qty }, -1] } },
+        { case: { $eq: [type, 'VERIFICATION'] }, then: 0 }
+      ],
+      default: 0
+    }
+  };
+}
+
 function normalizePartNumber(partNo) {
   return normalizer.normalizePartNumber(partNo);
 }
@@ -1173,15 +1192,20 @@ router.get('/intelligence/:partNo', auth.requireAuth, async (req, res) => {
   try {
     const partNo = normalizePart(req.params.partNo);
     const master = await MasterPart.findOne({ partNo }).lean();
-    const scans = await Inventory.find({ part: partNo }).sort({ timestamp: -1 }).limit(200).lean();
-    const currentScannedQty = scans.reduce((sum, scan) => sum + Number(scan.qty || 0), 0);
+    const scanFilter = { part: partNo, ...nonVerificationScanClause() };
+    const scans = await Inventory.find(scanFilter).sort({ timestamp: -1 }).limit(200).lean();
+    const currentScannedQty = await Inventory.aggregate([
+      { $match: scanFilter },
+      { $group: { _id: null, qty: { $sum: stockQtyExpression() } } }
+    ]).then((rows) => Number(rows[0]?.qty || 0));
 
     const dealerWiseMovement = await Inventory.aggregate([
-      { $match: { part: partNo } },
+      { $match: scanFilter },
+      { $addFields: { _movementQty: stockQtyExpression() } },
       {
         $group: {
           _id: { dealerCode: '$dealerCode', dealerName: '$dealerName', type: '$type' },
-          qty: { $sum: '$qty' },
+          qty: { $sum: '$_movementQty' },
           lastScannedDate: { $max: '$timestamp' }
         }
       },
@@ -1216,14 +1240,15 @@ router.get('/scan-validator', auth.requireAuth, auth.requireAdmin, async (req, r
     const filter = validatorFilter(req.query);
     const [totalMasterParts, totalScannedRecords, scans, duplicateScanIds, failedSyncRecords, verificationRows] = await Promise.all([
       MasterPart.countDocuments({}),
-      Inventory.countDocuments({}),
-      Inventory.find({}).select('part partNumber normalizedPartNumber partName partDescription category productCategory manufacturingYear year uniqueScanId scanId syncStatus').lean(),
+      Inventory.countDocuments(nonVerificationScanClause()),
+      Inventory.find(nonVerificationScanClause()).select('part partNumber normalizedPartNumber partName partDescription category productCategory manufacturingYear year uniqueScanId scanId syncStatus').lean(),
       Inventory.aggregate([
+        { $match: nonVerificationScanClause() },
         { $group: { _id: '$uniqueScanId', count: { $sum: 1 } } },
         { $match: { _id: { $nin: [null, ''] }, count: { $gt: 1 } } }
       ]),
-      Inventory.countDocuments({ syncStatus: 'failed' }),
-      VerificationLog.find(filter).sort({ time: -1 }).limit(5000).lean()
+      Inventory.countDocuments({ syncStatus: 'failed', ...nonVerificationScanClause() }),
+      VerificationLog.find({ ...filter, scanType: { $ne: 'VERIFICATION' } }).sort({ time: -1 }).limit(5000).lean()
     ]);
     const parts = Array.from(new Set(scans.map((scan) => normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)).filter(Boolean)));
     const masters = parts.length ? await MasterPart.find({ $or: [{ normalizedPartNumber: { $in: parts } }, { partNo: { $in: parts } }, { partNumber: { $in: parts } }] }).select('partNo partNumber normalizedPartNumber partName partDescription category productCategory manufacturingYear year').lean() : [];

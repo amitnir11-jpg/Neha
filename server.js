@@ -1342,7 +1342,7 @@ async function fixInventoryIndexes() {
         partialFilterExpression: {
           rawUpi: { $type: 'string', $gt: '' },
           scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] },
-          scanType: { $in: ['AUDIT', 'INWARD', 'VERIFICATION', 'DAMAGE'] }
+          scanType: { $in: ['AUDIT', 'INWARD', 'DAMAGE'] }
         }
       }
     );

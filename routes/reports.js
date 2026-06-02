@@ -68,7 +68,8 @@ function duplicateReportFilter(query = {}) {
   if (query.dealerCode) filter.dealerCode = upper(query.dealerCode);
   if (query.auditId) filter.auditId = clean(query.auditId);
   if (query.partNumber) filter.partNumber = { $regex: clean(query.partNumber), $options: 'i' };
-  if (query.scanType) filter.scanType = upper(query.scanType);
+  if (query.scanType) filter.scanType = upper(query.scanType) === 'VERIFICATION' ? '__NO_VERIFICATION_TRANSACTIONS__' : upper(query.scanType);
+  else filter.scanType = { $ne: 'VERIFICATION' };
   if (query.bin || query.binLocation) filter.binLocation = regex(query.bin || query.binLocation);
   applyCommonMetadataFilters(filter, query, { rawFields: ['rawUpi', 'rawQR', 'rawScan', 'rawBarcode'] });
   if (query.fromDate || query.dateFrom || query.from || query.toDate || query.dateTo || query.to) {
@@ -390,9 +391,9 @@ function auditRow(row) {
 }
 
 function scanAuditRow(scan) {
-  const physicalQty = Number(scan.qty || scan.quantity || 0);
+  const physicalQty = scanQuantity(scan);
   const isFitted = (scan.scanType || scan.type) === 'FITTED' || scan.isFitted;
-  const physicalBinQty = isFitted ? 0 : physicalQty;
+  const physicalBinQty = physicalQty;
   const fittedQty = isFitted ? Math.abs(physicalQty) : 0;
   return {
     partNumber: scan.partNumber || scan.part,
@@ -409,7 +410,7 @@ function scanAuditRow(scan) {
     dmsQty: scan.dmsQty || 0,
     physicalQty,
     physicalBinQty,
-    actualAuditQty: physicalBinQty + fittedQty,
+    actualAuditQty: physicalQty,
     inwardQty: 0,
     outwardQty: 0,
     damageQty: (scan.scanType || scan.type) === 'DAMAGE' ? physicalQty : 0,
@@ -439,7 +440,7 @@ function validScanRow(scan) {
     scanType: scan.scanType || scan.type || '',
     partNumber: scan.partNumber || scan.part || '',
     partDescription: scan.partDescription || scan.partName || '',
-    quantity: Number(scan.qty || scan.quantity || 0),
+    quantity: scanQuantity(scan),
     rawBarcode: scan.rawBarcode || scan.rawQR || scan.rawUpi || scan.rawScan || scan.rawScanString || '',
     binLocation: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin || ''),
     regdNo: scan.regdNo || '',
@@ -505,7 +506,7 @@ function scanRegisterInventoryRow(scan) {
     dealerName: scan.dealerName || '',
     partNumber: scan.partNumber || scan.part || '',
     partDescription: scan.partDescription || scan.partName || '',
-    quantity: Number(scan.qty || scan.quantity || 0),
+    quantity: scanQuantity(scan),
     mrp: Number(valueRow.valuationMRP || 0),
     scanUPIMRP: valueRow.valuationSource === 'UPI_SCANNED_MRP' ? Number(valueRow.valuationMRP || 0) : '',
     manualMRP: valueRow.valuationSource === 'MANUAL_ENTERED_MRP' ? Number(valueRow.valuationMRP || 0) : '',
@@ -620,7 +621,8 @@ async function scanRegisterRows(query = {}) {
 
 function scanTypeQtyBucket(scan) {
   const type = String(scan.scanType || scan.type || '').toUpperCase();
-  if (type === 'AUDIT' || type === 'VERIFICATION') return 'auditQty';
+  if (type === 'VERIFICATION') return '';
+  if (type === 'AUDIT') return 'auditQty';
   if (type === 'INWARD') return 'inwardQty';
   if (type === 'OUTWARD') return 'outwardQty';
   if (type === 'FITTED') return 'fittedQty';
@@ -633,7 +635,12 @@ function isMovementScan(scan = {}) {
 }
 
 function scanQuantity(scan) {
-  return Math.abs(Number(scan.qty !== undefined ? scan.qty : scan.quantity || 0));
+  const qty = Math.abs(Number(scan.qty !== undefined ? scan.qty : scan.quantity || 0));
+  const type = String(scan.scanType || scan.type || '').toUpperCase();
+  if (type === 'INWARD') return qty;
+  if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -qty;
+  if (type === 'VERIFICATION') return 0;
+  return 0;
 }
 
 function scanUserLabel(scan) {
@@ -716,7 +723,7 @@ function selectRows(data, type) {
         deviceId: scan.deviceId || ''
       }),
       (target, scan) => {
-        target.qty += Number(scan.qty || scan.quantity || 0);
+        target.qty += scanQuantity(scan);
         target.physicalBinQty = target.qty;
         target.actualAuditQty = target.qty;
         if (!target.partDescription) target.partDescription = scan.partDescription || scan.partName || '';

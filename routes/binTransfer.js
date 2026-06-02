@@ -104,17 +104,14 @@ function stockQtyExpression() {
     }
   };
   return {
-    $cond: [
-      { $in: [scanType, ['OUTWARD', 'DAMAGE']] },
-      { $multiply: [qtyValue, -1] },
-      {
-        $cond: [
-          { $eq: [scanType, 'FITTED'] },
-          0,
-          qtyValue
-        ]
-      }
-    ]
+    $switch: {
+      branches: [
+        { case: { $eq: [scanType, 'INWARD'] }, then: { $abs: qtyValue } },
+        { case: { $in: [scanType, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: qtyValue }, -1] } },
+        { case: { $eq: [scanType, 'VERIFICATION'] }, then: 0 }
+      ],
+      default: 0
+    }
   };
 }
 

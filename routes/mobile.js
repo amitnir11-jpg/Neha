@@ -15,6 +15,7 @@ const ExcelJS = require('exceljs');
 const auth = require('./auth');
 const devices = require('./devices');
 const sync = require('./sync');
+const inventoryRoute = require('./inventory');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
 const { serverInfo } = require('../utils/network');
 const { normalizePartNumber } = require('../utils/normalize');
@@ -139,8 +140,27 @@ function dealerFilter(query = {}) {
   return filter;
 }
 
+function transactionFilter(query = {}) {
+  return inventoryRoute.applyTransactionScanFilter(dealerFilter(query));
+}
+
+function scanQtyExpression() {
+  const qty = { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] };
+  const type = { $toUpper: { $ifNull: ['$scanType', { $ifNull: ['$type', ''] }] } };
+  return {
+    $switch: {
+      branches: [
+        { case: { $eq: [type, 'INWARD'] }, then: { $abs: qty } },
+        { case: { $in: [type, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: qty }, -1] } },
+        { case: { $eq: [type, 'VERIFICATION'] }, then: 0 }
+      ],
+      default: 0
+    }
+  };
+}
+
 function reportFilter(query = {}, scanType = '') {
-  const filter = dealerFilter(query);
+  const filter = transactionFilter(query);
   if (scanType) filter.$or = [{ scanType }, { type: scanType }];
   return filter;
 }
@@ -577,18 +597,13 @@ router.post('/verification-log', auth.optionalAuth, async (req, res) => {
     const partNumber = clean(req.body.partNumber || req.body.part || '').toUpperCase();
     const dealerCode = clean(req.body.dealerCode || '').toUpperCase();
     if (!partNumber) return res.status(400).json({ success: false, message: 'Part number is required' });
-    const [catalogue, master] = await Promise.all([
-      MasterCatalogue.findOne({ normalizedPartNumber: partNumber }).lean(),
-      MasterPart.findOne({ normalizedPartNumber: partNumber, ...(dealerCode ? { dealerCode } : {}) }).lean()
-    ]);
-    const log = await VerificationLog.create({
+    const result = await inventoryRoute.verifyPartOnly({
+      rawScan: clean(req.body.rawScan || req.body.rawScannedValue || partNumber),
       partNumber,
-      found: Boolean(catalogue || master),
       dealerCode,
-      deviceId: clean(req.body.deviceId),
-      scannedBy: req.user ? req.user.username || req.user.name : ''
+      auditId: clean(req.body.auditId || '')
     });
-    return res.json({ success: true, log });
+    return res.json(result);
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -634,7 +649,7 @@ router.get('/status/:deviceId', auth.optionalAuth, async (req, res) => {
 
 router.get('/inventory', auth.optionalAuth, async (req, res) => {
   try {
-    const records = await Inventory.find(dealerFilter(req.query))
+    const records = await Inventory.find(transactionFilter(req.query))
       .sort({ timestamp: -1 })
       .limit(1000)
       .lean();
@@ -646,7 +661,7 @@ router.get('/inventory', auth.optionalAuth, async (req, res) => {
 
 router.get('/reports/unique-upi', auth.optionalAuth, async (req, res) => {
   try {
-    const records = await Inventory.find(dealerFilter(req.query))
+    const records = await Inventory.find(transactionFilter(req.query))
       .sort({ timestamp: -1 })
       .limit(1000)
       .lean();
@@ -666,7 +681,7 @@ router.get('/reports/unique-upi', auth.optionalAuth, async (req, res) => {
 
 router.get('/reports/summary', auth.optionalAuth, async (req, res) => {
   try {
-    const filter = dealerFilter(req.query);
+    const filter = transactionFilter(req.query);
     const [summaryRows, lastScan, duplicateCount] = await Promise.all([
       Inventory.aggregate([
         { $match: filter },
@@ -674,7 +689,7 @@ router.get('/reports/summary', auth.optionalAuth, async (req, res) => {
           $group: {
             _id: null,
             total: { $sum: 1 },
-            totalQty: { $sum: '$qty' },
+            totalQty: { $sum: scanQtyExpression() },
             inward: { $sum: { $cond: [{ $eq: ['$scanType', 'INWARD'] }, 1, 0] } },
             outward: { $sum: { $cond: [{ $eq: ['$scanType', 'OUTWARD'] }, 1, 0] } },
             fitted: { $sum: { $cond: [{ $eq: ['$scanType', 'FITTED'] }, 1, 0] } },
@@ -717,7 +732,7 @@ router.get('/reports/summary', auth.optionalAuth, async (req, res) => {
 router.get('/reports/last-scans', auth.optionalAuth, async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 100);
-    const records = await Inventory.find(dealerFilter(req.query)).sort({ timestamp: -1, createdAt: -1 }).limit(limit).lean();
+    const records = await Inventory.find(transactionFilter(req.query)).sort({ timestamp: -1, createdAt: -1 }).limit(limit).lean();
     return res.json({ success: true, records: records.map(mobileItem) });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -727,29 +742,17 @@ router.get('/reports/last-scans', auth.optionalAuth, async (req, res) => {
 router.get('/reports/verify-scan', auth.optionalAuth, async (req, res) => {
   try {
     const value = clean(req.query.value);
-    const rawValue = value.toUpperCase();
     const partNumber = partFromVerificationValue(value);
     if (!value) {
       return res.status(400).json({ success: false, scanned: false, message: 'QR code or part number is required' });
     }
-    const filter = dealerFilter(req.query);
-    filter.$or = [
-      { rawScan: rawValue },
-      { rawScanString: rawValue },
-      { rawUpi: rawValue },
-      { partNumber },
-      { part: partNumber },
-      { normalizedPartNumber: partNumber }
-    ];
-    const scan = await Inventory.findOne(filter).sort({ timestamp: -1, createdAt: -1 }).lean();
-    return res.json({
-      success: true,
-      scanned: Boolean(scan),
-      query: value,
+    const result = await inventoryRoute.verifyPartOnly({
+      rawScan: value,
       partNumber,
-      message: scan ? 'Scan found' : 'No matching scan data found',
-      scan: scan ? mobileItem(scan) : null
+      dealerCode: req.query.dealerCode || '',
+      auditId: req.query.auditId || ''
     });
+    return res.json({ ...result, query: value });
   } catch (error) {
     return res.status(500).json({ success: false, scanned: false, message: error.message });
   }
@@ -762,7 +765,7 @@ router.get('/reports/damage', auth.optionalAuth, (req, res) => scanReport(req, r
 
 router.get('/reports/verification', auth.optionalAuth, async (req, res) => {
   try {
-    const rows = await VerificationLog.find(dealerFilter(req.query)).sort({ time: -1 }).limit(1000).lean();
+    const rows = await VerificationLog.find({ ...dealerFilter(req.query), scanType: { $ne: 'VERIFICATION' } }).sort({ time: -1 }).limit(1000).lean();
     return res.json({ success: true, count: rows.length, rows: rows.map((row) => ({
       time: row.time,
       dealerCode: row.dealerCode || '',
@@ -798,7 +801,7 @@ router.get('/reports/export-excel', auth.optionalAuth, async (req, res) => {
     if (map[type]) {
       rows = (await Inventory.find(reportFilter(req.query, map[type])).sort({ timestamp: -1 }).limit(5000).lean()).map(reportRow);
     } else if (type === 'verification') {
-      rows = (await VerificationLog.find(dealerFilter(req.query)).sort({ time: -1 }).limit(5000).lean()).map((row) => ({
+      rows = (await VerificationLog.find({ ...dealerFilter(req.query), scanType: { $ne: 'VERIFICATION' } }).sort({ time: -1 }).limit(5000).lean()).map((row) => ({
         time: row.time,
         dealerCode: row.dealerCode || '',
         user: row.staffName || row.scannedBy || row.loginId || row.userId || '',
@@ -831,7 +834,8 @@ router.get('/reports/export-excel', auth.optionalAuth, async (req, res) => {
 router.get('/reports/bin-wise', auth.optionalAuth, async (req, res) => {
   try {
     const records = await Inventory.aggregate([
-      { $match: dealerFilter(req.query) },
+      { $match: transactionFilter(req.query) },
+      { $addFields: { _movementQty: scanQtyExpression() } },
       {
         $group: {
           _id: {
@@ -842,7 +846,7 @@ router.get('/reports/bin-wise', auth.optionalAuth, async (req, res) => {
             scanType: '$scanType',
             deviceId: '$deviceId'
           },
-          qty: { $sum: '$qty' },
+          qty: { $sum: '$_movementQty' },
           partDescription: { $first: '$partDescription' },
           productCategory: { $first: '$productCategory' },
           lastScanTime: { $max: '$timestamp' }

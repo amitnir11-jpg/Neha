@@ -232,6 +232,16 @@ video {
   font-weight: 800;
 }
 
+.camera-state.verification-found {
+  background: #facc15;
+  color: #422006;
+}
+
+.camera-state.verification-missing {
+  background: #b42318;
+  color: #fff;
+}
+
 .scan-info {
   display: grid;
   gap: 10px;

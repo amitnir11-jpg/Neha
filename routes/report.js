@@ -460,13 +460,13 @@ function actionForScan(scan = {}) {
 function physicalScanQty(scan = {}) {
   const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
   const type = cleanText(scan.scanType || scan.type).toUpperCase();
-  if (['OUTWARD', 'DAMAGE'].includes(type)) return -Math.abs(qty);
-  return Math.abs(qty);
+  if (type === 'INWARD') return Math.abs(qty);
+  if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -Math.abs(qty);
+  if (type === 'VERIFICATION') return 0;
+  return 0;
 }
 
 function binPhysicalScanQty(scan = {}) {
-  const type = cleanText(scan.scanType || scan.type).toUpperCase();
-  if (type === 'FITTED' || scan.isFitted) return 0;
   return physicalScanQty(scan);
 }
 
@@ -1530,17 +1530,14 @@ function partsRefreshPhysicalBinQtyExpression() {
   const qtyAbs = { $abs: qtyValue };
   const typeValue = partsRefreshScanTypeExpression();
   return {
-    $cond: [
-      { $in: [typeValue, ['OUTWARD', 'DAMAGE']] },
-      { $multiply: [qtyAbs, -1] },
-      {
-        $cond: [
-          { $eq: [typeValue, 'FITTED'] },
-          0,
-          qtyAbs
-        ]
-      }
-    ]
+    $switch: {
+      branches: [
+        { case: { $eq: [typeValue, 'INWARD'] }, then: qtyAbs },
+        { case: { $in: [typeValue, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [qtyAbs, -1] } },
+        { case: { $eq: [typeValue, 'VERIFICATION'] }, then: 0 }
+      ],
+      default: 0
+    }
   };
 }
 
@@ -1601,8 +1598,8 @@ async function buildPartsInventoryRefreshRows(query = {}) {
 
   return rows.map((row) => ({
     partNumber: row.partNumber || row._id,
-    quantity: Number(row.physicalBinQty || 0) + Number(row.fittedQty || 0),
-    qty: Number(row.physicalBinQty || 0) + Number(row.fittedQty || 0),
+    quantity: Number(row.physicalBinQty || 0),
+    qty: Number(row.physicalBinQty || 0),
     physicalBinQty: Number(row.physicalBinQty || 0),
     fittedQty: Number(row.fittedQty || 0),
     fittedRegdNo: Array.from(new Set((row.fittedRegdNos || []).map(cleanText).filter(Boolean))).sort().join(', '),
@@ -1658,10 +1655,11 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
   const first = group.scans[0] || {};
   const scanBreakdown = group.scans.reduce((total, scan) => {
     const type = String(scan.scanType || scan.type || '').toUpperCase();
-    const qty = Math.abs(Number(scan.qty || scan.quantity || 0));
+    const qty = physicalScanQty(scan);
+    const absQty = Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
     if (type === 'INWARD') total.inwardQty += qty;
     else if (type === 'OUTWARD') total.outwardQty += qty;
-    else if (type === 'FITTED') total.fittedQty += qty;
+    else if (type === 'FITTED') total.fittedQty += absQty;
     else if (type === 'DAMAGE') total.damageQty += qty;
     const user = firstPresent(scan.userName, scan.staffName, scan.loginId, scan.userId) || '';
     if (user) {
@@ -1671,7 +1669,7 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
       item.totalQty += qty;
       if (type === 'INWARD') item.inwardQty += qty;
       else if (type === 'OUTWARD') item.outwardQty += qty;
-      else if (type === 'FITTED') item.fittedQty += qty;
+      else if (type === 'FITTED') item.fittedQty += absQty;
       else if (type === 'DAMAGE') item.damageQty += qty;
       total.users.set(key, item);
     }
@@ -1690,7 +1688,7 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
   const binPhysicalQty = numberValue(group.binPhysicalQty !== undefined ? group.binPhysicalQty : group.qty, 0);
   const fittedQty = numberValue(scanBreakdown.fittedQty, 0);
   const physicalQty = binPhysicalQty;
-  const auditedQty = physicalQty + fittedQty;
+  const auditedQty = physicalQty;
   const diffQty = auditedQty - dmsQty;
   const valueSummary = rowValueSummary(group.scans, master);
   const latestPrice = latestPriceForReport(priceHistories);
@@ -2074,18 +2072,19 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const latestPrice = latestPriceForReport(priceHistories);
   const mrp = finalMrpForReport(valueSummary, detailSource, priceHistories, scans);
   const dlc = numberValue(firstPresent(detailSource.dlc, firstScan.dlc), 0);
-  const auditTypes = new Set(['AUDIT', 'VERIFICATION', 'FITTED']);
+  const auditTypes = new Set(['AUDIT']);
   const userSummary = new Map();
   const breakdown = scans.reduce((total, scan) => {
     const type = cleanText(scan.scanType || scan.type).toUpperCase();
-    const qty = Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
+    const qty = physicalScanQty(scan);
+    const absQty = Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
     const action = auditTypes.has(type) ? 'Audit' : displayAction(type) || type || 'Scan';
     if (auditTypes.has(type)) {
-      total.auditQty += qty;
-      if (type === 'FITTED') total.fittedQty += qty;
+      total.auditQty += absQty;
     }
     else if (type === 'INWARD') total.inwardQty += qty;
     else if (type === 'OUTWARD') total.outwardQty += qty;
+    else if (type === 'FITTED') total.fittedQty += absQty;
     else if (type === 'DAMAGE') total.damageQty += qty;
     const user = firstPresent(scan.userName, scan.staffName, scan.loginId, scan.userId) || 'UNKNOWN';
     const userKey = cleanText(user).toUpperCase();
@@ -2093,12 +2092,11 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     userItem.scanCount += 1;
     userItem.totalQty += qty;
     if (action === 'Audit' || action === 'Inventory Matched') {
-      userItem.auditQty += qty;
-      if (type === 'FITTED') userItem.fittedQty += qty;
+      userItem.auditQty += absQty;
     }
     else if (action === 'Inward') userItem.inwardQty += qty;
     else if (action === 'Outward') userItem.outwardQty += qty;
-    else if (action === 'Fitted') userItem.fittedQty += qty;
+    else if (action === 'Fitted') userItem.fittedQty += absQty;
     else if (action === 'Damage') userItem.damageQty += qty;
     userSummary.set(userKey, userItem);
     return total;
@@ -2106,7 +2104,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const fittedQty = numberValue(breakdown.fittedQty, 0);
   const binPhysicalQty = numberValue(group.binPhysicalQty !== undefined ? group.binPhysicalQty : group.physicalQty, 0);
   const physicalQty = binPhysicalQty;
-  const auditedQty = physicalQty + fittedQty;
+  const auditedQty = physicalQty;
   const systemQty = hasSystemStock ? systemQtyValue(system) : 0;
   const finalAvailableQty = systemQty;
   const varianceQty = auditedQty - finalAvailableQty;
@@ -2821,9 +2819,10 @@ function stockSummaryColumns() {
 function stockSummaryQty(scan = {}) {
   const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
   const type = cleanText(scan.scanType || scan.type).toUpperCase();
-  if (type === 'FITTED' || scan.isFitted) return 0;
-  if (['OUTWARD', 'DAMAGE'].includes(type)) return -Math.abs(qty);
-  return Math.abs(qty);
+  if (type === 'INWARD') return Math.abs(qty);
+  if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -Math.abs(qty);
+  if (type === 'VERIFICATION') return 0;
+  return 0;
 }
 
 function stockSummaryValue(row = {}, qtyKey, rateKey) {
@@ -3105,7 +3104,7 @@ async function buildStockSummaryReport(query = {}) {
     const systemQty = numberValue(firstPresent(stock.systemQty, stock.dmsStock), 0);
     const physicalQty = numberValue(physical.physicalQty, 0);
     const fittedQty = numberValue(physical.fittedQty, 0);
-    const finalAuditQty = physicalQty + fittedQty;
+    const finalAuditQty = physicalQty;
     const varianceQty = finalAuditQty - systemQty;
     const physicalValueOnMrp = money(finalAuditQty * mrp);
     const systemValueOnMrp = money(systemQty * mrp);

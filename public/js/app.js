@@ -766,6 +766,13 @@
     payload.override = override;
     payload.deviceId = clientDeviceId();
     if (!payload.staffName && state.user) payload.staffName = state.user.name || state.user.username;
+    if (String(payload.type || payload.scanType || '').toUpperCase() === 'VERIFICATION') {
+      const data = await api('/api/inventory/verify', { method: 'POST', body: payload });
+      toast(data.message || (data.found ? 'Part Found' : 'Part Not Found'), data.found ? 'success' : 'error');
+      form.reset();
+      $('#rawScanInput').focus();
+      return;
+    }
     const data = await api('/api/inventory/scan', { method: 'POST', body: payload });
     toast(data.warnings && data.warnings.length ? 'Scan saved with admin override' : 'Scan saved');
     form.reset();

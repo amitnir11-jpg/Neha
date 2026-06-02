@@ -351,6 +351,10 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _setStatus('Bin location required before scanning', Colors.red);
       return;
     }
+    if (_scanType == 'VERIFICATION') {
+      await _verifyDraft(draft);
+      return;
+    }
 
     try {
       final now = DateTime.now();
@@ -376,6 +380,29 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       unawaited(_saveScanLocally(record));
     } catch (error) {
       _setStatus(error.toString(), Colors.red);
+    }
+  }
+
+  Future<void> _verifyDraft(_ScanDraft draft) async {
+    try {
+      final result = await ApiClient(_settings)
+          .verifyScan(draft.rawValue, dealerCode: _dealerCode);
+      final found = result['found'] == true || result['scanned'] == true;
+      final message =
+          (result['message'] ?? (found ? 'Part Found' : 'Part Not Found'))
+              .toString();
+      _setStatus(
+          '$message${draft.partNumber.isEmpty ? '' : ' ${draft.partNumber}'}',
+          found ? Colors.amber.shade700 : Colors.red);
+      unawaited(SystemSound.play(
+          found ? SystemSoundType.click : SystemSoundType.alert));
+      if (found) {
+        unawaited(HapticFeedback.mediumImpact());
+      } else {
+        unawaited(HapticFeedback.vibrate());
+      }
+    } catch (error) {
+      _setStatus('Verification failed', Colors.red);
     }
   }
 
@@ -484,8 +511,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     try {
       final result =
           await ApiClient(_settings).verifyScan(query, dealerCode: _dealerCode);
-      _setStatus(result['scanned'] == true ? 'Success' : 'Invalid QR',
-          result['scanned'] == true ? Colors.green : Colors.red);
+      final found = result['found'] == true || result['scanned'] == true;
+      _setStatus(
+          (result['message'] ?? (found ? 'Part Found' : 'Part Not Found'))
+              .toString(),
+          found ? Colors.amber.shade700 : Colors.red);
     } catch (_) {
       _setStatus('Sync failed', Colors.red);
     }

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAKSH INVENTORY SYSTEM</title>
-  <link rel="stylesheet" href="/style.css?v=20260601-scan-history-fix" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/style.css?v=20260602-inventory-logic" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -264,7 +264,7 @@
               <label>Bin<input name="bin" data-fill="bin"></label>
               <label>Category<input name="category" data-fill="category"></label>
               <label>Quantity<input name="qty" type="number" min="0" value="1" required></label>
-              <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
+              <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>VERIFICATION</option><option>FITTED</option><option>DAMAGE</option></select></label>
               <label class="fitted-only hidden">Regd No<input name="regdNo" autocomplete="off"></label>
               <label class="fitted-only hidden">Job Card No<input name="jobCardNo" autocomplete="off"></label>
               <label>Staff<input name="staffName" id="manualStaff"></label>
@@ -283,7 +283,7 @@
               <label>Bin Location *<div class="inline-field"><input name="binLocation" id="barcodeBinLocation" list="barcodeBinOptions" autocomplete="off" required><button class="btn light icon-btn" id="clearBarcodeBin" type="button" title="Clear Bin Location">X</button></div><datalist id="barcodeBinOptions"></datalist></label>
               <label>Part Number<div class="suggest-wrap"><input name="part" class="partSuggestInput" autocomplete="off"><div class="suggest-menu"></div></div></label>
               <label>Quantity<input name="qty" type="number" min="0" value="1"></label>
-              <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
+              <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>VERIFICATION</option><option>FITTED</option><option>DAMAGE</option></select></label>
               <label class="fitted-only hidden">Regd No<input name="regdNo" autocomplete="off"></label>
               <label class="fitted-only hidden">Job Card No<input name="jobCardNo" autocomplete="off"></label>
               <label>Device ID<input name="deviceId" id="barcodeDeviceId" readonly></label>
@@ -756,7 +756,7 @@
             <label>Device<input name="deviceId" placeholder="Device ID"></label>
             <label>Date From<input name="dateFrom" type="date"></label>
             <label>Date To<input name="dateTo" type="date"></label>
-            <label>Scan Type<select name="scanType"><option value="">All Types</option><option>INWARD</option><option>OUTWARD</option><option>VERIFICATION</option><option>FITTED</option><option>DAMAGE</option></select></label>
+            <label>Scan Type<select name="scanType"><option value="">All Types</option><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
           </form>
           <div id="validatorStats" class="metric-grid"></div>
         </section>
@@ -1354,7 +1354,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260601-scan-history-fix" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260602-inventory-logic" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {

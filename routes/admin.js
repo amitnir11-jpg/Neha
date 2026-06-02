@@ -99,6 +99,10 @@ function partMatch(partNumber, dealer = '') {
   return filter;
 }
 
+function transactionPartMatch(partNumber, dealer = '') {
+  return inventory.applyTransactionScanFilter(partMatch(partNumber, dealer));
+}
+
 function scanIdMatch(scanId) {
   const id = String(scanId || '').trim();
   const clauses = [{ scanId: id }, { uniqueScanId: id }];
@@ -637,11 +641,12 @@ router.get('/part/check', auth.requireAuth, auth.requireAdmin, async (req, res) 
     const partNo = normalizedPartNumber(req.query.partNumber);
     const code = dealerCode(req.query.dealerCode);
     if (!partNo) return res.status(400).json({ success: false, message: 'Part number is required' });
+    const scanFilter = transactionPartMatch(partNo, code);
     const [masterRecord, scanCount, bins, lastScan] = await Promise.all([
       MasterPart.findOne(partMatch(partNo, code)).lean(),
-      Inventory.countDocuments(partMatch(partNo, code)),
-      Inventory.distinct('binLocation', partMatch(partNo, code)),
-      Inventory.findOne(partMatch(partNo, code)).sort({ timestamp: -1, createdAt: -1 }).lean()
+      Inventory.countDocuments(scanFilter),
+      Inventory.distinct('binLocation', scanFilter),
+      Inventory.findOne(scanFilter).sort({ timestamp: -1, createdAt: -1 }).lean()
     ]);
     res.json({
       success: true,
@@ -658,10 +663,11 @@ router.get('/part/check', auth.requireAuth, auth.requireAdmin, async (req, res) 
 });
 
 async function partPreview(partNo, code = '') {
+  const scanFilter = transactionPartMatch(partNo, code);
   const [masterRecord, scanCount, lastScan] = await Promise.all([
     MasterPart.findOne(partMatch(partNo, code)).lean(),
-    Inventory.countDocuments(partMatch(partNo, code)),
-    Inventory.findOne(partMatch(partNo, code)).sort({ timestamp: -1, createdAt: -1 }).lean()
+    Inventory.countDocuments(scanFilter),
+    Inventory.findOne(scanFilter).sort({ timestamp: -1, createdAt: -1 }).lean()
   ]);
   return {
     partNumber: normalizedPartNumber(partNo),

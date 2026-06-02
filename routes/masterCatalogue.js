@@ -34,6 +34,10 @@ function normalizeHeader(value) {
   return cleanText(value).toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+function nonVerificationScanClause() {
+  return { $nor: [{ scanType: 'VERIFICATION' }, { type: 'VERIFICATION' }] };
+}
+
 function aliasValue(row, field) {
   for (const alias of FIELD_ALIASES[field] || []) {
     const value = row[normalizeHeader(alias)];
@@ -541,7 +545,7 @@ router.post('/reprocess-product-groups', auth.requireAuth, auth.requireAdmin, as
 router.get('/unmatched-parts', auth.requireAuth, async (req, res) => {
   try {
     const rows = await Inventory.aggregate([
-      { $match: { $or: [{ masterMatch: false }, { isMasterMatched: false }, { warnings: /Part not found in Master Catalogue|Not Found in Master/i }] } },
+      { $match: { ...nonVerificationScanClause(), $or: [{ masterMatch: false }, { isMasterMatched: false }, { warnings: /Part not found in Master Catalogue|Not Found in Master/i }] } },
       { $group: { _id: '$normalizedPartNumber', partNumber: { $first: '$partNumber' }, scanCount: { $sum: 1 }, lastScanTime: { $max: '$timestamp' } } },
       { $sort: { lastScanTime: -1 } }
     ]);

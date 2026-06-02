@@ -185,6 +185,7 @@ function isManualScan(scan = {}) {
 }
 
 function scanQty(scan = {}) {
+  if (movementType(scan) === 'VERIFICATION') return 0;
   const direct = optionalNumber(scan.qty !== undefined ? scan.qty : scan.quantity);
   if (direct !== undefined) return Math.abs(direct);
   return Math.abs(numberValue(parseSlashDelimitedUpi(rawScanText(scan)).qty, 0));
@@ -339,7 +340,7 @@ function calculateInventoryValue(input = [], options = {}) {
 
 function auditStockStatus({ mrp = 0, physicalQty = 0, fittedQty = 0, systemQty = 0 } = {}) {
   if (Number(mrp || 0) <= 0) return 'MRP Pending';
-  const auditedQty = Number(physicalQty || 0) + Number(fittedQty || 0);
+  const auditedQty = Number(physicalQty || 0);
   const system = Number(systemQty || 0);
   if (auditedQty === system) return 'Inventory Matched';
   return auditedQty > system ? 'Excess' : 'Short';
@@ -367,7 +368,7 @@ function summarizeMovementBucket(scans = [], options = {}) {
   const dates = rows.map((row) => row.timestamp).filter(Boolean).sort((a, b) => a - b);
   const firstScanDate = dates[0] || null;
   const lastScanDate = dates[dates.length - 1] || null;
-  const inwardQty = rows.filter((row) => ['INWARD', 'AUDIT', 'VERIFICATION'].includes(movementType(row.scan))).reduce((sum, row) => sum + row.qty, 0);
+  const inwardQty = rows.filter((row) => movementType(row.scan) === 'INWARD').reduce((sum, row) => sum + row.qty, 0);
   const outwardQty = rows.filter((row) => movementType(row.scan) === 'OUTWARD').reduce((sum, row) => sum + row.qty, 0);
   const fittedQty = rows.filter((row) => movementType(row.scan) === 'FITTED').reduce((sum, row) => sum + row.qty, 0);
   const damageQty = rows.filter((row) => movementType(row.scan) === 'DAMAGE').reduce((sum, row) => sum + row.qty, 0);

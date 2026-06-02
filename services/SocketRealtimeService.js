@@ -17,7 +17,10 @@ class SocketRealtimeService {
   async broadcastInventoryChanged(scans = [], options = {}) {
     if (!this.io) return;
     const scanList = Array.isArray(scans) ? scans.filter(Boolean) : [scans].filter(Boolean);
-    const publicScans = scanList.map(publicScan);
+    const publicScans = scanList
+      .map(publicScan)
+      .filter((scan) => String(scan.scanType || scan.type || '').toUpperCase() !== 'VERIFICATION');
+    if (!publicScans.length && scanList.length) return;
     publicScans.forEach((scan) => {
       this.io.emit('scan:new', scan);
       this.io.emit('scan:saved', scan);
@@ -34,7 +37,7 @@ class SocketRealtimeService {
 
     const [stats, recent] = await Promise.all([
       inventoryRoute.dashboardStats({}),
-      Inventory.find({}).sort({ timestamp: -1, createdAt: -1 }).limit(12).lean()
+      Inventory.find(inventoryRoute.applyTransactionScanFilter({})).sort({ timestamp: -1, createdAt: -1 }).limit(12).lean()
     ]);
     const recentPublic = recent.map(publicScan);
     const payload = {

@@ -36,12 +36,16 @@ function compactParams(query = {}) {
 
 function stockQtyExpression() {
   const qtyValue = { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] };
+  const typeValue = { $toUpper: { $toString: { $ifNull: ['$scanType', { $ifNull: ['$type', ''] }] } } };
   return {
-    $cond: [
-      { $in: [{ $ifNull: ['$scanType', '$type'] }, ['OUTWARD', 'FITTED', 'DAMAGE']] },
-      { $multiply: [qtyValue, -1] },
-      qtyValue
-    ]
+    $switch: {
+      branches: [
+        { case: { $eq: [typeValue, 'INWARD'] }, then: { $abs: qtyValue } },
+        { case: { $in: [typeValue, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: qtyValue }, -1] } },
+        { case: { $eq: [typeValue, 'VERIFICATION'] }, then: 0 }
+      ],
+      default: 0
+    }
   };
 }
 
