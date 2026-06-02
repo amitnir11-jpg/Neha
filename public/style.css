@@ -3555,6 +3555,11 @@ td.numeric,
 }
 
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm;
+  }
+
   body.print-labels .app-shell > *:not(.main) {
     display: none !important;
   }
@@ -3578,40 +3583,42 @@ td.numeric,
     gap: 8px;
   }
 
-  body.print-bin-labels .app-shell > *:not(.main) {
+  body.print-bin-labels {
+    margin: 0 !important;
+    background: #fff !important;
+  }
+
+  body.print-bin-labels .app,
+  body.print-bin-labels > *:not(#binLabelPrintSheet) {
     display: none !important;
   }
 
-  body.print-bin-labels .main > *:not(#binTransfer),
-  body.print-bin-labels #binTransfer > *:not(#binLabelPrintTab),
-  body.print-bin-labels #binLabelPrintTab > *:not(:last-child),
-  body.print-bin-labels #binLabelPrintTab .card-head,
-  body.print-bin-labels #binLabelPreviewArea {
-    display: none !important;
-  }
-
-  body.print-bin-labels #binTransfer,
-  body.print-bin-labels #binLabelPrintTab,
-  body.print-bin-labels #binLabelPrintArea {
+  body.print-bin-labels #binLabelPrintSheet {
     display: grid !important;
-  }
-
-  body.print-bin-labels #binLabelPrintArea {
-    grid-template-columns: repeat(auto-fit, minmax(var(--bin-label-width), max-content));
+    grid-template-columns: repeat(auto-fill, var(--bin-label-width));
     gap: 3mm;
     align-items: start;
+    justify-content: start;
+    width: 100%;
     padding: 0;
   }
 
-  body.print-bin-labels #binLabelPrintTab .card {
-    border: 0;
+  body.print-bin-labels #binLabelPrintSheet .bin-label-card {
+    border: 1px solid #111827;
+    border-radius: 1.5mm;
     box-shadow: none;
-    padding: 0;
-    background: transparent;
   }
 
-  body.print-bin-labels .bin-label-card {
-    box-shadow: none;
+  body.print-bin-labels #binLabelPrintSheet .bin-label-left strong,
+  body.print-bin-labels #binLabelPrintSheet .bin-label-continuation {
+    display: none !important;
+  }
+
+  body.print-bin-labels #binLabelPrintSheet a,
+  body.print-bin-labels #binLabelPrintSheet .enterprise-link,
+  body.print-bin-labels #binLabelPrintSheet .table-link {
+    color: #020617 !important;
+    text-decoration: none !important;
   }
 }
 

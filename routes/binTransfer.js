@@ -149,7 +149,20 @@ function labelSettings(input = {}) {
 function binLabelQrValue(item = {}) {
   const identityType = upper(item.identityType || item.labelType || 'BIN');
   const identityValue = upper(item.vin || item.vinNo || item.binNumber || item.bin);
-  return `${identityType === 'VIN' ? 'VIN' : 'BIN'}:${identityValue}`;
+  if (identityType === 'VIN') return `VIN:${identityValue}`;
+  const partNumbers = (Array.isArray(item.partNumbers) && item.partNumbers.length
+    ? item.partNumbers
+    : Array.isArray(item.parts)
+      ? item.parts.map((part) => part.partNumber)
+      : [item.partNumber])
+    .map(normalizePart)
+    .filter(Boolean);
+  const uniqueParts = Array.from(new Set(partNumbers));
+  if (!uniqueParts.length) return `BIN:${identityValue}`;
+  const partField = uniqueParts.length === 1
+    ? `PART=${uniqueParts[0]}`
+    : `PARTS=${uniqueParts.join(',')}`;
+  return `BIN=${identityValue}|${partField}`;
 }
 
 function publicPart(row) {
@@ -267,7 +280,6 @@ function groupedBinLabelItems(parts = [], settings = {}) {
         items.push({
           dealerCode: chunk[0]?.dealerCode || '',
           binNumber,
-          qrValue: binLabelQrValue({ binNumber }),
           parts: chunk.map((part) => ({
             partNumber: normalizePart(part.partNumber),
             partDescription: clean(part.partDescription),
@@ -277,6 +289,7 @@ function groupedBinLabelItems(parts = [], settings = {}) {
           chunkNo: Math.floor(index / maxParts) + 1,
           totalChunks: Math.ceil(sortedParts.length / maxParts)
         });
+        items[items.length - 1].qrValue = binLabelQrValue(items[items.length - 1]);
       }
     });
   return items;

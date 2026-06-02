@@ -943,6 +943,8 @@ function publicScanWithMaster(record = {}, masterLookup = {}) {
   if (!master) return scan;
   const scanDlc = numberValue(scan.dlc, 0);
   const masterDlc = numberValue(master.dlc, 0);
+  const scanMrp = numberValue(scan.mrp, 0);
+  const masterMrp = numberValue(master.mrp, 0);
   return {
     ...scan,
     partName: scan.partName || master.partName || master.partDescription || '',
@@ -954,6 +956,8 @@ function publicScanWithMaster(record = {}, masterLookup = {}) {
     model: scan.model || master.model || '',
     year: scan.year || master.year || master.manufacturingYear || '',
     manufacturingYear: scan.manufacturingYear || master.manufacturingYear || master.year || '',
+    currentCatalogueMRP: masterMrp,
+    displayMRP: scanMrp > 0 ? scanMrp : masterMrp,
     dlc: scanDlc > 0 ? scanDlc : masterDlc
   };
 }

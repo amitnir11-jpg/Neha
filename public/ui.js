@@ -2498,7 +2498,8 @@
 
   function scanHistoryRow(scan = {}) {
     const id = scan.scanId || scan.uniqueScanId || scan._id || '';
-    const currentMrp = scan.manualMRP || scan.valuationMRP || scan.mrp || '';
+    const rowMrp = scan.displayMRP || scan.mrp || scan.currentCatalogueMRP || 0;
+    const currentMrp = scan.manualMRP || scan.valuationMRP || rowMrp || '';
     const currentDlc = scan.dlc || '';
     const totalQty = scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1);
     const canEditPricing = canEditScanPricing(scan);
@@ -2514,7 +2515,7 @@
         <td>${partLink(scan.partNumber || scan.part)}</td>
         <td>${escapeHtml(scan.partDescription || scan.partName)}</td>
         <td>${escapeHtml(scan.productCategory || scan.category || '')}</td>
-        <td>${escapeHtml(money(scan.mrp))}</td>
+        <td>${escapeHtml(money(rowMrp))}</td>
         <td>${escapeHtml(money(scan.dlc))}</td>
         <td>${escapeHtml(scan.productGroup || '')}</td>
         <td>${escapeHtml(scan.model || '')}</td>
@@ -5530,9 +5531,64 @@
       method: 'POST',
       body: { dealerCode, items, settings, deviceId: state.deviceId }
     });
+    const existingSheet = $('#binLabelPrintSheet');
+    if (existingSheet) existingSheet.remove();
+    const existingStyle = $('#binLabelPrintStyle');
+    if (existingStyle) existingStyle.remove();
+    const printStyle = document.createElement('style');
+    printStyle.id = 'binLabelPrintStyle';
+    printStyle.textContent = `
+      @media print {
+        @page { size: A4 portrait; margin: 8mm; }
+        body.print-bin-labels { margin: 0 !important; background: #fff !important; }
+        body.print-bin-labels > *:not(#binLabelPrintSheet) { display: none !important; }
+        body.print-bin-labels #binLabelPrintSheet {
+          display: grid !important;
+          grid-template-columns: repeat(auto-fill, var(--bin-label-width));
+          gap: 3mm;
+          align-items: start;
+          justify-content: start;
+          width: 100%;
+          padding: 0;
+          background: #fff !important;
+        }
+        body.print-bin-labels #binLabelPrintSheet .bin-label-card {
+          border: 1px solid #111827 !important;
+          border-radius: 1.5mm !important;
+          box-shadow: none !important;
+        }
+        body.print-bin-labels #binLabelPrintSheet .bin-label-left strong,
+        body.print-bin-labels #binLabelPrintSheet .bin-label-continuation {
+          display: none !important;
+        }
+        body.print-bin-labels #binLabelPrintSheet a,
+        body.print-bin-labels #binLabelPrintSheet .enterprise-link,
+        body.print-bin-labels #binLabelPrintSheet .table-link {
+          color: #020617 !important;
+          text-decoration: none !important;
+        }
+      }
+    `;
+    const printSheet = document.createElement('div');
+    printSheet.id = 'binLabelPrintSheet';
+    printSheet.className = 'bin-label-print-area';
+    printSheet.innerHTML = items.map(binLabelCard).join('');
+    applyBinLabelVariables(printSheet, settings);
+    document.head.appendChild(printStyle);
+    document.body.appendChild(printSheet);
+    const cleanupPrintSheet = () => {
+      document.body.classList.remove('print-bin-labels');
+      printSheet.remove();
+      printStyle.remove();
+      window.removeEventListener('afterprint', cleanupPrintSheet);
+    };
+    window.addEventListener('afterprint', cleanupPrintSheet);
     document.body.classList.add('print-bin-labels');
+    void printSheet.offsetHeight;
     window.print();
-    setTimeout(() => document.body.classList.remove('print-bin-labels'), 400);
+    setTimeout(() => {
+      cleanupPrintSheet();
+    }, 400);
     setBinLabelMessage('Print log saved.', 'success');
   }
 
