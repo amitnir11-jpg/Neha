@@ -171,7 +171,7 @@ const CLOUD_SYNC_COLLECTIONS = [
   { name: 'scannersessions', identity: ['sessionId'] },
   { name: 'bintransferhistories' },
   { name: 'binlabelprintlogs' },
-  { name: 'dealerstocks' },
+  { name: 'dealer_stock_master' },
   { name: 'offlinequeues' }
 ];
 
@@ -992,7 +992,9 @@ app.use('/api/master-parts', require('./routes/master'));
 app.use('/api/master-catalogue', require('./routes/masterCatalogue'));
 app.use('/api/backup', require('./routes/backup'));
 app.use('/api/audit-backup', require('./routes/auditBackup'));
-app.use('/api/reconciliation', require('./routes/reconciliation'));
+const reconciliationRouter = require('./routes/reconciliation');
+app.use('/api/reconciliation', reconciliationRouter);
+app.use('/api/dealer-stock', reconciliationRouter);
 app.use('/api/qr', require('./routes/qr'));
 app.use('/api/audit', require('./routes/audit'));
 app.use('/api/scanner-network', require('./routes/scannerNetwork'));

@@ -1784,44 +1784,7 @@ async function saveScanRequest(req, res) {
 
     const warnings = await validateScan(candidate, master, timestamp, pricePeriod);
     if (!master && manualEntryMode) {
-      await logValidationFailure({
-        ...req.body,
-        partNumber: part,
-        part,
-        dealerCode,
-        scanType: type,
-        binLocation,
-        rawScan: rawScanText,
-        upiNo,
-        upiId,
-        loginId: String(req.body.loginId || req.body.userId || (req.user ? req.user.username || req.user.email : '') || ''),
-        userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || ''),
-        staffName: String(req.body.staffName || (req.user ? req.user.name : '') || ''),
-        source: entrySource,
-        deviceId: String(req.body.deviceId || '')
-      }, 'Not Found In Master', timestamp);
-      await masterValidation.rejectNotInMasterScan({
-        ...req.body,
-        partNumber: part,
-        extractedPartNumber: part,
-        dealerCode,
-        scanType: type,
-        binLocation,
-        rawScannedValue: rawScanText,
-        rawScan: rawScanText,
-        originalScanId: uniqueScanId,
-        source: entrySource,
-        sourceRoute: req.originalUrl,
-        userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || ''),
-        loginId: String(req.body.loginId || req.body.userId || (req.user ? req.user.username || req.user.email : '') || '')
-      }, console);
-      scanDebug('[MANUAL SCAN] validation failed', {
-        reason: 'Part not found in master. Scan rejected.',
-        rawScanReceived: rawScanText,
-        extractedPartNumber: part,
-        dealerCode
-      });
-      return res.status(422).json({ success: false, rejected: true, message: 'Part not found in master. Scan rejected.' });
+      warnings.push('Manual part saved without master catalogue match');
     }
     let scan;
     try {
@@ -2377,42 +2340,8 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
         if (master && mrpProvided && !pricePeriod) warnings.push('No matching price history period for scanned MRP');
         if (master && dlcProvided && approxMismatch(scannedDlc, master.dlc)) warnings.push('DLC mismatch');
 
-        if (!part || !isValidPartNumber(part) || (['INWARD', 'DAMAGE'].includes(type) && !finalBinLocation) || !dealerCode || !VALID_TYPES.includes(type) || (!master && manualEntryMode)) {
-          if (!master && part && manualEntryMode) {
-            await logValidationFailure({
-              ...item,
-              partNumber: part,
-              part,
-              dealerCode,
-              scanType: type,
-              binLocation: finalBinLocation,
-              rawScan: rawScanText,
-              upiNo,
-              upiId,
-              loginId: String(item.loginId || item.userId || (req.user ? req.user.username || req.user.email : '') || ''),
-              userId: String(item.userId || item.loginId || (req.user ? req.user.id : '') || ''),
-              staffName: String(item.staffName || (req.user ? req.user.name : '') || ''),
-              source: entrySource,
-              deviceId: String(item.deviceId || req.body.deviceId || '')
-            }, 'Not Found In Master', timestamp);
-            await masterValidation.rejectNotInMasterScan({
-              ...item,
-              partNumber: part,
-              extractedPartNumber: part,
-              dealerCode,
-              scanType: type,
-              binLocation: finalBinLocation,
-              rawScannedValue: rawScanText,
-              rawScan: rawScanText,
-              originalScanId: uniqueScanId,
-              source: entrySource,
-              sourceRoute: req.originalUrl,
-              userId: String(item.userId || item.loginId || (req.user ? req.user.id : '') || ''),
-              loginId: String(item.loginId || item.userId || (req.user ? req.user.username || req.user.email : '') || ''),
-              defaultScanMode: 'Sync'
-            }, console);
-          }
-          failed.push({ uniqueScanId, message: !master && part && manualEntryMode ? 'Part not found in master. Scan rejected.' : warnings.join(', ') });
+        if (!part || !isValidPartNumber(part) || (['INWARD', 'DAMAGE'].includes(type) && !finalBinLocation) || !dealerCode || !VALID_TYPES.includes(type)) {
+          failed.push({ uniqueScanId, message: warnings.join(', ') });
           continue;
         }
 

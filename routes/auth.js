@@ -240,6 +240,7 @@ function isDealerScopedRequest(req) {
     '/api/dashboard',
     '/api/reports',
     '/api/reconciliation',
+    '/api/dealer-stock',
     '/api/bin',
     '/api/bin-master',
     '/api/bin-transfer',

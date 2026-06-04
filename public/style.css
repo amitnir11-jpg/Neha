@@ -715,9 +715,12 @@ body:not(.dashboard-view-active) .topbar {
 
 .dashboard-dealer-filters {
   --field-min: min(360px, 100%);
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   width: min(760px, 100%);
   align-items: end;
-  gap: 6px;
+  column-gap: 10px;
+  row-gap: 8px;
 }
 
 .dashboard-dealer-filters label {
@@ -726,6 +729,7 @@ body:not(.dashboard-view-active) .topbar {
   font-size: 11px;
   letter-spacing: 0;
   text-transform: none;
+  min-width: 0;
 }
 
 .dashboard-dealer-select {
@@ -734,13 +738,17 @@ body:not(.dashboard-view-active) .topbar {
   background: #fff;
   font-size: 12px;
   font-weight: 750;
-  width: auto;
-  min-width: min(360px, 100%);
+  width: 100%;
+  min-width: min(300px, 100%);
   max-width: 100%;
 }
 
 .dashboard-view-report-btn {
   min-height: 34px;
+  align-self: end;
+  justify-self: start;
+  min-width: 132px;
+  margin-top: 17px;
   white-space: nowrap;
 }
 
@@ -1276,8 +1284,47 @@ body:not(.dashboard-view-active) .topbar {
 }
 
 .recon-stock-preview-wrap table {
-  min-width: 1320px;
+  min-width: 1900px;
   table-layout: fixed;
+}
+
+#reconReportTab .table-wrap table {
+  min-width: 1680px;
+  table-layout: fixed;
+}
+
+.stock-error-report {
+  margin-top: 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff7f7;
+  color: #7f1d1d;
+  padding: 10px;
+}
+
+.stock-error-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.compact-error-table {
+  max-height: 220px;
+}
+
+.compact-error-table table {
+  min-width: 760px;
+  table-layout: fixed;
+}
+
+.compact-select {
+  min-height: 36px;
+  height: 36px;
+  max-width: 210px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  padding: 0 10px;
 }
 
 .subtabs {
@@ -4647,7 +4694,12 @@ body:not(.dashboard-view-active) .topbar {
 }
 
 .dashboard-dealer-filters {
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   width: min(760px, 100%);
+  column-gap: 10px;
+  row-gap: 8px;
+  align-items: end;
 }
 
 .dashboard-dealer-filters label,
@@ -4677,6 +4729,31 @@ textarea {
   border-radius: 4px;
   font-size: 12.5px;
   font-weight: 500;
+}
+
+.dashboard-dealer-filters label {
+  min-width: 0;
+}
+
+.dashboard-dealer-select {
+  width: 100%;
+}
+
+.dashboard-view-report-btn {
+  align-self: end;
+  justify-self: start;
+  min-width: 132px;
+  margin-top: 17px;
+}
+
+@media (max-width: 560px) {
+  .dashboard-dealer-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard-view-report-btn {
+    width: 100%;
+  }
 }
 
 #activeAuditBadge {

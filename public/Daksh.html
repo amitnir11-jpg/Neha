@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAKSH INVENTORY SYSTEM</title>
-  <link rel="stylesheet" href="/style.css?v=20260602-bin-label-print-v2" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/style.css?v=20260603-dashboard-dealer-align" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -608,11 +608,12 @@
               <label>Upload DMS stock Excel/CSV<input name="file" type="file" accept=".xlsx,.xls,.csv" required></label>
               <button class="btn primary form-action" type="submit">Upload & Save Stock</button>
             </form>
-            <div id="dealerStockUploadMessage" class="form-message">Upload columns: Part Number, Part Description, Product Category, MRP, DLC, System Quantity / DMS Stock, System Bin Loc 1-3, Reserved Qty, Dealer Code.</div>
+            <div id="dealerStockUploadMessage" class="form-message">Upload columns: Part Number, Part Description, Product Category, MRP, DLC/DLP, System Quantity / DMS Stock, Bin Loc 1-3, Reserved Qty, Dealer Code, Movement, Demand, Forecast, ROP.</div>
+            <div id="dealerStockErrorReport" class="stock-error-report" hidden></div>
             <div class="table-wrap recon-stock-preview-wrap">
               <table>
-                <thead><tr><th>Part Number</th><th>Part Description</th><th>Product Category</th><th>MRP</th><th>DLC</th><th>DMS Stock</th><th>Bin Loc 1</th><th>Bin Loc 2</th><th>Bin Loc 3</th><th>Reserved Qty</th><th>Dealer Code</th></tr></thead>
-                <tbody id="dealerStockPreviewRows"><tr><td colspan="11" class="muted">No dealer stock uploaded yet</td></tr></tbody>
+                <thead><tr><th>Part Number</th><th>Description</th><th>Category</th><th>MRP</th><th>DLP</th><th>DMS Stock</th><th>Bin Loc 1</th><th>Bin Loc 2</th><th>Bin Loc 3</th><th>Reserved Qty</th><th>Dealer Code</th><th>Movement Code</th><th>Demand</th><th>Forecast</th><th>Safety Stock</th><th>ROP</th><th>Pending Order</th><th>Stock Value</th></tr></thead>
+                <tbody id="dealerStockPreviewRows"><tr><td colspan="18" class="muted">No dealer stock uploaded yet</td></tr></tbody>
               </table>
             </div>
           </section>
@@ -620,25 +621,28 @@
 
         <section id="reconReportTab" class="recon-panel" role="tabpanel" hidden>
           <section class="card">
-            <div class="card-head"><h2>Dealer Reconciliation Report</h2><div class="actions"><button id="reconReset" class="btn light" type="button">Reset Filter</button><button id="reconExcel" class="btn primary" type="button">Export Excel</button><button id="reconPdf" class="btn light" type="button">Export PDF</button><button id="reconFullReport" class="btn light" type="button">Download Full Report</button></div></div>
+            <div class="card-head"><h2>Dealer Reconciliation Report</h2><div class="actions"><select id="reconExportType" class="compact-select" aria-label="Report type"><option value="dealer">Dealer-wise Report</option><option value="bin">Bin-wise Report</option><option value="movement">Movement-wise Report</option><option value="shortage">Shortage Report</option><option value="excess">Excess Report</option><option value="dead">Dead Stock Report</option><option value="scanned-not-in-dms">Scanned Not In DMS</option></select><button id="reconReset" class="btn light" type="button">Reset Filter</button><button id="reconExcel" class="btn primary" type="button">Export Excel</button><button id="reconPdf" class="btn light" type="button">Export PDF</button><button id="reconFullReport" class="btn light" type="button">Download Full Report</button></div></div>
             <form id="reconFilters" class="filter-grid">
               <label>Dealer Code<select name="dealerCode" id="reconDealer" class="dealerSelect"></select></label>
               <label>Category<input name="category" placeholder="Category"></label>
               <label>Part Number<input name="partNumber" placeholder="Part Number"></label>
               <label>Bin<input name="bin" placeholder="Bin"></label>
+              <label>Status<select name="status"><option value="">All Status</option><option>Matched</option><option>Shortage</option><option>Excess</option><option value="Scanned but not in DMS">Scanned but not in DMS</option><option value="Manual / Not in DMS">Manual / Not in DMS</option></select></label>
+              <label>Movement<select name="movement"><option value="">All Movement</option><option>Fast Moving</option><option>Slow Moving</option><option>Dead Stock</option><option>Critical Shortage</option><option>Excess Stock</option><option>Not in DMS</option></select></label>
               <button id="reconShow" class="btn primary" type="submit">Submit</button>
             </form>
             <div id="reconMessage" class="form-message">Please select filters and click Submit.</div>
-            <div class="metric-grid five">
+            <div class="metric-grid six">
               <div class="metric mini"><span>DMS Stock</span><strong id="reconDms">0</strong></div>
-              <div class="metric mini"><span>Physical</span><strong id="reconPhysical">0</strong></div>
-              <div class="metric mini"><span>Excess</span><strong id="reconExcess">0</strong></div>
-              <div class="metric mini"><span>Short</span><strong id="reconShort">0</strong></div>
-              <div class="metric mini"><span>Net Difference</span><strong id="reconNet">0</strong></div>
+              <div class="metric mini"><span>Actual Scanned</span><strong id="reconPhysical">0</strong></div>
+              <div class="metric mini"><span>Matched Parts</span><strong id="reconMatched">0</strong></div>
+              <div class="metric mini"><span>Shortage Parts</span><strong id="reconShortageParts">0</strong></div>
+              <div class="metric mini"><span>Excess Parts</span><strong id="reconExcessParts">0</strong></div>
+              <div class="metric mini"><span>Net Variance</span><strong id="reconNet">0</strong></div>
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Part Number</th><th>Part Description</th><th>Model</th><th>Year</th><th>Category</th><th>MRP</th><th>DLC</th><th>Product Group</th><th>Bin</th><th>DMS Stock</th><th>Physical</th><th>Excess</th><th>Short</th><th>Net</th><th>Status</th><th>Raw Proof</th></tr></thead>
+                <thead><tr><th>Part Number</th><th>Description</th><th>Category</th><th>DMS Stock</th><th>Actual Scanned Stock</th><th>Variance</th><th>Status</th><th>MRP</th><th>DLP</th><th>Stock Value</th><th>Bin Location</th><th>Movement Type</th><th>Fast/Slow/Dead Status</th><th>Raw Proof</th></tr></thead>
                 <tbody id="reconRows"></tbody>
               </table>
             </div>
@@ -648,14 +652,27 @@
         <section id="reconSummaryTab" class="recon-panel" role="tabpanel" hidden>
           <section class="card">
             <div class="card-head"><h2>Final Summary</h2></div>
-            <div class="metric-grid five">
-              <div class="metric mini"><span>DMS Stock</span><strong id="reconSummaryDms">0</strong></div>
-              <div class="metric mini"><span>Physical Qty</span><strong id="reconSummaryPhysical">0</strong></div>
-              <div class="metric mini"><span>Excess</span><strong id="reconSummaryExcess">0</strong></div>
-              <div class="metric mini"><span>Short</span><strong id="reconSummaryShort">0</strong></div>
-              <div class="metric mini"><span>Net Difference</span><strong id="reconSummaryNet">0</strong></div>
+            <div class="metric-grid six">
+              <div class="metric mini"><span>Total Parts Uploaded</span><strong id="reconSummaryPartsUploaded">0</strong></div>
+              <div class="metric mini"><span>Total DMS Stock Qty</span><strong id="reconSummaryDms">0</strong></div>
+              <div class="metric mini"><span>Total Actual Scanned Qty</span><strong id="reconSummaryPhysical">0</strong></div>
+              <div class="metric mini"><span>Total Matched Parts</span><strong id="reconSummaryMatched">0</strong></div>
+              <div class="metric mini"><span>Total Shortage Parts</span><strong id="reconSummaryShortageParts">0</strong></div>
+              <div class="metric mini"><span>Total Excess Parts</span><strong id="reconSummaryExcessParts">0</strong></div>
             </div>
-            <div class="metric-grid two">
+            <div class="metric-grid six">
+              <div class="metric mini"><span>Total Fast Moving Parts</span><strong id="reconSummaryFast">0</strong></div>
+              <div class="metric mini"><span>Total Slow Moving Parts</span><strong id="reconSummarySlow">0</strong></div>
+              <div class="metric mini"><span>Total Dead Stock Parts</span><strong id="reconSummaryDead">0</strong></div>
+              <div class="metric mini"><span>Total Inventory Value</span><strong id="reconSummaryInventoryValue">0.00</strong></div>
+              <div class="metric mini"><span>Total Shortage Value</span><strong id="reconSummaryShortageValue">0.00</strong></div>
+              <div class="metric mini"><span>Total Excess Value</span><strong id="reconSummaryExcessValue">0.00</strong></div>
+            </div>
+            <div class="metric-grid six">
+              <div class="metric mini"><span>Scanned Not In DMS</span><strong id="reconSummaryNotInDms">0</strong></div>
+              <div class="metric mini"><span>Excess Qty</span><strong id="reconSummaryExcess">0</strong></div>
+              <div class="metric mini"><span>Shortage Qty</span><strong id="reconSummaryShort">0</strong></div>
+              <div class="metric mini"><span>Net Difference</span><strong id="reconSummaryNet">0</strong></div>
               <div class="metric mini"><span>Variance on MRP</span><strong id="reconSummaryMrp">0.00</strong></div>
               <div class="metric mini"><span>Variance on DLC</span><strong id="reconSummaryDlc">0.00</strong></div>
             </div>
@@ -1358,7 +1375,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260602-bin-label-print-v2" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260603-dashboard-dealer-align" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {

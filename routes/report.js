@@ -3203,9 +3203,10 @@ async function buildStockSummaryReport(query = {}) {
     { syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] } },
     { isDuplicate: { $ne: true } }
   ]);
+  const stockFilter = query.auditId ? { dealerCode, auditId: query.auditId } : { dealerCode };
   const [rawScans, stockRows, dealers, audits] = await Promise.all([
     Inventory.find(scanFilter).sort({ timestamp: 1 }).lean(),
-    DealerStock.find({ dealerCode }).sort({ partNumber: 1 }).lean(),
+    DealerStock.find(stockFilter).sort({ partNumber: 1 }).lean(),
     Dealer.find({}).sort({ dealerName: 1 }).lean(),
     Audit.find({ dealerCode }).sort({ createdAt: -1 }).lean()
   ]);

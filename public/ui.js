@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260602-dealer-report-dlc';
+  const UI_BOOT_VERSION = '20260603-dashboard-dealer-align';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -166,6 +166,7 @@
     reportSort: { reportType: '', key: '', direction: 'asc' },
     dashboardDealerCode: '',
     reconLoaded: false,
+    reconRefreshTimer: null,
     validatorInvalidRows: [],
     validatorMapIndex: null,
     catalogueWarningRows: [],
@@ -399,14 +400,17 @@
     document.body.appendChild(measurer);
     const textWidth = Math.ceil(measurer.getBoundingClientRect().width);
     measurer.remove();
-    const left = select.getBoundingClientRect().left || 0;
-    const viewportRoom = Math.max(320, window.innerWidth - left - 24);
-    const width = Math.min(Math.max(360, textWidth + 64), Math.min(760, viewportRoom));
     const wrapper = $('#dashboardDealerFilters');
+    const left = (wrapper || select).getBoundingClientRect().left || 0;
+    const button = $('#dashboardViewReportBtn');
+    const gap = 10;
+    const actionWidth = Math.ceil((button?.getBoundingClientRect().width || 132) + gap);
+    const viewportRoom = Math.max(280, window.innerWidth - left - 24);
+    const maxSelectWidth = Math.max(220, Math.min(760 - actionWidth, viewportRoom - actionWidth));
+    const width = Math.min(Math.max(300, textWidth + 64), maxSelectWidth);
     select.style.width = `${width}px`;
     select.style.maxWidth = '100%';
     if (wrapper) {
-      const actionWidth = Math.ceil(($('#dashboardViewReportBtn')?.getBoundingClientRect().width || 118) + 12);
       wrapper.style.width = `min(${width + actionWidth}px, 100%)`;
     }
   }
@@ -1746,7 +1750,18 @@
     await Promise.all(jobs);
   }
 
+  function queueReconciliationRefresh(reason = 'realtime scan') {
+    if (!state.reconLoaded) return;
+    clearTimeout(state.reconRefreshTimer);
+    state.reconRefreshTimer = setTimeout(() => {
+      loadReconciliation({ silent: true }).catch((error) => {
+        addConnectionLog(`Reconciliation refresh skipped after ${reason}: ${error.message}`, 'warning');
+      });
+    }, 900);
+  }
+
   function queueRealtimeReportRefresh(reason = 'realtime scan') {
+    queueReconciliationRefresh(reason);
     if (!state.reportHasRun || !activeReportType()) return;
     state.reportCache.clear();
     const now = Date.now();
@@ -4505,13 +4520,29 @@
   }
 
   function setReconciliationSummary(summary = {}) {
-    setText('reconDms', summary.dmsStock || 0);
-    setText('reconPhysical', summary.physicalStock || 0);
+    const dmsQty = summary.totalDmsStockQty ?? summary.dmsStock ?? 0;
+    const actualQty = summary.totalActualScannedQty ?? summary.physicalStock ?? summary.actualStock ?? 0;
+    setText('reconDms', dmsQty);
+    setText('reconPhysical', actualQty);
+    setText('reconMatched', summary.totalMatchedParts || 0);
+    setText('reconShortageParts', summary.totalShortageParts || 0);
+    setText('reconExcessParts', summary.totalExcessParts || 0);
+    setText('reconNet', summary.netDifference || 0);
     setText('reconExcess', summary.excess || 0);
     setText('reconShort', summary.short || 0);
-    setText('reconNet', summary.netDifference || 0);
-    setText('reconSummaryDms', summary.dmsStock || 0);
-    setText('reconSummaryPhysical', summary.physicalStock || 0);
+    setText('reconSummaryPartsUploaded', summary.totalPartsUploaded || 0);
+    setText('reconSummaryDms', dmsQty);
+    setText('reconSummaryPhysical', actualQty);
+    setText('reconSummaryMatched', summary.totalMatchedParts || 0);
+    setText('reconSummaryShortageParts', summary.totalShortageParts || 0);
+    setText('reconSummaryExcessParts', summary.totalExcessParts || 0);
+    setText('reconSummaryFast', summary.totalFastMovingParts || 0);
+    setText('reconSummarySlow', summary.totalSlowMovingParts || 0);
+    setText('reconSummaryDead', summary.totalDeadStockParts || 0);
+    setText('reconSummaryInventoryValue', money2(summary.totalInventoryValue || 0));
+    setText('reconSummaryShortageValue', money2(summary.totalShortageValue || 0));
+    setText('reconSummaryExcessValue', money2(summary.totalExcessValue || 0));
+    setText('reconSummaryNotInDms', summary.totalScannedButNotInDms || 0);
     setText('reconSummaryExcess', summary.excess || 0);
     setText('reconSummaryShort', summary.short || 0);
     setText('reconSummaryNet', summary.netDifference || 0);
@@ -4523,6 +4554,34 @@
     return cleanDealerCode($('#reconDealer')?.value || $('#dealerStockDealer')?.value || '');
   }
 
+  function renderDealerStockErrors(errorRows = [], skippedCount = errorRows.length, truncated = false) {
+    const box = $('#dealerStockErrorReport');
+    if (!box) return;
+    const rows = Array.isArray(errorRows) ? errorRows : [];
+    if (!rows.length) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = `
+      <div class="stock-error-title">Skipped rows: ${escapeHtml(skippedCount || rows.length)}${truncated ? `, showing first ${rows.length}` : ''}</div>
+      <div class="table-wrap compact-error-table">
+        <table>
+          <thead><tr><th>Row</th><th>Part Number</th><th>Dealer Code</th><th>Error</th></tr></thead>
+          <tbody>${rows.map((row) => `
+            <tr>
+              <td>${escapeHtml(row.rowNumber || '')}</td>
+              <td>${escapeHtml(row.partNumber || '')}</td>
+              <td>${escapeHtml(row.dealerCode || '')}</td>
+              <td>${escapeHtml(row.message || '')}</td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
   function renderDealerStockPreview(rows = [], total = rows.length) {
     $('#dealerStockPreviewRows').innerHTML = rows.map((row) => `
       <tr>
@@ -4530,15 +4589,22 @@
         <td>${escapeHtml(row.partDescription)}</td>
         <td>${escapeHtml(row.productCategory)}</td>
         <td>${escapeHtml(money(row.mrp))}</td>
-        <td>${escapeHtml(money(row.dlc))}</td>
+        <td>${escapeHtml(money(row.dlp || row.dlc))}</td>
         <td>${escapeHtml(row.dmsStock || row.systemQty || 0)}</td>
-        <td>${escapeHtml(row.systemBinLoc1)}</td>
-        <td>${escapeHtml(row.systemBinLoc2)}</td>
-        <td>${escapeHtml(row.systemBinLoc3)}</td>
+        <td>${escapeHtml(row.binLoc1 || row.systemBinLoc1 || '')}</td>
+        <td>${escapeHtml(row.binLoc2 || row.systemBinLoc2 || '')}</td>
+        <td>${escapeHtml(row.binLoc3 || row.systemBinLoc3 || '')}</td>
         <td>${escapeHtml(row.reservedQty || 0)}</td>
         <td>${escapeHtml(row.dealerCode)}</td>
+        <td>${escapeHtml([row.movementCodeA, row.movementCodeB].filter(Boolean).join(' / '))}</td>
+        <td>${escapeHtml(row.averageDemand || 0)}</td>
+        <td>${escapeHtml(row.forecast || 0)}</td>
+        <td>${escapeHtml(row.safetyStock || 0)}</td>
+        <td>${escapeHtml(row.rop || 0)}</td>
+        <td>${escapeHtml(row.pendingOrder || 0)}</td>
+        <td>${escapeHtml(money2(row.stockValue || 0))}</td>
       </tr>
-    `).join('') || '<tr><td colspan="11" class="muted">No dealer stock uploaded yet</td></tr>';
+    `).join('') || '<tr><td colspan="18" class="muted">No dealer stock uploaded yet</td></tr>';
     const message = $('#dealerStockUploadMessage');
     if (message && rows.length) {
       message.className = 'form-message success';
@@ -4551,6 +4617,7 @@
     if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
     const data = await api(`/api/reconciliation/stock-preview?dealerCode=${encodeURIComponent(dealerCode)}`);
     renderDealerStockPreview(data.stock || [], data.total || 0);
+    renderDealerStockErrors([]);
     const message = $('#dealerStockUploadMessage');
     if (message) {
       message.className = (data.stock || []).length ? 'form-message success' : 'form-message';
@@ -4570,10 +4637,12 @@
     const data = await api('/api/reconciliation/upload-stock', { method: 'POST', body: new FormData(form) });
     if ($('#reconDealer')) $('#reconDealer').value = data.dealerCode || dealerCode;
     renderDealerStockPreview(data.preview || [], data.savedCount || 0);
+    renderDealerStockErrors(data.errorRows || [], data.skippedCount || 0, data.errorRowsTruncated);
     if (message) {
       message.className = 'form-message success';
       message.textContent = data.message || `Saved ${data.savedCount || 0} DMS stock row(s).`;
     }
+    loadReconciliation({ silent: true }).catch(() => undefined);
     toast('Dealer DMS stock saved');
     return data;
   }
@@ -4584,6 +4653,7 @@
     if (!window.confirm(`Delete old DMS stock for dealer ${dealerCode}?`)) return;
     const data = await api(`/api/reconciliation/stock?dealerCode=${encodeURIComponent(dealerCode)}`, { method: 'DELETE' });
     renderDealerStockPreview([]);
+    renderDealerStockErrors([]);
     setReconciliationSummary({});
     $('#reconRows').innerHTML = '';
     toast(data.message || 'Dealer stock deleted');
@@ -4598,20 +4668,21 @@
     return data;
   }
 
-  async function loadReconciliation() {
+  async function loadReconciliation(options = {}) {
+    const silent = Boolean(options.silent);
     const dealerCode = cleanDealerCode($('#reconDealer')?.value || '');
     const message = $('#reconMessage');
     if (!dealerCode || dealerCode === 'ALL') {
       $('#reconRows').innerHTML = '';
       setReconciliationSummary({});
-      if (message) {
+      if (message && !silent) {
         message.className = 'form-message';
         message.textContent = 'Please select Dealer Code and click Submit.';
       }
       state.reconLoaded = false;
       return;
     }
-    if (message) {
+    if (message && !silent) {
       message.className = 'form-message loading';
       message.textContent = 'Loading reconciliation report...';
     }
@@ -4621,29 +4692,35 @@
     setReconciliationSummary(summary);
     $('#reconRows').innerHTML = (data.rows || []).slice(0, 500).map((row) => `
       <tr>
-        <td>${partLink(row.partNo || row.partNumber)}</td>
-        <td>${escapeHtml(row.partDescription || row.partName)}</td>
-        <td>${escapeHtml(row.model || '')}</td>
-        <td>${escapeHtml(row.manufacturingYear || row.year || '')}</td>
+        <td>${partLink(row.partNumber || row.partNo)}</td>
+        <td>${escapeHtml(row.partDescription || row.partName || '')}</td>
         <td>${escapeHtml(row.productCategory || row.category || '')}</td>
-        <td>${escapeHtml(money(row.mrp))}</td>
-        <td>${escapeHtml(money(row.dlc))}</td>
-        <td>${escapeHtml(row.productGroup || '')}</td>
-        <td>${escapeHtml(row.bin)}</td>
-        <td>${escapeHtml(row.dmsStock)}</td>
-        <td>${escapeHtml(row.physicalStock)}</td>
-        <td>${escapeHtml(row.excess)}</td>
-        <td>${escapeHtml(row.short)}</td>
-        <td>${escapeHtml(row.netDifference)}</td>
-        <td>${escapeHtml(row.status)}</td>
-        <td class="raw-cell" title="${escapeHtml(row.rawScanProof)}">${escapeHtml(row.rawScanProof)}</td>
+        <td>${escapeHtml(row.dmsStock || 0)}</td>
+        <td>${escapeHtml(row.actualStock ?? row.physicalStock ?? 0)}</td>
+        <td>${escapeHtml(row.variance ?? row.netDifference ?? 0)}</td>
+        <td>${escapeHtml(row.status || '')}</td>
+        <td>${escapeHtml(money(row.mrp || 0))}</td>
+        <td>${escapeHtml(money(row.dlp || row.dlc || 0))}</td>
+        <td>${escapeHtml(money2(row.stockValue || 0))}</td>
+        <td>${escapeHtml(row.binLocation || row.bin || '')}</td>
+        <td>${escapeHtml(row.movementType || '')}</td>
+        <td>${escapeHtml(row.movementStatus || row.fastSlowDeadStatus || '')}</td>
+        <td class="raw-cell" title="${escapeHtml(row.rawScanProof || '')}">${escapeHtml(row.rawScanProof || '')}</td>
       </tr>
-    `).join('') || '<tr><td colspan="16" class="muted">No reconciliation data found for selected dealer/filter</td></tr>';
-    if (message) {
+    `).join('') || '<tr><td colspan="14" class="muted">No reconciliation data found for selected dealer/filter</td></tr>';
+    if (message && !silent) {
       message.className = (data.rows || []).length ? 'form-message success' : 'form-message error';
       message.textContent = (data.rows || []).length ? `${data.rows.length} reconciliation row(s) loaded.` : (data.message || 'No reconciliation data found for selected filter');
     }
     state.reconLoaded = true;
+  }
+
+  function reconciliationExportQuery(format, full = false) {
+    const params = new URLSearchParams(queryFromForm($('#reconFilters')));
+    params.set('format', format);
+    if (full) params.set('full', '1');
+    else params.set('report', $('#reconExportType')?.value || 'dealer');
+    return params.toString();
   }
 
   function clearPartSearch(message = 'Click Show to view all parts, or use filters to narrow master details.') {
@@ -7975,6 +8052,7 @@
       event.preventDefault();
       uploadDealerStock(event.currentTarget).catch((error) => {
         const message = $('#dealerStockUploadMessage');
+        renderDealerStockErrors(error.data?.errorRows || [], error.data?.skippedCount || 0, error.data?.errorRowsTruncated);
         if (message) {
           message.className = 'form-message error';
           message.textContent = error.message;
@@ -7989,9 +8067,9 @@
       $('#reconFilters').reset();
       loadReconciliation().catch((error) => toast(error.message, 'error'));
     });
-    $('#reconExcel').addEventListener('click', () => downloadGet(`/api/reconciliation/report?${queryFromForm($('#reconFilters'))}&format=excel`, 'Daksh_Reconciliation.xlsx').catch((error) => toast(error.message, 'error')));
-    $('#reconPdf').addEventListener('click', () => downloadGet(`/api/reconciliation/report?${queryFromForm($('#reconFilters'))}&format=pdf`, 'Daksh_Reconciliation.pdf').catch((error) => toast(error.message, 'error')));
-    $('#reconFullReport')?.addEventListener('click', () => downloadGet(`/api/reconciliation/report?${queryFromForm($('#reconFilters'))}&format=excel&full=1`, 'Daksh_Reconciliation_Full.xlsx').catch((error) => toast(error.message, 'error')));
+    $('#reconExcel').addEventListener('click', () => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('excel')}`, 'Daksh_Reconciliation.xlsx').catch((error) => toast(error.message, 'error')));
+    $('#reconPdf').addEventListener('click', () => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('pdf')}`, 'Daksh_Reconciliation.pdf').catch((error) => toast(error.message, 'error')));
+    $('#reconFullReport')?.addEventListener('click', () => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('excel', true)}`, 'Daksh_Reconciliation_Full.xlsx').catch((error) => toast(error.message, 'error')));
 
     $('#partUploadForm').addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -8331,7 +8409,10 @@
       state.lastRealtimeAt = Date.now();
       toast(`Duplicate scan: ${scan.partNumber || scan.part || ''}`, 'error');
     });
-    socket.on('scan:deleted', () => Promise.all([loadDashboard(), loadScanHistory(), loadBinTransferParts(activeBinTransferForm())]).catch(console.warn));
+    socket.on('scan:deleted', () => {
+      queueReconciliationRefresh('scan deleted');
+      Promise.all([loadDashboard(), loadScanHistory(), loadBinTransferParts(activeBinTransferForm())]).catch(console.warn);
+    });
     socket.on('scan:count:update', (stats) => {
       if (stats && dashboardStatsMatchesActiveAudit(stats)) {
         updateDashboardCards(stats);
@@ -8355,6 +8436,13 @@
     socket.on('reports:update', () => {
       state.lastRealtimeAt = Date.now();
       queueRealtimeReportRefresh('report broadcast');
+    });
+    socket.on('dealer-stock:update', (payload = {}) => {
+      state.lastRealtimeAt = Date.now();
+      if (activeReconDealer() && (!payload.dealerCode || cleanDealerCode(payload.dealerCode) === activeReconDealer())) {
+        loadDealerStockPreview().catch(() => undefined);
+        queueReconciliationRefresh('dealer stock update');
+      }
     });
     socket.on('mrp:updated', (scan = {}) => {
       state.lastRealtimeAt = Date.now();
