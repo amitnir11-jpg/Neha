@@ -843,6 +843,10 @@
             <div class="card-head"><h2>Bulk QR PDF</h2></div>
             <textarea id="bulkQrItems" rows="8" placeholder="One bin or part per line"></textarea>
             <div class="grid-form two print-grid">
+              <label>Bin From<input id="bulkQrRangeFrom" placeholder="A1B1"></label>
+              <label>Bin To<input id="bulkQrRangeTo" placeholder="A1B10"></label>
+            </div>
+            <div class="grid-form two print-grid">
               <label>Paper Size<select id="qrPaperSize"><option value="a4">A4</option><option value="a5">A5</option><option value="letter">Letter</option><option value="legal">Legal</option><option value="thermal80">Thermal 80mm</option><option value="thermal58">Thermal 58mm</option><option value="custom">Custom</option></select></label>
               <label>Orientation<select id="qrOrientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
               <label>Custom Width mm<input id="qrPaperWidth" type="number" min="40" value="210"></label>
@@ -852,7 +856,10 @@
               <label>Margin mm<input id="qrMarginMm" type="number" min="2" max="40" value="10"></label>
               <label>Label Font<input id="qrLabelFont" type="number" min="6" max="18" value="9"></label>
             </div>
-            <button id="bulkQrBtn" class="btn primary" type="button">Download Bulk QR PDF</button>
+            <div class="actions">
+              <button id="bulkQrRangeBtn" class="btn light" type="button">Add Bin Range</button>
+              <button id="bulkQrBtn" class="btn primary" type="button">Download Bulk QR PDF</button>
+            </div>
           </section>
         </div>
         <div id="qrBulkLabelPanel" class="qr-tool-panel">

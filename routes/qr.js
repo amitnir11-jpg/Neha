@@ -10,6 +10,7 @@ const { serverInfo } = require('../utils/network');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
 
 const router = express.Router();
+const MAX_BULK_QR_ITEMS = 1000;
 
 function paperConfig(input = {}) {
   const paperSize = String(input.paperSize || 'a4').toLowerCase();
@@ -84,6 +85,54 @@ function rangeBins(start, end) {
   const max = Math.max(first, last);
   const width = Math.max(startMatch[2].length, endMatch[2].length);
   return Array.from({ length: max - min + 1 }, (_, index) => `${prefix}${String(min + index).padStart(width, '0')}`);
+}
+
+function rangeFromText(value) {
+  const text = clean(value);
+  if (!text) return [];
+  const match = text.match(/^(.+?)\s+(?:to|thru|through)\s+(.+)$/i) || text.match(/^(.+?)\s*\.\.\s*(.+)$/);
+  return match ? rangeBins(match[1], match[2]) : [];
+}
+
+function bulkQrItemValue(item) {
+  if (item && typeof item === 'object') return clean(item.value || item.partNo || item.partNumber || item.bin || item.binLocation || item.label);
+  return clean(item);
+}
+
+function bulkQrItems(input = {}) {
+  const rows = Array.isArray(input.items) ? input.items : [];
+  const output = [];
+  const addItem = (item) => {
+    const value = bulkQrItemValue(item);
+    if (!value) return;
+    const range = rangeFromText(value);
+    if (range.length) {
+      range.forEach((binCode) => output.push({ value: binCode, label: binCode }));
+      return;
+    }
+    const label = item && typeof item === 'object' ? clean(item.label || value) : value;
+    output.push({ value, label });
+  };
+
+  rows.forEach(addItem);
+
+  const rangeFrom = clean(input.rangeFrom || input.binRangeFrom || input.bulkBinRangeFrom);
+  const rangeTo = clean(input.rangeTo || input.binRangeTo || input.bulkBinRangeTo);
+  if (rangeFrom || rangeTo) {
+    const range = rangeBins(rangeFrom, rangeTo);
+    if (!range.length) throw new Error('Valid bin range is required');
+    range.forEach((binCode) => output.push({ value: binCode, label: binCode }));
+  }
+
+  const seen = new Set();
+  const unique = output.filter((item) => {
+    const key = clean(item.value).toUpperCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (unique.length > MAX_BULK_QR_ITEMS) throw new Error(`Maximum ${MAX_BULK_QR_ITEMS} QR labels can be generated at once`);
+  return unique;
 }
 
 function binQrValue(item) {
@@ -527,7 +576,12 @@ router.post('/generate-part-labels', auth.requireAuth, async (req, res) => {
 
 router.post('/bulk-pdf', auth.requireAuth, async (req, res) => {
   try {
-    const items = Array.isArray(req.body.items) ? req.body.items.filter(Boolean) : [];
+    let items = [];
+    try {
+      items = bulkQrItems(req.body);
+    } catch (error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
     if (!items.length) return res.status(400).json({ success: false, message: 'At least one QR item is required' });
 
     const paper = paperConfig(req.body);
@@ -546,8 +600,8 @@ router.post('/bulk-pdf', auth.requireAuth, async (req, res) => {
     doc.text('DAKSH INVENTORY SYSTEM - Bulk QR', margin, margin + 2);
 
     for (let index = 0; index < items.length; index += 1) {
-      const value = String(items[index].value || items[index].partNo || items[index].bin || items[index]).trim();
-      const label = String(items[index].label || value).trim();
+      const value = clean(items[index].value);
+      const label = clean(items[index].label || value);
       const dataUrl = await QRCode.toDataURL(value, { margin: 1, width: 260 });
       const pageIndex = index % perPage;
       const col = pageIndex % columns;

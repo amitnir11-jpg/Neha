@@ -7236,6 +7236,55 @@
     };
   }
 
+  function expandCodeRange(startValue, endValue) {
+    const start = String(startValue || '').trim();
+    const end = String(endValue || '').trim();
+    const startMatch = start.match(/^(.+?)(\d+)$/);
+    const endMatch = end.match(/^(.+?)(\d+)$/);
+    if (!startMatch || !endMatch || startMatch[1].toUpperCase() !== endMatch[1].toUpperCase()) return [];
+    const first = Number(startMatch[2]);
+    const last = Number(endMatch[2]);
+    if (!Number.isFinite(first) || !Number.isFinite(last)) return [];
+    const min = Math.min(first, last);
+    const max = Math.max(first, last);
+    const total = max - min + 1;
+    if (total > 1000) throw new Error('Maximum 1000 QR labels can be generated at once');
+    const prefix = startMatch[1].toUpperCase();
+    const width = Math.max(startMatch[2].length, endMatch[2].length);
+    return Array.from({ length: total }, (_, index) => `${prefix}${String(min + index).padStart(width, '0')}`);
+  }
+
+  function expandQrRangeText(value) {
+    const text = String(value || '').trim();
+    if (!text) return [];
+    const match = text.match(/^(.+?)\s+(?:to|thru|through)\s+(.+)$/i) || text.match(/^(.+?)\s*\.\.\s*(.+)$/);
+    return match ? expandCodeRange(match[1], match[2]) : [];
+  }
+
+  function bulkQrItemsFromInput() {
+    const items = [];
+    $('#bulkQrItems').value.split(/\r?\n|,/).forEach((value) => {
+      const text = value.trim();
+      if (!text) return;
+      const range = expandQrRangeText(text);
+      items.push(...(range.length ? range : [text]));
+    });
+    const from = $('#bulkQrRangeFrom')?.value || '';
+    const to = $('#bulkQrRangeTo')?.value || '';
+    if (from || to) {
+      const range = expandCodeRange(from, to);
+      if (!range.length) throw new Error('Enter a valid bin range');
+      items.push(...range);
+    }
+    const seen = new Set();
+    return items.filter((item) => {
+      const key = item.toUpperCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
   function selectedLabelBins() {
     return $('#labelSelectedBins').value
       .split(/[\n,]+/)
@@ -8223,9 +8272,36 @@
       event.preventDefault();
       createQr(event.currentTarget, '/api/qr/part', 'partQrImage').catch((error) => toast(error.message, 'error'));
     });
+    $('#bulkQrRangeBtn').addEventListener('click', () => {
+      try {
+        const range = expandCodeRange($('#bulkQrRangeFrom').value, $('#bulkQrRangeTo').value);
+        if (!range.length) throw new Error('Enter a valid bin range');
+        const existing = bulkQrItemsFromInput();
+        const combined = [...existing, ...range];
+        const seen = new Set();
+        $('#bulkQrItems').value = combined.filter((item) => {
+          const key = item.toUpperCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).join('\n');
+        toast(`${range.length} bin QR item(s) added`);
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    });
     $('#bulkQrBtn').addEventListener('click', () => {
-      const items = $('#bulkQrItems').value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
-      downloadPost('/api/qr/bulk-pdf', { items, ...bulkQrOptions() }, 'Daksh_Bulk_QR.pdf').catch((error) => toast(error.message, 'error'));
+      try {
+        const items = bulkQrItemsFromInput();
+        downloadPost('/api/qr/bulk-pdf', {
+          items,
+          rangeFrom: $('#bulkQrRangeFrom')?.value || '',
+          rangeTo: $('#bulkQrRangeTo')?.value || '',
+          ...bulkQrOptions()
+        }, 'Daksh_Bulk_QR.pdf').catch((error) => toast(error.message, 'error'));
+      } catch (error) {
+        toast(error.message, 'error');
+      }
     });
 
     $('#backupDbBtn').addEventListener('click', () => downloadGet('/api/backup/download', 'Daksh_Inventory_Backup.json').catch((error) => toast(error.message, 'error')));
