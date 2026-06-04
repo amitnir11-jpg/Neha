@@ -187,6 +187,8 @@ function plainBinLabelItems(input = {}) {
     if (!binLocation) return;
     output.push({
       binLocation,
+      dealerCode: cleanCode(item.dealerCode || input.dealerCode),
+      includeAvailableParts: item.includeAvailableParts === true || item.includeAvailableParts === 'true',
       partNumbers: splitPlainPartNumbers(item.partNumbers || item.parts || item.partNumber || item.partNo || item.part)
     });
   };
@@ -212,15 +214,51 @@ function plainBinLabelItems(input = {}) {
   output.forEach((item) => {
     const key = cleanCode(item.binLocation);
     if (!key) return;
-    const existing = byBin.get(key) || { binLocation: key, partNumbers: [] };
+    const existing = byBin.get(key) || {
+      binLocation: key,
+      dealerCode: cleanCode(item.dealerCode || input.dealerCode),
+      includeAvailableParts: false,
+      partNumbers: []
+    };
     const parts = new Set(existing.partNumbers);
     (item.partNumbers || []).forEach((partNumber) => parts.add(cleanCode(partNumber)));
-    byBin.set(key, { binLocation: key, partNumbers: Array.from(parts).filter(Boolean) });
+    byBin.set(key, {
+      binLocation: key,
+      dealerCode: existing.dealerCode || cleanCode(item.dealerCode || input.dealerCode),
+      includeAvailableParts: existing.includeAvailableParts || item.includeAvailableParts === true,
+      partNumbers: Array.from(parts).filter(Boolean)
+    });
   });
 
   const items = Array.from(byBin.values());
   if (items.length > MAX_BULK_QR_ITEMS) throw new Error(`Maximum ${MAX_BULK_QR_ITEMS} labels can be generated at once`);
   return items;
+}
+
+async function hydratePlainBinAvailableParts(items = [], input = {}) {
+  const output = [];
+  for (const item of items) {
+    if (!item.includeAvailableParts) {
+      output.push(item);
+      continue;
+    }
+    const dealerCode = cleanCode(item.dealerCode || input.dealerCode);
+    if (!dealerCode) {
+      output.push(item);
+      continue;
+    }
+    const parts = await findBinParts({ dealerCode, binLocation: item.binLocation, category: input.category });
+    const partNumbers = new Set(item.partNumbers || []);
+    parts.forEach((part) => {
+      if (part.partNumber) partNumbers.add(cleanCode(part.partNumber));
+    });
+    output.push({
+      ...item,
+      dealerCode,
+      partNumbers: Array.from(partNumbers).filter(Boolean)
+    });
+  }
+  return output;
 }
 
 function binQrValue(item) {
@@ -258,6 +296,20 @@ async function findBins({ dealerCode, category, selectedBins, rangeFrom, rangeTo
   query.dealerCode = dealer;
   if (category) query.category = { $regex: escapeRegex(category), $options: 'i' };
   let bins = await Bin.find(query).sort({ binCode: 1 }).lean();
+  const categoryText = clean(category);
+  const stockCategoryFilter = categoryText ? { $or: [{ category: { $regex: escapeRegex(categoryText), $options: 'i' } }, { productCategory: { $regex: escapeRegex(categoryText), $options: 'i' } }] } : {};
+  const [inventoryBinLocations, inventoryBins, masterBinLocations, masterBins] = await Promise.all([
+    Inventory.distinct('binLocation', { dealerCode: dealer, ...stockCategoryFilter }).catch(() => []),
+    Inventory.distinct('bin', { dealerCode: dealer, ...stockCategoryFilter }).catch(() => []),
+    MasterPart.distinct('binLocation', { dealerCode: dealer, ...stockCategoryFilter }).catch(() => []),
+    MasterPart.distinct('bin', { dealerCode: dealer, ...stockCategoryFilter }).catch(() => [])
+  ]);
+  [...inventoryBinLocations, ...inventoryBins, ...masterBinLocations, ...masterBins].forEach((binCode) => {
+    const code = cleanCode(binCode);
+    if (code && !bins.some((bin) => cleanCode(bin.binCode) === code)) {
+      bins.push({ binCode: code, binName: code, dealerCode: dealer, category: categoryText, active: true });
+    }
+  });
 
   const selected = Array.isArray(selectedBins) ? selectedBins.map(cleanCode).filter(Boolean) : [];
   const range = rangeBins(rangeFrom, rangeTo).map(cleanCode);
@@ -754,6 +806,7 @@ router.post('/bin-location-label-pdf', auth.requireAuth, async (req, res) => {
     } catch (error) {
       return res.status(400).json({ success: false, message: error.message });
     }
+    items = await hydratePlainBinAvailableParts(items, req.body);
     if (!items.length) return res.status(400).json({ success: false, message: 'At least one bin location is required' });
     const pdf = await renderPlainBinLabelsPdf(items, req.body);
     res.setHeader('Content-Type', 'application/pdf');

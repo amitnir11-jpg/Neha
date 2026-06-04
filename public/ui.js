@@ -7177,12 +7177,6 @@
     toast('Network test completed');
   }
 
-  async function createQr(form, endpoint, imageId) {
-    const params = new URLSearchParams(formObject(form)).toString();
-    const data = await api(`${endpoint}?${params}`);
-    $(`#${imageId}`).src = data.dataUrl;
-  }
-
   async function refreshAll() {
     await loadActiveAudit({ silent: true }).catch(() => null);
     await loadDealers();
@@ -7283,6 +7277,7 @@
 
   function plainBinLabelOptions() {
     return {
+      dealerCode: cleanDealerCode($('#plainBinDealer')?.value || ''),
       paperSize: $('#plainBinPaperSize').value,
       orientation: $('#plainBinOrientation').value,
       paperWidthMm: Number($('#plainBinPaperWidth').value || 210),
@@ -7300,15 +7295,19 @@
 
   function plainBinLabelItemsFromInput() {
     const mode = $('#plainBinLabelMode')?.value || 'single';
+    const dealerCode = cleanDealerCode($('#plainBinDealer')?.value || '');
+    const selectedBin = cleanDealerCode($('#plainBinSelect')?.value || '');
     const items = [];
     const addItem = (item) => {
       if (!item || !item.binLocation) return;
       items.push(item);
     };
 
-    if (mode === 'single' || mode === 'bin-part') {
+    if (mode === 'single' || mode === 'bin-part' || mode === 'bin-auto-parts') {
       addItem({
-        binLocation: String($('#plainBinLocation')?.value || '').trim().toUpperCase(),
+        binLocation: cleanDealerCode(selectedBin || $('#plainBinLocation')?.value || ''),
+        dealerCode,
+        includeAvailableParts: mode === 'bin-auto-parts',
         partNumbers: mode === 'bin-part' ? splitPlainPartNumbers($('#plainBinParts')?.value || '') : []
       });
     }
@@ -7327,12 +7326,37 @@
     const byBin = new Map();
     items.forEach((item) => {
       const key = item.binLocation.toUpperCase();
-      const existing = byBin.get(key) || { binLocation: key, partNumbers: [] };
+      const existing = byBin.get(key) || { binLocation: key, dealerCode: item.dealerCode || '', includeAvailableParts: false, partNumbers: [] };
       const parts = new Set(existing.partNumbers);
       (item.partNumbers || []).forEach((partNumber) => parts.add(partNumber));
-      byBin.set(key, { binLocation: key, partNumbers: Array.from(parts) });
+      byBin.set(key, {
+        binLocation: key,
+        dealerCode: existing.dealerCode || item.dealerCode || '',
+        includeAvailableParts: existing.includeAvailableParts || item.includeAvailableParts === true,
+        partNumbers: Array.from(parts)
+      });
     });
     return Array.from(byBin.values());
+  }
+
+  async function loadPlainBinOptions() {
+    const dealerCode = cleanDealerCode($('#plainBinDealer')?.value || '');
+    const select = $('#plainBinSelect');
+    if (!select) return [];
+    if (!dealerCode) {
+      select.innerHTML = '<option value="">Select bin</option>';
+      return [];
+    }
+    const data = await api(`/api/qr/bins?dealerCode=${encodeURIComponent(dealerCode)}`);
+    const selected = select.value;
+    select.innerHTML = '<option value="">Select bin</option>' + (data.bins || []).map((bin) => {
+      const binCode = escapeHtml(bin.binLocation || bin.binCode || '');
+      return `<option value="${binCode}">${binCode}</option>`;
+    }).join('');
+    select.value = Array.from(select.options).some((option) => option.value === selected) ? selected : '';
+    if (select.value && $('#plainBinLocation')) $('#plainBinLocation').value = select.value;
+    toast(`Loaded ${(data.bins || []).length} bin location(s)`);
+    return data.bins || [];
   }
 
   function selectedLabelBins() {
@@ -7623,14 +7647,6 @@
           loadBinTransferDestinationBins(dealerCode, fromBin, toBin).catch((error) => toast(error.message, 'error'));
           renderBinTransferParts(state.binTransferParts, state.binTransferParts.length ? '' : 'Click Show Parts to load available scanned parts.');
         }
-      });
-    });
-    $$('.qr-tool-tab').forEach((button) => {
-      button.addEventListener('click', () => {
-        const target = button.dataset.qrPanel;
-        $$('.qr-tool-tab').forEach((item) => item.classList.toggle('active', item === button));
-        $$('.qr-tool-panel').forEach((panel) => panel.classList.toggle('active', panel.id === target));
-        if (target === 'qrBulkLabelPanel') loadLabelBins().catch(console.warn);
       });
     });
   }
@@ -8315,15 +8331,15 @@
       await loadBinTransferDestinationBins(dealerCode, $('.bin-transfer-from')?.value || '').catch(() => null);
     });
 
-    $('#binQrForm').addEventListener('submit', (event) => {
-      event.preventDefault();
-      createQr(event.currentTarget, '/api/qr/bin', 'binQrImage').catch((error) => toast(error.message, 'error'));
+    $('#plainLoadBinsBtn')?.addEventListener('click', () => loadPlainBinOptions().catch((error) => toast(error.message, 'error')));
+    $('#plainBinLabelMode')?.addEventListener('change', () => {
+      if ($('#plainBinLabelMode')?.value === 'bin-auto-parts') loadPlainBinOptions().catch((error) => toast(error.message, 'error'));
     });
-    $('#partQrForm').addEventListener('submit', (event) => {
-      event.preventDefault();
-      createQr(event.currentTarget, '/api/qr/part', 'partQrImage').catch((error) => toast(error.message, 'error'));
+    $('#plainBinDealer')?.addEventListener('change', () => loadPlainBinOptions().catch((error) => toast(error.message, 'error')));
+    $('#plainBinSelect')?.addEventListener('change', () => {
+      if ($('#plainBinSelect')?.value && $('#plainBinLocation')) $('#plainBinLocation').value = $('#plainBinSelect').value;
     });
-    $('#plainBinRangeBtn').addEventListener('click', () => {
+    $('#plainBinRangeBtn')?.addEventListener('click', () => {
       try {
         const range = expandCodeRange($('#plainBinRangeFrom').value, $('#plainBinRangeTo').value);
         if (!range.length) throw new Error('Enter a valid bulk bin range');
@@ -8342,7 +8358,7 @@
         toast(error.message, 'error');
       }
     });
-    $('#plainBinLabelPdfBtn').addEventListener('click', () => {
+    $('#plainBinLabelPdfBtn')?.addEventListener('click', () => {
       try {
         const items = plainBinLabelItemsFromInput();
         if (!items.length) throw new Error('Enter at least one bin location');

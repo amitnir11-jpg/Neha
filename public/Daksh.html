@@ -824,100 +824,36 @@
       </div>
 
       <section id="qr" class="view">
-        <div class="qr-tool-tabs">
-          <button class="qr-tool-tab active" data-qr-panel="qrClassicPanel" type="button">QR / Barcode Tools</button>
-          <button class="qr-tool-tab" data-qr-panel="qrBulkLabelPanel" type="button">Bulk Bin / Part Label Generator</button>
-        </div>
-        <div id="qrClassicPanel" class="qr-tool-panel active three-col">
-          <section class="card">
-            <div class="card-head"><h2>Bin QR Creation</h2></div>
-            <form id="binQrForm" class="stack-form"><input name="bin" placeholder="Bin Code" required><button class="btn primary" type="submit">Create Bin QR</button></form>
-            <img id="binQrImage" class="qr-preview" alt="">
-          </section>
-          <section class="card">
-            <div class="card-head"><h2>Part QR Creation</h2></div>
-            <form id="partQrForm" class="stack-form"><input name="partNo" placeholder="Part Number" required><button class="btn primary" type="submit">Create Part QR</button></form>
-            <img id="partQrImage" class="qr-preview" alt="">
-          </section>
-          <section class="card">
-            <div class="card-head"><h2>Bin Location Label PDF</h2></div>
-            <div class="grid-form two print-grid">
-              <label>Process<select id="plainBinLabelMode"><option value="single">Single Bin Location</option><option value="bulk">Bulk Bin Locations</option><option value="bin-part">Bin Location + Part Numbers</option></select></label>
-              <label>Bin Location<input id="plainBinLocation" placeholder="CTR03N"></label>
-              <label class="span-2">Part Numbers<textarea id="plainBinParts" rows="3" placeholder="30510ACK000995 / 30510AAE30099S / 30500AAE10099S"></textarea></label>
-              <label class="span-2">Bulk Locations / Bin + Parts<textarea id="plainBulkBinLocations" rows="6" placeholder="CTR03N&#10;CTR03M&#10;CTR03L 30510ACK000995 / 30510AAE30099S"></textarea></label>
-              <label>Bulk From<input id="plainBinRangeFrom" placeholder="A1B1"></label>
-              <label>Bulk To<input id="plainBinRangeTo" placeholder="A1B10"></label>
-              <label>Paper Size<select id="plainBinPaperSize"><option value="a4">A4</option><option value="a5">A5</option><option value="letter">Letter</option><option value="legal">Legal</option><option value="custom">Custom</option></select></label>
-              <label>Orientation<select id="plainBinOrientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
-              <label>Custom Width mm<input id="plainBinPaperWidth" type="number" min="40" value="210"></label>
-              <label>Custom Height mm<input id="plainBinPaperHeight" type="number" min="40" value="297"></label>
-              <label>Label Width mm<input id="plainBinLabelWidth" type="number" min="30" max="210" value="92"></label>
-              <label>Label Height mm<input id="plainBinLabelHeight" type="number" min="12" max="80" value="28"></label>
-              <label>Columns<input id="plainBinColumns" type="number" min="1" max="5" value="2"></label>
-              <label>Max Parts<input id="plainBinMaxParts" type="number" min="1" max="20" value="5"></label>
-              <label>Margin mm<input id="plainBinMarginMm" type="number" min="2" max="40" value="8"></label>
-              <label>Gap mm<input id="plainBinGapMm" type="number" min="0" max="30" value="4"></label>
-              <label>Bin Font<input id="plainBinFontSize" type="number" min="6" max="24" value="10"></label>
-              <label>Part Font<input id="plainPartFontSize" type="number" min="5" max="20" value="8"></label>
-            </div>
-            <div class="actions">
-              <button id="plainBinRangeBtn" class="btn light" type="button">Add Bulk Range</button>
-              <button id="plainBinLabelPdfBtn" class="btn primary" type="button">Download Bin Location PDF</button>
-            </div>
-          </section>
-        </div>
-        <div id="qrBulkLabelPanel" class="qr-tool-panel">
-          <section class="card">
-            <div class="card-head"><h2>Bulk Bin / Part Label Generator</h2><span id="labelPreviewCount" class="live-pill red-dot">0 labels</span></div>
-            <div class="grid-form three">
-              <label>Mode<select id="labelMode"><option value="bin">Bin QR Only</option><option value="part">Part QR + Part Number</option><option value="combined">Bin + Part Combined Label</option></select></label>
-              <label>Dealer<select id="labelDealerSelect" class="dealerSelect"><option value="">Select dealer</option></select></label>
-              <label>Category Optional<input id="labelCategory" placeholder="All categories"></label>
-              <label>Bin Location<select id="labelBinSelect"><option value="">All bins</option></select></label>
-              <label>Selected Bins<textarea id="labelSelectedBins" rows="3" placeholder="B1, B2 or one bin per line"></textarea></label>
-              <label>Bin Range<div class="range-inline"><input id="labelRangeFrom" placeholder="B1"><input id="labelRangeTo" placeholder="B50"></div></label>
-            </div>
-            <div class="actions">
-              <button id="loadLabelBinsBtn" class="btn light" type="button">Load Bins</button>
-              <button id="previewLabelsBtn" class="btn primary" type="button">Preview Labels</button>
-              <button id="printLabelsBtn" class="btn light" type="button">Print</button>
-              <button id="downloadLabelPdfBtn" class="btn light" type="button">Download PDF</button>
-              <button id="downloadLabelExcelBtn" class="btn light" type="button">Download Excel List</button>
-              <button id="downloadLabelPngZipBtn" class="btn light" type="button">Download PNG ZIP</button>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-head"><h2>Label Size Settings</h2></div>
-            <div class="grid-form four">
-              <label>Label Width mm<input id="labelWidthMm" type="number" min="20" value="70"></label>
-              <label>Label Height mm<input id="labelHeightMm" type="number" min="12" value="28"></label>
-              <label>QR Size mm<input id="labelQrSizeMm" type="number" min="8" value="20"></label>
-              <label>Font Size<input id="labelFontSize" type="number" min="5" value="8"></label>
-              <label>Part Number Font<input id="labelPartFontSize" type="number" min="6" value="11"></label>
-              <label>Description Font<input id="labelDescriptionFontSize" type="number" min="5" value="7"></label>
-              <label>Margin mm<input id="labelMarginMm" type="number" min="1" value="8"></label>
-              <label>Gap mm<input id="labelGapMm" type="number" min="0" value="3"></label>
-              <label>Labels per row<input id="labelLabelsPerRow" type="number" min="1" max="8" value="2"></label>
-              <label>Paper Size<select id="labelPaperSize"><option value="a4">A4</option><option value="custom">Custom</option><option value="thermal80">Thermal 80mm</option><option value="thermal58">Thermal 58mm</option></select></label>
-              <label>Orientation<select id="labelOrientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
-              <label>Custom Width mm<input id="labelPaperWidthMm" type="number" min="40" value="210"></label>
-              <label>Custom Height mm<input id="labelPaperHeightMm" type="number" min="40" value="297"></label>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-head"><h2>Preview List</h2><span class="muted">Part Number | Part Description | Category | Bin | Qty</span></div>
-            <div id="labelPrintArea" class="label-print-area"></div>
-            <div class="table-wrap compact-table">
-              <table>
-                <thead><tr><th>Part Number</th><th>Part Description</th><th>Category</th><th>Bin</th><th>Dealer</th><th>Qty</th></tr></thead>
-                <tbody id="labelPreviewRows"></tbody>
-              </table>
-            </div>
-          </section>
-        </div>
+        <section class="card">
+          <div class="card-head"><h2>QR / Barcode Tools - Bulk Bin Print</h2></div>
+          <div class="grid-form three print-grid">
+            <label>Process<select id="plainBinLabelMode"><option value="single">Single Bin Location</option><option value="bulk">Multiple Bin Locations</option><option value="bin-part">Bin Location + Manual Part Numbers</option><option value="bin-auto-parts">Selected Bin + Available Parts</option></select></label>
+            <label>Dealer<select id="plainBinDealer" class="dealerSelect"><option value="">Select dealer</option></select></label>
+            <label>Select Bin<select id="plainBinSelect"><option value="">Select bin</option></select></label>
+            <label>Bin Location<input id="plainBinLocation" placeholder="CTR03N"></label>
+            <label>Bulk From<input id="plainBinRangeFrom" placeholder="A1B1"></label>
+            <label>Bulk To<input id="plainBinRangeTo" placeholder="A1B10"></label>
+            <label class="span-3">Part Numbers<textarea id="plainBinParts" rows="3" placeholder="30510ACK000995 / 30510AAE30099S / 30500AAE10099S"></textarea></label>
+            <label class="span-3">Bulk Locations / Bin + Parts<textarea id="plainBulkBinLocations" rows="6" placeholder="CTR03N&#10;CTR03M&#10;CTR03L 30510ACK000995 / 30510AAE30099S"></textarea></label>
+            <label>Paper Size<select id="plainBinPaperSize"><option value="a4">A4</option><option value="a5">A5</option><option value="letter">Letter</option><option value="legal">Legal</option><option value="custom">Custom</option></select></label>
+            <label>Orientation<select id="plainBinOrientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
+            <label>Custom Width mm<input id="plainBinPaperWidth" type="number" min="40" value="210"></label>
+            <label>Custom Height mm<input id="plainBinPaperHeight" type="number" min="40" value="297"></label>
+            <label>Label Width mm<input id="plainBinLabelWidth" type="number" min="30" max="210" value="92"></label>
+            <label>Label Height mm<input id="plainBinLabelHeight" type="number" min="12" max="80" value="28"></label>
+            <label>Columns<input id="plainBinColumns" type="number" min="1" max="5" value="2"></label>
+            <label>Max Parts<input id="plainBinMaxParts" type="number" min="1" max="40" value="8"></label>
+            <label>Margin mm<input id="plainBinMarginMm" type="number" min="2" max="40" value="8"></label>
+            <label>Gap mm<input id="plainBinGapMm" type="number" min="0" max="30" value="4"></label>
+            <label>Bin Font<input id="plainBinFontSize" type="number" min="6" max="24" value="10"></label>
+            <label>Part Font<input id="plainPartFontSize" type="number" min="5" max="20" value="8"></label>
+          </div>
+          <div class="actions">
+            <button id="plainLoadBinsBtn" class="btn light" type="button">Load Bins</button>
+            <button id="plainBinRangeBtn" class="btn light" type="button">Add Bulk Range</button>
+            <button id="plainBinLabelPdfBtn" class="btn primary" type="button">Download Bin Location PDF</button>
+          </div>
+        </section>
       </section>
 
       <section id="devices" class="view">
