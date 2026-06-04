@@ -14,11 +14,13 @@ const User = require('../models/User');
 const Device = require('../models/Device');
 const auth = require('./auth');
 const inventoryRoute = require('./inventory');
+const reconciliationRoute = require('./reconciliation');
 const { normalizePartNumber: normalizePartNo, cleanText: normalizedCleanText, numberValue } = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
 const { formatDateLikeFields, formatIstDateTime, isDateLikeKey } = require('../utils/time');
 const { auditStockStatus, calculateInventoryValue, decorateScanValue, scanValueRow, validateReportValueSource } = require('../utils/inventoryValueEngine');
 const { latestCurrentPriceFromRows } = require('../utils/priceHistory');
+const { getActiveAudit } = require('../utils/audit');
 
 const router = express.Router();
 const autoTable = autoTableModule.default || autoTableModule;
@@ -3816,6 +3818,163 @@ function stockSummaryFileName(data = {}) {
   const prefix = [dealerName, dealerCode, location].filter(Boolean).join(' ');
   return `${prefix || 'DEALER'} INVENTORY AUDIT REPORT AS ON ${dateLabel}.xlsx`;
 }
+
+function movementWiseStockAnalysisColumns() {
+  return [
+    { header: 'Movement Status', key: 'movementStatus', width: 20 },
+    { header: 'Part Number', key: 'partNumber', width: 18 },
+    { header: 'Part Description', key: 'partDescription', width: 34 },
+    { header: 'Product Category', key: 'productCategory', width: 22 },
+    { header: 'DMS Stock', key: 'dmsStock', width: 12 },
+    { header: 'Actual Scanned Stock', key: 'actualStock', width: 20 },
+    { header: 'Variance', key: 'variance', width: 12 },
+    { header: 'Reconciliation Status', key: 'reconciliationStatus', width: 22 },
+    { header: 'MRP', key: 'mrp', width: 12 },
+    { header: 'DLP', key: 'dlp', width: 12 },
+    { header: 'Stock Value', key: 'stockValue', width: 16 },
+    { header: 'Bin Location', key: 'binLocation', width: 28 },
+    { header: 'Movement Code A', key: 'movementCodeA', width: 16 },
+    { header: 'Movement Code B', key: 'movementCodeB', width: 16 },
+    { header: 'Average Demand', key: 'averageDemand', width: 16 },
+    { header: 'Forecast', key: 'forecast', width: 12 },
+    { header: 'Safety Stock', key: 'safetyStock', width: 14 },
+    { header: 'ROP', key: 'rop', width: 10 }
+  ];
+}
+
+function movementWiseStockAnalysisSummaryRows(summary = {}) {
+  return [
+    ['Total Parts', summary.totalParts || summary.totalRows || 0],
+    ['Fast Moving Parts', summary.fastMovingParts || summary.fastMovingCount || 0],
+    ['Slow Moving Parts', summary.slowMovingParts || summary.slowMovingCount || 0],
+    ['Dead Stock Parts', summary.deadStockParts || summary.deadStockCount || 0],
+    ['Critical Shortage Parts', summary.criticalShortageParts || summary.criticalShortageCount || 0],
+    ['Excess Stock Parts', summary.excessStockParts || summary.excessStockCount || 0],
+    ['Total Stock Value', summary.totalStockValue || 0],
+    ['Dead Stock Value', summary.deadStockValue || summary.totalDeadStockValue || 0],
+    ['Excess Stock Value', summary.excessStockValue || summary.totalExcessStockValue || 0]
+  ];
+}
+
+async function movementWiseStockAnalysisQuery(payload = {}) {
+  const query = requireDealerForReport(payload);
+  query.auditId = reportQueryValue(payload.auditId || payload.audit || query.auditId || '');
+  if (String(query.auditId || '').trim().toLowerCase() === 'active') query.auditId = '';
+  query.movementStatus = reportQueryValue(payload.movementStatus || query.movementStatus || '');
+  if (!query.auditId) {
+    const [dealer, activeAudit] = await Promise.all([
+      Dealer.findOne({ dealerCode: query.dealerCode }).lean().catch(() => null),
+      getActiveAudit({ dealerCode: query.dealerCode }).catch(() => null)
+    ]);
+    query.auditId = cleanText((dealer && dealer.currentAuditId) || (activeAudit && activeAudit.auditId) || '');
+  }
+  if (!query.auditId) {
+    const error = new Error('Active Audit ID is required for Movement Wise Stock Analysis Report');
+    error.statusCode = 400;
+    throw error;
+  }
+  return query;
+}
+
+function styleMovementWiseStockSheet(sheet, headerRowNumber) {
+  const title = sheet.getCell(1, 1);
+  title.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
+  title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
+  title.alignment = { vertical: 'middle', horizontal: 'center' };
+  const header = sheet.getRow(headerRowNumber);
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
+  header.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  sheet.views = [{ state: 'frozen', ySplit: headerRowNumber }];
+  sheet.autoFilter = {
+    from: { row: headerRowNumber, column: 1 },
+    to: { row: headerRowNumber, column: sheet.columnCount }
+  };
+  sheet.eachRow((row) => {
+    row.eachCell((cell) => {
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+    });
+  });
+}
+
+function addMovementWiseStockAnalysisSheet(workbook, data = {}) {
+  const columns = movementWiseStockAnalysisColumns();
+  const rows = data.rows || [];
+  const summary = data.summary || {};
+  const sheet = workbook.addWorksheet('Movement Stock Analysis');
+  columns.forEach((column, index) => {
+    sheet.getColumn(index + 1).width = column.width || 18;
+  });
+  sheet.mergeCells(1, 1, 1, columns.length);
+  sheet.getCell(1, 1).value = 'Movement Wise Stock Analysis Report';
+  sheet.getRow(1).height = 24;
+  sheet.getCell(2, 1).value = 'Dealer Code';
+  sheet.getCell(2, 2).value = summary.dealerCode || data.dealerCode || '';
+  sheet.getCell(2, 4).value = 'Active Audit ID';
+  sheet.getCell(2, 5).value = summary.auditId || data.auditId || '';
+  const summaryRows = movementWiseStockAnalysisSummaryRows(summary);
+  let rowNumber = 4;
+  summaryRows.forEach(([metric, value]) => {
+    const row = sheet.getRow(rowNumber);
+    row.getCell(1).value = metric;
+    row.getCell(2).value = value;
+    row.getCell(1).font = { bold: true };
+    rowNumber += 1;
+  });
+  rowNumber += 1;
+  const headerRowNumber = rowNumber;
+  const headerRow = sheet.getRow(headerRowNumber);
+  columns.forEach((column, index) => {
+    headerRow.getCell(index + 1).value = column.header;
+  });
+  rows.forEach((item) => {
+    rowNumber += 1;
+    const row = sheet.getRow(rowNumber);
+    columns.forEach((column, index) => {
+      row.getCell(index + 1).value = item[column.key] === undefined || item[column.key] === null ? '' : item[column.key];
+    });
+  });
+  styleMovementWiseStockSheet(sheet, headerRowNumber);
+  return sheet;
+}
+
+async function sendMovementWiseStockAnalysisWorkbook(res, data = {}) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Daksh Inventory v2';
+  workbook.created = new Date();
+  addMovementWiseStockAnalysisSheet(workbook, data);
+  const buffer = await workbook.xlsx.writeBuffer();
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="Movement_Wise_Stock_Analysis_Report.xlsx"');
+  return res.send(Buffer.from(buffer));
+}
+
+router.get('/movement_wise_stock_analysis', auth.requireAuth, async (req, res) => {
+  try {
+    const reportQuery = await movementWiseStockAnalysisQuery(req.query);
+    const data = await reconciliationRoute.buildMovementAnalysisReport(reportQuery);
+    const columns = movementWiseStockAnalysisColumns();
+    if (req.query.format === 'excel') return sendMovementWiseStockAnalysisWorkbook(res, data);
+    return res.json({
+      success: true,
+      type: 'movement_wise_stock_analysis',
+      title: 'Movement Wise Stock Analysis Report',
+      columns: columns.map(({ header, key }) => ({ header, key })),
+      rows: data.rows || [],
+      sections: data.sections || {},
+      summary: data.summary || {},
+      totalRows: (data.rows || []).length,
+      message: data.message
+    });
+  } catch (error) {
+    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
+  }
+});
 
 router.get('/inventory-audit-summary', auth.requireAuth, async (req, res) => {
   try {

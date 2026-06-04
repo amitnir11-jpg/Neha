@@ -579,9 +579,9 @@ function classifyMovement(stock = {}, actualStock = 0) {
 
   const highDemand = averageDemand >= 10 || forecast >= 10 || (dmsStock > 0 && averageDemand >= dmsStock * 0.25);
   const lowDemand = averageDemand <= 2;
-  const fast = hasCode(movementCodeA, ['A', 'F']) || hasCode(movementCodeB, ['6', 'F']) || highDemand;
-  const dead = dmsStock > 0 && averageDemand === 0 && forecast === 0 && !fast;
-  const slow = !dead && (hasCode(movementCodeA, ['B', 'C', 'S']) || hasCode(movementCodeB, ['S'])) && lowDemand && dmsStock > 0;
+  const fast = hasCode(movementCodeA, ['A']) || hasCode(movementCodeB, ['6']) || highDemand;
+  const dead = dmsStock > 0 && averageDemand === 0 && forecast === 0;
+  const slow = hasCode(movementCodeA, ['B', 'C']) || (lowDemand && dmsStock > 0);
 
   let movementStatus = 'Normal';
   if (dead) movementStatus = 'Dead Stock';
@@ -589,13 +589,31 @@ function classifyMovement(stock = {}, actualStock = 0) {
   else if (slow) movementStatus = 'Slow Moving';
 
   const criticalShortage = rop > 0 && (dmsStock < rop || Number(actualStock || 0) < rop);
-  const excessStock = dmsStock > 0 && (dmsStock > forecast + safetyStock || (lowDemand && dmsStock > Math.max(rop, safetyStock, 0)));
+  const excessStock = dmsStock > forecast + safetyStock;
   let movementType = 'Normal';
   if (criticalShortage) movementType = 'Critical Shortage';
+  else if (dead) movementType = 'Dead Stock';
   else if (excessStock) movementType = 'Excess Stock';
   else if (movementStatus !== 'Normal') movementType = movementStatus;
 
-  return { movementType, movementStatus };
+  const movementLabels = [];
+  if (fast) movementLabels.push('Fast Moving');
+  if (slow) movementLabels.push('Slow Moving');
+  if (dead) movementLabels.push('Dead Stock');
+  if (criticalShortage) movementLabels.push('Critical Shortage');
+  if (excessStock) movementLabels.push('Excess Stock');
+
+  return {
+    movementType,
+    movementStatus,
+    priorityMovementStatus: movementType,
+    movementLabels,
+    fastMoving: fast,
+    slowMoving: slow,
+    deadStock: dead,
+    criticalShortage,
+    excessStock
+  };
 }
 
 function statusForVariance(variance, notInDms = false, manual = false) {
@@ -627,7 +645,14 @@ function reportRowFromStock(stock, physical) {
     bin: binLocation,
     movementType: movement.movementType,
     movementStatus: movement.movementStatus,
+    priorityMovementStatus: movement.priorityMovementStatus,
     fastSlowDeadStatus: movement.movementStatus,
+    movementLabels: movement.movementLabels,
+    fastMoving: movement.fastMoving,
+    slowMoving: movement.slowMoving,
+    deadStock: movement.deadStock,
+    criticalShortage: movement.criticalShortage,
+    excessStock: movement.excessStock,
     stockValue: money(publicRow.stockValue || dmsStock * dlp),
     shortageQty: Math.max(variance * -1, 0),
     excessQty: Math.max(variance, 0),
@@ -778,6 +803,157 @@ async function buildReconciliationReport(query = {}) {
   };
 }
 
+function movementStatusText(row = {}) {
+  const labels = Array.isArray(row.movementLabels) ? row.movementLabels.filter(Boolean) : [];
+  if (labels.length) return Array.from(new Set(labels)).join(', ');
+  return [row.movementStatus, row.movementType].filter((value) => value && value !== 'Normal').join(', ') || 'Normal';
+}
+
+function priorityMovementStatus(row = {}) {
+  if (row.criticalShortage || row.movementType === 'Critical Shortage') return 'Critical Shortage';
+  if (row.deadStock || row.movementStatus === 'Dead Stock' || row.fastSlowDeadStatus === 'Dead Stock') return 'Dead Stock';
+  if (row.excessStock || row.movementType === 'Excess Stock') return 'Excess Stock';
+  if (row.fastMoving || row.movementStatus === 'Fast Moving' || row.fastSlowDeadStatus === 'Fast Moving') return 'Fast Moving';
+  if (row.slowMoving || row.movementStatus === 'Slow Moving' || row.fastSlowDeadStatus === 'Slow Moving') return 'Slow Moving';
+  return 'Normal';
+}
+
+function movementAnalysisRow(row = {}) {
+  const dmsStock = Number(row.dmsStock || row.systemQty || 0);
+  const dlp = Number(row.dlp || row.dlc || 0);
+  const movementStatus = row.priorityMovementStatus || priorityMovementStatus(row);
+  return {
+    dealerCode: row.dealerCode || '',
+    auditId: row.auditId || '',
+    partNumber: row.partNumber || row.partNo || '',
+    partDescription: row.partDescription || row.partName || '',
+    productCategory: row.productCategory || row.category || '',
+    dmsStock,
+    actualStock: Number(row.actualStock ?? row.physicalStock ?? 0),
+    variance: Number(row.variance ?? row.netDifference ?? 0),
+    reconciliationStatus: row.status || '',
+    mrp: Number(row.mrp || 0),
+    dlp,
+    stockValue: money(row.stockValue || dmsStock * dlp),
+    movementCodeA: row.movementCodeA || '',
+    movementCodeB: row.movementCodeB || '',
+    averageDemand: Number(row.averageDemand || 0),
+    forecast: Number(row.forecast || 0),
+    safetyStock: Number(row.safetyStock || 0),
+    rop: Number(row.rop || 0),
+    binLocation: row.binLocation || row.bin || '',
+    movementType: row.movementType || 'Normal',
+    fastSlowDeadStatus: row.fastSlowDeadStatus || row.movementStatus || 'Normal',
+    movementStatus,
+    movementStatusDetail: movementStatusText(row),
+    movementLabels: Array.isArray(row.movementLabels) ? row.movementLabels : [],
+    fastMoving: Boolean(row.fastMoving || row.movementStatus === 'Fast Moving'),
+    slowMoving: Boolean(row.slowMoving || row.movementStatus === 'Slow Moving'),
+    deadStock: Boolean(row.deadStock || row.movementStatus === 'Dead Stock'),
+    criticalShortage: Boolean(row.criticalShortage || row.movementType === 'Critical Shortage'),
+    excessStock: Boolean(row.excessStock || row.movementType === 'Excess Stock')
+  };
+}
+
+function movementRowHasLabel(row = {}, value = '') {
+  const needle = upper(value);
+  if (!needle) return true;
+  const labels = [
+    ...(Array.isArray(row.movementLabels) ? row.movementLabels : []),
+    row.movementType,
+    row.fastSlowDeadStatus,
+    row.movementStatus
+  ].map(upper);
+  return labels.some((label) => label === needle || label.includes(needle));
+}
+
+function movementAnalysisFilter(row = {}, filters = {}) {
+  if (filters.productCategory && !upper(row.productCategory).includes(upper(filters.productCategory))) return false;
+  if (filters.category && !upper(row.productCategory).includes(upper(filters.category))) return false;
+  if (filters.binLocation && !upper(row.binLocation).includes(upper(filters.binLocation))) return false;
+  if (filters.bin && !upper(row.binLocation).includes(upper(filters.bin))) return false;
+  if (filters.movementStatus && upper(row.movementStatus) !== upper(filters.movementStatus)) return false;
+  if (filters.movementType && !movementRowHasLabel(row, filters.movementType)) return false;
+  if (filters.movement && !movementRowHasLabel(row, filters.movement)) return false;
+  if (filters.fastSlowDead && !movementRowHasLabel(row, filters.fastSlowDead)) return false;
+  if (filters.fastSlowDeadStatus && !movementRowHasLabel(row, filters.fastSlowDeadStatus)) return false;
+  return true;
+}
+
+function movementAnalysisSections(rows = []) {
+  return {
+    fastMoving: rows.filter((row) => row.movementStatus === 'Fast Moving'),
+    slowMoving: rows.filter((row) => row.movementStatus === 'Slow Moving'),
+    deadStock: rows.filter((row) => row.movementStatus === 'Dead Stock'),
+    criticalShortage: rows.filter((row) => row.movementStatus === 'Critical Shortage'),
+    excessStock: rows.filter((row) => row.movementStatus === 'Excess Stock')
+  };
+}
+
+function movementAnalysisSummary(rows = [], baseSummary = {}) {
+  const fastMovingParts = rows.filter((row) => row.movementStatus === 'Fast Moving').length;
+  const slowMovingParts = rows.filter((row) => row.movementStatus === 'Slow Moving').length;
+  const deadStockParts = rows.filter((row) => row.movementStatus === 'Dead Stock').length;
+  const criticalShortageParts = rows.filter((row) => row.movementStatus === 'Critical Shortage').length;
+  const excessStockParts = rows.filter((row) => row.movementStatus === 'Excess Stock').length;
+  const deadStockValue = money(rows.reduce((sum, row) => sum + (row.movementStatus === 'Dead Stock' ? Number(row.stockValue || 0) : 0), 0));
+  const excessStockValue = money(rows.reduce((sum, row) => sum + (row.movementStatus === 'Excess Stock' ? Number(row.stockValue || 0) : 0), 0));
+  return {
+    dealerCode: baseSummary.dealerCode || '',
+    auditId: baseSummary.auditId || '',
+    totalParts: rows.length,
+    totalRows: rows.length,
+    fastMovingParts,
+    fastMovingCount: fastMovingParts,
+    slowMovingParts,
+    slowMovingCount: slowMovingParts,
+    deadStockParts,
+    deadStockCount: deadStockParts,
+    criticalShortageParts,
+    criticalShortageCount: criticalShortageParts,
+    excessStockParts,
+    excessStockCount: excessStockParts,
+    deadStockValue,
+    excessStockValue,
+    totalDeadStockValue: deadStockValue,
+    totalExcessStockValue: excessStockValue,
+    totalDmsStockQty: rows.reduce((sum, row) => sum + Number(row.dmsStock || 0), 0),
+    totalActualScannedQty: rows.reduce((sum, row) => sum + Number(row.actualStock || 0), 0),
+    netVariance: rows.reduce((sum, row) => sum + Number(row.variance || 0), 0),
+    totalStockValue: money(rows.reduce((sum, row) => sum + Number(row.stockValue || 0), 0))
+  };
+}
+
+async function buildMovementAnalysisReport(query = {}) {
+  const baseQuery = { ...query };
+  if (baseQuery.productCategory && !baseQuery.category) baseQuery.category = baseQuery.productCategory;
+  if (baseQuery.binLocation && !baseQuery.bin) baseQuery.bin = baseQuery.binLocation;
+  delete baseQuery.movementType;
+  delete baseQuery.fastSlowDead;
+  delete baseQuery.fastSlowDeadStatus;
+  const report = await buildReconciliationReport(baseQuery);
+  const filters = compactParams(query);
+  const rows = (report.rows || [])
+    .filter((row) => !row.notInDms)
+    .map(movementAnalysisRow)
+    .filter((row) => movementAnalysisFilter(row, filters))
+    .sort((a, b) => String(a.movementStatus || '').localeCompare(String(b.movementStatus || '')) || String(a.partNumber || '').localeCompare(String(b.partNumber || ''), undefined, { numeric: true, sensitivity: 'base' }));
+  const sections = movementAnalysisSections(rows);
+  const summary = movementAnalysisSummary(rows, report.summary || {});
+  return {
+    scope: report.scope,
+    dealerCode: report.scope.dealerCode,
+    auditId: report.scope.auditId,
+    filters,
+    summary,
+    sections,
+    columns: movementAnalysisColumns().map(({ header, key }) => ({ header, key })),
+    rows,
+    stockCount: report.stockCount,
+    message: rows.length ? '' : (report.message || 'No movement analysis data found for selected filter')
+  };
+}
+
 function previewColumns() {
   return [
     { header: 'Part Number', key: 'partNumber', width: 18 },
@@ -829,6 +1005,29 @@ function reportColumns() {
   ];
 }
 
+function movementAnalysisColumns() {
+  return [
+    { header: 'Movement Status', key: 'movementStatus', width: 20 },
+    { header: 'Part Number', key: 'partNumber', width: 18 },
+    { header: 'Part Description', key: 'partDescription', width: 34 },
+    { header: 'Product Category', key: 'productCategory', width: 22 },
+    { header: 'DMS Stock', key: 'dmsStock', width: 12 },
+    { header: 'Actual Scanned Stock', key: 'actualStock', width: 18 },
+    { header: 'Variance', key: 'variance', width: 12 },
+    { header: 'Reconciliation Status', key: 'reconciliationStatus', width: 22 },
+    { header: 'MRP', key: 'mrp', width: 12 },
+    { header: 'DLP', key: 'dlp', width: 12 },
+    { header: 'Stock Value', key: 'stockValue', width: 16 },
+    { header: 'Bin Location', key: 'binLocation', width: 26 },
+    { header: 'Movement Code A', key: 'movementCodeA', width: 16 },
+    { header: 'Movement Code B', key: 'movementCodeB', width: 16 },
+    { header: 'Average Demand', key: 'averageDemand', width: 16 },
+    { header: 'Forecast', key: 'forecast', width: 12 },
+    { header: 'Safety Stock', key: 'safetyStock', width: 14 },
+    { header: 'ROP', key: 'rop', width: 10 }
+  ];
+}
+
 function addSheet(workbook, name, columns, rows) {
   const sheet = workbook.addWorksheet(name.slice(0, 31));
   sheet.columns = columns;
@@ -858,6 +1057,28 @@ function addSummarySheet(workbook, summary) {
     ['Total Shortage Value', summary.totalShortageValue],
     ['Total Excess Value', summary.totalExcessValue],
     ['Scanned but not in DMS', summary.totalScannedButNotInDms]
+  ].forEach(([metric, value]) => sheet.addRow({ metric, value }));
+  sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
+}
+
+function addMovementAnalysisSummarySheet(workbook, summary = {}) {
+  const sheet = workbook.addWorksheet('Movement Summary');
+  sheet.columns = [{ header: 'Metric', key: 'metric', width: 34 }, { header: 'Value', key: 'value', width: 18 }];
+  [
+    ['Dealer Code', summary.dealerCode],
+    ['Audit ID', summary.auditId],
+    ['Fast Moving Count', summary.fastMovingCount],
+    ['Slow Moving Count', summary.slowMovingCount],
+    ['Dead Stock Count', summary.deadStockCount],
+    ['Critical Shortage Count', summary.criticalShortageCount],
+    ['Excess Stock Count', summary.excessStockCount],
+    ['Total Dead Stock Value', summary.totalDeadStockValue],
+    ['Total Excess Stock Value', summary.totalExcessStockValue],
+    ['Total DMS Stock Qty', summary.totalDmsStockQty],
+    ['Total Actual Scanned Qty', summary.totalActualScannedQty],
+    ['Net Variance', summary.netVariance],
+    ['Total Stock Value', summary.totalStockValue]
   ].forEach(([metric, value]) => sheet.addRow({ metric, value }));
   sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
@@ -899,6 +1120,47 @@ async function sendReportExport(res, report, format, reportType = 'dealer') {
     const pdf = Buffer.from(doc.output('arraybuffer'));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Daksh_Reconciliation_${reportType || 'dealer'}.pdf"`);
+    return res.send(pdf);
+  }
+  return null;
+}
+
+async function sendMovementAnalysisExport(res, analysis, format) {
+  const rows = analysis.rows || [];
+  if (format === 'excel' || format === 'xlsx') {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Daksh Inventory';
+    addMovementAnalysisSummarySheet(workbook, analysis.summary || {});
+    addSheet(workbook, 'Movement Analysis', movementAnalysisColumns(), rows);
+    const movementTypeFilter = clean((analysis.filters && (analysis.filters.movementType || analysis.filters.fastSlowDead)) || '');
+    if (!movementTypeFilter) {
+      addSheet(workbook, 'Fast Moving Parts', movementAnalysisColumns(), analysis.sections.fastMoving || []);
+      addSheet(workbook, 'Slow Moving Parts', movementAnalysisColumns(), analysis.sections.slowMoving || []);
+      addSheet(workbook, 'Dead Stock Parts', movementAnalysisColumns(), analysis.sections.deadStock || []);
+      addSheet(workbook, 'Critical Shortage', movementAnalysisColumns(), analysis.sections.criticalShortage || []);
+      addSheet(workbook, 'Excess Stock Parts', movementAnalysisColumns(), analysis.sections.excessStock || []);
+    }
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Movement_Analysis_Report.xlsx"');
+    return res.send(Buffer.from(buffer));
+  }
+  if (format === 'pdf') {
+    const doc = new jsPDF({ orientation: 'landscape' });
+    doc.setFontSize(14);
+    doc.text('DAKSH INVENTORY SYSTEM - Movement Analysis Report', 14, 15);
+    doc.setFontSize(9);
+    doc.text(`Dealer: ${analysis.summary.dealerCode || '-'} | Audit: ${analysis.summary.auditId || '-'} | Rows: ${rows.length}`, 14, 21);
+    autoTable(doc, {
+      startY: 28,
+      head: [['Part Number', 'Description', 'Category', 'DMS', 'Actual', 'Variance', 'MRP', 'DLP', 'Stock Value', 'Move A', 'Move B', 'Avg Demand', 'Forecast', 'Safety', 'ROP', 'Movement Status']],
+      body: rows.slice(0, 1000).map((row) => [row.partNumber, row.partDescription, row.productCategory, row.dmsStock, row.actualStock, row.variance, row.mrp, row.dlp, row.stockValue, row.movementCodeA, row.movementCodeB, row.averageDemand, row.forecast, row.safetyStock, row.rop, row.movementStatus]),
+      styles: { fontSize: 6.6, cellPadding: 1.2 },
+      headStyles: { fillColor: [21, 58, 91] }
+    });
+    const pdf = Buffer.from(doc.output('arraybuffer'));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Movement_Analysis_Report.pdf"');
     return res.send(pdf);
   }
   return null;
@@ -1027,6 +1289,17 @@ async function summaryHandler(req, res) {
   }
 }
 
+async function movementAnalysisHandler(req, res) {
+  try {
+    const scope = await resolveScope(req);
+    const analysis = await buildMovementAnalysisReport({ ...req.query, dealerCode: scope.dealerCode, auditId: scope.auditId });
+    if (req.query.format) return sendMovementAnalysisExport(res, analysis, req.query.format);
+    return res.json({ success: true, ...analysis, dealerCode: scope.dealerCode, auditId: scope.auditId });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
 function exportHandler(format) {
   return async (req, res) => {
     try {
@@ -1046,6 +1319,8 @@ router.delete(['/stock', '/delete/:dealerCode/:auditId'], auth.requireAuth, auth
 router.get('/export/excel', auth.requireAuth, exportHandler('excel'));
 router.get('/export/pdf', auth.requireAuth, exportHandler('pdf'));
 router.get('/final-summary/:dealerCode/:auditId', auth.requireAuth, summaryHandler);
+router.get('/movement-analysis/:dealerCode/:auditId', auth.requireAuth, movementAnalysisHandler);
+router.get('/movement-analysis', auth.requireAuth, movementAnalysisHandler);
 router.get('/report/:dealerCode/:auditId', auth.requireAuth, reportHandler);
 router.get('/report', auth.requireAuth, reportHandler);
 router.get('/', auth.requireAuth, reportHandler);
@@ -1070,5 +1345,6 @@ router.post('/reprocess', auth.requireAuth, async (req, res) => {
 
 module.exports = router;
 module.exports.buildReconciliationReport = buildReconciliationReport;
+module.exports.buildMovementAnalysisReport = buildMovementAnalysisReport;
 module.exports.rowsToStockRecords = rowsToStockRecords;
 module.exports.readUploadedRows = readUploadedRows;

@@ -208,6 +208,7 @@
     'inventory-audit-summary': ['dealer', 'dateRange', 'productCategory'],
     short: ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
     excess: ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
+    movement_wise_stock_analysis: ['dealer', 'audit', 'binLocation', 'productCategory', 'partNumber', 'movementStatus'],
     damage: ['dealer', 'dateRange', 'scanType', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation']
   };
   const REPORT_FILTER_OPTIONS = [
@@ -218,7 +219,7 @@
     ['scanStatus', 'Scan Status'],
     ['userName', 'User Name'],
     ['syncStatus', 'Sync Status'],
-    ['audit', 'Audit'],
+    ['audit', 'Active Audit ID'],
     ['auditDate', 'Audit Date'],
     ['productGroup', 'Product Group'],
     ['productSubGroup', 'Product Sub Group'],
@@ -230,6 +231,7 @@
     ['entryChannel', 'Entry Channel'],
     ['entrySource', 'Entry Source'],
     ['binLocation', 'Bin Location'],
+    ['movementStatus', 'Movement Status'],
     ['partNumber', 'Part Number'],
     ['productCategory', 'Product Category'],
     ['model', 'Model'],
@@ -263,6 +265,7 @@
     'inventory-audit-summary': 'Inventory Audit Summary Report',
     short: 'Short Report',
     excess: 'Excess Report',
+    movement_wise_stock_analysis: 'Movement Wise Stock Analysis Report',
     damage: 'Damage Report',
     'category-wise-variance-summary': 'Category Wise Variance Summary',
     'partwise-inventory-audit': 'Partwise Inventory Audit Report',
@@ -274,6 +277,7 @@
     'partwise-inventory-audit': 'partwise_inventory_audit_report_layout_v2',
     short: 'short_report_layout',
     excess: 'excess_report_layout',
+    movement_wise_stock_analysis: 'movement_wise_stock_analysis_report_layout',
     damage: 'damage_report_layout',
     'bin-wise-stock': 'bin_wise_report_layout',
     'bin-stock': 'bin_wise_report_layout',
@@ -3335,13 +3339,14 @@
       fromDate: reportFilterValue(formData.fromDate),
       toDate: reportFilterValue(formData.toDate),
       category: reportFilterValue(formData.category),
-      productCategory: ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary', 'inventory-audit-summary'].includes(reportType) ? reportFilterValue(formData.category) : undefined,
+      productCategory: ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary', 'inventory-audit-summary', 'movement_wise_stock_analysis'].includes(reportType) ? reportFilterValue(formData.category) : undefined,
       model: reportFilterValue(formData.model),
       year: reportFilterValue(formData.year),
       partNumber: reportFilterValue(formData.partNumber),
       productGroup: reportFilterValue(formData.productGroup),
       partSubGroup: reportFilterValue(formData.partSubGroup),
       binLocation: reportFilterValue(formData.binLocation || formData.bin),
+      movementStatus: reportFilterValue(formData.movementStatus),
       scanType: reportFilterValue(formData.scanType),
       scanStatus: reportFilterValue(formData.scanStatus),
       userName: reportFilterValue(formData.userName),
@@ -3370,7 +3375,7 @@
     params.delete('testScanMode');
     if (format) {
       const reportType = paramsObject.reportType || activeReportType();
-      if (!['stock-summary', 'inventory-audit-summary'].includes(reportType)) {
+      if (!['stock-summary', 'inventory-audit-summary', 'movement_wise_stock_analysis'].includes(reportType)) {
         const selectedColumns = currentReportColumnKeys(reportType);
         if (selectedColumns && selectedColumns.length) params.set('columns', selectedColumns.join(','));
       }
@@ -3403,11 +3408,45 @@
     return entry.data || null;
   }
 
+  function movementWiseSummaryValue(summary = {}, keys = []) {
+    const key = keys.find((item) => summary[item] !== undefined && summary[item] !== null && summary[item] !== '');
+    return key ? summary[key] : 0;
+  }
+
+  function renderMovementWiseStockSummary(summary = {}, reportType = activeReportType()) {
+    const panel = $('#movementWiseStockSummary');
+    if (!panel) return;
+    if (reportType !== 'movement_wise_stock_analysis') {
+      panel.hidden = true;
+      panel.innerHTML = '';
+      return;
+    }
+    const cards = [
+      ['Total Parts', wholeNumber(movementWiseSummaryValue(summary, ['totalParts', 'totalRows']))],
+      ['Fast Moving Parts', wholeNumber(movementWiseSummaryValue(summary, ['fastMovingParts', 'fastMovingCount']))],
+      ['Slow Moving Parts', wholeNumber(movementWiseSummaryValue(summary, ['slowMovingParts', 'slowMovingCount']))],
+      ['Dead Stock Parts', wholeNumber(movementWiseSummaryValue(summary, ['deadStockParts', 'deadStockCount']))],
+      ['Critical Shortage Parts', wholeNumber(movementWiseSummaryValue(summary, ['criticalShortageParts', 'criticalShortageCount']))],
+      ['Excess Stock Parts', wholeNumber(movementWiseSummaryValue(summary, ['excessStockParts', 'excessStockCount']))],
+      ['Total Stock Value', money2(movementWiseSummaryValue(summary, ['totalStockValue']))],
+      ['Dead Stock Value', money2(movementWiseSummaryValue(summary, ['deadStockValue', 'totalDeadStockValue']))],
+      ['Excess Stock Value', money2(movementWiseSummaryValue(summary, ['excessStockValue', 'totalExcessStockValue']))]
+    ];
+    panel.innerHTML = cards.map(([label, value]) => `
+      <div class="metric mini">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value)}</strong>
+      </div>
+    `).join('');
+    panel.hidden = false;
+  }
+
   function applyReportData(data, reportType = activeReportType()) {
     $('#reportTitle').textContent = data.title || REPORT_TITLES[reportType];
     const rows = data.rows || [];
     state.reportTableSummary = data.summary || null;
     state.reportTableSections = data.sections || null;
+    renderMovementWiseStockSummary(data.summary || {}, reportType);
     renderReportTable(data.columns || [], rows, data.totalRows, data.grandTotal, reportType);
     const message = $('#reportMessage');
     if (message) {
@@ -3460,8 +3499,6 @@
   }
 
   function updateReportButtons() {
-    const oldMovementButton = $('#movementAnalysisRefresh');
-    if (oldMovementButton) oldMovementButton.remove();
     const reportType = activeReportType();
     const canShow = Boolean(reportType) && validateReportSelection(false);
     const isCsvReport = CSV_REPORT_TYPES.has(reportType);
@@ -3535,6 +3572,7 @@
     state.reportTableGrandTotal = null;
     state.reportTableSummary = null;
     state.reportTableSections = null;
+    renderMovementWiseStockSummary({}, '');
     $('#reportHead').innerHTML = '';
     $('#reportRows').innerHTML = '';
     if ($('#reportTableSearch')) $('#reportTableSearch').value = '';
@@ -8069,7 +8107,6 @@
     });
     $('#reconExcel').addEventListener('click', () => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('excel')}`, 'Daksh_Reconciliation.xlsx').catch((error) => toast(error.message, 'error')));
     $('#reconPdf').addEventListener('click', () => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('pdf')}`, 'Daksh_Reconciliation.pdf').catch((error) => toast(error.message, 'error')));
-    $('#reconFullReport')?.addEventListener('click', () => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('excel', true)}`, 'Daksh_Reconciliation_Full.xlsx').catch((error) => toast(error.message, 'error')));
 
     $('#partUploadForm').addEventListener('submit', async (event) => {
       event.preventDefault();

@@ -351,6 +351,7 @@
               <option value="stock-summary">Stock Summary</option>
               <option value="short">Short Report</option>
               <option value="excess">Excess Report</option>
+              <option value="movement_wise_stock_analysis">Movement Wise Stock Analysis Report</option>
               <option value="damage">Damage Report</option>
               <option value="category-wise-variance-summary">Category Wise Variance Summary</option>
               <option value="partwise-inventory-audit">Partwise Inventory Audit Report</option>
@@ -358,7 +359,7 @@
             </select></label>
             <label class="hidden" data-report-filter-key="dealerName">Dealer Name<input name="dealerName" placeholder="Dealer Name"></label>
             <label data-report-filter-key="dealer">Dealer Code<select name="dealerCode" class="dealerSelect"></select></label>
-            <label class="hidden" data-report-filter-key="audit">Audit<input name="auditId" placeholder="Audit ID"></label>
+            <label class="hidden" data-report-filter-key="audit">Active Audit ID<input name="auditId" placeholder="Active Audit ID"></label>
             <label class="hidden" data-report-filter-key="auditDate">Audit Date<input name="auditDate" type="date"></label>
             <label data-report-filter-key="dateRange">From Date<input name="fromDate" type="date"></label>
             <label data-report-filter-key="dateRange">To Date<input name="toDate" type="date"></label>
@@ -369,6 +370,7 @@
             <label class="hidden" data-report-filter-key="productGroup">Product Group<select name="productGroup" id="reportProductGroupFilter"><option value="">All Product Groups</option></select></label>
             <label class="hidden" data-report-filter-key="productSubGroup">Product SubGroup<select name="partSubGroup" id="reportProductSubGroupFilter"><option value="">All Product SubGroups</option></select></label>
             <label class="hidden" data-report-filter-key="binLocation">Bin Location<input name="bin" placeholder="Bin Location"></label>
+            <label class="hidden" data-report-filter-key="movementStatus">Movement Status<select name="movementStatus"><option value="">All Movement Status</option><option>Fast Moving</option><option>Slow Moving</option><option>Dead Stock</option><option>Critical Shortage</option><option>Excess Stock</option><option>Normal</option></select></label>
             <label data-report-filter-key="scanType">Scan Type<select name="scanType"><option value="">All Types</option><option>AUDIT</option><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
             <label class="hidden" data-report-filter-key="action">Action<select name="action"><option value="">All Actions</option><option>Inventory Addition</option><option>Inventory Matched</option><option>Inward</option><option>Outward</option><option>Fitted</option><option>Damage</option></select></label>
             <label class="hidden" data-report-filter-key="varianceType">Variance Type<select name="varianceType"><option value="">All Variance</option><option value="matched">Matched</option><option value="short">Short</option><option value="excess">Excess</option><option value="inventory-addition">Inventory Addition</option><option value="not-scanned">Not Scanned</option><option value="damage">Damage</option><option value="non-moving">Non Moving</option></select></label>
@@ -397,6 +399,7 @@
             </div>
           </div>
           <div id="reportResizeHandle" class="report-resize-handle" title="Drag to resize report preview"></div>
+          <div id="movementWiseStockSummary" class="metric-grid six movement-wise-stock-summary" hidden></div>
           <div id="reportTableWrap" class="table-wrap report-table-wrap">
             <table id="reportTable">
               <thead id="reportHead"></thead>
@@ -621,14 +624,13 @@
 
         <section id="reconReportTab" class="recon-panel" role="tabpanel" hidden>
           <section class="card">
-            <div class="card-head"><h2>Dealer Reconciliation Report</h2><div class="actions"><select id="reconExportType" class="compact-select" aria-label="Report type"><option value="dealer">Dealer-wise Report</option><option value="bin">Bin-wise Report</option><option value="movement">Movement-wise Report</option><option value="shortage">Shortage Report</option><option value="excess">Excess Report</option><option value="dead">Dead Stock Report</option><option value="scanned-not-in-dms">Scanned Not In DMS</option></select><button id="reconReset" class="btn light" type="button">Reset Filter</button><button id="reconExcel" class="btn primary" type="button">Export Excel</button><button id="reconPdf" class="btn light" type="button">Export PDF</button><button id="reconFullReport" class="btn light" type="button">Download Full Report</button></div></div>
+            <div class="card-head"><h2>Dealer Reconciliation Report</h2><div class="actions"><button id="reconReset" class="btn light" type="button">Reset Filter</button><button id="reconExcel" class="btn primary" type="button">Export Excel</button><button id="reconPdf" class="btn light" type="button">Export PDF</button></div></div>
             <form id="reconFilters" class="filter-grid">
               <label>Dealer Code<select name="dealerCode" id="reconDealer" class="dealerSelect"></select></label>
               <label>Category<input name="category" placeholder="Category"></label>
               <label>Part Number<input name="partNumber" placeholder="Part Number"></label>
-              <label>Bin<input name="bin" placeholder="Bin"></label>
               <label>Status<select name="status"><option value="">All Status</option><option>Matched</option><option>Shortage</option><option>Excess</option><option value="Scanned but not in DMS">Scanned but not in DMS</option><option value="Manual / Not in DMS">Manual / Not in DMS</option></select></label>
-              <label>Movement<select name="movement"><option value="">All Movement</option><option>Fast Moving</option><option>Slow Moving</option><option>Dead Stock</option><option>Critical Shortage</option><option>Excess Stock</option><option>Not in DMS</option></select></label>
+              <label>Movement<select name="movement"><option value="">All Movement</option><option>Fast Moving</option><option>Slow Moving</option><option>Dead Stock</option><option>Critical Shortage</option><option>Excess Stock</option><option>Normal</option></select></label>
               <button id="reconShow" class="btn primary" type="submit">Submit</button>
             </form>
             <div id="reconMessage" class="form-message">Please select filters and click Submit.</div>
