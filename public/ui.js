@@ -4743,9 +4743,8 @@
         <td>${escapeHtml(row.binLocation || row.bin || '')}</td>
         <td>${escapeHtml(row.movementType || '')}</td>
         <td>${escapeHtml(row.movementStatus || row.fastSlowDeadStatus || '')}</td>
-        <td class="raw-cell" title="${escapeHtml(row.rawScanProof || '')}">${escapeHtml(row.rawScanProof || '')}</td>
       </tr>
-    `).join('') || '<tr><td colspan="14" class="muted">No reconciliation data found for selected dealer/filter</td></tr>';
+    `).join('') || '<tr><td colspan="13" class="muted">No reconciliation data found for selected dealer/filter</td></tr>';
     if (message && !silent) {
       message.className = (data.rows || []).length ? 'form-message success' : 'form-message error';
       message.textContent = (data.rows || []).length ? `${data.rows.length} reconciliation row(s) loaded.` : (data.message || 'No reconciliation data found for selected filter');

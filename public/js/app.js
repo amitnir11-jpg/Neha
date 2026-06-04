@@ -845,7 +845,6 @@
         <td>${escapeHtml(row.differenceQty)}</td>
         <td>${escapeHtml(row.status)}</td>
         <td>${escapeHtml(row.mrp)}</td>
-        <td class="raw-cell" title="${escapeHtml(row.rawScanProof)}">${escapeHtml(row.rawScanProof)}</td>
       </tr>
     `).join('');
   }

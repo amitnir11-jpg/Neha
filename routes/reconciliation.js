@@ -536,7 +536,6 @@ async function physicalRows(scope, filters = {}) {
         dlp: { $max: '$dlc' },
         actualStock: { $sum: stockQtyExpression() },
         bins: { $addToSet: { $ifNull: ['$binLocation', '$bin'] } },
-        rawProofs: { $addToSet: { $ifNull: ['$rawScan', { $ifNull: ['$rawScanString', { $ifNull: ['$upiNo', '$uniqueScanId'] }] }] } },
         sources: { $addToSet: '$source' },
         scanModes: { $addToSet: '$scanMode' },
         valuationSources: { $addToSet: '$valuationSource' }
@@ -663,7 +662,6 @@ function reportRowFromStock(stock, physical) {
     varianceDlp: money(variance * dlp),
     varianceDlc: money(variance * dlp),
     varianceMrp: money(variance * Number(publicRow.mrp || 0)),
-    rawScanProof: ((physical && physical.rawProofs) || []).filter(Boolean).slice(0, 4).join(' | '),
     notInDms: false,
     manual: false
   };
@@ -714,7 +712,6 @@ function reportRowFromPhysical(physical) {
     varianceDlp: money(variance * dlp),
     varianceDlc: money(variance * dlp),
     varianceMrp: money(variance * mrp),
-    rawScanProof: (physical.rawProofs || []).filter(Boolean).slice(0, 4).join(' | '),
     notInDms: true,
     manual
   };
@@ -1000,8 +997,7 @@ function reportColumns() {
     { header: 'Safety Stock', key: 'safetyStock', width: 14 },
     { header: 'ROP', key: 'rop', width: 10 },
     { header: 'Shortage Value', key: 'shortageValue', width: 16 },
-    { header: 'Excess Value', key: 'excessValue', width: 16 },
-    { header: 'Raw Proof', key: 'rawScanProof', width: 44 }
+    { header: 'Excess Value', key: 'excessValue', width: 16 }
   ];
 }
 
