@@ -204,6 +204,7 @@
   const REPORT_FILTER_DEFAULTS_BY_TYPE = {
     'scan-register': ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'deviceName', 'syncStatus', 'entryMode'],
     'partwise-inventory-audit': ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation', 'varianceType', 'scanModeOptions'],
+    'inventory-audit-summary': ['dealer', 'dateRange', 'productCategory'],
     short: ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
     excess: ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
     damage: ['dealer', 'dateRange', 'scanType', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation']
@@ -258,6 +259,7 @@
     'scan-register': 'Scan Register Report',
     'wrong-not-found-master': 'Rejected Report',
     'stock-summary': 'Stock Summary',
+    'inventory-audit-summary': 'Inventory Audit Summary Report',
     short: 'Short Report',
     excess: 'Excess Report',
     damage: 'Damage Report',
@@ -266,7 +268,7 @@
     'parts-inventory-refresh-template': 'Part Inventory Refresh Template CSV'
   };
   const CSV_REPORT_TYPES = new Set(['parts-inventory-refresh-template']);
-  const EXCEL_ONLY_REPORT_TYPES = new Set(['stock-summary']);
+  const EXCEL_ONLY_REPORT_TYPES = new Set(['stock-summary', 'inventory-audit-summary']);
   const REPORT_LAYOUT_KEYS = {
     'partwise-inventory-audit': 'partwise_inventory_audit_report_layout_v2',
     short: 'short_report_layout',
@@ -3238,7 +3240,7 @@
   }
 
   function defaultReportColumnLimit(reportType = activeReportType()) {
-    return ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary'].includes(reportType) ? 0 : 18;
+    return ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary', 'inventory-audit-summary'].includes(reportType) ? 0 : 18;
   }
 
   function defaultReportColumns(available, reportType = activeReportType(), defaultLimit = defaultReportColumnLimit(reportType)) {
@@ -3318,7 +3320,7 @@
       fromDate: reportFilterValue(formData.fromDate),
       toDate: reportFilterValue(formData.toDate),
       category: reportFilterValue(formData.category),
-      productCategory: ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary'].includes(reportType) ? reportFilterValue(formData.category) : undefined,
+      productCategory: ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary', 'inventory-audit-summary'].includes(reportType) ? reportFilterValue(formData.category) : undefined,
       model: reportFilterValue(formData.model),
       year: reportFilterValue(formData.year),
       partNumber: reportFilterValue(formData.partNumber),
@@ -3353,7 +3355,7 @@
     params.delete('testScanMode');
     if (format) {
       const reportType = paramsObject.reportType || activeReportType();
-      if (reportType !== 'stock-summary') {
+      if (!['stock-summary', 'inventory-audit-summary'].includes(reportType)) {
         const selectedColumns = currentReportColumnKeys(reportType);
         if (selectedColumns && selectedColumns.length) params.set('columns', selectedColumns.join(','));
       }
@@ -3842,7 +3844,7 @@
       renderCategoryWiseVarianceTable(rows, totalRows, grandTotal, reportType);
       return;
     }
-    if (reportType === 'stock-summary') {
+    if (reportType === 'stock-summary' || reportType === 'inventory-audit-summary') {
       renderStockSummaryTable(columns, rows, totalRows, reportType);
       return;
     }
