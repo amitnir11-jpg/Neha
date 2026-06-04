@@ -76,15 +76,24 @@ function rangeBins(start, end) {
   const to = clean(end);
   const startMatch = from.match(/^(.+?)(\d+)$/);
   const endMatch = to.match(/^(.+?)(\d+)$/);
-  if (!startMatch || !endMatch || startMatch[1].toUpperCase() !== endMatch[1].toUpperCase()) return [];
-  const prefix = startMatch[1];
-  const first = Number(startMatch[2]);
-  const last = Number(endMatch[2]);
-  if (!Number.isFinite(first) || !Number.isFinite(last)) return [];
-  const min = Math.min(first, last);
-  const max = Math.max(first, last);
-  const width = Math.max(startMatch[2].length, endMatch[2].length);
-  return Array.from({ length: max - min + 1 }, (_, index) => `${prefix}${String(min + index).padStart(width, '0')}`);
+  if (startMatch && endMatch && startMatch[1].toUpperCase() === endMatch[1].toUpperCase()) {
+    const prefix = startMatch[1].toUpperCase();
+    const first = Number(startMatch[2]);
+    const last = Number(endMatch[2]);
+    if (!Number.isFinite(first) || !Number.isFinite(last)) return [];
+    const min = Math.min(first, last);
+    const max = Math.max(first, last);
+    const width = Math.max(startMatch[2].length, endMatch[2].length);
+    return Array.from({ length: max - min + 1 }, (_, index) => `${prefix}${String(min + index).padStart(width, '0')}`);
+  }
+  const startLetter = from.match(/^(.+?)([A-Za-z])$/);
+  const endLetter = to.match(/^(.+?)([A-Za-z])$/);
+  if (!startLetter || !endLetter || startLetter[1].toUpperCase() !== endLetter[1].toUpperCase()) return [];
+  const prefix = startLetter[1].toUpperCase();
+  const first = startLetter[2].toUpperCase().charCodeAt(0);
+  const last = endLetter[2].toUpperCase().charCodeAt(0);
+  const step = first <= last ? 1 : -1;
+  return Array.from({ length: Math.abs(last - first) + 1 }, (_, index) => `${prefix}${String.fromCharCode(first + index * step)}`);
 }
 
 function rangeFromText(value) {
@@ -133,6 +142,85 @@ function bulkQrItems(input = {}) {
   });
   if (unique.length > MAX_BULK_QR_ITEMS) throw new Error(`Maximum ${MAX_BULK_QR_ITEMS} QR labels can be generated at once`);
   return unique;
+}
+
+function splitPlainPartNumbers(value) {
+  if (Array.isArray(value)) return value.map(cleanCode).filter(Boolean);
+  return clean(value)
+    .split(/[\n,/]+/)
+    .map(cleanCode)
+    .filter(Boolean);
+}
+
+function parsePlainBinLabelLine(line) {
+  const text = clean(line);
+  if (!text) return null;
+  let binLocation = text;
+  let partText = '';
+  const separator = text.match(/^(.+?)\s*(?:\||:|=>)\s*(.+)$/);
+  if (separator) {
+    binLocation = separator[1];
+    partText = separator[2];
+  } else {
+    const firstSplit = text.match(/^(\S+)\s+(.+)$/);
+    if (firstSplit && /\d/.test(firstSplit[2])) {
+      binLocation = firstSplit[1];
+      partText = firstSplit[2];
+    }
+  }
+  return {
+    binLocation: cleanCode(binLocation),
+    partNumbers: splitPlainPartNumbers(partText)
+  };
+}
+
+function plainBinLabelItems(input = {}) {
+  const output = [];
+  const addItem = (item) => {
+    if (!item) return;
+    if (typeof item === 'string') {
+      const parsed = parsePlainBinLabelLine(item);
+      if (parsed) output.push(parsed);
+      return;
+    }
+    const binLocation = cleanCode(item.binLocation || item.binCode || item.bin || item.location || item.label);
+    if (!binLocation) return;
+    output.push({
+      binLocation,
+      partNumbers: splitPlainPartNumbers(item.partNumbers || item.parts || item.partNumber || item.partNo || item.part)
+    });
+  };
+
+  if (Array.isArray(input.items)) input.items.forEach(addItem);
+  if (input.binLocation || input.binCode || input.bin) {
+    addItem({
+      binLocation: input.binLocation || input.binCode || input.bin,
+      partNumbers: input.partNumbers || input.parts
+    });
+  }
+  clean(input.bulkText || input.bulkLocations || input.locations).split(/\r?\n/).filter(Boolean).forEach(addItem);
+
+  const rangeFrom = clean(input.rangeFrom || input.binRangeFrom || input.bulkRangeFrom);
+  const rangeTo = clean(input.rangeTo || input.binRangeTo || input.bulkRangeTo);
+  if (rangeFrom || rangeTo) {
+    const range = rangeBins(rangeFrom, rangeTo);
+    if (!range.length) throw new Error('Valid bulk bin range is required');
+    range.forEach((binLocation) => addItem({ binLocation }));
+  }
+
+  const byBin = new Map();
+  output.forEach((item) => {
+    const key = cleanCode(item.binLocation);
+    if (!key) return;
+    const existing = byBin.get(key) || { binLocation: key, partNumbers: [] };
+    const parts = new Set(existing.partNumbers);
+    (item.partNumbers || []).forEach((partNumber) => parts.add(cleanCode(partNumber)));
+    byBin.set(key, { binLocation: key, partNumbers: Array.from(parts).filter(Boolean) });
+  });
+
+  const items = Array.from(byBin.values());
+  if (items.length > MAX_BULK_QR_ITEMS) throw new Error(`Maximum ${MAX_BULK_QR_ITEMS} labels can be generated at once`);
+  return items;
 }
 
 function binQrValue(item) {
@@ -274,6 +362,90 @@ async function renderLabelsPdf(items, input, labelType) {
       if (item.category) doc.text(clean(item.category).slice(0, 28), x + 2, y + settings.labelHeight - 3);
     }
   }
+
+  return Buffer.from(doc.output('arraybuffer'));
+}
+
+function plainBinLabelSettings(input = {}) {
+  return {
+    paper: paperConfig(input),
+    labelWidth: positiveNumber(input.labelWidthMm || input.labelWidth, 92, 30, 210),
+    labelHeight: positiveNumber(input.labelHeightMm || input.labelHeight, 28, 12, 80),
+    columns: Math.max(1, Math.min(Number(input.columns || input.labelsPerRow || 2), 5)),
+    maxParts: Math.max(1, Math.min(Number(input.maxParts || 5), 20)),
+    margin: positiveNumber(input.marginMm || input.margin, 8, 2, 40),
+    gap: positiveNumber(input.gapMm || input.gap, 4, 0, 30),
+    binFontSize: positiveNumber(input.binFontSize, 10, 6, 24),
+    partFontSize: positiveNumber(input.partFontSize, 8, 5, 20)
+  };
+}
+
+function fitText(doc, text, maxWidth, fontSize, minFontSize = 5) {
+  let size = fontSize;
+  doc.setFontSize(size);
+  while (size > minFontSize && doc.getTextWidth(text) > maxWidth) {
+    size -= 0.5;
+    doc.setFontSize(size);
+  }
+  return size;
+}
+
+function drawPlainBinLabel(doc, item, x, y, settings) {
+  const width = settings.labelWidth;
+  const height = settings.labelHeight;
+  const parts = (item.partNumbers || []).filter(Boolean).slice(0, settings.maxParts);
+  const binBoxWidth = parts.length ? Math.min(32, Math.max(22, width * 0.34)) : Math.min(width - 6, Math.max(34, width * 0.55));
+  const binBoxHeight = Math.min(10, Math.max(7, height * 0.36));
+  const binX = x + 2;
+  const binY = y + (height - binBoxHeight) / 2;
+
+  doc.setDrawColor(220);
+  doc.setLineWidth(0.2);
+  doc.roundedRect(x, y, width, height, 1.2, 1.2);
+
+  doc.setFillColor(248, 177, 52);
+  doc.setDrawColor(214, 137, 18);
+  doc.roundedRect(binX, binY, binBoxWidth, binBoxHeight, 0.6, 0.6, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(20, 20, 20);
+  fitText(doc, item.binLocation, binBoxWidth - 3, settings.binFontSize, 5);
+  doc.text(item.binLocation, binX + binBoxWidth / 2, binY + binBoxHeight / 2 + 1.7, { align: 'center' });
+
+  if (!parts.length) return;
+
+  const partX = binX + binBoxWidth + 4;
+  const partY = y + 2.5;
+  const partWidth = width - (partX - x) - 2;
+  const partHeight = height - 5;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(225);
+  doc.rect(partX, partY, partWidth, partHeight, 'S');
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0, 0, 0);
+  const lineHeight = Math.max(3.3, Math.min(5, partHeight / Math.max(parts.length, 1)));
+  parts.forEach((partNumber, index) => {
+    fitText(doc, partNumber, partWidth - 2, settings.partFontSize, 5);
+    doc.text(partNumber, partX + 1.5, partY + 4 + index * lineHeight);
+  });
+}
+
+async function renderPlainBinLabelsPdf(items, input) {
+  const settings = plainBinLabelSettings(input);
+  const doc = new jsPDF({ orientation: settings.paper.orientation, unit: 'mm', format: settings.paper.size });
+  const usableWidth = settings.paper.size[0] - settings.margin * 2;
+  const perRow = Math.max(1, Math.min(settings.columns, Math.floor((usableWidth + settings.gap) / (settings.labelWidth + settings.gap)) || 1));
+  const perPageRows = Math.max(1, Math.floor((settings.paper.size[1] - settings.margin * 2 + settings.gap) / (settings.labelHeight + settings.gap)));
+  const perPage = perRow * perPageRows;
+
+  items.forEach((item, index) => {
+    if (index > 0 && index % perPage === 0) doc.addPage(settings.paper.size, settings.paper.orientation);
+    const pageIndex = index % perPage;
+    const col = pageIndex % perRow;
+    const row = Math.floor(pageIndex / perRow);
+    const x = settings.margin + col * (settings.labelWidth + settings.gap);
+    const y = settings.margin + row * (settings.labelHeight + settings.gap);
+    drawPlainBinLabel(doc, item, x, y, settings);
+  });
 
   return Buffer.from(doc.output('arraybuffer'));
 }
@@ -568,6 +740,24 @@ router.post('/generate-part-labels', auth.requireAuth, async (req, res) => {
     const pdf = await renderLabelsPdf(parts, req.body, 'part');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Part_Labels.pdf"');
+    return res.send(pdf);
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/bin-location-label-pdf', auth.requireAuth, async (req, res) => {
+  try {
+    let items = [];
+    try {
+      items = plainBinLabelItems(req.body);
+    } catch (error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    if (!items.length) return res.status(400).json({ success: false, message: 'At least one bin location is required' });
+    const pdf = await renderPlainBinLabelsPdf(items, req.body);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Bin_Location_Labels.pdf"');
     return res.send(pdf);
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });

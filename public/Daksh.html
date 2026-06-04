@@ -840,25 +840,30 @@
             <img id="partQrImage" class="qr-preview" alt="">
           </section>
           <section class="card">
-            <div class="card-head"><h2>Bulk QR PDF</h2></div>
-            <textarea id="bulkQrItems" rows="8" placeholder="One bin or part per line"></textarea>
+            <div class="card-head"><h2>Bin Location Label PDF</h2></div>
             <div class="grid-form two print-grid">
-              <label>Bin From<input id="bulkQrRangeFrom" placeholder="A1B1"></label>
-              <label>Bin To<input id="bulkQrRangeTo" placeholder="A1B10"></label>
-            </div>
-            <div class="grid-form two print-grid">
-              <label>Paper Size<select id="qrPaperSize"><option value="a4">A4</option><option value="a5">A5</option><option value="letter">Letter</option><option value="legal">Legal</option><option value="thermal80">Thermal 80mm</option><option value="thermal58">Thermal 58mm</option><option value="custom">Custom</option></select></label>
-              <label>Orientation<select id="qrOrientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
-              <label>Custom Width mm<input id="qrPaperWidth" type="number" min="40" value="210"></label>
-              <label>Custom Height mm<input id="qrPaperHeight" type="number" min="40" value="297"></label>
-              <label>QR Print Size mm<input id="qrSizeMm" type="number" min="12" max="120" value="44"></label>
-              <label>Columns<input id="qrColumns" type="number" min="1" max="8" value="2"></label>
-              <label>Margin mm<input id="qrMarginMm" type="number" min="2" max="40" value="10"></label>
-              <label>Label Font<input id="qrLabelFont" type="number" min="6" max="18" value="9"></label>
+              <label>Process<select id="plainBinLabelMode"><option value="single">Single Bin Location</option><option value="bulk">Bulk Bin Locations</option><option value="bin-part">Bin Location + Part Numbers</option></select></label>
+              <label>Bin Location<input id="plainBinLocation" placeholder="CTR03N"></label>
+              <label class="span-2">Part Numbers<textarea id="plainBinParts" rows="3" placeholder="30510ACK000995 / 30510AAE30099S / 30500AAE10099S"></textarea></label>
+              <label class="span-2">Bulk Locations / Bin + Parts<textarea id="plainBulkBinLocations" rows="6" placeholder="CTR03N&#10;CTR03M&#10;CTR03L 30510ACK000995 / 30510AAE30099S"></textarea></label>
+              <label>Bulk From<input id="plainBinRangeFrom" placeholder="A1B1"></label>
+              <label>Bulk To<input id="plainBinRangeTo" placeholder="A1B10"></label>
+              <label>Paper Size<select id="plainBinPaperSize"><option value="a4">A4</option><option value="a5">A5</option><option value="letter">Letter</option><option value="legal">Legal</option><option value="custom">Custom</option></select></label>
+              <label>Orientation<select id="plainBinOrientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
+              <label>Custom Width mm<input id="plainBinPaperWidth" type="number" min="40" value="210"></label>
+              <label>Custom Height mm<input id="plainBinPaperHeight" type="number" min="40" value="297"></label>
+              <label>Label Width mm<input id="plainBinLabelWidth" type="number" min="30" max="210" value="92"></label>
+              <label>Label Height mm<input id="plainBinLabelHeight" type="number" min="12" max="80" value="28"></label>
+              <label>Columns<input id="plainBinColumns" type="number" min="1" max="5" value="2"></label>
+              <label>Max Parts<input id="plainBinMaxParts" type="number" min="1" max="20" value="5"></label>
+              <label>Margin mm<input id="plainBinMarginMm" type="number" min="2" max="40" value="8"></label>
+              <label>Gap mm<input id="plainBinGapMm" type="number" min="0" max="30" value="4"></label>
+              <label>Bin Font<input id="plainBinFontSize" type="number" min="6" max="24" value="10"></label>
+              <label>Part Font<input id="plainPartFontSize" type="number" min="5" max="20" value="8"></label>
             </div>
             <div class="actions">
-              <button id="bulkQrRangeBtn" class="btn light" type="button">Add Bin Range</button>
-              <button id="bulkQrBtn" class="btn primary" type="button">Download Bulk QR PDF</button>
+              <button id="plainBinRangeBtn" class="btn light" type="button">Add Bulk Range</button>
+              <button id="plainBinLabelPdfBtn" class="btn primary" type="button">Download Bin Location PDF</button>
             </div>
           </section>
         </div>

@@ -7223,66 +7223,116 @@
     }, 60000);
   }
 
-  function bulkQrOptions() {
-    return {
-      paperSize: $('#qrPaperSize').value,
-      orientation: $('#qrOrientation').value,
-      paperWidthMm: Number($('#qrPaperWidth').value || 210),
-      paperHeightMm: Number($('#qrPaperHeight').value || 297),
-      qrSizeMm: Number($('#qrSizeMm').value || 44),
-      columns: Number($('#qrColumns').value || 2),
-      marginMm: Number($('#qrMarginMm').value || 10),
-      labelFontSize: Number($('#qrLabelFont').value || 9)
-    };
-  }
-
   function expandCodeRange(startValue, endValue) {
     const start = String(startValue || '').trim();
     const end = String(endValue || '').trim();
     const startMatch = start.match(/^(.+?)(\d+)$/);
     const endMatch = end.match(/^(.+?)(\d+)$/);
-    if (!startMatch || !endMatch || startMatch[1].toUpperCase() !== endMatch[1].toUpperCase()) return [];
-    const first = Number(startMatch[2]);
-    const last = Number(endMatch[2]);
-    if (!Number.isFinite(first) || !Number.isFinite(last)) return [];
-    const min = Math.min(first, last);
-    const max = Math.max(first, last);
-    const total = max - min + 1;
-    if (total > 1000) throw new Error('Maximum 1000 QR labels can be generated at once');
-    const prefix = startMatch[1].toUpperCase();
-    const width = Math.max(startMatch[2].length, endMatch[2].length);
-    return Array.from({ length: total }, (_, index) => `${prefix}${String(min + index).padStart(width, '0')}`);
-  }
-
-  function expandQrRangeText(value) {
-    const text = String(value || '').trim();
-    if (!text) return [];
-    const match = text.match(/^(.+?)\s+(?:to|thru|through)\s+(.+)$/i) || text.match(/^(.+?)\s*\.\.\s*(.+)$/);
-    return match ? expandCodeRange(match[1], match[2]) : [];
-  }
-
-  function bulkQrItemsFromInput() {
-    const items = [];
-    $('#bulkQrItems').value.split(/\r?\n|,/).forEach((value) => {
-      const text = value.trim();
-      if (!text) return;
-      const range = expandQrRangeText(text);
-      items.push(...(range.length ? range : [text]));
-    });
-    const from = $('#bulkQrRangeFrom')?.value || '';
-    const to = $('#bulkQrRangeTo')?.value || '';
-    if (from || to) {
-      const range = expandCodeRange(from, to);
-      if (!range.length) throw new Error('Enter a valid bin range');
-      items.push(...range);
+    if (startMatch && endMatch && startMatch[1].toUpperCase() === endMatch[1].toUpperCase()) {
+      const first = Number(startMatch[2]);
+      const last = Number(endMatch[2]);
+      if (!Number.isFinite(first) || !Number.isFinite(last)) return [];
+      const min = Math.min(first, last);
+      const max = Math.max(first, last);
+      const total = max - min + 1;
+      if (total > 1000) throw new Error('Maximum 1000 labels can be generated at once');
+      const prefix = startMatch[1].toUpperCase();
+      const width = Math.max(startMatch[2].length, endMatch[2].length);
+      return Array.from({ length: total }, (_, index) => `${prefix}${String(min + index).padStart(width, '0')}`);
     }
-    const seen = new Set();
-    return items.filter((item) => {
-      const key = item.toUpperCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+    const letterStart = start.match(/^(.+?)([A-Za-z])$/);
+    const letterEnd = end.match(/^(.+?)([A-Za-z])$/);
+    if (!letterStart || !letterEnd || letterStart[1].toUpperCase() !== letterEnd[1].toUpperCase()) return [];
+    const first = letterStart[2].toUpperCase().charCodeAt(0);
+    const last = letterEnd[2].toUpperCase().charCodeAt(0);
+    const step = first <= last ? 1 : -1;
+    const total = Math.abs(last - first) + 1;
+    if (total > 1000) throw new Error('Maximum 1000 labels can be generated at once');
+    const prefix = letterStart[1].toUpperCase();
+    return Array.from({ length: total }, (_, index) => `${prefix}${String.fromCharCode(first + index * step)}`);
+  }
+
+  function splitPlainPartNumbers(value) {
+    return String(value || '')
+      .split(/[\n,/]+/)
+      .map((item) => item.trim().toUpperCase())
+      .filter(Boolean);
+  }
+
+  function parsePlainBinLabelLine(line) {
+    const text = String(line || '').trim();
+    if (!text) return null;
+    let binLocation = text;
+    let partText = '';
+    const separator = text.match(/^(.+?)\s*(?:\||:|=>)\s*(.+)$/);
+    if (separator) {
+      binLocation = separator[1];
+      partText = separator[2];
+    } else {
+      const firstSplit = text.match(/^(\S+)\s+(.+)$/);
+      if (firstSplit && /\d/.test(firstSplit[2])) {
+        binLocation = firstSplit[1];
+        partText = firstSplit[2];
+      }
+    }
+    return {
+      binLocation: binLocation.trim().toUpperCase(),
+      partNumbers: splitPlainPartNumbers(partText)
+    };
+  }
+
+  function plainBinLabelOptions() {
+    return {
+      paperSize: $('#plainBinPaperSize').value,
+      orientation: $('#plainBinOrientation').value,
+      paperWidthMm: Number($('#plainBinPaperWidth').value || 210),
+      paperHeightMm: Number($('#plainBinPaperHeight').value || 297),
+      labelWidthMm: Number($('#plainBinLabelWidth').value || 92),
+      labelHeightMm: Number($('#plainBinLabelHeight').value || 28),
+      columns: Number($('#plainBinColumns').value || 2),
+      maxParts: Number($('#plainBinMaxParts').value || 5),
+      marginMm: Number($('#plainBinMarginMm').value || 8),
+      gapMm: Number($('#plainBinGapMm').value || 4),
+      binFontSize: Number($('#plainBinFontSize').value || 10),
+      partFontSize: Number($('#plainPartFontSize').value || 8)
+    };
+  }
+
+  function plainBinLabelItemsFromInput() {
+    const mode = $('#plainBinLabelMode')?.value || 'single';
+    const items = [];
+    const addItem = (item) => {
+      if (!item || !item.binLocation) return;
+      items.push(item);
+    };
+
+    if (mode === 'single' || mode === 'bin-part') {
+      addItem({
+        binLocation: String($('#plainBinLocation')?.value || '').trim().toUpperCase(),
+        partNumbers: mode === 'bin-part' ? splitPlainPartNumbers($('#plainBinParts')?.value || '') : []
+      });
+    }
+
+    if (mode === 'bulk') {
+      String($('#plainBulkBinLocations')?.value || '').split(/\r?\n/).forEach((line) => addItem(parsePlainBinLabelLine(line)));
+      const from = $('#plainBinRangeFrom')?.value || '';
+      const to = $('#plainBinRangeTo')?.value || '';
+      if (from || to) {
+        const range = expandCodeRange(from, to);
+        if (!range.length) throw new Error('Enter a valid bulk bin range');
+        range.forEach((binLocation) => addItem({ binLocation, partNumbers: [] }));
+      }
+    }
+
+    const byBin = new Map();
+    items.forEach((item) => {
+      const key = item.binLocation.toUpperCase();
+      const existing = byBin.get(key) || { binLocation: key, partNumbers: [] };
+      const parts = new Set(existing.partNumbers);
+      (item.partNumbers || []).forEach((partNumber) => parts.add(partNumber));
+      byBin.set(key, { binLocation: key, partNumbers: Array.from(parts) });
     });
+    return Array.from(byBin.values());
   }
 
   function selectedLabelBins() {
@@ -8256,7 +8306,8 @@
       const data = await api('/api/bin-master/bulk-create', { method: 'POST', body: formObject(event.currentTarget) });
       $('#bulkBinStats').textContent = `Created ${data.createdCount} | Skipped duplicates ${data.skippedDuplicateCount || data.duplicateCount || 0}`;
       if (data.bins && data.bins.length) {
-        $('#bulkQrItems').value = data.bins.map((bin) => bin.binCode).join('\n');
+        $('#plainBinLabelMode').value = 'bulk';
+        $('#plainBulkBinLocations').value = data.bins.map((bin) => bin.binCode).join('\n');
       }
       toast('Bulk bin sequence created');
       if ($('#binManagementDealer')) $('#binManagementDealer').value = dealerCode;
@@ -8272,31 +8323,33 @@
       event.preventDefault();
       createQr(event.currentTarget, '/api/qr/part', 'partQrImage').catch((error) => toast(error.message, 'error'));
     });
-    $('#bulkQrRangeBtn').addEventListener('click', () => {
+    $('#plainBinRangeBtn').addEventListener('click', () => {
       try {
-        const range = expandCodeRange($('#bulkQrRangeFrom').value, $('#bulkQrRangeTo').value);
-        if (!range.length) throw new Error('Enter a valid bin range');
-        const existing = bulkQrItemsFromInput();
+        const range = expandCodeRange($('#plainBinRangeFrom').value, $('#plainBinRangeTo').value);
+        if (!range.length) throw new Error('Enter a valid bulk bin range');
+        const existing = String($('#plainBulkBinLocations').value || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
         const combined = [...existing, ...range];
         const seen = new Set();
-        $('#bulkQrItems').value = combined.filter((item) => {
+        $('#plainBulkBinLocations').value = combined.filter((item) => {
           const key = item.toUpperCase();
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
         }).join('\n');
-        toast(`${range.length} bin QR item(s) added`);
+        $('#plainBinLabelMode').value = 'bulk';
+        toast(`${range.length} bin location label(s) added`);
       } catch (error) {
         toast(error.message, 'error');
       }
     });
-    $('#bulkQrBtn').addEventListener('click', () => {
+    $('#plainBinLabelPdfBtn').addEventListener('click', () => {
       try {
-        const items = bulkQrItemsFromInput();
-        downloadPost('/api/qr/bulk-pdf', {
+        const items = plainBinLabelItemsFromInput();
+        if (!items.length) throw new Error('Enter at least one bin location');
+        downloadPost('/api/qr/bin-location-label-pdf', {
           items,
-          ...bulkQrOptions()
-        }, 'Daksh_Bulk_QR.pdf').catch((error) => toast(error.message, 'error'));
+          ...plainBinLabelOptions()
+        }, 'Daksh_Bin_Location_Labels.pdf').catch((error) => toast(error.message, 'error'));
       } catch (error) {
         toast(error.message, 'error');
       }
