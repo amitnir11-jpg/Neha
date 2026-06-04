@@ -8295,8 +8295,6 @@
         const items = bulkQrItemsFromInput();
         downloadPost('/api/qr/bulk-pdf', {
           items,
-          rangeFrom: $('#bulkQrRangeFrom')?.value || '',
-          rangeTo: $('#bulkQrRangeTo')?.value || '',
           ...bulkQrOptions()
         }, 'Daksh_Bulk_QR.pdf').catch((error) => toast(error.message, 'error'));
       } catch (error) {

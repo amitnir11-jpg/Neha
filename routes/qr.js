@@ -74,8 +74,8 @@ function labelSettings(input = {}) {
 function rangeBins(start, end) {
   const from = clean(start);
   const to = clean(end);
-  const startMatch = from.match(/^([A-Za-z-_\s]*?)(\d+)$/);
-  const endMatch = to.match(/^([A-Za-z-_\s]*?)(\d+)$/);
+  const startMatch = from.match(/^(.+?)(\d+)$/);
+  const endMatch = to.match(/^(.+?)(\d+)$/);
   if (!startMatch || !endMatch || startMatch[1].toUpperCase() !== endMatch[1].toUpperCase()) return [];
   const prefix = startMatch[1];
   const first = Number(startMatch[2]);
