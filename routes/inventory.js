@@ -6,6 +6,7 @@ const Bin = require('../models/Bin');
 const MasterPart = require('../models/MasterPart');
 const MasterCatalogue = require('../models/MasterCatalogue');
 const Dealer = require('../models/Dealer');
+const Audit = require('../models/Audit');
 const Device = require('../models/Device');
 const BluetoothDevice = require('../models/BluetoothDevice');
 const BluetoothScanLog = require('../models/BluetoothScanLog');
@@ -1532,6 +1533,19 @@ async function saveScanRequest(req, res) {
     const dealerCode = requestedDealerCode || upper(master ? master.dealerCode : '');
     const dealer = dealerCode ? await Dealer.findOne({ dealerCode }).lean() : null;
     const auditId = String(req.body.auditId || (dealer ? dealer.currentAuditId : '') || '').trim();
+    
+    // Check if audit is completed - prevent scanning
+    if (auditId) {
+      const audit = await Audit.findOne({ auditId }).lean();
+      if (audit && (audit.auditStatus === 'COMPLETED' || audit.status === 'COMPLETED')) {
+        return res.status(403).json({ 
+          success: false, 
+          message: 'Scanning is not allowed for completed audits. Only admin can reopen this audit.',
+          auditCompleted: true
+        });
+      }
+    }
+
     const type = normalizeScanType(req.body.type || req.body.scanType || req.body.action || parsed.type || 'INWARD');
     const timestamp = new Date();
     if (type === 'VERIFICATION') {

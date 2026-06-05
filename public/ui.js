@@ -4938,14 +4938,26 @@
   }
 
   function renderDealerMaster() {
-    $('#dealerMasterRows').innerHTML = state.dealers.length ? state.dealers.map((dealer) => `
+    $('#dealerMasterRows').innerHTML = state.dealers.length ? state.dealers.map((dealer) => {
+      const auditStatus = dealer.auditStatus || dealer.status || 'IN_PROGRESS';
+      const auditStatusDisplay = auditStatus === 'COMPLETED' ? 'Completed' : 'In Progress';
+      const auditStatusClass = auditStatus === 'COMPLETED' ? 'status-completed' : 'status-in-progress';
+      return `
       <tr>
         <td>${escapeHtml(dealer.dealerName)}</td>
         <td>${escapeHtml(dealer.dealerCode)}</td>
         <td>${escapeHtml(dealer.location)}</td>
-        <td><button class="btn danger-soft small dealer-master-delete admin-only" type="button" data-code="${escapeHtml(dealer.dealerCode)}" data-name="${escapeHtml(dealer.dealerName)}">Delete</button></td>
+        <td><span class="audit-status-badge ${auditStatusClass}">${auditStatusDisplay}</span></td>
+        <td>
+          <select class="btn light small dealer-action-select" data-code="${escapeHtml(dealer.dealerCode)}" data-audit-id="${escapeHtml(dealer.currentAuditId || '')}">
+            <option value="">Select Action</option>
+            <option value="delete">Delete</option>
+            ${auditStatus === 'IN_PROGRESS' ? `<option value="complete">Mark Complete</option>` : `<option value="reopen">Reopen</option>`}
+          </select>
+        </td>
       </tr>
-    `).join('') : '<tr><td colspan="4" class="muted">No dealers yet</td></tr>';
+    `;
+    }).join('') : '<tr><td colspan="5" class="muted">No dealers yet</td></tr>';
   }
 
   async function deleteDealerMaster(dealerCode, dealerName = '') {
@@ -4956,6 +4968,61 @@
     const data = await api(`/api/master/dealers/${encodeURIComponent(code)}`, { method: 'DELETE', body: {} });
     toast(`Dealer deleted: ${data.dealersDeleted || 0}, audits deleted: ${data.auditsDeleted || 0}`);
     await loadDealers();
+  }
+
+  async function handleAuditComplete(auditId, dealerCode) {
+    if (!auditId || !dealerCode) {
+      toast('Audit ID and Dealer Code are required', 'error');
+      return;
+    }
+
+    // Show remark dialog
+    const remark = window.prompt('Please enter the reason for marking this audit as complete:', '');
+    if (remark === null) return; // User cancelled
+
+    if (!window.confirm('Once you mark this audit as COMPLETED, no scanning will be allowed. You sure?')) return;
+
+    try {
+      const data = await api(`/api/audit/${encodeURIComponent(auditId)}/status/complete`, {
+        method: 'POST',
+        body: { remark: remark || '' }
+      });
+
+      // Show completion popup
+      alert('✓ Audit marked as COMPLETED successfully.\n\nNo further changes can be made to this audit unless it is reopened by an admin.');
+
+      toast('Audit marked as completed', 'success');
+      await loadDealers();
+    } catch (error) {
+      toast(`Failed to complete audit: ${error.message}`, 'error');
+    }
+  }
+
+  async function handleAuditReopen(auditId, dealerCode) {
+    if (!auditId || !dealerCode) {
+      toast('Audit ID and Dealer Code are required', 'error');
+      return;
+    }
+
+    // Show remark dialog
+    const remark = window.prompt('Please enter the reason for reopening this audit:', '');
+    if (remark === null) return; // User cancelled
+
+    if (!window.confirm('Reopen this completed audit? Only admins can do this.')) return;
+
+    try {
+      const data = await api(`/api/audit/${encodeURIComponent(auditId)}/status/reopen`, {
+        method: 'POST',
+        body: { remark: remark || '' }
+      });
+
+      alert('✓ Audit reopened successfully.\n\nScanning is now allowed for this audit.');
+
+      toast('Audit reopened', 'success');
+      await loadDealers();
+    } catch (error) {
+      toast(`Failed to reopen audit: ${error.message}`, 'error');
+    }
   }
 
   async function loadBins() {
@@ -8399,6 +8466,23 @@
       const button = event.target.closest('.dealer-master-delete');
       if (!button) return;
       deleteDealerMaster(button.dataset.code, button.dataset.name).catch((error) => toast(error.message, 'error'));
+    });
+    $('#dealerMasterRows')?.addEventListener('change', (event) => {
+      const select = event.target.closest('.dealer-action-select');
+      if (!select) return;
+      const action = select.value;
+      const dealerCode = select.dataset.code;
+      const auditId = select.dataset.auditId;
+      if (!action) return;
+      
+      if (action === 'delete') {
+        deleteDealerMaster(dealerCode).catch((error) => toast(error.message, 'error'));
+      } else if (action === 'complete') {
+        handleAuditComplete(auditId, dealerCode).catch((error) => toast(error.message, 'error'));
+      } else if (action === 'reopen') {
+        handleAuditReopen(auditId, dealerCode).catch((error) => toast(error.message, 'error'));
+      }
+      select.value = '';
     });
     $('#binMasterForm').addEventListener('submit', async (event) => {
       event.preventDefault();

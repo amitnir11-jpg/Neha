@@ -28,7 +28,27 @@ router.get('/', auth.requireAuth, async (req, res) => {
     }
     const dealers = await Dealer.find(dealerFilter).sort({ dealerName: 1 }).lean();
     const audits = await Audit.find(auditFilter).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, dealers, audits });
+    
+    // Map audit status to dealers
+    const auditMap = {};
+    audits.forEach(audit => {
+      if (audit.auditId && !auditMap[audit.auditId]) {
+        auditMap[audit.auditId] = {
+          auditStatus: audit.auditStatus || audit.status || 'IN_PROGRESS',
+          completedAt: audit.completedAt
+        };
+      }
+    });
+    
+    // Add audit status to each dealer
+    const dealersWithStatus = dealers.map(dealer => ({
+      ...dealer,
+      auditStatus: dealer.currentAuditId && auditMap[dealer.currentAuditId] 
+        ? auditMap[dealer.currentAuditId].auditStatus 
+        : 'IN_PROGRESS'
+    }));
+    
+    res.json({ success: true, dealers: dealersWithStatus, audits });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

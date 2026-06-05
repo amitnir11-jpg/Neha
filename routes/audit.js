@@ -152,4 +152,99 @@ router.post('/:auditId/close', auth.requireAuth, auth.requireAdmin, async (req, 
   }
 });
 
+// Update audit status to COMPLETED
+router.post('/:auditId/status/complete', auth.requireAuth, async (req, res) => {
+  try {
+    const auditId = clean(req.params.auditId);
+    const remark = clean(req.body.remark || '');
+    const audit = await Audit.findOne({ auditId });
+
+    if (!audit) {
+      return res.status(404).json({ success: false, message: 'Audit not found' });
+    }
+
+    // Create status history entry
+    const statusHistoryEntry = {
+      status: 'COMPLETED',
+      changedAt: new Date(),
+      changedBy: req.user ? (req.user.name || req.user.username || req.user.email || '') : 'System',
+      remark: remark
+    };
+
+    // Update audit status
+    const updatedAudit = await Audit.findOneAndUpdate(
+      { auditId },
+      {
+        $set: {
+          auditStatus: 'COMPLETED',
+          status: 'COMPLETED',
+          completedAt: new Date(),
+          completedByUserId: req.user ? (req.user.id || req.user._id || '') : '',
+          completionRemark: remark
+        },
+        $push: { statusHistory: statusHistoryEntry }
+      },
+      { new: true }
+    );
+
+    const io = req.io || req.app.get('io');
+    if (io) {
+      io.emit('audit:completed', { auditId, dealerCode: updatedAudit.dealerCode });
+      io.emit('dealers:update');
+    }
+
+    return res.json({ success: true, audit: updatedAudit });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Update audit status from COMPLETED back to IN_PROGRESS (Admin only)
+router.post('/:auditId/status/reopen', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const auditId = clean(req.params.auditId);
+    const remark = clean(req.body.remark || '');
+    const audit = await Audit.findOne({ auditId });
+
+    if (!audit) {
+      return res.status(404).json({ success: false, message: 'Audit not found' });
+    }
+
+    if (audit.auditStatus !== 'COMPLETED') {
+      return res.status(400).json({ success: false, message: 'Only completed audits can be reopened' });
+    }
+
+    // Create status history entry
+    const statusHistoryEntry = {
+      status: 'IN_PROGRESS',
+      changedAt: new Date(),
+      changedBy: req.user ? (req.user.name || req.user.username || req.user.email || '') : 'System',
+      remark: remark
+    };
+
+    // Update audit status
+    const updatedAudit = await Audit.findOneAndUpdate(
+      { auditId },
+      {
+        $set: {
+          auditStatus: 'IN_PROGRESS',
+          status: 'IN_PROGRESS'
+        },
+        $push: { statusHistory: statusHistoryEntry }
+      },
+      { new: true }
+    );
+
+    const io = req.io || req.app.get('io');
+    if (io) {
+      io.emit('audit:reopened', { auditId, dealerCode: updatedAudit.dealerCode });
+      io.emit('dealers:update');
+    }
+
+    return res.json({ success: true, audit: updatedAudit });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;

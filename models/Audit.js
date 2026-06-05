@@ -63,10 +63,47 @@ const auditSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['active', 'open', 'closed'],
-      default: 'active',
+      enum: ['IN_PROGRESS', 'COMPLETED', 'active', 'open', 'closed'],
+      default: 'IN_PROGRESS',
       index: true
-    }
+    },
+    auditStatus: {
+      type: String,
+      enum: ['IN_PROGRESS', 'COMPLETED'],
+      default: 'IN_PROGRESS',
+      index: true
+    },
+    completedAt: {
+      type: Date
+    },
+    completedByUserId: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    completionRemark: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    statusHistory: [{
+      status: {
+        type: String,
+        enum: ['IN_PROGRESS', 'COMPLETED']
+      },
+      changedAt: {
+        type: Date,
+        default: Date.now
+      },
+      changedBy: {
+        type: String,
+        trim: true
+      },
+      remark: {
+        type: String,
+        trim: true
+      }
+    }]
   },
   {
     timestamps: true
