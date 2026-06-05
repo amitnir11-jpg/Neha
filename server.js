@@ -79,6 +79,7 @@ const OfflineSyncService = require('./services/OfflineSyncService');
 
 const app = express();
 app.locals.reportRoutesVersion = 'dealer-report-dlc-20260602';
+app.locals.deployConfigVersion = 'render-mongo-env-20260605';
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -99,7 +100,14 @@ const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 const DEFAULT_MONGO_URI = 'mongodb://127.0.0.1:27017/daksh_inventory_v2';
 const IS_PRODUCTION = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
-const MONGO_URI_ENV_NAMES = ['MONGO_URI', 'MONGODB_URI', 'MONGO_URL', 'DATABASE_URL'];
+const DEPLOY_TARGET = String(process.env.DAKSH_DEPLOY_TARGET || process.env.DEPLOY_TARGET || '').trim().toLowerCase();
+const IS_RENDER = DEPLOY_TARGET === 'render' ||
+  String(process.env.RENDER || '').toLowerCase() === 'true' ||
+  Boolean(process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_EXTERNAL_HOSTNAME);
+const DEPLOYMENT_NAME = IS_RENDER ? 'Render' : (IS_PRODUCTION ? 'hosting provider' : 'local PC');
+const MONGO_URI_ENV_NAMES = IS_RENDER
+  ? ['RENDER_MONGO_URI', 'MONGO_URI', 'MONGODB_URI', 'MONGO_URL', 'DATABASE_URL']
+  : ['MONGO_URI', 'MONGODB_URI', 'MONGO_URL', 'DATABASE_URL'];
 const configuredMongoUri = firstEnvValue(MONGO_URI_ENV_NAMES);
 const MONGO_ALLOW_LOCAL_DEFAULT = String(process.env.MONGO_ALLOW_LOCAL_DEFAULT || (IS_PRODUCTION ? 'false' : 'true')).toLowerCase() === 'true';
 const MONGO_URI = String(configuredMongoUri.value || (MONGO_ALLOW_LOCAL_DEFAULT ? DEFAULT_MONGO_URI : '')).trim();
@@ -232,6 +240,34 @@ function isLocalMongoUri(uri) {
 
 function isProductionLocalMongoBlocked(uri) {
   return IS_PRODUCTION && isLocalMongoUri(uri) && !MONGO_ALLOW_LOCAL_DEFAULT;
+}
+
+function mongoEnvLocation() {
+  if (IS_RENDER) return 'Render Environment Variables';
+  if (IS_PRODUCTION) return 'your hosting environment variables';
+  return 'your .env file or environment variables';
+}
+
+function hostedMongoDescription() {
+  return IS_RENDER ? 'a MongoDB Atlas mongodb+srv URI' : 'a hosted MongoDB URI';
+}
+
+function localMongoBlockedMessage(source = 'configuration') {
+  return `Refusing local MongoDB URI from ${source} in production. ${DEPLOYMENT_NAME} needs ${hostedMongoDescription()}, not 127.0.0.1 or localhost.`;
+}
+
+function missingMongoMessage() {
+  return `Missing MongoDB connection string. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} in ${mongoEnvLocation()}.`;
+}
+
+function databaseOfflineMessage() {
+  if (IS_RENDER) {
+    return 'Database is offline on Render. Set RENDER_MONGO_URI or MONGO_URI to your MongoDB Atlas connection string in Render Environment Variables, then allow Render access in MongoDB Atlas Network Access.';
+  }
+  if (IS_PRODUCTION) {
+    return `Database is offline. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} to ${hostedMongoDescription()} in ${mongoEnvLocation()} and check MongoDB Atlas Network Access.`;
+  }
+  return 'Database is offline. Check MongoDB Atlas Network Access or keep local MongoDB running.';
 }
 
 function mongoUriHasDatabaseName(uri) {
@@ -606,10 +642,10 @@ async function monitorAtlasAndPromote() {
 
 async function connectMongoCandidate(candidate) {
   if (!candidate || !candidate.uri) {
-    throw new Error(`Missing MongoDB connection string. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} in Railway Variables.`);
+    throw new Error(missingMongoMessage());
   }
   if (isProductionLocalMongoBlocked(candidate.uri)) {
-    throw new Error(`Refusing local MongoDB URI from ${candidate.source || 'configuration'} in production. Railway needs a hosted MongoDB URI, not 127.0.0.1.`);
+    throw new Error(localMongoBlockedMessage(candidate.source || 'configuration'));
   }
   configureMongoDnsServers();
   await mongoose.connect(candidate.uri, mongoConnectOptions(candidate.uri));
@@ -638,7 +674,7 @@ async function connectMongoWithFallback() {
   try {
     const candidates = mongoConnectionCandidates();
     if (!candidates.length) {
-      throw new Error(`Missing MongoDB connection string. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} in Railway Variables.`);
+      throw new Error(missingMongoMessage());
     }
     for (const candidate of candidates) {
       try {
@@ -692,24 +728,26 @@ function mongoConnectionHelp(error, uri = activeMongoUri || MONGO_URI) {
       'MongoDB connection string is missing.',
       `Reason: ${error.message}`,
       'Fix:',
-      `- In Railway Variables, add one of: ${MONGO_URI_ENV_NAMES.join(', ')}.`,
-      '- Use a MongoDB Atlas mongodb+srv URI or Railway MongoDB private URI.',
-      '- Do not use 127.0.0.1 or localhost for the Railway deployment.'
+      `- In ${mongoEnvLocation()}, add one of: ${MONGO_URI_ENV_NAMES.join(', ')}.`,
+      `- Use ${hostedMongoDescription()}.`,
+      `- Do not use 127.0.0.1 or localhost for the ${DEPLOYMENT_NAME} deployment.`
     ].join('\n');
   }
   const isAtlas = /^mongodb\+srv:\/\//i.test(uri);
   const hints = isAtlas
     ? [
-        'Check MongoDB Atlas username/password in MONGO_URI.',
-        'Add your server IP address in Atlas Network Access, or use 0.0.0.0/0 during testing.',
-        'If the error mentions querySrv, set MONGO_DNS_SERVERS=8.8.8.8,1.1.1.1.',
+        `Check MongoDB Atlas username/password in ${MONGO_URI_SOURCE || 'MONGO_URI'}.`,
+        IS_RENDER
+          ? 'In Atlas Network Access, allow access for testing with 0.0.0.0/0 or allow your Render outbound IP if your plan provides one.'
+          : 'Add your server IP address in Atlas Network Access, or use 0.0.0.0/0 during testing.',
+        `If the error mentions querySrv, set MONGO_DNS_SERVERS=8.8.8.8,1.1.1.1 in ${mongoEnvLocation()}.`,
         'Confirm the Atlas database user has readWrite permission.',
-        'Keep MONGO_URI inside hosting environment variables, not in GitHub.'
+        `Keep the MongoDB URI inside ${mongoEnvLocation()}, not in GitHub.`
       ]
     : [
         'Check that MongoDB Community Server service is running on this PC.',
         'Confirm local MongoDB is listening at 127.0.0.1:27017.',
-        'For online hosting, replace MONGO_URI with a MongoDB Atlas mongodb+srv URI.'
+        `For ${DEPLOYMENT_NAME}, replace local MongoDB with ${hostedMongoDescription()}.`
       ];
   return [
     `MongoDB connection failed for ${maskMongoUri(uri)}.`,
@@ -853,6 +891,11 @@ app.get('/api/health', async (req, res) => {
     success: true,
     server: 'online',
     reportRoutesVersion: req.app.locals.reportRoutesVersion || '',
+    deployConfigVersion: req.app.locals.deployConfigVersion || '',
+    deploymentTarget: DEPLOYMENT_NAME,
+    render: IS_RENDER,
+    acceptedMongoEnvVars: MONGO_URI_ENV_NAMES,
+    configuredMongoEnvVar: MONGO_URI_SOURCE,
     mongodb: dbStatus === 'connected' ? 'online' : 'offline',
     serverStatus: 'online',
     mongoStatus: dbStatus === 'connected' ? 'online' : 'offline',
@@ -885,6 +928,9 @@ app.get('/api/ping', (req, res) => {
     message: 'pong',
     time: new Date().toISOString(),
     uptimeSeconds: Math.round(process.uptime()),
+    deployConfigVersion: req.app.locals.deployConfigVersion || '',
+    deploymentTarget: DEPLOYMENT_NAME,
+    render: IS_RENDER,
     db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     serverUrl: info.serverUrl
   });
@@ -900,11 +946,13 @@ app.get('/api/ready', (req, res) => {
     db: mongoReady ? 'connected' : 'disconnected',
     activeDatabase: activeMongoLabel,
     activeDatabaseUri: maskMongoUri(activeMongoUri),
+    deploymentTarget: DEPLOYMENT_NAME,
+    render: IS_RENDER,
     acceptedMongoEnvVars: MONGO_URI_ENV_NAMES,
     configuredMongoEnvVar: MONGO_URI_SOURCE,
     message: mongoReady
       ? 'Daksh is ready.'
-      : `MongoDB is not connected. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} to a hosted MongoDB URI in Railway.`
+      : databaseOfflineMessage()
   });
 });
 
@@ -951,12 +999,16 @@ app.use('/api', (req, res, next) => {
   if (mongoose.connection.readyState === 1) return next();
   return res.status(503).json({
     success: false,
-    message: 'Database is offline. Check MongoDB Atlas Network Access or keep local MongoDB running.',
+    message: databaseOfflineMessage(),
     serverStatus: 'online',
     mongoStatus: 'offline',
     db: 'disconnected',
     activeDatabase: activeMongoLabel,
     activeDatabaseUri: maskMongoUri(activeMongoUri),
+    deploymentTarget: DEPLOYMENT_NAME,
+    render: IS_RENDER,
+    acceptedMongoEnvVars: MONGO_URI_ENV_NAMES,
+    configuredMongoEnvVar: MONGO_URI_SOURCE,
     fallbackEnabled: MONGO_AUTO_LOCAL_FALLBACK
   });
 });

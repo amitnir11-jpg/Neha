@@ -23,22 +23,25 @@ mongodb://127.0.0.1:27017/daksh_inventory_v2
 
 You can change it in `.env`.
 
-For online hosting, use MongoDB Atlas and set these environment variables in the hosting dashboard:
+For online hosting, use MongoDB Atlas and set these environment variables in the hosting dashboard. On Render, use `RENDER_MONGO_URI` so the cloud database stays separate from the local PC `MONGO_URI`.
 
 ```text
-MONGO_URI=mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/daksh_inventory_v2?retryWrites=true&w=majority
+DAKSH_DEPLOY_TARGET=render
+RENDER_MONGO_URI=mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/daksh_inventory_v2?retryWrites=true&w=majority
 MONGO_DB_NAME=daksh_inventory_v2
 MONGO_SERVER_SELECTION_TIMEOUT_MS=15000
 MONGO_CONNECT_TIMEOUT_MS=15000
 MONGO_SOCKET_TIMEOUT_MS=45000
 MONGO_MAX_POOL_SIZE=20
 MONGO_DNS_SERVERS=8.8.8.8,1.1.1.1
+MONGO_ALLOW_LOCAL_DEFAULT=false
+MONGO_AUTO_LOCAL_FALLBACK=false
 MOBILE_DISCOVERY_PORT=3001
 JWT_SECRET=replace-with-a-long-random-secret
 PUBLIC_BASE_URL=https://your-live-app-url
 ```
 
-In MongoDB Atlas, create a database user with `readWrite` permission, add the hosting server IP in Network Access, and keep the full `MONGO_URI` secret in the hosting environment variables. Railway deployments can also use `MONGO_URL`, `MONGODB_URI`, or `DATABASE_URL`; the app checks those names too. Do not put real database passwords in GitHub. `MONGO_DNS_SERVERS` is optional and only needed on networks where Node cannot resolve Atlas `mongodb+srv` records through the default DNS resolver.
+In MongoDB Atlas, create a database user with `readWrite` permission, allow the Render service in Network Access, and keep the full `RENDER_MONGO_URI` secret in Render Environment Variables. For first testing, `0.0.0.0/0` is the simplest Atlas Network Access entry. The app also accepts `MONGO_URI`, `MONGO_URL`, `MONGODB_URI`, or `DATABASE_URL`. Do not put real database passwords in GitHub. `MONGO_DNS_SERVERS` is optional and only needed on networks where Node cannot resolve Atlas `mongodb+srv` records through the default DNS resolver.
 
 The mobile scanner app auto-discovers the PC server on the local network using UDP on `MOBILE_DISCOVERY_PORT`. Keep this port aligned with `PORT` unless you intentionally separate discovery from the HTTP API.
 

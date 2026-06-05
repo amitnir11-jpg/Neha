@@ -19,7 +19,7 @@ This setup is for testing only. Render Free services can sleep when idle, have m
 3. Create a free `M0` cluster.
 4. Create a database user with username/password authentication.
 5. Give the user `readWrite` permission.
-6. In Network Access, allow the Render server IP. For first testing only, you can allow `0.0.0.0/0`.
+6. In Network Access, allow the Render service. For first testing only, you can allow `0.0.0.0/0`.
 7. Copy the connection string and replace username/password/database:
 
 ```text
@@ -41,11 +41,11 @@ amitnir11-jpg/daksh-inventory-v2
 6. Set environment variables:
 
 ```text
-MONGO_URI=<your MongoDB Atlas connection string>
+RENDER_MONGO_URI=<your MongoDB Atlas connection string>
 PUBLIC_BASE_URL=<your Render app URL after first deploy>
 ```
 
-The `render.yaml` file already sets the Node.js build command, start command, health check, JWT secret generation, and MongoDB timeout settings.
+The `render.yaml` file already sets the Node.js build command, start command, health check, Render deployment marker, JWT secret generation, MongoDB DNS, local fallback disabled, and MongoDB timeout settings.
 
 ## First Login
 
@@ -61,7 +61,7 @@ Change the admin password immediately from Admin Settings.
 ## Important Notes
 
 - Do not put real MongoDB passwords in GitHub.
-- Keep `MONGO_URI` only in Render environment variables.
+- Keep `RENDER_MONGO_URI` only in Render environment variables.
 - Render Free may sleep after idle time, so the first page load can take around a minute.
 - Gmail SMTP on common SMTP ports may not work from Render Free. Admin login and normal app testing still work.
 - Bluetooth barcode scanner input works from the browser/computer where the web app is opened. The cloud server cannot directly control a user's PC Bluetooth hardware.

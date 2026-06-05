@@ -70,6 +70,9 @@ function publicBaseUrl(port, remoteIp = '') {
   const explicit = String(process.env.PUBLIC_BASE_URL || process.env.SERVER_URL || '').trim().replace(/\/+$/, '');
   if (explicit) return /^https?:\/\//i.test(explicit) ? explicit : `https://${explicit}`;
 
+  const renderUrl = String(process.env.RENDER_EXTERNAL_URL || process.env.RENDER_EXTERNAL_HOSTNAME || '').trim().replace(/\/+$/, '');
+  if (renderUrl) return /^https?:\/\//i.test(renderUrl) ? renderUrl : `https://${renderUrl}`;
+
   const railwayUrl = String(process.env.RAILWAY_STATIC_URL || '').trim().replace(/\/+$/, '');
   if (railwayUrl) return /^https?:\/\//i.test(railwayUrl) ? railwayUrl : `https://${railwayUrl}`;
 
