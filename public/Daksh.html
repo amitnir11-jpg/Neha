@@ -829,7 +829,14 @@
           <div class="grid-form three print-grid">
             <label>Process<select id="plainBinLabelMode"><option value="single">Single Bin Location</option><option value="bulk">Multiple Bin Locations</option><option value="bin-part">Bin Location + Manual Part Numbers</option><option value="bin-auto-parts">Selected Bin + Available Parts</option></select></label>
             <label>Dealer<select id="plainBinDealer" class="dealerSelect"><option value="">Select dealer</option></select></label>
-            <label>Select Bin<select id="plainBinSelect"><option value="">Select bin</option></select></label>
+            <label>Select Bin
+              <div class="plain-bin-multi-select" id="plainBinSelectControl">
+                <button id="plainBinSelectButton" class="plain-bin-multi-button" type="button">Select bin location(s)</button>
+                <div id="plainBinSelectPanel" class="plain-bin-multi-panel" hidden></div>
+              </div>
+              <select id="plainBinSelect" multiple hidden></select>
+            </label>
+            <div id="plainBinSelectedList" class="plain-bin-selected-list span-3"></div>
             <label>Bin Location<input id="plainBinLocation" placeholder="CTR03N"></label>
             <label>Bulk From<input id="plainBinRangeFrom" placeholder="A1B1"></label>
             <label>Bulk To<input id="plainBinRangeTo" placeholder="A1B10"></label>
@@ -839,9 +846,9 @@
             <label>Orientation<select id="plainBinOrientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
             <label>Custom Width mm<input id="plainBinPaperWidth" type="number" min="40" value="210"></label>
             <label>Custom Height mm<input id="plainBinPaperHeight" type="number" min="40" value="297"></label>
-            <label>Label Width mm<input id="plainBinLabelWidth" type="number" min="30" max="210" value="92"></label>
-            <label>Label Height mm<input id="plainBinLabelHeight" type="number" min="12" max="80" value="28"></label>
-            <label>Columns<input id="plainBinColumns" type="number" min="1" max="5" value="2"></label>
+            <label>Label Width mm<input id="plainBinLabelWidth" type="number" min="30" max="90" value="62"></label>
+            <label>Label Height mm<input id="plainBinLabelHeight" type="number" min="12" max="80" value="24"></label>
+            <label>Columns<input id="plainBinColumns" type="number" min="1" max="5" value="3"></label>
             <label>Max Parts<input id="plainBinMaxParts" type="number" min="1" max="40" value="8"></label>
             <label>Margin mm<input id="plainBinMarginMm" type="number" min="2" max="40" value="8"></label>
             <label>Gap mm<input id="plainBinGapMm" type="number" min="0" max="30" value="4"></label>
@@ -850,8 +857,21 @@
           </div>
           <div class="actions">
             <button id="plainLoadBinsBtn" class="btn light" type="button">Load Bins</button>
+            <button id="plainShowBinsBtn" class="btn light" type="button">Show</button>
             <button id="plainBinRangeBtn" class="btn light" type="button">Add Bulk Range</button>
             <button id="plainBinLabelPdfBtn" class="btn primary" type="button">Download Bin Location PDF</button>
+          </div>
+        </section>
+        <section id="plainBinShowPanel" class="card" hidden>
+          <div class="card-head">
+            <h2>Bin Location List</h2>
+            <span id="plainBinShowCount" class="muted">0 bin locations</span>
+          </div>
+          <div class="table-wrap">
+            <table class="plain-bin-list-table">
+              <thead><tr><th>Bin Location</th><th>Dealer</th><th>Category</th><th>Status</th></tr></thead>
+              <tbody id="plainBinShowRows"><tr><td colspan="4" class="muted">Click Show to load bin locations.</td></tr></tbody>
+            </table>
           </div>
         </section>
       </section>

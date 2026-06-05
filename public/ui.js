@@ -182,6 +182,8 @@
     binLabelSelectedKeys: new Set(),
     binLabelPreviewItems: [],
     binLabelSettings: null,
+    plainBinLocations: [],
+    plainBinSelectedBins: new Set(),
     binMasterRows: [],
     barcodeAutoSaving: false,
     barcodeLastRaw: '',
@@ -7282,9 +7284,9 @@
       orientation: $('#plainBinOrientation').value,
       paperWidthMm: Number($('#plainBinPaperWidth').value || 210),
       paperHeightMm: Number($('#plainBinPaperHeight').value || 297),
-      labelWidthMm: Number($('#plainBinLabelWidth').value || 92),
-      labelHeightMm: Number($('#plainBinLabelHeight').value || 28),
-      columns: Number($('#plainBinColumns').value || 2),
+      labelWidthMm: Number($('#plainBinLabelWidth').value || 62),
+      labelHeightMm: Number($('#plainBinLabelHeight').value || 24),
+      columns: Number($('#plainBinColumns').value || 3),
       maxParts: Number($('#plainBinMaxParts').value || 5),
       marginMm: Number($('#plainBinMarginMm').value || 8),
       gapMm: Number($('#plainBinGapMm').value || 4),
@@ -7296,7 +7298,9 @@
   function plainBinLabelItemsFromInput() {
     const mode = $('#plainBinLabelMode')?.value || 'single';
     const dealerCode = cleanDealerCode($('#plainBinDealer')?.value || '');
-    const selectedBin = cleanDealerCode($('#plainBinSelect')?.value || '');
+    const selectedBins = plainBinSelectedValues();
+    const manualBin = cleanDealerCode($('#plainBinLocation')?.value || '');
+    const targetBins = selectedBins.length ? selectedBins : (manualBin ? [manualBin] : []);
     const items = [];
     const addItem = (item) => {
       if (!item || !item.binLocation) return;
@@ -7304,12 +7308,12 @@
     };
 
     if (mode === 'single' || mode === 'bin-part' || mode === 'bin-auto-parts') {
-      addItem({
-        binLocation: cleanDealerCode(selectedBin || $('#plainBinLocation')?.value || ''),
+      targetBins.forEach((binLocation) => addItem({
+        binLocation,
         dealerCode,
         includeAvailableParts: mode === 'bin-auto-parts',
         partNumbers: mode === 'bin-part' ? splitPlainPartNumbers($('#plainBinParts')?.value || '') : []
-      });
+      }));
     }
 
     if (mode === 'bulk') {
@@ -7339,24 +7343,115 @@
     return Array.from(byBin.values());
   }
 
+  function plainBinSelectedValues() {
+    return Array.from(state.plainBinSelectedBins || [])
+      .map(cleanDealerCode)
+      .filter(Boolean);
+  }
+
+  function plainBinValuesFromBins(bins = []) {
+    return bins
+      .map((bin) => cleanDealerCode(bin.binLocation || bin.binCode || bin.bin || ''))
+      .filter(Boolean);
+  }
+
+  function syncPlainBinHiddenSelect() {
+    const select = $('#plainBinSelect');
+    if (!select) return;
+    const selected = new Set(plainBinSelectedValues());
+    Array.from(select.options || []).forEach((option) => {
+      option.selected = selected.has(cleanDealerCode(option.value));
+    });
+  }
+
+  function updatePlainBinSelectedView() {
+    const values = plainBinSelectedValues();
+    const button = $('#plainBinSelectButton');
+    if (button) {
+      button.textContent = values.length ? (values.length === 1 ? values[0] : `${values.length} bins selected`) : 'Select bin location(s)';
+      button.title = values.join(', ');
+    }
+    const list = $('#plainBinSelectedList');
+    if (list) {
+      list.innerHTML = values.length
+        ? values.map((value) => `<span class="plain-bin-chip" title="${escapeHtml(value)}">${escapeHtml(value)}</span>`).join('')
+        : '<span class="muted">No bin selected</span>';
+    }
+    if (values.length && $('#plainBinLocation')) $('#plainBinLocation').value = values[0];
+    syncPlainBinHiddenSelect();
+  }
+
+  function renderPlainBinShowList(bins = state.plainBinLocations || []) {
+    const rows = bins || [];
+    setText('plainBinShowCount', `${rows.length} bin location${rows.length === 1 ? '' : 's'}`);
+    const selected = new Set(plainBinSelectedValues());
+    const body = $('#plainBinShowRows');
+    if (!body) return;
+    body.innerHTML = rows.length ? rows.map((bin) => {
+      const binCode = cleanDealerCode(bin.binLocation || bin.binCode || bin.bin || '');
+      const isSelected = selected.has(binCode);
+      return `
+        <tr class="${isSelected ? 'plain-bin-list-selected' : ''}">
+          <td>${escapeHtml(binCode)}</td>
+          <td>${escapeHtml(cleanDealerCode(bin.dealerCode || $('#plainBinDealer')?.value || ''))}</td>
+          <td>${escapeHtml(bin.category || bin.binName || '')}</td>
+          <td>${isSelected ? 'Selected' : 'Available'}</td>
+        </tr>
+      `;
+    }).join('') : '<tr><td colspan="4" class="muted">No bin locations found for selected dealer.</td></tr>';
+  }
+
+  function renderPlainBinOptions(bins = []) {
+    state.plainBinLocations = bins;
+    const values = plainBinValuesFromBins(bins);
+    const allowed = new Set(values);
+    state.plainBinSelectedBins = new Set(plainBinSelectedValues().filter((value) => allowed.has(value)));
+
+    const select = $('#plainBinSelect');
+    if (select) {
+      select.innerHTML = values.length
+        ? values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('')
+        : '<option value="">No bins found</option>';
+    }
+
+    const panel = $('#plainBinSelectPanel');
+    if (panel) {
+      panel.innerHTML = values.length ? values.map((value, index) => `
+        <label class="plain-bin-multi-option">
+          <input class="plain-bin-option" type="checkbox" value="${escapeHtml(value)}" data-index="${escapeHtml(index)}" ${state.plainBinSelectedBins.has(value) ? 'checked' : ''}>
+          <span>${escapeHtml(value)}</span>
+        </label>
+      `).join('') : '<div class="bin-label-multi-empty">No bins found</div>';
+    }
+
+    updatePlainBinSelectedView();
+    renderPlainBinShowList(bins);
+  }
+
   async function loadPlainBinOptions() {
     const dealerCode = cleanDealerCode($('#plainBinDealer')?.value || '');
-    const select = $('#plainBinSelect');
-    if (!select) return [];
     if (!dealerCode) {
-      select.innerHTML = '<option value="">Select bin</option>';
+      state.plainBinSelectedBins = new Set();
+      renderPlainBinOptions([]);
+      if ($('#plainBinShowPanel')) $('#plainBinShowPanel').hidden = true;
       return [];
     }
     const data = await api(`/api/qr/bins?dealerCode=${encodeURIComponent(dealerCode)}`);
-    const selected = select.value;
-    select.innerHTML = '<option value="">Select bin</option>' + (data.bins || []).map((bin) => {
-      const binCode = escapeHtml(bin.binLocation || bin.binCode || '');
-      return `<option value="${binCode}">${binCode}</option>`;
-    }).join('');
-    select.value = Array.from(select.options).some((option) => option.value === selected) ? selected : '';
-    if (select.value && $('#plainBinLocation')) $('#plainBinLocation').value = select.value;
+    renderPlainBinOptions(data.bins || []);
     toast(`Loaded ${(data.bins || []).length} bin location(s)`);
     return data.bins || [];
+  }
+
+  async function showPlainBinLocations() {
+    const dealerCode = cleanDealerCode($('#plainBinDealer')?.value || '');
+    if (!dealerCode) throw new Error('Select dealer first');
+    if (!state.plainBinLocations.length) await loadPlainBinOptions();
+    renderPlainBinShowList(state.plainBinLocations || []);
+    const panel = $('#plainBinShowPanel');
+    if (panel) {
+      panel.hidden = false;
+      panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }
 
   function selectedLabelBins() {
@@ -8332,12 +8427,33 @@
     });
 
     $('#plainLoadBinsBtn')?.addEventListener('click', () => loadPlainBinOptions().catch((error) => toast(error.message, 'error')));
+    $('#plainShowBinsBtn')?.addEventListener('click', () => showPlainBinLocations().catch((error) => toast(error.message, 'error')));
     $('#plainBinLabelMode')?.addEventListener('change', () => {
       if ($('#plainBinLabelMode')?.value === 'bin-auto-parts') loadPlainBinOptions().catch((error) => toast(error.message, 'error'));
     });
     $('#plainBinDealer')?.addEventListener('change', () => loadPlainBinOptions().catch((error) => toast(error.message, 'error')));
-    $('#plainBinSelect')?.addEventListener('change', () => {
-      if ($('#plainBinSelect')?.value && $('#plainBinLocation')) $('#plainBinLocation').value = $('#plainBinSelect').value;
+    $('#plainBinSelectButton')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const panel = $('#plainBinSelectPanel');
+      if (!panel) return;
+      panel.hidden = !panel.hidden;
+      $('#plainBinSelectControl')?.classList.toggle('open', panel.hidden === false);
+    });
+    $('#plainBinSelectPanel')?.addEventListener('click', (event) => event.stopPropagation());
+    $('#plainBinSelectPanel')?.addEventListener('change', (event) => {
+      const box = event.target.closest('.plain-bin-option');
+      if (!box) return;
+      const value = cleanDealerCode(box.value || '');
+      if (box.checked) state.plainBinSelectedBins.add(value);
+      else state.plainBinSelectedBins.delete(value);
+      updatePlainBinSelectedView();
+      renderPlainBinShowList(state.plainBinLocations || []);
+    });
+    document.addEventListener('click', () => {
+      const panel = $('#plainBinSelectPanel');
+      if (!panel) return;
+      panel.hidden = true;
+      $('#plainBinSelectControl')?.classList.remove('open');
     });
     $('#plainBinRangeBtn')?.addEventListener('click', () => {
       try {

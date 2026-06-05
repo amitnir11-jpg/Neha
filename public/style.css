@@ -1700,6 +1700,132 @@ textarea:focus {
   font-weight: 800;
 }
 
+.plain-bin-multi-select {
+  position: relative;
+  width: 100%;
+}
+
+.plain-bin-multi-button {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  padding: 9px 38px 9px 12px;
+  font: inherit;
+  font-weight: 900;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plain-bin-multi-button::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: translateY(-65%) rotate(45deg);
+}
+
+.plain-bin-multi-select.open .plain-bin-multi-button {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(20, 92, 158, 0.12);
+}
+
+.plain-bin-multi-select.open .plain-bin-multi-button::after {
+  transform: translateY(-25%) rotate(225deg);
+}
+
+.plain-bin-multi-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.16);
+  padding: 4px 0;
+}
+
+.plain-bin-multi-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 12px;
+  color: var(--text);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.plain-bin-multi-option:hover {
+  background: #eef6ff;
+}
+
+.plain-bin-multi-option input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.plain-bin-multi-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plain-bin-multi-option:has(input:checked) {
+  background: #dbeafe;
+  color: #0f4c91;
+}
+
+.plain-bin-selected-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 26px;
+  align-items: center;
+}
+
+.plain-bin-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 180px;
+  min-height: 24px;
+  padding: 4px 8px;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #0f4c91;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plain-bin-list-table td:first-child,
+.plain-bin-list-table th:first-child {
+  font-weight: 900;
+}
+
+.plain-bin-list-selected {
+  color: #0f4c91;
+  font-weight: 900;
+}
+
 .btn {
   min-height: 34px;
   border: 1px solid transparent;

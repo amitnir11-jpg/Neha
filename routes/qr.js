@@ -419,14 +419,19 @@ async function renderLabelsPdf(items, input, labelType) {
 }
 
 function plainBinLabelSettings(input = {}) {
+  const paper = { orientation: 'portrait', size: [210, 297] };
+  const columns = 3;
+  const margin = positiveNumber(input.marginMm || input.margin, 8, 2, 20);
+  const gap = positiveNumber(input.gapMm || input.gap, 4, 0, 12);
+  const maxLabelWidth = (paper.size[0] - margin * 2 - gap * (columns - 1)) / columns;
   return {
-    paper: paperConfig(input),
-    labelWidth: positiveNumber(input.labelWidthMm || input.labelWidth, 92, 30, 210),
-    labelHeight: positiveNumber(input.labelHeightMm || input.labelHeight, 28, 12, 80),
-    columns: Math.max(1, Math.min(Number(input.columns || input.labelsPerRow || 2), 5)),
+    paper,
+    labelWidth: Math.min(positiveNumber(input.labelWidthMm || input.labelWidth, 62, 30, 90), maxLabelWidth),
+    labelHeight: positiveNumber(input.labelHeightMm || input.labelHeight, 24, 12, 60),
+    columns,
     maxParts: Math.max(1, Math.min(Number(input.maxParts || 5), 20)),
-    margin: positiveNumber(input.marginMm || input.margin, 8, 2, 40),
-    gap: positiveNumber(input.gapMm || input.gap, 4, 0, 30),
+    margin,
+    gap,
     binFontSize: positiveNumber(input.binFontSize, 10, 6, 24),
     partFontSize: positiveNumber(input.partFontSize, 8, 5, 20)
   };
@@ -451,10 +456,6 @@ function drawPlainBinLabel(doc, item, x, y, settings) {
   const binX = x + 2;
   const binY = y + (height - binBoxHeight) / 2;
 
-  doc.setDrawColor(220);
-  doc.setLineWidth(0.2);
-  doc.roundedRect(x, y, width, height, 1.2, 1.2);
-
   doc.setFillColor(248, 177, 52);
   doc.setDrawColor(214, 137, 18);
   doc.roundedRect(binX, binY, binBoxWidth, binBoxHeight, 0.6, 0.6, 'FD');
@@ -469,9 +470,6 @@ function drawPlainBinLabel(doc, item, x, y, settings) {
   const partY = y + 2.5;
   const partWidth = width - (partX - x) - 2;
   const partHeight = height - 5;
-  doc.setFillColor(255, 255, 255);
-  doc.setDrawColor(225);
-  doc.rect(partX, partY, partWidth, partHeight, 'S');
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(0, 0, 0);
   const lineHeight = Math.max(3.3, Math.min(5, partHeight / Math.max(parts.length, 1)));
