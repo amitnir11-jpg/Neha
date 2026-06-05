@@ -187,6 +187,10 @@ router.post('/:auditId/status/complete', auth.requireAuth, async (req, res) => {
       { new: true }
     );
 
+    if (!updatedAudit) {
+      return res.status(404).json({ success: false, message: 'Failed to update audit status' });
+    }
+
     const io = req.io || req.app.get('io');
     if (io) {
       io.emit('audit:completed', { auditId, dealerCode: updatedAudit.dealerCode });
@@ -234,6 +238,10 @@ router.post('/:auditId/status/reopen', auth.requireAuth, auth.requireAdmin, asyn
       },
       { new: true }
     );
+
+    if (!updatedAudit) {
+      return res.status(404).json({ success: false, message: 'Failed to reopen audit' });
+    }
 
     const io = req.io || req.app.get('io');
     if (io) {
