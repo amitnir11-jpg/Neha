@@ -86,6 +86,7 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 
     const statusText = clean(req.body.auditStatus || req.body.status || 'Active').toLowerCase();
     const isClosed = statusText === 'closed';
+    const auditClosedDate = isClosed ? new Date() : undefined;
     const auditId = cleanCode(req.body.auditId) || buildAuditId(dealerCode, req.body.auditName);
     const payload = {
       auditId,
@@ -95,13 +96,18 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
       brand: clean(req.body.brand),
       location: clean(req.body.location),
       auditStartDate: req.body.auditStartDate ? new Date(req.body.auditStartDate) : new Date(),
-      auditClosedDate: isClosed ? new Date() : undefined,
+      auditClosedDate,
       auditorName: clean(req.body.auditorName),
       generalManager: clean(req.body.generalManager),
       spmName: clean(req.body.spmName),
+      auditStatus: isClosed ? 'COMPLETED' : 'IN_PROGRESS',
+      completedAt: auditClosedDate,
       status: isClosed ? 'closed' : 'active'
     };
-    if (!isClosed) delete payload.auditClosedDate;
+    if (!isClosed) {
+      delete payload.auditClosedDate;
+      delete payload.completedAt;
+    }
 
     if (!isClosed && !(await multiAuditEnabled())) {
       await closeOtherActiveAudits(dealerCode, auditId);
@@ -109,7 +115,7 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 
     const audit = await Audit.findOneAndUpdate(
       { auditId },
-      isClosed ? { $set: payload } : { $set: payload, $unset: { auditClosedDate: '' } },
+      isClosed ? { $set: payload } : { $set: payload, $unset: { auditClosedDate: '', completedAt: '', completedBy: '', completedByUserId: '', completionRemark: '' } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
     const dealer = await syncDealerWithAudit(audit);
@@ -129,10 +135,17 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 router.post('/:auditId/close', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const auditId = clean(req.params.auditId);
+    const completedAt = new Date();
     const completedByUser = req.user ? (req.user.name || req.user.username || req.user.email || '') : '';
     const audit = await Audit.findOneAndUpdate(
       { auditId },
-      { status: 'closed', auditClosedDate: new Date(), completedBy: completedByUser },
+      {
+        status: 'closed',
+        auditStatus: 'COMPLETED',
+        auditClosedDate: completedAt,
+        completedAt,
+        completedBy: completedByUser
+      },
       { new: true }
     );
     if (!audit) return res.status(404).json({ success: false, message: 'Audit not found' });
@@ -157,6 +170,8 @@ router.post('/:auditId/status/complete', auth.requireAuth, async (req, res) => {
   try {
     const auditId = clean(req.params.auditId);
     const remark = clean(req.body.remark || '');
+    const completedAt = new Date();
+    const completedByUser = req.user ? (req.user.name || req.user.username || req.user.email || '') : 'System';
     const audit = await Audit.findOne({ auditId });
 
     if (!audit) {
@@ -166,8 +181,8 @@ router.post('/:auditId/status/complete', auth.requireAuth, async (req, res) => {
     // Create status history entry
     const statusHistoryEntry = {
       status: 'COMPLETED',
-      changedAt: new Date(),
-      changedBy: req.user ? (req.user.name || req.user.username || req.user.email || '') : 'System',
+      changedAt: completedAt,
+      changedBy: completedByUser,
       remark: remark
     };
 
@@ -178,7 +193,9 @@ router.post('/:auditId/status/complete', auth.requireAuth, async (req, res) => {
         $set: {
           auditStatus: 'COMPLETED',
           status: 'COMPLETED',
-          completedAt: new Date(),
+          auditClosedDate: completedAt,
+          completedAt,
+          completedBy: completedByUser,
           completedByUserId: req.user ? (req.user.id || req.user._id || '') : '',
           completionRemark: remark
         },
@@ -191,13 +208,15 @@ router.post('/:auditId/status/complete', auth.requireAuth, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Failed to update audit status' });
     }
 
+    const dealer = await syncDealerWithAudit(updatedAudit);
+
     const io = req.io || req.app.get('io');
     if (io) {
       io.emit('audit:completed', { auditId, dealerCode: updatedAudit.dealerCode });
       io.emit('dealers:update');
     }
 
-    return res.json({ success: true, audit: updatedAudit });
+    return res.json({ success: true, audit: updatedAudit, dealer, activeAudit: null });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -234,6 +253,13 @@ router.post('/:auditId/status/reopen', auth.requireAuth, auth.requireAdmin, asyn
           auditStatus: 'IN_PROGRESS',
           status: 'IN_PROGRESS'
         },
+        $unset: {
+          auditClosedDate: '',
+          completedAt: '',
+          completedBy: '',
+          completedByUserId: '',
+          completionRemark: ''
+        },
         $push: { statusHistory: statusHistoryEntry }
       },
       { new: true }
@@ -243,13 +269,16 @@ router.post('/:auditId/status/reopen', auth.requireAuth, auth.requireAdmin, asyn
       return res.status(404).json({ success: false, message: 'Failed to reopen audit' });
     }
 
+    const dealer = await syncDealerWithAudit(updatedAudit);
+
     const io = req.io || req.app.get('io');
     if (io) {
       io.emit('audit:reopened', { auditId, dealerCode: updatedAudit.dealerCode });
+      io.emit('audit:active', publicAudit(updatedAudit));
       io.emit('dealers:update');
     }
 
-    return res.json({ success: true, audit: updatedAudit });
+    return res.json({ success: true, audit: updatedAudit, dealer, activeAudit: publicAudit(updatedAudit) });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

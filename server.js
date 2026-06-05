@@ -192,6 +192,16 @@ mongoose.connection.on('disconnected', () => {
 });
 mongoose.connection.on('reconnected', () => {
   cloudSyncState.status = 'atlas active';
+  // CRITICAL FIX: Immediately notify all connected clients that database is back online
+  if (io) {
+    io.emit('database:status', mongoHealthDetails());
+    io.emit('database:reconnected', { 
+      message: 'Database reconnected',
+      timestamp: new Date().toISOString(),
+      status: 'connected'
+    });
+  }
+  console.log('✓ MongoDB reconnected - clients notified');
 });
 
 app.use(cors({ origin: '*' }));
@@ -1490,6 +1500,30 @@ async function start() {
     app.locals.activePort = activePort;
     fs.writeFileSync(path.join(__dirname, 'server_port.txt'), String(activePort));
     startMobileDiscoveryServer(activePort);
+
+    // CRITICAL FIX: Start periodic health broadcast to keep clients in sync with database status
+    // This ensures "Server: Offline" status is updated in real-time every 10 seconds
+    let healthBroadcastTimer = null;
+    const startHealthBroadcast = () => {
+      if (healthBroadcastTimer) clearInterval(healthBroadcastTimer);
+      healthBroadcastTimer = setInterval(() => {
+        try {
+          const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+          if (io && io.sockets && io.sockets.sockets.size > 0) {
+            io.emit('database:health', {
+              status: dbStatus === 'connected' ? 'online' : 'offline',
+              mongoStatus: dbStatus,
+              timestamp: new Date().toISOString(),
+              details: mongoHealthDetails()
+            });
+          }
+        } catch (error) {
+          console.warn('Health broadcast failed:', error.message);
+        }
+      }, 10000); // Broadcast every 10 seconds
+      if (typeof healthBroadcastTimer.unref === 'function') healthBroadcastTimer.unref();
+    };
+    startHealthBroadcast();
 
     if (!mongoConnected) {
       console.warn('Daksh is running with MongoDB offline. Health will show mongoStatus=offline until Atlas allows this IP.');
