@@ -46,6 +46,17 @@ const auditSchema = new mongoose.Schema(
       trim: true,
       default: ''
     },
+    auditUserId: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    auditorUsername: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: ''
+    },
     generalManager: {
       type: String,
       trim: true,

@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260603-dashboard-dealer-align';
+  const UI_BOOT_VERSION = '20260605-master-user-admin-tools';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -846,6 +846,18 @@
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+  }
+
+  function moveMasterDataAdminTools() {
+    const userPanel = $('#userApprovalTab');
+    const deletePanel = $('#adminDeleteMasterTab');
+    const userCard = $('#createUserForm')?.closest('.card');
+    const editModal = $('#editUserModal');
+    const adminDeleteCard = $('.admin-delete-card');
+
+    if (userPanel && userCard && userCard.parentElement !== userPanel) userPanel.appendChild(userCard);
+    if (userPanel && editModal && editModal.parentElement !== userPanel) userPanel.appendChild(editModal);
+    if (deletePanel && adminDeleteCard && adminDeleteCard.parentElement !== deletePanel) deletePanel.appendChild(adminDeleteCard);
   }
 
   function formObject(form) {
@@ -4962,6 +4974,7 @@
         <td>${escapeHtml(dealer.dealerName)}</td>
         <td>${escapeHtml(dealer.dealerCode)}</td>
         <td>${escapeHtml(dealer.location)}</td>
+        <td>${escapeHtml(auditUserDisplay(dealer) || '-')}</td>
         <td><span class="audit-status-badge ${auditStatusClass}">${auditStatusDisplay}</span></td>
         <td>
           <select class="btn light small dealer-action-select" data-code="${escapeHtml(dealer.dealerCode)}" data-audit-id="${escapeHtml(dealer.currentAuditId || '')}">
@@ -4972,7 +4985,7 @@
         </td>
       </tr>
     `;
-    }).join('') : '<tr><td colspan="5" class="muted">No dealers yet</td></tr>';
+    }).join('') : '<tr><td colspan="6" class="muted">No dealers yet</td></tr>';
   }
 
   async function deleteDealerMaster(dealerCode, dealerName = '') {
@@ -6988,9 +7001,17 @@
   function setMultiSelectValues(select, values = []) {
     if (!select) return;
     const selected = new Set(cleanDealerAccessInput(values));
-    Array.from(select.options || []).forEach((option) => {
-      option.selected = selected.has(cleanDealerCode(option.value));
-    });
+    const options = Array.from(select.options || []);
+    if (select.multiple) {
+      options.forEach((option) => {
+        option.selected = selected.has(cleanDealerCode(option.value));
+      });
+    } else {
+      const preferred = selected.has('ALL') ? 'ALL' : Array.from(selected)[0] || '';
+      const match = options.find((option) => cleanDealerCode(option.value) === preferred);
+      select.value = match ? match.value : (options[0] ? options[0].value : '');
+    }
+    updateDealerAccessBoxes();
   }
 
   function dealerAccessDisplay(access = []) {
@@ -7003,6 +7024,25 @@
     }).join(', ');
   }
 
+  function dealerAccessSummary(select) {
+    if (!select) return 'Select dealer access';
+    const codes = cleanDealerAccessInput(select.multiple
+      ? Array.from(select.selectedOptions || []).map((option) => option.value)
+      : select.value);
+    return dealerAccessDisplay(codes) || 'Select dealer access';
+  }
+
+  function updateDealerAccessBoxes() {
+    const pairs = [
+      ['#createUserDealerAccess', '#createUserDealerAccessBox'],
+      ['#editUserDealerAccess', '#editUserDealerAccessBox']
+    ];
+    pairs.forEach(([selectId, boxId]) => {
+      const box = $(boxId);
+      if (box) box.textContent = dealerAccessSummary($(selectId));
+    });
+  }
+
   function renderDealerAccessOptions() {
     const dealers = (state.dealers || []).filter((dealer) => !isTestDealer(dealer) && dealer.active !== false);
     $$('.dealer-access-select').forEach((select) => {
@@ -7012,6 +7052,44 @@
       )).join('');
       setMultiSelectValues(select, selected);
     });
+    updateDealerAccessBoxes();
+  }
+
+  function auditUserLabel(user = {}) {
+    const role = user.role === 'mobile_user' ? 'Mobile User' : (user.role || 'staff');
+    const name = user.name || user.username || user.email || 'User';
+    const username = user.username ? ` (${user.username})` : '';
+    return `${name}${username} - ${role}`;
+  }
+
+  function auditAssignableUsers() {
+    return (state.users || [])
+      .filter((user) => user && user.active !== false && user.approved !== false)
+      .sort((a, b) => String(a.name || a.username || '').localeCompare(String(b.name || b.username || ''), undefined, { numeric: true }));
+  }
+
+  function renderAuditUserOptions() {
+    const select = $('#dealerAuditUserSelect');
+    if (!select) return;
+    const selected = select.value;
+    const users = auditAssignableUsers();
+    select.innerHTML = '<option value="">Select User</option>' + users.map((user) => (
+      `<option value="${escapeHtml(user.id || '')}" data-name="${escapeHtml(user.name || user.username || '')}" data-username="${escapeHtml(user.username || '')}">${escapeHtml(auditUserLabel(user))}</option>`
+    )).join('');
+    if (selected && Array.from(select.options).some((option) => option.value === selected)) select.value = selected;
+  }
+
+  function applySelectedAuditUserToForm() {
+    const select = $('#dealerAuditUserSelect');
+    const input = $('#dealerAuditUserName');
+    if (!select || !input) return;
+    const option = select.selectedOptions && select.selectedOptions[0];
+    if (!option || !option.value) return;
+    input.value = option.dataset.name || option.dataset.username || option.textContent || '';
+  }
+
+  function auditUserDisplay(dealer = {}) {
+    return dealer.auditorName || dealer.auditorUsername || dealer.auditUserName || '';
   }
 
   async function loadUsers() {
@@ -7019,6 +7097,7 @@
     const data = await api('/api/users');
     state.users = data.users || [];
     renderUsers();
+    renderAuditUserOptions();
   }
 
   function renderUsers() {
@@ -8479,9 +8558,19 @@
     });
     $('#dealerMasterForm').addEventListener('submit', async (event) => {
       event.preventDefault();
-      await api('/api/master/dealers', { method: 'POST', body: formObject(event.currentTarget) });
+      const payload = formObject(event.currentTarget);
+      const auditUserOption = $('#dealerAuditUserSelect')?.selectedOptions?.[0];
+      if (auditUserOption && auditUserOption.value) {
+        payload.auditUserId = auditUserOption.value;
+        payload.auditorUsername = auditUserOption.dataset.username || '';
+        payload.auditorName = payload.auditorName || auditUserOption.dataset.name || auditUserOption.dataset.username || '';
+      }
+      await api('/api/master/dealers', { method: 'POST', body: payload });
       toast('Dealer saved');
       event.currentTarget.reset();
+      renderAuditUserOptions();
+      const auditStartDate = $('[name="auditStartDate"]', event.currentTarget);
+      if (auditStartDate) auditStartDate.value = new Date().toISOString().slice(0, 10);
       await loadDealers();
     });
     $('#dealerMasterRows')?.addEventListener('click', (event) => {
@@ -8647,6 +8736,10 @@
       toast('Database restored');
       await refreshAll();
     });
+    $$('.dealer-access-select').forEach((select) => {
+      select.addEventListener('change', updateDealerAccessBoxes);
+    });
+    $('#dealerAuditUserSelect')?.addEventListener('change', applySelectedAuditUserToForm);
     $('#createUserForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       try {
@@ -8658,13 +8751,13 @@
         payload.approved = $('[name="approved"]', event.currentTarget).checked;
         payload.active = $('[name="active"]', event.currentTarget).checked;
         const data = await api('/api/users/create', { method: 'POST', body: payload });
-        showCreatedUser(data.user);
         toast('User created');
         event.currentTarget.reset();
         renderDealerAccessOptions();
-        if (payload.role !== 'admin') setMultiSelectValues(event.currentTarget.elements.dealerAccess, payload.dealerAccess);
         $('[name="approved"]', event.currentTarget).checked = true;
         $('[name="active"]', event.currentTarget).checked = true;
+        showCreatedUser(data.user);
+        renderAuditUserOptions();
       } catch (error) {
         toast(error.message, 'error');
       }
@@ -8960,6 +9053,7 @@
       });
       restoreBarcodeScanDefaults();
       bootLog('binding dashboard UI start');
+      moveMasterDataAdminTools();
       bindNavigation();
       bindEvents();
       bindSuggestions();

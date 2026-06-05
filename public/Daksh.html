@@ -686,6 +686,8 @@
         <div class="master-tabs" role="tablist" aria-label="Master Data sections">
           <button class="master-tab active" type="button" role="tab" aria-selected="true" aria-controls="partMasterTab" data-master-tab="partMasterTab">Part Master</button>
           <button class="master-tab" type="button" role="tab" aria-selected="false" aria-controls="dealerAuditTab" data-master-tab="dealerAuditTab">Dealer Master / Audit Setup</button>
+          <button class="master-tab" type="button" role="tab" aria-selected="false" aria-controls="userApprovalTab" data-master-tab="userApprovalTab">User Login Approval</button>
+          <button class="master-tab" type="button" role="tab" aria-selected="false" aria-controls="adminDeleteMasterTab" data-master-tab="adminDeleteMasterTab">Admin Delete Manager</button>
         </div>
 
         <div class="master-tab-panels">
@@ -729,6 +731,8 @@
                 <label>Dealer Code<input name="dealerCode" placeholder="Dealer Code" required></label>
                 <label>Brand<input name="brand" placeholder="Brand"></label>
                 <label>Location<input name="location" placeholder="Location"></label>
+                <label>Audit User<select name="auditUserId" id="dealerAuditUserSelect"><option value="">Select User</option></select></label>
+                <label>Auditor Name<input name="auditorName" id="dealerAuditUserName" placeholder="Auditor Name"></label>
                 <label>Audit Start Date<input name="auditStartDate" type="date" required></label>
                 <label>Status<select name="auditStatus"><option>Active</option></select></label>
                 <button class="btn primary admin-only form-action" type="submit">Start Audit</button>
@@ -761,9 +765,12 @@
 
             <section class="card">
               <div class="card-head"><h2>Dealer List</h2></div>
-              <div class="table-wrap master-table-wrap"><table><thead><tr><th>Dealer</th><th>Code</th><th>Location</th><th>Audit Status</th><th>Action</th></tr></thead><tbody id="dealerMasterRows"></tbody></table></div>
+              <div class="table-wrap master-table-wrap"><table><thead><tr><th>Dealer</th><th>Code</th><th>Location</th><th>Audit User</th><th>Audit Status</th><th>Action</th></tr></thead><tbody id="dealerMasterRows"></tbody></table></div>
             </section>
           </section>
+
+          <section id="userApprovalTab" class="master-tab-panel" role="tabpanel" hidden></section>
+          <section id="adminDeleteMasterTab" class="master-tab-panel" role="tabpanel" hidden></section>
 
         </div>
       </section>
@@ -1049,7 +1056,7 @@
             <label>Password<input name="password" type="password"></label>
             <label>4-digit PIN<input name="pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}"></label>
             <label>Role<select name="role"><option value="admin">Admin</option><option value="staff" selected>Staff</option><option value="mobile_user">Mobile User</option></select></label>
-            <label class="span-3">Dealer Access<select name="dealerAccess" id="createUserDealerAccess" class="dealer-access-select" multiple size="6"></select></label>
+            <label class="span-3">Dealer Access<select name="dealerAccess" id="createUserDealerAccess" class="dealer-access-select"></select><span id="createUserDealerAccessBox" class="dealer-access-selected-box">Select dealer access</span></label>
             <label class="toggle"><input name="approved" type="checkbox" checked>Approve login now</label>
             <label class="toggle"><input name="active" type="checkbox" checked>Active</label>
             <div class="actions span-3">
@@ -1104,7 +1111,7 @@
               <label>Username<input name="username" required></label>
               <label>Email ID<input name="email" type="email"></label>
               <label>Role<select name="role"><option value="admin">Admin</option><option value="staff">Staff</option><option value="mobile_user">Mobile User</option></select></label>
-              <label class="span-3">Dealer Access<select name="dealerAccess" id="editUserDealerAccess" class="dealer-access-select" multiple size="6"></select></label>
+              <label class="span-3">Dealer Access<select name="dealerAccess" id="editUserDealerAccess" class="dealer-access-select"></select><span id="editUserDealerAccessBox" class="dealer-access-selected-box">Select dealer access</span></label>
               <label>Reset Password<input name="password" type="password" autocomplete="new-password"></label>
               <label>Reset 4-digit PIN<input name="pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}"></label>
               <label class="toggle"><input name="approved" type="checkbox">Approved</label>

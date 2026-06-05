@@ -8,6 +8,7 @@ const Dealer = require('../models/Dealer');
 const Audit = require('../models/Audit');
 const Bin = require('../models/Bin');
 const VerificationLog = require('../models/VerificationLog');
+const User = require('../models/User');
 const auth = require('./auth');
 const { auditWorkflowStatus, closeOtherActiveAudits, multiAuditEnabled, publicAudit, syncDealerWithAudit } = require('../utils/audit');
 const normalizer = require('../utils/normalize');
@@ -725,7 +726,7 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
       MasterPart.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
       Inventory.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
       Bin.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
-      Audit.find({}).sort({ createdAt: -1 }).select('auditId auditStatus status completedAt auditClosedDate').lean()
+      Audit.find({}).sort({ createdAt: -1 }).select('auditId auditStatus status completedAt auditClosedDate auditUserId auditorUsername auditorName').lean()
     ]);
     const auditMap = new Map();
     auditRows.forEach((audit) => {
@@ -747,6 +748,9 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
       const audit = auditMap.get(auditLookupKey(dealer.currentAuditId));
       return {
         ...dealer,
+        auditUserId: dealer.auditUserId || (audit && audit.auditUserId) || '',
+        auditorUsername: dealer.auditorUsername || (audit && audit.auditorUsername) || '',
+        auditorName: dealer.auditorName || (audit && audit.auditorName) || '',
         auditStatus: audit ? auditWorkflowStatus(audit) : (dealer.active === false ? 'COMPLETED' : 'IN_PROGRESS'),
         completedAt: audit ? audit.completedAt : null,
         auditClosedDate: audit ? audit.auditClosedDate : dealer.auditClosedDate
@@ -789,6 +793,24 @@ router.get('/parts/categories', auth.requireAuth, async (req, res) => {
   }
 });
 
+async function auditUserPayload(body = {}) {
+  const auditUserKey = String(body.auditUserId || body.auditorUsername || '').trim();
+  let auditUser = null;
+  if (auditUserKey) {
+    const clauses = [
+      { username: auditUserKey.toLowerCase() },
+      { email: auditUserKey.toLowerCase() }
+    ];
+    if (/^[a-f0-9]{24}$/i.test(auditUserKey)) clauses.push({ _id: auditUserKey });
+    auditUser = await User.findOne({ $or: clauses }).lean();
+  }
+  return {
+    auditUserId: auditUser ? String(auditUser._id) : auditUserKey,
+    auditorUsername: auditUser ? auditUser.username || '' : String(body.auditorUsername || '').trim().toLowerCase(),
+    auditorName: String(body.auditorName || (auditUser && (auditUser.name || auditUser.username)) || '').trim()
+  };
+}
+
 router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const dealerCode = normalizePart(req.body.dealerCode);
@@ -800,6 +822,7 @@ router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) =>
     const isClosed = auditStatus === 'closed';
     const auditId = normalizePart(req.body.auditId || req.body.currentAuditId || `AUD-${dealerCode}-${Date.now()}`);
     const auditClosedDate = isClosed ? new Date() : undefined;
+    const auditUser = await auditUserPayload(req.body);
     const auditPayload = {
       auditId,
       dealerCode,
@@ -807,6 +830,9 @@ router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) =>
       brand: req.body.brand || '',
       location: req.body.location || '',
       auditName: req.body.auditName || `${dealerCode} Audit`,
+      auditUserId: auditUser.auditUserId,
+      auditorUsername: auditUser.auditorUsername,
+      auditorName: auditUser.auditorName,
       auditStartDate: req.body.auditStartDate ? new Date(req.body.auditStartDate) : new Date(),
       auditClosedDate,
       auditStatus: isClosed ? 'COMPLETED' : 'IN_PROGRESS',

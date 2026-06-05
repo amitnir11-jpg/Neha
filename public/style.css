@@ -5502,6 +5502,26 @@ tr:hover td,
   padding: 7px 9px;
 }
 
+.dealer-access-select:not([multiple]) {
+  min-height: 44px;
+}
+
+.dealer-access-selected-box {
+  display: block;
+  min-height: 34px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .user-management-table-wrap {
   max-height: 420px !important;
 }

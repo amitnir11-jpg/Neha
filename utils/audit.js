@@ -58,6 +58,9 @@ function publicAudit(audit = {}) {
     auditId: clean(audit.auditId || audit._id),
     auditName: clean(audit.auditName),
     auditStartDate: audit.auditStartDate || audit.createdAt || null,
+    auditUserId: clean(audit.auditUserId),
+    auditorUsername: clean(audit.auditorUsername),
+    auditorName: clean(audit.auditorName),
     auditStatus: auditWorkflowStatus(audit)
   };
 }
@@ -103,6 +106,9 @@ async function syncDealerWithAudit(audit) {
       auditName: clean(audit.auditName),
       auditStartDate: audit.auditStartDate,
       auditClosedDate: audit.auditClosedDate,
+      auditUserId: clean(audit.auditUserId),
+      auditorUsername: clean(audit.auditorUsername),
+      auditorName: clean(audit.auditorName),
       currentAuditId: clean(audit.auditId),
       active: !completed
     },

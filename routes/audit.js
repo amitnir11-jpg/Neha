@@ -4,6 +4,7 @@ const fsp = require('fs/promises');
 const Audit = require('../models/Audit');
 const Dealer = require('../models/Dealer');
 const Inventory = require('../models/Inventory');
+const User = require('../models/User');
 const auth = require('./auth');
 const { compactClosedAuditRawScans } = require('../services/AuditArchiveService');
 const {
@@ -27,6 +28,24 @@ function buildAuditId(dealerCode, auditName) {
 
 function safeArchiveName(value = '') {
   return clean(value).replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '') || 'audit';
+}
+
+async function auditUserPayload(body = {}) {
+  const auditUserKey = clean(body.auditUserId || body.auditorUsername);
+  let auditUser = null;
+  if (auditUserKey) {
+    const clauses = [
+      { username: auditUserKey.toLowerCase() },
+      { email: auditUserKey.toLowerCase() }
+    ];
+    if (/^[a-f0-9]{24}$/i.test(auditUserKey)) clauses.push({ _id: auditUserKey });
+    auditUser = await User.findOne({ $or: clauses }).lean();
+  }
+  return {
+    auditUserId: auditUser ? String(auditUser._id) : auditUserKey,
+    auditorUsername: auditUser ? auditUser.username || '' : clean(body.auditorUsername).toLowerCase(),
+    auditorName: clean(body.auditorName || (auditUser && (auditUser.name || auditUser.username)) || '')
+  };
 }
 
 async function createClosedAuditBackup(audit, completedBy = '') {
@@ -88,6 +107,7 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
     const isClosed = statusText === 'closed';
     const auditClosedDate = isClosed ? new Date() : undefined;
     const auditId = cleanCode(req.body.auditId) || buildAuditId(dealerCode, req.body.auditName);
+    const auditUser = await auditUserPayload(req.body);
     const payload = {
       auditId,
       auditName: clean(req.body.auditName || `${dealerCode} Audit`),
@@ -97,7 +117,9 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
       location: clean(req.body.location),
       auditStartDate: req.body.auditStartDate ? new Date(req.body.auditStartDate) : new Date(),
       auditClosedDate,
-      auditorName: clean(req.body.auditorName),
+      auditUserId: auditUser.auditUserId,
+      auditorUsername: auditUser.auditorUsername,
+      auditorName: auditUser.auditorName,
       generalManager: clean(req.body.generalManager),
       spmName: clean(req.body.spmName),
       auditStatus: isClosed ? 'COMPLETED' : 'IN_PROGRESS',
