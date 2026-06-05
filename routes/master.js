@@ -9,7 +9,7 @@ const Audit = require('../models/Audit');
 const Bin = require('../models/Bin');
 const VerificationLog = require('../models/VerificationLog');
 const auth = require('./auth');
-const { closeOtherActiveAudits, multiAuditEnabled, publicAudit, syncDealerWithAudit } = require('../utils/audit');
+const { auditWorkflowStatus, closeOtherActiveAudits, multiAuditEnabled, publicAudit, syncDealerWithAudit } = require('../utils/audit');
 const normalizer = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
 
@@ -18,6 +18,10 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 function normalizeHeader(value) {
   return normalizer.cleanText(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function auditLookupKey(value) {
+  return String(value || '').trim().toUpperCase();
 }
 
 const FIELD_ALIASES = {
@@ -716,12 +720,18 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
     const userAccess = await auth.userDealerAccessCodes(req.user);
     const canSeeAll = req.user.role === 'admin' || userAccess.includes('ALL');
     const allowedDealerSet = new Set(userAccess);
-    const [dealerRows, masterDealerCodes, scanDealerCodes, binDealerCodes] = await Promise.all([
+    const [dealerRows, masterDealerCodes, scanDealerCodes, binDealerCodes, auditRows] = await Promise.all([
       Dealer.find({}).sort({ dealerName: 1 }).lean(),
       MasterPart.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
       Inventory.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
-      Bin.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } })
+      Bin.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
+      Audit.find({}).sort({ createdAt: -1 }).select('auditId auditStatus status completedAt auditClosedDate').lean()
     ]);
+    const auditMap = new Map();
+    auditRows.forEach((audit) => {
+      const key = auditLookupKey(audit.auditId);
+      if (key && !auditMap.has(key)) auditMap.set(key, audit);
+    });
     const dealerMap = new Map();
     dealerRows.forEach((dealer) => {
       const code = normalizePart(dealer.dealerCode);
@@ -733,7 +743,15 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
       if (!code || dealerMap.has(code)) return;
       dealerMap.set(code, { dealerCode: code, dealerName: code, active: true });
     });
-    const dealers = Array.from(dealerMap.values()).sort((a, b) =>
+    const dealers = Array.from(dealerMap.values()).map((dealer) => {
+      const audit = auditMap.get(auditLookupKey(dealer.currentAuditId));
+      return {
+        ...dealer,
+        auditStatus: audit ? auditWorkflowStatus(audit) : (dealer.active === false ? 'COMPLETED' : 'IN_PROGRESS'),
+        completedAt: audit ? audit.completedAt : null,
+        auditClosedDate: audit ? audit.auditClosedDate : dealer.auditClosedDate
+      };
+    }).sort((a, b) =>
       String(a.dealerName || a.dealerCode || '').localeCompare(String(b.dealerName || b.dealerCode || ''))
     ).filter((dealer) => canSeeAll || allowedDealerSet.has(normalizePart(dealer.dealerCode)));
     res.json({ success: true, dealers });
@@ -781,6 +799,7 @@ router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) =>
     const auditStatus = String(req.body.auditStatus || req.body.status || 'Active').trim().toLowerCase();
     const isClosed = auditStatus === 'closed';
     const auditId = normalizePart(req.body.auditId || req.body.currentAuditId || `AUD-${dealerCode}-${Date.now()}`);
+    const auditClosedDate = isClosed ? new Date() : undefined;
     const auditPayload = {
       auditId,
       dealerCode,
@@ -789,16 +808,21 @@ router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) =>
       location: req.body.location || '',
       auditName: req.body.auditName || `${dealerCode} Audit`,
       auditStartDate: req.body.auditStartDate ? new Date(req.body.auditStartDate) : new Date(),
-      auditClosedDate: isClosed ? new Date() : undefined,
+      auditClosedDate,
+      auditStatus: isClosed ? 'COMPLETED' : 'IN_PROGRESS',
+      completedAt: auditClosedDate,
       status: isClosed ? 'closed' : 'active'
     };
-    if (!isClosed) delete auditPayload.auditClosedDate;
+    if (!isClosed) {
+      delete auditPayload.auditClosedDate;
+      delete auditPayload.completedAt;
+    }
     if (!isClosed && !(await multiAuditEnabled())) {
       await closeOtherActiveAudits(dealerCode, auditId);
     }
     const audit = await Audit.findOneAndUpdate(
       { auditId },
-      isClosed ? { $set: auditPayload } : { $set: auditPayload, $unset: { auditClosedDate: '' } },
+      isClosed ? { $set: auditPayload } : { $set: auditPayload, $unset: { auditClosedDate: '', completedAt: '', completedBy: '', completedByUserId: '', completionRemark: '' } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
     const dealer = await syncDealerWithAudit(audit);

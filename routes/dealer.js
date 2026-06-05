@@ -2,7 +2,7 @@ const express = require('express');
 const Dealer = require('../models/Dealer');
 const Audit = require('../models/Audit');
 const auth = require('./auth');
-const { closeOtherActiveAudits, multiAuditEnabled, publicAudit } = require('../utils/audit');
+const { auditWorkflowStatus, closeOtherActiveAudits, multiAuditEnabled, publicAudit, syncDealerWithAudit } = require('../utils/audit');
 
 const router = express.Router();
 
@@ -34,7 +34,7 @@ router.get('/', auth.requireAuth, async (req, res) => {
     audits.forEach(audit => {
       if (audit.auditId && !auditMap[audit.auditId]) {
         auditMap[audit.auditId] = {
-          auditStatus: audit.auditStatus || audit.status || 'IN_PROGRESS',
+          auditStatus: auditWorkflowStatus(audit),
           completedAt: audit.completedAt
         };
       }
@@ -85,7 +85,13 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
     );
 
     const isClosed = Boolean(payload.auditClosedDate) || String(req.body.auditStatus || req.body.status || '').toLowerCase() === 'closed';
-    if (!isClosed) delete payload.auditClosedDate;
+    payload.auditStatus = isClosed ? 'COMPLETED' : 'IN_PROGRESS';
+    if (isClosed && !payload.auditClosedDate) payload.auditClosedDate = new Date();
+    if (isClosed) payload.completedAt = payload.auditClosedDate;
+    if (!isClosed) {
+      delete payload.auditClosedDate;
+      delete payload.completedAt;
+    }
     if (!isClosed && !(await multiAuditEnabled())) {
       await closeOtherActiveAudits(dealerCode, auditId);
     }
@@ -100,13 +106,14 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
         ...payload,
         auditId,
         status: 'active'
-      }, $unset: { auditClosedDate: '' } },
+      }, $unset: { auditClosedDate: '', completedAt: '', completedBy: '', completedByUserId: '', completionRemark: '' } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    const syncedDealer = await syncDealerWithAudit(audit);
 
     if (req.io && !isClosed) req.io.emit('audit:active', publicAudit(audit));
     req.io.emit('dealers:update');
-    res.json({ success: true, dealer, audit, activeAudit: isClosed ? null : publicAudit(audit) });
+    res.json({ success: true, dealer: syncedDealer || dealer, audit, activeAudit: isClosed ? null : publicAudit(audit) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

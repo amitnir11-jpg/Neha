@@ -12,13 +12,39 @@ function cleanCode(value) {
 
 function activeStatusFilter() {
   return {
-    $or: [
-      { status: 'active' },
-      { status: 'open' },
-      { status: { $exists: false } }
-    ],
-    auditClosedDate: null
+    $and: [
+      {
+        $or: [
+          { status: { $in: ['active', 'open', 'IN_PROGRESS'] } },
+          { status: { $exists: false } },
+          { status: null },
+          { status: '' }
+        ]
+      },
+      {
+        $or: [
+          { auditStatus: 'IN_PROGRESS' },
+          { auditStatus: { $exists: false } },
+          { auditStatus: null },
+          { auditStatus: '' }
+        ]
+      },
+      { auditClosedDate: null }
+    ]
   };
+}
+
+function auditWorkflowStatus(audit = {}) {
+  const auditStatus = clean(audit.auditStatus).toUpperCase();
+  const status = clean(audit.status).toUpperCase();
+  if (auditStatus === 'COMPLETED' || status === 'COMPLETED' || status === 'CLOSED' || audit.auditClosedDate) {
+    return 'COMPLETED';
+  }
+  return 'IN_PROGRESS';
+}
+
+function isCompletedAudit(audit = {}) {
+  return auditWorkflowStatus(audit) === 'COMPLETED';
 }
 
 function publicAudit(audit = {}) {
@@ -32,7 +58,7 @@ function publicAudit(audit = {}) {
     auditId: clean(audit.auditId || audit._id),
     auditName: clean(audit.auditName),
     auditStartDate: audit.auditStartDate || audit.createdAt || null,
-    auditStatus: 'Active'
+    auditStatus: auditWorkflowStatus(audit)
   };
 }
 
@@ -66,6 +92,7 @@ async function closeOtherActiveAudits(dealerCode, auditId) {
 
 async function syncDealerWithAudit(audit) {
   if (!audit || !audit.dealerCode) return null;
+  const completed = isCompletedAudit(audit);
   return Dealer.findOneAndUpdate(
     { dealerCode: cleanCode(audit.dealerCode) },
     {
@@ -77,7 +104,7 @@ async function syncDealerWithAudit(audit) {
       auditStartDate: audit.auditStartDate,
       auditClosedDate: audit.auditClosedDate,
       currentAuditId: clean(audit.auditId),
-      active: audit.status !== 'closed'
+      active: !completed
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
@@ -85,10 +112,12 @@ async function syncDealerWithAudit(audit) {
 
 module.exports = {
   activeStatusFilter,
+  auditWorkflowStatus,
   clean,
   cleanCode,
   closeOtherActiveAudits,
   getActiveAudit,
+  isCompletedAudit,
   multiAuditEnabled,
   publicAudit,
   syncDealerWithAudit

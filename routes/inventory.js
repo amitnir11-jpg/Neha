@@ -19,7 +19,7 @@ const { normalizePartNumber } = require('../utils/normalize');
 const { findCataloguePart, cataloguePayload, reprocessScansWithCatalogue } = require('../utils/catalogue');
 const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentity');
 const masterValidation = require('../utils/masterValidation');
-const { getActiveAudit, publicAudit } = require('../utils/audit');
+const { getActiveAudit, isCompletedAudit, publicAudit } = require('../utils/audit');
 const { dateDebugPayload, formatIstDateTime, validDate } = require('../utils/time');
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { findPricePeriod, pricePeriodPayload } = require('../utils/priceHistory');
@@ -1537,7 +1537,7 @@ async function saveScanRequest(req, res) {
     // Check if audit is completed - prevent scanning
     if (auditId) {
       const audit = await Audit.findOne({ auditId }).lean();
-      if (audit && (audit.auditStatus === 'COMPLETED' || audit.status === 'COMPLETED')) {
+      if (audit && isCompletedAudit(audit)) {
         return res.status(403).json({ 
           success: false, 
           message: 'Scanning is not allowed for completed audits. Only admin can reopen this audit.',

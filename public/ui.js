@@ -1300,13 +1300,22 @@
   async function loadActiveAudit(options = {}) {
     try {
       const data = await api('/api/audit/active');
-      if (!data.success) throw new Error(data.message || 'No active audit found. Please start audit from PC Admin.');
+      if (!data.success) {
+        const message = data.message || 'No active audit found. Please start audit from PC Admin.';
+        if (options.allowMissing && /no active audit/i.test(message)) {
+          state.activeAudit = null;
+          updateActiveAuditUi();
+          return null;
+        }
+        throw new Error(message);
+      }
       state.activeAudit = data;
       updateActiveAuditUi();
       return data;
     } catch (error) {
       state.activeAudit = null;
       updateActiveAuditUi();
+      if (options.allowMissing && /no active audit/i.test(error.message || '')) return null;
       if (!options.silent) toast(error.message, 'error');
       throw error;
     }
@@ -2461,7 +2470,7 @@
   }
 
   async function loadDashboard() {
-    await loadActiveAudit({ silent: true }).catch(() => null);
+    await loadActiveAudit({ silent: true, allowMissing: true }).catch(() => null);
     const query = dashboardQueryString();
     const data = await api(`/api/scans/dashboard${query ? `?${query}` : ''}`);
     if (data.activeAudit && data.activeAudit.dealerCode) {
@@ -3040,7 +3049,7 @@
     try {
       if (options.checkHealth !== false) {
         await loadHealth();
-        await loadActiveAudit();
+        await loadActiveAudit({ silent: true, allowMissing: true });
         setHeaderSyncStatus('Synced', true);
         setDashboardSyncStatus('Synced', true);
       }
@@ -3114,6 +3123,7 @@
       return data;
     } catch (error) {
       if (error.data) renderSyncApiResponse(error.data);
+      const noActiveAudit = /no active audit/i.test(error.message || '');
       const failedQueue = getSyncQueue().map((item) => records.some((record) => record.syncKey === item.syncKey)
         ? { ...item, localStatus: 'failed', retryCount: Number(item.retryCount || 0) + 1, syncError: error.message }
         : item);
@@ -3125,9 +3135,9 @@
         status: 'failed',
         errorMessage: error.message
       }));
-      setHeaderSyncStatus('Failed', false);
-      setDashboardSyncStatus('Failed', false);
-      updateSyncBadges({ serverStatus: 'offline', mongoStatus: 'offline' });
+      setHeaderSyncStatus(noActiveAudit ? 'Pending' : 'Failed', false);
+      setDashboardSyncStatus(noActiveAudit ? 'Pending' : 'Failed', false);
+      updateSyncBadges(noActiveAudit ? { serverStatus: 'online', mongoStatus: 'connected' } : { serverStatus: 'offline', mongoStatus: 'offline' });
       if (!options.silent) toast(error.message, 'error');
       return { success: false, message: error.message };
     } finally {
@@ -4937,9 +4947,14 @@
     triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'Master_Catalogue_Upload_Warnings.csv');
   }
 
+  function normalizeAuditWorkflowStatus(value) {
+    const status = String(value || '').trim().toUpperCase();
+    return status === 'COMPLETED' || status === 'CLOSED' ? 'COMPLETED' : 'IN_PROGRESS';
+  }
+
   function renderDealerMaster() {
     $('#dealerMasterRows').innerHTML = state.dealers.length ? state.dealers.map((dealer) => {
-      const auditStatus = dealer.auditStatus || dealer.status || 'IN_PROGRESS';
+      const auditStatus = normalizeAuditWorkflowStatus(dealer.auditStatus || dealer.status || (dealer.active === false ? 'COMPLETED' : 'IN_PROGRESS'));
       const auditStatusDisplay = auditStatus === 'COMPLETED' ? 'Completed' : 'In Progress';
       const auditStatusClass = auditStatus === 'COMPLETED' ? 'status-completed' : 'status-in-progress';
       return `
@@ -4992,6 +5007,7 @@
       alert('✓ Audit marked as COMPLETED successfully.\n\nNo further changes can be made to this audit unless it is reopened by an admin.');
 
       toast('Audit marked as completed', 'success');
+      await loadActiveAudit({ silent: true, allowMissing: true });
       await loadDealers();
     } catch (error) {
       toast(`Failed to complete audit: ${error.message}`, 'error');
@@ -5019,6 +5035,12 @@
       alert('✓ Audit reopened successfully.\n\nScanning is now allowed for this audit.');
 
       toast('Audit reopened', 'success');
+      if (data.activeAudit) {
+        state.activeAudit = data.activeAudit;
+        updateActiveAuditUi();
+      } else {
+        await loadActiveAudit({ silent: true, allowMissing: true });
+      }
       await loadDealers();
     } catch (error) {
       toast(`Failed to reopen audit: ${error.message}`, 'error');
@@ -7247,7 +7269,7 @@
   }
 
   async function refreshAll() {
-    await loadActiveAudit({ silent: true }).catch(() => null);
+    await loadActiveAudit({ silent: true, allowMissing: true }).catch(() => null);
     await loadDealers();
     await Promise.all([
       loadCategories(),
@@ -8864,11 +8886,20 @@
       loadBins().catch(console.warn);
       loadDashboard().catch(console.warn);
     });
-    socket.on('audit:closed', () => {
+    function handleInactiveAuditEvent() {
       state.activeAudit = null;
       updateActiveAuditUi();
       loadBins().catch(console.warn);
-      toast('Audit closed. Refresh active audit before syncing.', 'error');
+      loadDashboard().catch(console.warn);
+      loadDevices().catch(console.warn);
+      loadDealers().catch(console.warn);
+    }
+    socket.on('audit:completed', handleInactiveAuditEvent);
+    socket.on('audit:closed', handleInactiveAuditEvent);
+    socket.on('audit:reopened', () => {
+      loadActiveAudit({ silent: true, allowMissing: true }).catch(console.warn);
+      loadDealers().catch(console.warn);
+      loadDashboard().catch(console.warn);
     });
     socket.on('sync:started', () => {
       setHeaderSyncStatus('Syncing', true);
