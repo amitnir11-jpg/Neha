@@ -97,7 +97,7 @@ async function main() {
           { $nor: testScanClause().$or },
           { $nor: [{ scanType: 'VERIFICATION' }, { type: 'VERIFICATION' }] },
           validScanClause(),
-          { syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] } },
+          { syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] } },
           { isDuplicate: { $ne: true } }
         ]
       }

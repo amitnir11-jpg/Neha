@@ -509,22 +509,6 @@ function signedVarianceQty(action, qty) {
   }
 }
 
-function scanDuplicateKey(scan = {}) {
-  const type = cleanText(scan.scanType || scan.type).toUpperCase();
-  if (type === 'FITTED' || scan.isFitted) {
-    return [
-      cleanText(scan.dealerCode).toUpperCase(),
-      normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part),
-      cleanText(scan.regdNo).toUpperCase(),
-      cleanText(scan.jobCardNo).toUpperCase(),
-      'FITTED'
-    ].filter(Boolean).join('::');
-  }
-  const id = cleanText(scan.uniqueScanId || scan.scanId || scan.upiId || scan.rawUpi || scan.rawScan || scan.rawScanString || scan.syncKey || scan._id);
-  const bin = cleanText(scan.binLocation || scan.bin || scan.location);
-  return [id, bin].filter(Boolean).join('::BIN::');
-}
-
 function rowStatus(diffQty) {
   if (diffQty > 0) return 'Excess';
   if (diffQty < 0) return 'Short';
@@ -1433,7 +1417,7 @@ function realReportText(value) {
 }
 
 function masterQty(master = {}) {
-  return Number(master.qty !== undefined ? master.qty : master.openingStockQty !== undefined ? master.openingStockQty : master.quantity || 0);
+  return Number(master.dmsStock !== undefined ? master.dmsStock : master.systemQty !== undefined ? master.systemQty : master.qty !== undefined ? master.qty : master.openingStockQty !== undefined ? master.openingStockQty : master.quantity || 0);
 }
 
 function enrichScan(scan = {}, master = {}) {
@@ -1522,6 +1506,8 @@ function scanBasedFilter(query = {}) {
   if (query.partSubGroup || query.productSubGroup) filter.partSubGroup = { $regex: escapeRegExp(query.partSubGroup || query.productSubGroup), $options: 'i' };
   if (query.dealerName) filter.dealerName = { $regex: escapeRegExp(query.dealerName), $options: 'i' };
   applyReportMetadataFilters(filter, query);
+  if (!query.syncStatus) filter.syncStatus = { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] };
+  filter.isDuplicate = { $ne: true };
   return filter;
 }
 
@@ -1579,7 +1565,7 @@ function partsRefreshPhysicalBinExpression() {
 async function buildPartsInventoryRefreshRows(query = {}) {
   const filter = scanBasedFilter(query);
   filter.$and = (filter.$and || []).concat([
-    { syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] } },
+    { syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] } },
     { isDuplicate: { $ne: true } }
   ]);
 
@@ -2031,7 +2017,7 @@ function firstPresent(...values) {
 }
 
 function systemQtyValue(master = {}) {
-  return numberValue(firstPresent(master.openingStockQty, master.quantity, master.qty, master.stockOnHand, master.systemQty), 0);
+  return numberValue(firstPresent(master.dmsStock, master.systemQty, master.openingStockQty, master.quantity, master.qty, master.stockOnHand), 0);
 }
 
 function reservedQtyValue(master = {}) {
@@ -2138,7 +2124,13 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     physicalBins.bin2,
     physicalBins.bin3,
     physicalBins.otherBins,
-    ...splitBins(firstPresent(system.binLocation, system.bin, detailSource.binLocation, detailSource.bin) || '')
+    ...splitBins(firstPresent(system.binLocation, system.bin, detailSource.binLocation, detailSource.bin) || ''),
+    system.systemBinLoc1,
+    system.systemBinLoc2,
+    system.systemBinLoc3,
+    system.binLoc1,
+    system.binLoc2,
+    system.binLoc3
   ].flatMap((value) => cleanText(value).split(',').map((item) => cleanText(item))).filter(Boolean))).join(', ');
 
   return {
@@ -2201,6 +2193,9 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     binLoc2: physicalBins.bin2,
     binLoc3: physicalBins.bin3,
     otherBinLocations: physicalBins.otherBins,
+    systemBinLoc1: system.systemBinLoc1 || system.binLoc1 || '',
+    systemBinLoc2: system.systemBinLoc2 || system.binLoc2 || '',
+    systemBinLoc3: system.systemBinLoc3 || system.binLoc3 || '',
     binLocations,
     userAuditTrail,
     userWiseScanSummary,
@@ -2278,26 +2273,18 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   ]);
   rawScans = rawScans.map(inventoryRoute.publicScan);
 
-  const seenScanIds = new Set();
   const groups = new Map();
   const validationLog = {
     totalMasterParts: allCatalogueCount,
     totalScannedParts: 0,
     matchedParts: 0,
     unmatchedParts: 0,
-    duplicateScanIdsSkipped: 0,
     totalVarianceQuantity: 0,
     totalVarianceOnMRP: 0,
     totalVarianceOnDLC: 0
   };
 
   rawScans.forEach((scan) => {
-    const duplicateKey = scanDuplicateKey(scan);
-    if (duplicateKey && seenScanIds.has(duplicateKey)) {
-      validationLog.duplicateScanIdsSkipped += 1;
-      return;
-    }
-    if (duplicateKey) seenScanIds.add(duplicateKey);
     const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
     if (!partNo || /^SYNC/i.test(partNo)) return;
     const dealerCode = cleanText(scan.dealerCode).toUpperCase();
@@ -2339,11 +2326,51 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     const bin = cleanText(query.bin || query.binLocation);
     systemFilter.$and = (systemFilter.$and || []).concat([{ $or: [{ bin: { $regex: escapeRegExp(bin), $options: 'i' } }, { binLocation: { $regex: escapeRegExp(bin), $options: 'i' } }] }]);
   }
-  const systemParts = await MasterPart.find(systemFilter).lean();
-  validationLog.totalMasterParts = Math.max(validationLog.totalMasterParts, systemParts.length);
+  const stockFilter = query.dealerCode && query.auditId
+    ? { dealerCode: String(query.dealerCode).trim().toUpperCase(), auditId: String(query.auditId).trim() }
+    : null;
+  if (stockFilter && !includeFullMaster) {
+    stockFilter.$and = (stockFilter.$and || []).concat([{
+      $or: [
+        { normalizedPartNumber: { $in: scannedParts } },
+        { partNumber: { $in: scannedParts } }
+      ]
+    }]);
+  }
+  if (stockFilter && query.partNumber) {
+    const part = normalizePartNumber(query.partNumber);
+    stockFilter.$and = (stockFilter.$and || []).concat([{
+      $or: [
+        { normalizedPartNumber: { $regex: escapeRegExp(part), $options: 'i' } },
+        { partNumber: { $regex: escapeRegExp(part), $options: 'i' } }
+      ]
+    }]);
+  }
+  if (stockFilter && (query.bin || query.binLocation)) {
+    const bin = cleanText(query.bin || query.binLocation);
+    stockFilter.$and = (stockFilter.$and || []).concat([{
+      $or: [
+        { binLoc1: { $regex: escapeRegExp(bin), $options: 'i' } },
+        { binLoc2: { $regex: escapeRegExp(bin), $options: 'i' } },
+        { binLoc3: { $regex: escapeRegExp(bin), $options: 'i' } },
+        { systemBinLoc1: { $regex: escapeRegExp(bin), $options: 'i' } },
+        { systemBinLoc2: { $regex: escapeRegExp(bin), $options: 'i' } },
+        { systemBinLoc3: { $regex: escapeRegExp(bin), $options: 'i' } }
+      ]
+    }]);
+  }
+  const [systemParts, dealerStockRows] = await Promise.all([
+    MasterPart.find(systemFilter).lean(),
+    stockFilter ? DealerStock.find(stockFilter).lean() : []
+  ]);
+  validationLog.totalMasterParts = Math.max(validationLog.totalMasterParts, dealerStockRows.length || systemParts.length);
   const partSet = new Set(scannedParts);
   if (includeFullMaster) {
     systemParts.forEach((part) => {
+      const partNo = masterPartNumber(part);
+      if (partNo) partSet.add(partNo);
+    });
+    dealerStockRows.forEach((part) => {
       const partNo = masterPartNumber(part);
       if (partNo) partSet.add(partNo);
     });
@@ -2367,6 +2394,16 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   systemParts.forEach((part) => {
     const partNo = masterPartNumber(part);
     if (partNo && !systemByPart.has(partNo)) systemByPart.set(partNo, part);
+  });
+  dealerStockRows.forEach((part) => {
+    const partNo = masterPartNumber(part);
+    if (!partNo) return;
+    systemByPart.set(partNo, {
+      ...(systemByPart.get(partNo) || {}),
+      ...part,
+      dmsStock: Number(part.dmsStock || part.systemQty || 0),
+      systemQty: Number(part.systemQty || part.dmsStock || 0)
+    });
   });
 
   const groupedRows = Array.from(groups.values()).map((group) => partwiseRowFrom(group.partNo, group, catalogueByPart.get(group.partNo), systemByPart.get(group.partNo), priceHistoryByPart.get(group.partNo) || []));
@@ -2625,23 +2662,15 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
   ]);
   rawScans = rawScans.map(inventoryRoute.publicScan);
   const { masterByDealer, masterByPart } = await masterMapsForScans(rawScans);
-  const seen = new Set();
   const groupMap = new Map();
   const validationLog = {
     totalRowsProcessed: 0,
     unmatchedMasterRows: 0,
-    duplicateScanIdsSkipped: 0,
     grandTotalMRP: 0,
     grandTotalDLC: 0
   };
 
   rawScans.forEach((scan) => {
-    const duplicateKey = scanDuplicateKey(scan);
-    if (duplicateKey && seen.has(duplicateKey)) {
-      validationLog.duplicateScanIdsSkipped += 1;
-      return;
-    }
-    if (duplicateKey) seen.add(duplicateKey);
     validationLog.totalRowsProcessed += 1;
 
     const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
@@ -2996,7 +3025,7 @@ async function buildStockSummaryReport(query = {}) {
   const dealerCode = query.dealerCode;
   const scanFilter = scanBasedFilter({ ...query, category: '', productCategory: '', productGroup: '', partSubGroup: '', productSubGroup: '', model: '', year: '', type: '', scanType: '' });
   scanFilter.$and = (scanFilter.$and || []).concat([
-    { syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] } },
+    { syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] } },
     { isDuplicate: { $ne: true } }
   ]);
   const stockFilter = query.auditId ? { dealerCode, auditId: query.auditId } : { dealerCode };
@@ -3007,12 +3036,8 @@ async function buildStockSummaryReport(query = {}) {
     Audit.find({ dealerCode }).sort({ createdAt: -1 }).lean()
   ]);
   const scans = rawScans.map(inventoryRoute.publicScan);
-  const seenScanIds = new Set();
   const physicalGroups = new Map();
   scans.forEach((scan) => {
-    const duplicateKey = scanDuplicateKey(scan);
-    if (duplicateKey && seenScanIds.has(duplicateKey)) return;
-    if (duplicateKey) seenScanIds.add(duplicateKey);
     const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
     if (!partNo || /^SYNC/i.test(partNo)) return;
     const group = physicalGroups.get(partNo) || { partNo, scans: [], physicalQty: 0, fittedQty: 0, firstScan: scan };

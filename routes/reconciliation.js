@@ -10,6 +10,7 @@ const Inventory = require('../models/Inventory');
 const Dealer = require('../models/Dealer');
 const auth = require('./auth');
 const { getActiveAudit } = require('../utils/audit');
+const { validScanClause } = require('../utils/masterValidation');
 const { normalizePartNumber } = require('../utils/normalize');
 
 const router = express.Router();
@@ -17,11 +18,11 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 
 const autoTable = autoTableModule.default || autoTableModule;
 
 const EXCLUDED_SYNC_STATUSES = ['duplicate', 'rejected', 'failed', 'deleted'];
-const EXCLUDED_SCAN_STATUSES = ['DUPLICATE_BLOCKED', 'FAILED'];
 const POSITIVE_SCAN_TYPES = ['INWARD', 'AUDIT'];
 const NEGATIVE_SCAN_TYPES = ['OUTWARD', 'FITTED', 'DAMAGE'];
 const UPLOAD_ERROR_LIMIT = 250;
 const PREVIEW_LIMIT = 500;
+const ACCEPTED_SCAN_STATUSES = ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'];
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -91,6 +92,50 @@ function stockQtyExpression() {
       ],
       default: { $abs: qtyValue }
     }
+  };
+}
+
+function acceptedScanStatusClause() {
+  return {
+    $or: [
+      { scanStatus: { $in: ACCEPTED_SCAN_STATUSES } },
+      { scanStatus: { $exists: false } },
+      { scanStatus: '' },
+      { scanStatus: null }
+    ]
+  };
+}
+
+function nonVerificationScanClause() {
+  return { $nor: [{ scanType: 'VERIFICATION' }, { type: 'VERIFICATION' }] };
+}
+
+function testScanClause() {
+  return {
+    $or: [
+      { dealerName: /Sync Test/i },
+      { deviceId: /sync-test/i },
+      { deviceName: /sync-test/i },
+      { rawUpi: /SYNCPT|scan test/i },
+      { rawScan: /SYNCPT|scan test/i },
+      { rawScanString: /SYNCPT|scan test/i },
+      { staffName: /sync test|test sync/i },
+      { partName: /Sync Test/i },
+      { partDescription: /Sync Test/i }
+    ]
+  };
+}
+
+function acceptedPhysicalScanClause() {
+  return {
+    syncStatus: { $nin: EXCLUDED_SYNC_STATUSES },
+    isDuplicate: { $ne: true },
+    $and: [
+      nonVerificationScanClause(),
+      acceptedScanStatusClause(),
+      validScanClause(),
+      { $nor: testScanClause().$or }
+    ]
   };
 }
 
@@ -498,15 +543,7 @@ function scanMatch(scope, filters = {}) {
   const match = {
     dealerCode: scope.dealerCode,
     auditId: scope.auditId,
-    syncStatus: { $nin: EXCLUDED_SYNC_STATUSES },
-    scanStatus: { $nin: EXCLUDED_SCAN_STATUSES },
-    isDuplicate: { $ne: true },
-    $and: [{
-      $or: [
-        { scanType: { $ne: 'VERIFICATION' } },
-        { scanType: { $exists: false } }
-      ]
-    }]
+    ...acceptedPhysicalScanClause()
   };
   if (filters.partNumber) {
     const part = normalizePart(filters.partNumber);
