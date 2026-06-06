@@ -2853,33 +2853,8 @@ function stockSummaryQty(scan = {}) {
   return 0;
 }
 
-function stockSummaryValue(row = {}, qtyKey, rateKey) {
-  if (rateKey === 'mrp') {
-    if (/^system/i.test(qtyKey)) return Number(row.systemValueOnMrp || row.systemMrpValue || 0);
-    if (/^variance/i.test(qtyKey)) return Number(row.varianceValueOnMrp || row.varianceOnMrp || 0);
-    return Number(row.physicalValueOnMrp || row.finalInventoryValue || 0);
-  }
-  return Number(row[qtyKey] || 0) * Number(row[rateKey] || 0);
-}
-
-function stockSummaryPct(value, base) {
-  const denominator = Number(base || 0);
-  return denominator ? Number(value || 0) / denominator : 0;
-}
-
 function stockSummaryCategoryText(row = {}) {
   return [row.productCategory, row.category, row.productGroup, row.partSubGroup, row.partDescription].filter(Boolean).join(' ').toUpperCase();
-}
-
-function isStockSummaryExcluded(row = {}) {
-  const text = stockSummaryCategoryText(row);
-  if (/\b(OIL|LUBE|LUBRICANT|PUBLICATION|BATTERY|TOOLS?|MERCHANDISE|CONSUMABLES?)\b/i.test(text)) return true;
-  if (/LOCAL/i.test(text) && /(PART|ACCESSOR)/i.test(text)) return true;
-  return false;
-}
-
-function isStockSummaryAccessory(row = {}) {
-  return /ACCESSOR/i.test(stockSummaryCategoryText(row)) && !/LOCAL/i.test(stockSummaryCategoryText(row));
 }
 
 function stockSummaryRowMatchesFilters(row = {}, query = {}) {
@@ -2890,187 +2865,6 @@ function stockSummaryRowMatchesFilters(row = {}, query = {}) {
   if (query.productGroup && !new RegExp(escapeRegExp(query.productGroup), 'i').test(row.productGroup || '')) return false;
   if ((query.partSubGroup || query.productSubGroup) && !new RegExp(escapeRegExp(query.partSubGroup || query.productSubGroup), 'i').test(row.partSubGroup || '')) return false;
   return true;
-}
-
-function summarizeStockRows(rows = []) {
-  return rows.reduce((total, row) => {
-    total.skuCount += 1;
-    total.physicalBinQty += Number(row.physicalBinQty ?? row.physicalQty ?? 0);
-    total.fittedQty += Number(row.fittedQty || 0);
-    total.finalAuditQty += Number(row.finalAuditQty ?? row.actualAuditQty ?? row.physicalQty ?? 0);
-    total.physicalMrp += stockSummaryValue(row, 'physicalQty', 'mrp');
-    total.physicalDlc += stockSummaryValue(row, 'physicalQty', 'dlc');
-    total.finalAuditMrp += stockSummaryValue(row, 'finalAuditQty', 'mrp');
-    total.finalAuditDlc += stockSummaryValue(row, 'finalAuditQty', 'dlc');
-    total.systemMrp += stockSummaryValue(row, 'systemQty', 'mrp');
-    total.systemDlc += stockSummaryValue(row, 'systemQty', 'dlc');
-    total.varianceMrp += stockSummaryValue(row, 'varianceQty', 'mrp');
-    total.varianceDlc += stockSummaryValue(row, 'varianceQty', 'dlc');
-    return total;
-  }, { skuCount: 0, physicalBinQty: 0, fittedQty: 0, finalAuditQty: 0, physicalMrp: 0, physicalDlc: 0, finalAuditMrp: 0, finalAuditDlc: 0, systemMrp: 0, systemDlc: 0, varianceMrp: 0, varianceDlc: 0 });
-}
-
-function caseSummary(rows = [], mode) {
-  const filtered = rows.filter((row) => {
-    const physical = Number(row.finalAuditQty ?? row.physicalQty ?? 0);
-    const system = Number(row.systemQty || 0);
-    if (mode === 'case1') return physical > 0 && system <= 0;
-    if (mode === 'case2') return physical > system && system > 0;
-    if (mode === 'case3') return system > physical;
-    if (mode === 'case4') return physical === system && (physical > 0 || system > 0);
-    return false;
-  });
-  return filtered.reduce((total, row) => {
-    const physical = Number(row.finalAuditQty ?? row.physicalQty ?? 0);
-    const system = Number(row.systemQty || 0);
-    const diff = physical - system;
-    const mrp = Number(row.mrp || 0);
-    const dlc = Number(row.dlc || 0);
-    const varianceMrp = Number(row.varianceValueOnMrp ?? row.varianceOnMrp ?? (diff * mrp));
-    const varianceDlc = diff * dlc;
-    total.skuCount += 1;
-    total.valueOnMrp += Math.abs(varianceMrp);
-    total.valueOnDlc += Math.abs(varianceDlc);
-    total.signedMrp += varianceMrp;
-    total.signedDlc += varianceDlc;
-    total.physicalMrp += Number(row.finalInventoryValue || row.physicalValueOnMrp || (physical * mrp));
-    total.physicalDlc += physical * dlc;
-    return total;
-  }, { skuCount: 0, valueOnMrp: 0, valueOnDlc: 0, signedMrp: 0, signedDlc: 0, physicalMrp: 0, physicalDlc: 0 });
-}
-
-function stockSummaryAuditDateLabel(query = {}) {
-  return query.auditDate || (query.from && query.to && query.from === query.to ? query.from : query.to || query.from || 'selected audit date');
-}
-
-function stockSummaryShortDate(value) {
-  const text = cleanText(value);
-  if (!text) return '';
-  const date = new Date(text);
-  if (Number.isNaN(date.getTime())) return text;
-  return new Intl.DateTimeFormat('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'Asia/Kolkata'
-  }).format(date).replace(',', '');
-}
-
-function stockSummaryDisplayDateLabel(query = {}, selectedAudit = {}, selectedDealer = {}) {
-  const raw = firstPresent(
-    query.auditDate,
-    query.to,
-    query.from,
-    selectedAudit && selectedAudit.auditStartDate,
-    selectedDealer && selectedDealer.auditStartDate
-  );
-  return stockSummaryShortDate(raw) || stockSummaryAuditDateLabel(query);
-}
-
-function stockSummaryOpeningValueText(dateLabel) {
-  return `System Value (Opening Stock ${dateLabel || 'selected audit date'})`;
-}
-
-function stockSummaryNoteText() {
-  return 'Note:-Opening Stock value & Physical Stock Value (Except HHML Oil,Lube, Publication, Battery, Tools,Merchandise,Consumables,Local Parts and Accessories.)';
-}
-
-function stockSummaryRowsTotal(rows = []) {
-  const total = summarizeStockRows(rows);
-  Object.keys(total).forEach((key) => {
-    total[key] = money(total[key]);
-  });
-  return total;
-}
-
-function stockSummaryMismatchCases(rows = [], total = {}) {
-  const case1 = caseSummary(rows, 'case1');
-  const case2 = caseSummary(rows, 'case2');
-  const case3 = caseSummary(rows, 'case3');
-  const case4 = {
-    skuCount: caseSummary(rows, 'case4').skuCount,
-    valueOnMrp: Number(total.physicalMrp || 0) - Number(case1.signedMrp || 0) - Number(case2.signedMrp || 0),
-    valueOnDlc: Number(total.physicalDlc || 0) - Number(case1.signedDlc || 0) - Number(case2.signedDlc || 0)
-  };
-  return {
-    case1: {
-      skuCount: case1.skuCount,
-      valueOnMrp: money(case1.signedMrp),
-      valueOnDlc: money(case1.signedDlc)
-    },
-    case2: {
-      skuCount: case2.skuCount,
-      valueOnMrp: money(case2.signedMrp),
-      valueOnDlc: money(case2.signedDlc)
-    },
-    case3: {
-      skuCount: case3.skuCount,
-      valueOnMrp: money(case3.signedMrp),
-      valueOnDlc: money(case3.signedDlc)
-    },
-    case4: {
-      skuCount: case4.skuCount,
-      valueOnMrp: money(case4.valueOnMrp),
-      valueOnDlc: money(case4.valueOnDlc)
-    }
-  };
-}
-
-function stockSummaryNonMovingRows(rows = []) {
-  return rows.filter((row) => {
-    const physical = Number(row.finalAuditQty ?? row.physicalQty ?? 0);
-    const system = Number(row.systemQty || 0);
-    return system > 0 && physical === 0;
-  });
-}
-
-function stockSummarySystemTotals(rows = []) {
-  return rows.reduce((total, row) => {
-    const systemQty = Number(row.systemQty || 0);
-    const mrp = Number(row.mrp || 0);
-    const dlc = Number(row.dlc || 0);
-    total.skuCount += 1;
-    total.valueOnMrp += Number(row.systemValueOnMrp || row.systemMrpValue || (systemQty * mrp));
-    total.valueOnDlc += Number(row.systemValueOnDlc || (systemQty * dlc));
-    return total;
-  }, { skuCount: 0, valueOnMrp: 0, valueOnDlc: 0 });
-}
-
-function buildExactStockSummarySections(rows = [], query = {}, selectedDealer = {}, selectedAudit = {}) {
-  const includedRows = rows.filter((row) => !isStockSummaryExcluded(row));
-  const accessoryRows = includedRows.filter((row) => isStockSummaryAccessory(row));
-  const hhmlRows = includedRows.filter((row) => !isStockSummaryAccessory(row));
-  const total = stockSummaryRowsTotal(includedRows);
-  const hhml = stockSummaryRowsTotal(hhmlRows);
-  const accessories = stockSummaryRowsTotal(accessoryRows);
-  const cases = stockSummaryMismatchCases(includedRows, total);
-  const nonMovingRows = stockSummaryNonMovingRows(includedRows);
-  const highVolumeNonMovingRows = nonMovingRows
-    .slice()
-    .sort((a, b) => Number(b.systemValueOnMrp || 0) - Number(a.systemValueOnMrp || 0))
-    .slice(0, 1250);
-  const nonMoving = stockSummarySystemTotals(nonMovingRows);
-  const highVolumeNonMoving = stockSummarySystemTotals(highVolumeNonMovingRows);
-  const auditDateLabel = stockSummaryDisplayDateLabel(query, selectedAudit, selectedDealer);
-
-  return {
-    auditDateLabel,
-    note: stockSummaryNoteText(),
-    total,
-    hhml,
-    accessories,
-    cases,
-    nonMoving: {
-      skuCount: nonMoving.skuCount,
-      valueOnMrp: money(nonMoving.valueOnMrp),
-      valueOnDlc: money(nonMoving.valueOnDlc)
-    },
-    highVolumeNonMoving: {
-      skuCount: highVolumeNonMoving.skuCount,
-      valueOnMrp: money(highVolumeNonMoving.valueOnMrp),
-      valueOnDlc: money(highVolumeNonMoving.valueOnDlc)
-    }
-  };
 }
 
 function emptyStockSummaryCategory(category) {
@@ -3206,10 +3000,10 @@ async function buildStockSummaryReport(query = {}) {
     { isDuplicate: { $ne: true } }
   ]);
   const stockFilter = query.auditId ? { dealerCode, auditId: query.auditId } : { dealerCode };
-  const [rawScans, stockRows, dealers, audits] = await Promise.all([
+  const [rawScans, stockRows, selectedDealer, audits] = await Promise.all([
     Inventory.find(scanFilter).sort({ timestamp: 1 }).lean(),
     DealerStock.find(stockFilter).sort({ partNumber: 1 }).lean(),
-    Dealer.find({}).sort({ dealerName: 1 }).lean(),
+    dealerCode ? Dealer.findOne({ dealerCode }).lean() : Promise.resolve(null),
     Audit.find({ dealerCode }).sort({ createdAt: -1 }).lean()
   ]);
   const scans = rawScans.map(inventoryRoute.publicScan);
@@ -3320,7 +3114,6 @@ async function buildStockSummaryReport(query = {}) {
       status
     };
   }).filter((row) => stockSummaryRowMatchesFilters(row, query));
-  const selectedDealer = dealerCode ? dealers.find((dealer) => dealer.dealerCode === dealerCode) : null;
   const selectedAudit = query.auditId
     ? audits.find((audit) => audit.auditId === query.auditId)
     : (selectedDealer && selectedDealer.currentAuditId
@@ -3339,14 +3132,12 @@ async function buildStockSummaryReport(query = {}) {
     damagedItemsDeadline: ''
   };
   const metadata = stockSummaryMetadata(selectedDealer, selectedAudit, query);
-  const exactSummary = buildExactStockSummarySections(rows, query, selectedDealer, selectedAudit);
   const sections = {
     title: STOCK_SUMMARY_TITLE,
     metadata,
     rows: matrixRows,
     grandTotal,
-    footer,
-    exactSummary
+    footer
   };
   const summary = {
     title: STOCK_SUMMARY_TITLE,
@@ -3365,283 +3156,6 @@ async function buildStockSummaryReport(query = {}) {
     totalPhysicalParts: physicalGroups.size
   };
   return { rows: matrixRows.concat([grandTotal]), columns: stockSummaryColumns(), sections, summary, detailRows: rows, selectedDealer, selectedAudit, message: rows.length ? '' : 'No stock summary data found for selected dealer/filter' };
-}
-
-function styleStockSummaryRange(sheet, startRow, endRow, startCol = 1, endCol = 6) {
-  for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
-    const row = sheet.getRow(rowNumber);
-    for (let col = startCol; col <= endCol; col += 1) {
-      const cell = row.getCell(col);
-      cell.border = {
-        top: { style: 'thin', color: { argb: 'FF94A3B8' } },
-        left: { style: 'thin', color: { argb: 'FF94A3B8' } },
-        bottom: { style: 'thin', color: { argb: 'FF94A3B8' } },
-        right: { style: 'thin', color: { argb: 'FF94A3B8' } }
-      };
-      cell.alignment = { vertical: 'middle', wrapText: true };
-    }
-  }
-}
-
-function addInventoryAuditSummarySheet(workbook, data) {
-  const sheet = workbook.addWorksheet('SUMMARY');
-  const exact = data.sections && data.sections.exactSummary ? data.sections.exactSummary : buildExactStockSummarySections(data.detailRows || []);
-  const total = exact.total || {};
-  const hhml = exact.hhml || {};
-  const accessories = exact.accessories || {};
-  const cases = exact.cases || {};
-  const nonMoving = exact.nonMoving || {};
-  const highVolumeNonMoving = exact.highVolumeNonMoving || {};
-  const dateLabel = exact.auditDateLabel || 'selected audit date';
-  const note = exact.note || stockSummaryNoteText();
-  const openingValueLabel = stockSummaryOpeningValueText(dateLabel);
-  const moneyFormat = '#,##0.00';
-
-  sheet.columns = [
-    { width: 58 },
-    { width: 21 },
-    { width: 26.109375 },
-    { width: 25.44140625 },
-    { width: 20.77734375 },
-    { width: 20.77734375 }
-  ];
-
-  const fills = {
-    beige: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEECE1' } },
-    blue: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEEF3' } },
-    yellow: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC000' } },
-    brightYellow: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } },
-    cyan: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00FFFF' } },
-    red: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF0000' } },
-    white: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }
-  };
-  const border = {
-    top: { style: 'thin', color: { indexed: 64 } },
-    left: { style: 'thin', color: { indexed: 64 } },
-    bottom: { style: 'thin', color: { indexed: 64 } },
-    right: { style: 'thin', color: { indexed: 64 } }
-  };
-  const center = { horizontal: 'center', vertical: 'middle', wrapText: true };
-  const rowHeights = {
-    1: 16.8, 2: 18, 3: 34.2, 4: 16.8, 5: 18, 6: 16.8, 7: 16.8,
-    9: 15.6, 10: 15.6, 11: 15.6, 12: 15.6, 13: 15.6, 14: 15.6,
-    15: 15.6, 16: 16.8, 17: 15.6, 18: 15.6, 19: 15.6, 20: 15.6,
-    21: 15.6, 22: 15.6, 23: 15.6, 24: 15.6, 25: 16.8, 26: 15.6,
-    27: 30, 28: 15.6, 29: 15.6, 30: 15.6, 31: 16.8, 32: 15.6,
-    33: 15.6, 34: 15.6, 35: 22.8, 36: 24.6, 37: 15, 38: 15,
-    39: 15.6, 40: 15, 41: 15, 43: 15, 44: 15, 45: 15, 46: 15,
-    47: 15, 48: 15, 50: 42.6, 51: 15, 53: 30, 54: 15.6, 55: 15.6,
-    56: 15.6, 57: 15.6, 58: 15.6
-  };
-  Object.entries(rowHeights).forEach(([rowNumber, height]) => {
-    sheet.getRow(Number(rowNumber)).height = height;
-  });
-
-  [
-    'A9:B14', 'A17:B17', 'A18:B23', 'A1:B2', 'A3:B3', 'A4:B5',
-    'A6:B6', 'A7:B7', 'A15:B16', 'A8:B8', 'A48:C48', 'E48:F48',
-    'A49:C49', 'D49:F49', 'A45:C45', 'E45:F45', 'A46:C46', 'E46:F46',
-    'A47:C47', 'E47:F47', 'A50:C50', 'D50:F50', 'A51:C51', 'D51:F51',
-    'A52:F52', 'A24:B25', 'A26:B26', 'A32:B32', 'A33:B33', 'A34:B34',
-    'A35:D35', 'A36:B36', 'A37:B37', 'A38:B38', 'A39:B39', 'A40:B40',
-    'A41:B41', 'A43:F43', 'A44:C44', 'E44:F44'
-  ].forEach((range) => sheet.mergeCells(range));
-
-  const applyStyle = (cell, options = {}) => {
-    const font = {
-      name: options.fontName || 'Cambria',
-      size: options.fontSize || 12,
-      color: { argb: options.fontColor || 'FF000000' }
-    };
-    if (options.bold !== undefined) font.bold = options.bold;
-    if (options.italic !== undefined) font.italic = options.italic;
-    cell.font = font;
-    cell.alignment = options.alignment || center;
-    cell.border = options.border || border;
-    if (options.fill) cell.fill = options.fill;
-    if (options.numFmt) cell.numFmt = options.numFmt;
-  };
-  const styleRange = (startRow, startCol, endRow, endCol, options = {}) => {
-    for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
-      for (let colNumber = startCol; colNumber <= endCol; colNumber += 1) {
-        applyStyle(sheet.getCell(rowNumber, colNumber), options);
-      }
-    }
-  };
-  const setCell = (address, value, options = {}) => {
-    const cell = sheet.getCell(address);
-    cell.value = value;
-    applyStyle(cell, options);
-    return cell;
-  };
-  const setFormula = (address, formula, result, options = {}) => {
-    const cell = sheet.getCell(address);
-    cell.value = { formula, result };
-    applyStyle(cell, options);
-    return cell;
-  };
-  const setMoney = (address, value, options = {}) => setCell(address, money(value), { numFmt: moneyFormat, fontName: 'Calibri', fontSize: 10, ...options });
-  const setMoneyFormula = (address, formula, result, options = {}) => setFormula(address, formula, money(result), { numFmt: moneyFormat, ...options });
-
-  styleRange(1, 1, 42, 4);
-  styleRange(43, 1, 58, 6);
-
-  const beigeHeader = { fill: fills.beige, fontSize: 13 };
-  const blueValue = { fill: fills.blue, fontName: 'Calibri', fontSize: 14, numFmt: moneyFormat };
-  const yellowHeader = { fill: fills.yellow, fontSize: 12 };
-  const labelLeft = { alignment: { horizontal: 'left', vertical: 'middle', wrapText: true } };
-  const noWrapLeft = { alignment: { horizontal: 'left', vertical: 'middle' } };
-
-  setCell('A1', 'Physical (Inventory Audit) Value', beigeHeader);
-  setCell('C1', 'Value On MRP', beigeHeader);
-  setCell('D1', 'Value On DLC', beigeHeader);
-  setCell('C2', money(total.physicalMrp), blueValue);
-  setCell('D2', money(total.physicalDlc), blueValue);
-  setCell('A3', note, { fontSize: 9, bold: true, fontColor: 'FF0070C0' });
-  setCell('A4', openingValueLabel, beigeHeader);
-  setCell('C4', 'Value On MRP', beigeHeader);
-  setCell('D4', 'Value On DLC', beigeHeader);
-  setCell('C5', money(total.systemMrp), blueValue);
-  setCell('D5', money(total.systemDlc), blueValue);
-  setCell('A6', 'Mismatch Value', beigeHeader);
-  setCell('C6', 'Variance Value On MRP', beigeHeader);
-  setCell('D6', 'Variance Value On DLC', beigeHeader);
-  setCell('A7', 'Total', { fill: fills.yellow, fontSize: 13 });
-  setFormula('C7', 'C2-C5', money(Number(total.physicalMrp || 0) - Number(total.systemMrp || 0)), { fill: fills.yellow, fontSize: 13, numFmt: moneyFormat });
-  setFormula('D7', 'D2-D5', money(Number(total.physicalDlc || 0) - Number(total.systemDlc || 0)), { fill: fills.yellow, fontSize: 13, numFmt: moneyFormat });
-
-  setCell('A9', 'HHML/Vida Parts Variance', { fontName: 'Calibri', fontSize: 12 });
-  setCell('C9', 'HHML Parts', { fill: fills.white, fontSize: 12 });
-  setCell('D9', 'HHML Parts', { fill: fills.white, fontSize: 12 });
-  setCell('C10', 'Physical Value On MRP', { fill: fills.white, fontSize: 12 });
-  setCell('D10', 'Physical Value On DLC', { fill: fills.white, fontSize: 12 });
-  setMoney('C11', hhml.physicalMrp, { fill: fills.white });
-  setMoney('D11', hhml.physicalDlc, { fill: fills.white });
-  setCell('C12', 'HHML Parts', { fill: fills.white, fontSize: 12 });
-  setCell('D12', 'HHML Parts', { fill: fills.white, fontSize: 12 });
-  setCell('C13', 'System Value On MRP', { fill: fills.white, fontSize: 12 });
-  setCell('D13', 'System Value On DLC', { fill: fills.white, fontSize: 12 });
-  setMoney('C14', hhml.systemMrp, { fill: fills.white });
-  setMoney('D14', hhml.systemDlc, { fill: fills.white });
-  setCell('A15', 'Total', { fontSize: 13 });
-  setCell('C15', 'Variance Value On MRP', { fontSize: 12 });
-  setCell('D15', 'Variance Value On DLC', { fontSize: 12 });
-  setMoneyFormula('C16', 'C11-C14', Number(hhml.physicalMrp || 0) - Number(hhml.systemMrp || 0), { fontSize: 13 });
-  setMoneyFormula('D16', 'D11-D14', Number(hhml.physicalDlc || 0) - Number(hhml.systemDlc || 0), { fontSize: 13 });
-
-  setCell('A18', 'HHML Accessories Variance', { fontName: 'Calibri', fontSize: 12 });
-  setCell('C18', 'HHML Accessories', { fill: fills.white, fontSize: 12 });
-  setCell('D18', 'HHML Accessories', { fill: fills.white, fontSize: 12 });
-  setCell('C19', 'Physical Value On MRP', { fill: fills.white, fontSize: 12 });
-  setCell('D19', 'Physical Value On DLC', { fill: fills.white, fontSize: 12 });
-  setMoney('C20', accessories.physicalMrp, { fill: fills.white });
-  setMoney('D20', accessories.physicalDlc, { fill: fills.white });
-  setCell('C21', 'HHML Accessories', { fill: fills.white, fontSize: 12 });
-  setCell('D21', 'HHML Accessories', { fill: fills.white, fontSize: 12 });
-  setCell('C22', 'System Value On MRP', { fill: fills.white, fontSize: 12 });
-  setCell('D22', 'System Value On DLC', { fill: fills.white, fontSize: 12 });
-  setMoney('C23', accessories.systemMrp, { fill: fills.white });
-  setMoney('D23', accessories.systemDlc, { fill: fills.white });
-  setCell('A24', 'Total', { fontSize: 13 });
-  setCell('C24', 'Variance Value On MRP', { fontSize: 12 });
-  setCell('D24', 'Variance Value On DLC', { fontSize: 12 });
-  setMoneyFormula('C25', 'C20-C23', Number(accessories.physicalMrp || 0) - Number(accessories.systemMrp || 0), { fontSize: 13 });
-  setMoneyFormula('D25', 'D20-D23', Number(accessories.physicalDlc || 0) - Number(accessories.systemDlc || 0), { fontSize: 13 });
-
-  setCell('A27', 'Mismatch Cases', { ...yellowHeader, ...labelLeft });
-  setCell('B27', 'Mismatch Cases SKU Counts', yellowHeader);
-  setCell('C27', 'Variance Value On MRP', yellowHeader);
-  setCell('D27', 'Variance Value On DLC', yellowHeader);
-  setCell('A28', 'Case1. Inventory Addition: - Found Physical but not in DMS', { fontSize: 12, ...noWrapLeft });
-  setCell('B28', Number(cases.case1 && cases.case1.skuCount || 0), { fontSize: 12 });
-  setMoney('C28', cases.case1 && cases.case1.valueOnMrp);
-  setMoney('D28', cases.case1 && cases.case1.valueOnDlc);
-  setCell('A29', 'Case2. Inward: - Excess ', { fontSize: 12, ...noWrapLeft });
-  setCell('B29', Number(cases.case2 && cases.case2.skuCount || 0), { fontSize: 12 });
-  setMoney('C29', cases.case2 && cases.case2.valueOnMrp);
-  setMoney('D29', cases.case2 && cases.case2.valueOnDlc);
-  setCell('A30', 'Case3. Outward: - In DMS But Not Found in Physical', { fontSize: 12, ...noWrapLeft });
-  setCell('B30', Number(cases.case3 && cases.case3.skuCount || 0), { fontSize: 12 });
-  setMoney('C30', cases.case3 && cases.case3.valueOnMrp);
-  setMoney('D30', cases.case3 && cases.case3.valueOnDlc);
-  setCell('A31', 'Variance', { fill: fills.yellow, fontSize: 12 });
-  setCell('B31', '', { fill: fills.yellow, fontSize: 12 });
-  setMoneyFormula('C31', 'C28+C29+C30', Number(cases.case1 && cases.case1.valueOnMrp || 0) + Number(cases.case2 && cases.case2.valueOnMrp || 0) + Number(cases.case3 && cases.case3.valueOnMrp || 0), { fill: fills.yellow, fontSize: 13 });
-  setMoneyFormula('D31', 'D28+D29+D30', Number(cases.case1 && cases.case1.valueOnDlc || 0) + Number(cases.case2 && cases.case2.valueOnDlc || 0) + Number(cases.case3 && cases.case3.valueOnDlc || 0), { fill: fills.yellow, fontSize: 13 });
-  setCell('A33', 'Case4.Inventory Matched: -Equal', { fontSize: 12, ...noWrapLeft });
-  setMoney('C33', cases.case4 && cases.case4.valueOnMrp);
-  setMoney('D33', cases.case4 && cases.case4.valueOnDlc);
-
-  setCell('A35', 'NON MOVING SKU', { fill: fills.red, fontSize: 18, fontColor: 'FFFFFFFF' });
-  setCell('A37', 'NON MOVING PARTS COUNT', { fill: fills.brightYellow, fontSize: 12 });
-  setCell('C37', ' Value On MRP', { fill: fills.brightYellow, fontSize: 12 });
-  setCell('D37', 'Value On DLC', { fill: fills.brightYellow, fontSize: 12 });
-  setCell('A38', Number(nonMoving.skuCount || 0), { fill: fills.cyan, bold: true, fontColor: 'FFFF0000' });
-  setMoney('C38', nonMoving.valueOnMrp, { fill: fills.cyan, bold: true, fontColor: 'FFFF0000' });
-  setMoney('D38', nonMoving.valueOnDlc, { fill: fills.cyan, bold: true, fontColor: 'FFFF0000' });
-  setCell('A40', 'TOP HIGH VOLUME NON MOVING PARTS COUNT', { fill: fills.brightYellow, fontSize: 12 });
-  setCell('C40', 'Value On MRP', { fill: fills.brightYellow, fontSize: 12 });
-  setCell('D40', 'Value On DLC', { fill: fills.brightYellow, fontSize: 12 });
-  setCell('A41', Number(highVolumeNonMoving.skuCount || 0), { fill: fills.cyan, bold: true, fontColor: 'FFFF0000' });
-  setMoney('C41', highVolumeNonMoving.valueOnMrp, { fill: fills.cyan, bold: true, fontColor: 'FFFF0000' });
-  setMoney('D41', highVolumeNonMoving.valueOnDlc, { fill: fills.cyan, bold: true, fontColor: 'FFFF0000' });
-
-  setCell('A43', `Variance as on ${dateLabel}`, { bold: true, fontColor: 'FFFF0000' });
-  setCell('D44', 'Value On MRP', { fontSize: 12 });
-  setCell('E44', 'Value On DLC', { fontSize: 12 });
-  setCell('A45', 'Opening Stock value', { fontSize: 11 });
-  setMoneyFormula('D45', 'C5', total.systemMrp, { fontSize: 12 });
-  setMoneyFormula('E45', 'D5', total.systemDlc, { fontSize: 12 });
-  setCell('A46', 'Physical Stock Value', { fontSize: 11 });
-  setMoneyFormula('D46', 'C2', total.physicalMrp, { fontSize: 12 });
-  setMoneyFormula('E46', 'D2', total.physicalDlc, { fontSize: 12 });
-  setCell('A47', 'Net Variance', { fontSize: 11 });
-  setMoneyFormula('D47', 'D46-D45', Number(total.physicalMrp || 0) - Number(total.systemMrp || 0), { fontSize: 12 });
-  setMoneyFormula('E47', 'E46-E45', Number(total.physicalDlc || 0) - Number(total.systemDlc || 0), { fontSize: 12 });
-  setCell('A48', 'Net Variance (%age of Opening Stock)', { fontSize: 11 });
-  setFormula('D48', 'D47/D45', stockSummaryPct(Number(total.physicalMrp || 0) - Number(total.systemMrp || 0), total.systemMrp), { fill: fills.yellow, fontSize: 12, numFmt: '0.00%' });
-  setFormula('E48', 'E47/E45', stockSummaryPct(Number(total.physicalDlc || 0) - Number(total.systemDlc || 0), total.systemDlc), { fill: fills.yellow, fontSize: 12, numFmt: '0.00%' });
-  setCell('A50', note, { fontSize: 11 });
-
-  setCell('A52', 'Inventory Health Check', { fill: fills.brightYellow, bold: true, fontSize: 11 });
-  setCell('A53', 'Mismatch Cases', { fontSize: 12 });
-  setCell('B53', 'Mismatch Cases SKU Counts', { fontSize: 12 });
-  setCell('C53', 'Variance Value On MRP', { fill: fills.white, fontSize: 12 });
-  setCell('D53', 'Variance Value On DLC', { fill: fills.white, fontSize: 12 });
-  setCell('E53', '% of Opening Stock On MRP', { fontSize: 11 });
-  setCell('F53', '% of Opening Stock On DLC', { fontSize: 11 });
-  setCell('A54', 'Case1. Inventory Addition: - Found Physical but not in DMS', { fontSize: 12, ...noWrapLeft });
-  setFormula('B54', 'B28', Number(cases.case1 && cases.case1.skuCount || 0), { fontSize: 12 });
-  setMoney('C54', cases.case1 && cases.case1.valueOnMrp, { fontName: 'Cambria', fontSize: 12 });
-  setMoney('D54', cases.case1 && cases.case1.valueOnDlc, { fontName: 'Cambria', fontSize: 12 });
-  setFormula('E54', 'C54/C5', stockSummaryPct(cases.case1 && cases.case1.valueOnMrp, total.systemMrp), { fontSize: 11, numFmt: '0.00%' });
-  setFormula('F54', 'D54/D5', stockSummaryPct(cases.case1 && cases.case1.valueOnDlc, total.systemDlc), { fontSize: 11, numFmt: '0.00%' });
-  setCell('A55', 'Case2. Inward: - Excess ', { fontSize: 12, ...noWrapLeft });
-  setCell('B55', Number(cases.case2 && cases.case2.skuCount || 0), { fontSize: 12 });
-  setMoney('C55', cases.case2 && cases.case2.valueOnMrp, { fontName: 'Cambria', fontSize: 12 });
-  setMoney('D55', cases.case2 && cases.case2.valueOnDlc, { fontName: 'Cambria', fontSize: 12 });
-  setFormula('E55', 'C55/C5', stockSummaryPct(cases.case2 && cases.case2.valueOnMrp, total.systemMrp), { fontSize: 11, numFmt: '0.00%' });
-  setFormula('F55', 'D55/D5', stockSummaryPct(cases.case2 && cases.case2.valueOnDlc, total.systemDlc), { fontSize: 11, numFmt: '0.00%' });
-  setCell('A56', 'Case3. Outward: - In DMS But Not Found in Physical', { fontSize: 12, ...noWrapLeft });
-  setFormula('B56', 'B30', Number(cases.case3 && cases.case3.skuCount || 0), { fontSize: 12 });
-  setMoneyFormula('C56', '-C30', Math.abs(Number(cases.case3 && cases.case3.valueOnMrp || 0)), { fontName: 'Cambria', fontSize: 12 });
-  setMoneyFormula('D56', '-D30', Math.abs(Number(cases.case3 && cases.case3.valueOnDlc || 0)), { fontName: 'Cambria', fontSize: 12 });
-  setFormula('E56', 'C56/C5', stockSummaryPct(Math.abs(Number(cases.case3 && cases.case3.valueOnMrp || 0)), total.systemMrp), { fontSize: 11, numFmt: '0.00%' });
-  setFormula('F56', 'D56/D5', stockSummaryPct(Math.abs(Number(cases.case3 && cases.case3.valueOnDlc || 0)), total.systemDlc), { fontSize: 11, numFmt: '0.00%' });
-  setCell('A57', 'Case4.Inventory Matched: -Equal', { fontSize: 12, ...noWrapLeft });
-  setMoneyFormula('C57', 'C2-(C54+C55)', Number(total.physicalMrp || 0) - Number(cases.case1 && cases.case1.valueOnMrp || 0) - Number(cases.case2 && cases.case2.valueOnMrp || 0), { fontName: 'Cambria', fontSize: 12 });
-  setMoneyFormula('D57', 'D2-(D54+D55)', Number(total.physicalDlc || 0) - Number(cases.case1 && cases.case1.valueOnDlc || 0) - Number(cases.case2 && cases.case2.valueOnDlc || 0), { fontName: 'Cambria', fontSize: 12 });
-  setFormula('E57', 'C57/C5', stockSummaryPct(Number(total.physicalMrp || 0) - Number(cases.case1 && cases.case1.valueOnMrp || 0) - Number(cases.case2 && cases.case2.valueOnMrp || 0), total.systemMrp), { fontSize: 11, numFmt: '0.00%' });
-  setFormula('F57', 'D57/D5', stockSummaryPct(Number(total.physicalDlc || 0) - Number(cases.case1 && cases.case1.valueOnDlc || 0) - Number(cases.case2 && cases.case2.valueOnDlc || 0), total.systemDlc), { fontSize: 11, numFmt: '0.00%' });
-  setCell('A58', 'Net Variance', { fontSize: 12, ...noWrapLeft });
-  setMoneyFormula('C58', 'C54+C55-C56', Number(cases.case1 && cases.case1.valueOnMrp || 0) + Number(cases.case2 && cases.case2.valueOnMrp || 0) - Math.abs(Number(cases.case3 && cases.case3.valueOnMrp || 0)), { fontName: 'Cambria', fontSize: 12 });
-  setMoneyFormula('D58', '(D54+D55)-D56', Number(cases.case1 && cases.case1.valueOnDlc || 0) + Number(cases.case2 && cases.case2.valueOnDlc || 0) - Math.abs(Number(cases.case3 && cases.case3.valueOnDlc || 0)), { fontName: 'Cambria', fontSize: 12 });
-  setFormula('E58', 'C58/C5', stockSummaryPct(Number(cases.case1 && cases.case1.valueOnMrp || 0) + Number(cases.case2 && cases.case2.valueOnMrp || 0) - Math.abs(Number(cases.case3 && cases.case3.valueOnMrp || 0)), total.systemMrp), { fontSize: 11, numFmt: '0.00%' });
-  setFormula('F58', 'D58/D5', stockSummaryPct(Number(cases.case1 && cases.case1.valueOnDlc || 0) + Number(cases.case2 && cases.case2.valueOnDlc || 0) - Math.abs(Number(cases.case3 && cases.case3.valueOnDlc || 0)), total.systemDlc), { fontSize: 11, numFmt: '0.00%' });
-
-  sheet.views = [{ showGridLines: true, topLeftCell: 'A1', activeCell: 'A52' }];
-  sheet.pageSetup = { orientation: 'portrait', fitToWidth: 1, fitToHeight: 1 };
-  return sheet;
 }
 
 function addStockSummarySheet(workbook, data) {
@@ -3798,27 +3312,6 @@ function addStockSummarySheet(workbook, data) {
   return sheet;
 }
 
-function stockSummaryFileSegment(value) {
-  return cleanText(value)
-    .replace(/[\\/:*?"<>|]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toUpperCase();
-}
-
-function stockSummaryFileName(data = {}) {
-  const summary = data.summary || {};
-  const exact = data.sections && data.sections.exactSummary ? data.sections.exactSummary : {};
-  const dealer = data.selectedDealer || {};
-  const audit = data.selectedAudit || {};
-  const dealerName = stockSummaryFileSegment(firstPresent(summary.dealerName, audit.dealerName, dealer.dealerName, 'Dealer'));
-  const dealerCode = stockSummaryFileSegment(firstPresent(summary.dealerCode, audit.dealerCode, dealer.dealerCode, ''));
-  const location = stockSummaryFileSegment(firstPresent(audit.location, dealer.location, ''));
-  const dateLabel = stockSummaryFileSegment(exact.auditDateLabel || summary.auditDate || 'SELECTED DATE');
-  const prefix = [dealerName, dealerCode, location].filter(Boolean).join(' ');
-  return `${prefix || 'DEALER'} INVENTORY AUDIT REPORT AS ON ${dateLabel}.xlsx`;
-}
-
 function movementWiseStockAnalysisColumns() {
   return [
     { header: 'Movement Status', key: 'movementStatus', width: 20 },
@@ -3969,36 +3462,6 @@ router.get('/movement_wise_stock_analysis', auth.requireAuth, async (req, res) =
       sections: data.sections || {},
       summary: data.summary || {},
       totalRows: (data.rows || []).length,
-      message: data.message
-    });
-  } catch (error) {
-    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
-  }
-});
-
-router.get('/inventory-audit-summary', auth.requireAuth, async (req, res) => {
-  try {
-    const reportQuery = requireDealerForReport(req.query);
-    const data = await buildStockSummaryReport(reportQuery);
-    if (req.query.format === 'excel') {
-      const workbook = new ExcelJS.Workbook();
-      workbook.creator = 'Daksh Inventory v2';
-      workbook.created = new Date();
-      addInventoryAuditSummarySheet(workbook, data);
-      const buffer = await workbook.xlsx.writeBuffer();
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', `attachment; filename="${stockSummaryFileName(data)}"`);
-      return res.send(Buffer.from(buffer));
-    }
-    return res.json({
-      success: true,
-      type: 'inventory-audit-summary',
-      title: 'Inventory Audit Summary Report',
-      columns: data.columns.map(({ header, key }) => ({ header, key })),
-      rows: data.rows,
-      sections: data.sections,
-      summary: data.summary,
-      totalRows: data.rows.length,
       message: data.message
     });
   } catch (error) {
@@ -4389,4 +3852,3 @@ module.exports.buildStockSummaryReport = buildStockSummaryReport;
 module.exports.buildPartwiseInventoryAuditReport = buildPartwiseInventoryAuditReport;
 module.exports.buildPartsInventoryRefreshRows = buildPartsInventoryRefreshRows;
 module.exports.addStockSummarySheet = addStockSummarySheet;
-module.exports.addInventoryAuditSummarySheet = addInventoryAuditSummarySheet;

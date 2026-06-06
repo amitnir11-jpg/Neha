@@ -207,7 +207,6 @@
   const REPORT_FILTER_DEFAULTS_BY_TYPE = {
     'scan-register': ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'deviceName', 'syncStatus', 'entryMode'],
     'partwise-inventory-audit': ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation', 'varianceType', 'scanModeOptions'],
-    'inventory-audit-summary': ['dealer', 'dateRange', 'productCategory'],
     short: ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
     excess: ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
     movement_wise_stock_analysis: ['dealer', 'audit', 'binLocation', 'productCategory', 'partNumber', 'movementStatus'],
@@ -264,7 +263,6 @@
     'scan-register': 'Scan Register Report',
     'wrong-not-found-master': 'Rejected Report',
     'stock-summary': 'Stock Summary',
-    'inventory-audit-summary': 'Inventory Audit Summary Report',
     short: 'Short Report',
     excess: 'Excess Report',
     movement_wise_stock_analysis: 'Movement Wise Stock Analysis Report',
@@ -274,7 +272,7 @@
     'parts-inventory-refresh-template': 'Part Inventory Refresh Template CSV'
   };
   const CSV_REPORT_TYPES = new Set(['parts-inventory-refresh-template']);
-  const EXCEL_ONLY_REPORT_TYPES = new Set(['stock-summary', 'inventory-audit-summary']);
+  const EXCEL_ONLY_REPORT_TYPES = new Set(['stock-summary']);
   const REPORT_LAYOUT_KEYS = {
     'partwise-inventory-audit': 'partwise_inventory_audit_report_layout_v2',
     short: 'short_report_layout',
@@ -3283,7 +3281,7 @@
   }
 
   function defaultReportColumnLimit(reportType = activeReportType()) {
-    return ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary', 'inventory-audit-summary'].includes(reportType) ? 0 : 18;
+    return ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary'].includes(reportType) ? 0 : 18;
   }
 
   function defaultReportColumns(available, reportType = activeReportType(), defaultLimit = defaultReportColumnLimit(reportType)) {
@@ -3363,7 +3361,7 @@
       fromDate: reportFilterValue(formData.fromDate),
       toDate: reportFilterValue(formData.toDate),
       category: reportFilterValue(formData.category),
-      productCategory: ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary', 'inventory-audit-summary', 'movement_wise_stock_analysis'].includes(reportType) ? reportFilterValue(formData.category) : undefined,
+      productCategory: ['category-wise-variance-summary', 'partwise-inventory-audit', 'stock-summary', 'movement_wise_stock_analysis'].includes(reportType) ? reportFilterValue(formData.category) : undefined,
       model: reportFilterValue(formData.model),
       year: reportFilterValue(formData.year),
       partNumber: reportFilterValue(formData.partNumber),
@@ -3399,7 +3397,7 @@
     params.delete('testScanMode');
     if (format) {
       const reportType = paramsObject.reportType || activeReportType();
-      if (!['stock-summary', 'inventory-audit-summary', 'movement_wise_stock_analysis'].includes(reportType)) {
+      if (!['stock-summary', 'movement_wise_stock_analysis'].includes(reportType)) {
         const selectedColumns = currentReportColumnKeys(reportType);
         if (selectedColumns && selectedColumns.length) params.set('columns', selectedColumns.join(','));
       }
@@ -3921,7 +3919,7 @@
       renderCategoryWiseVarianceTable(rows, totalRows, grandTotal, reportType);
       return;
     }
-    if (reportType === 'stock-summary' || reportType === 'inventory-audit-summary') {
+    if (reportType === 'stock-summary') {
       renderStockSummaryTable(columns, rows, totalRows, reportType);
       return;
     }
@@ -7350,20 +7348,18 @@
   async function refreshAll() {
     await loadActiveAudit({ silent: true, allowMissing: true }).catch(() => null);
     await loadDealers();
-    await Promise.all([
-      loadCategories(),
+    const viewJobs = [
       loadDashboard(),
-      loadScanHistory(),
-      loadBins(),
       loadDevices(),
-      loadBinTransferHistory(),
-      loadPairingQr(),
-      loadAuthSettings(),
-      loadUsers(),
-      loadSyncStatus(),
-      loadMasterScanValidator(),
-      loadPartSearchFilters()
-    ]);
+      loadSyncStatus()
+    ];
+    if ($('#reports')?.classList.contains('active')) viewJobs.push(loadCategories());
+    if ($('#scan')?.classList.contains('active')) viewJobs.push(loadScanHistory(), loadBins(), loadBarcodeBins(), loadPairingQr());
+    if ($('#binTransfer')?.classList.contains('active')) viewJobs.push(loadBinTransferHistory());
+    if ($('#master')?.classList.contains('active')) viewJobs.push(loadPartSearchFilters());
+    if ($('#validator')?.classList.contains('active')) viewJobs.push(loadMasterScanValidator());
+    if ($('#admin')?.classList.contains('active')) viewJobs.push(loadAuthSettings(), loadUsers());
+    await Promise.all(viewJobs);
     renderSyncQueue();
     renderSyncLog();
     renderConnectionLog();
@@ -7832,8 +7828,29 @@
       if (dealerCode) loadBinTransferBins(dealerCode).then(() => loadBinTransferHistory()).catch((error) => toast(error.message, 'error'));
       else loadBinTransferHistory().catch((error) => toast(error.message, 'error'));
     }
+    if (viewId === 'scan') {
+      Promise.all([loadScanHistory(), loadBins(), loadBarcodeBins(), loadPairingQr()]).catch((error) => toast(error.message, 'error'));
+    }
+    if (viewId === 'reports') {
+      loadCategories().catch((error) => toast(error.message, 'error'));
+    }
+    if (viewId === 'master') {
+      loadPartSearchFilters().catch((error) => toast(error.message, 'error'));
+    }
+    if (viewId === 'validator') {
+      loadMasterScanValidator().catch((error) => toast(error.message, 'error'));
+    }
+    if (viewId === 'devices') {
+      Promise.all([loadDevices(), loadPairingQr()]).catch((error) => toast(error.message, 'error'));
+    }
+    if (viewId === 'admin') {
+      Promise.all([loadAuthSettings(), loadUsers()]).catch((error) => toast(error.message, 'error'));
+    }
     if (viewId === 'archiveRestore') {
       loadAuditBackups().catch((error) => toast(error.message, 'error'));
+    }
+    if (viewId === 'reconciliation' && !state.reconLoaded && activeReconDealer()) {
+      loadReconciliation().catch((error) => toast(error.message, 'error'));
     }
   }
 
@@ -8126,7 +8143,7 @@
           Promise.all([
             loadDashboard(),
             loadScanHistory(),
-            state.reportHasRun || ($('#reports')?.classList.contains('active') && reportParams().reportType && reportParams().dealerCode)
+            state.reportHasRun
               ? loadReport({ forceRefresh: true, showLoading: $('#reports')?.classList.contains('active') })
               : Promise.resolve()
           ]).catch((error) => toast(error.message, 'error'));
@@ -8320,9 +8337,8 @@
     });
     $('#reportTypeSelect').addEventListener('change', (event) => {
       setReportTab(event.target.value);
-      if (reportParams().dealerCode) {
-        loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error'));
-      }
+      state.reportCache.clear();
+      updateReportButtons();
     });
     $('#reportCategoryFilter')?.addEventListener('change', updateReportButtons);
     $('#reportProductGroupFilter')?.addEventListener('change', () => {
@@ -8338,7 +8354,11 @@
         return;
       }
       syncScanDealerScope(reportParams().dealerCode, event.currentTarget);
-      loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error'));
+      if (state.reportHasRun) {
+        loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error'));
+      } else {
+        resetReportPreview('Dealer selected. Click Submit to fetch report data.');
+      }
     });
     $('[name="showScannedPartsOnly"]', $('#reportFilters'))?.addEventListener('change', (event) => {
       if (event.target.checked) $('[name="showFullMasterWithZeroScan"]', $('#reportFilters')).checked = false;
@@ -9082,7 +9102,6 @@
       const auditStartDate = $('[name="auditStartDate"]', $('#dealerMasterForm'));
       if (auditStartDate && !auditStartDate.value) auditStartDate.value = new Date().toISOString().slice(0, 10);
       clearPartSearch();
-      loadReconciliation().catch((error) => bootWarn('initial reconciliation load skipped', errorDetails(error)));
       setAutoSyncState();
       window.addEventListener('online', () => syncPendingQueue({ silent: true, includeFailed: true }).catch(console.warn));
       window.addEventListener('storage', (event) => {
@@ -9114,7 +9133,7 @@
       bootLog('finishRestoredViewLoad complete', restoredView);
       secureNewTabLinks();
       restoreBarcodeScanDefaults();
-      await loadBarcodeBins().catch(() => null);
+      if ($('#scan')?.classList.contains('active')) await loadBarcodeBins().catch(() => null);
       bootLog('loadBarcodeBins complete or skipped');
       await syncPendingQueue({ silent: true, includeFailed: true });
       bootLog('initial syncPendingQueue complete');
