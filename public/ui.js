@@ -269,10 +269,10 @@
     damage: 'Damage Report',
     'category-wise-variance-summary': 'Category Wise Variance Summary',
     'partwise-inventory-audit': 'Partwise Inventory Audit Report',
-    'parts-inventory-refresh-template': 'Part Inventory Refresh Template CSV'
+    'parts-inventory-refresh-template': 'Part Inventory Refresh Template'
   };
-  const CSV_REPORT_TYPES = new Set(['parts-inventory-refresh-template']);
-  const EXCEL_ONLY_REPORT_TYPES = new Set(['stock-summary']);
+  const CSV_REPORT_TYPES = new Set();
+  const NO_PDF_EMAIL_REPORT_TYPES = new Set(['stock-summary', 'parts-inventory-refresh-template']);
   const REPORT_LAYOUT_KEYS = {
     'partwise-inventory-audit': 'partwise_inventory_audit_report_layout_v2',
     short: 'short_report_layout',
@@ -3524,12 +3524,12 @@
     const reportType = activeReportType();
     const canShow = Boolean(reportType) && validateReportSelection(false);
     const isCsvReport = CSV_REPORT_TYPES.has(reportType);
-    const isExcelOnlyReport = EXCEL_ONLY_REPORT_TYPES.has(reportType);
+    const blocksPdfEmail = NO_PDF_EMAIL_REPORT_TYPES.has(reportType);
     $('#reportShow').disabled = !canShow || state.reportLoading;
     $('#reportRefresh').disabled = !canShow || state.reportLoading;
     $('#reportExcel').disabled = isCsvReport || !canShow || state.reportLoading;
-    if ($('#reportPdf')) $('#reportPdf').disabled = isCsvReport || isExcelOnlyReport || !state.reportLoaded || state.reportLoading;
-    if ($('#reportEmail')) $('#reportEmail').disabled = isCsvReport || isExcelOnlyReport || !state.reportLoaded || state.reportLoading;
+    if ($('#reportPdf')) $('#reportPdf').disabled = isCsvReport || blocksPdfEmail || !state.reportLoaded || state.reportLoading;
+    if ($('#reportEmail')) $('#reportEmail').disabled = isCsvReport || blocksPdfEmail || !state.reportLoaded || state.reportLoading;
   }
 
   function hasReportCriteria() {

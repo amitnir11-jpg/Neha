@@ -46,11 +46,11 @@ function physicalBinQuantityExpression() {
   return {
     $switch: {
       branches: [
-        { case: { $eq: [typeValue, 'INWARD'] }, then: qtyAbs },
+        { case: { $in: [typeValue, ['INWARD', 'AUDIT']] }, then: qtyAbs },
         { case: { $in: [typeValue, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [qtyAbs, -1] } },
         { case: { $eq: [typeValue, 'VERIFICATION'] }, then: 0 }
       ],
-      default: 0
+      default: qtyAbs
     }
   };
 }

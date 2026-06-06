@@ -462,10 +462,10 @@ function actionForScan(scan = {}) {
 function physicalScanQty(scan = {}) {
   const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
   const type = cleanText(scan.scanType || scan.type).toUpperCase();
-  if (type === 'INWARD') return Math.abs(qty);
+  if (type === 'INWARD' || type === 'AUDIT') return Math.abs(qty);
   if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -Math.abs(qty);
   if (type === 'VERIFICATION') return 0;
-  return 0;
+  return Math.abs(qty);
 }
 
 function binPhysicalScanQty(scan = {}) {
@@ -1536,11 +1536,11 @@ function partsRefreshPhysicalBinQtyExpression() {
   return {
     $switch: {
       branches: [
-        { case: { $eq: [typeValue, 'INWARD'] }, then: qtyAbs },
+        { case: { $in: [typeValue, ['INWARD', 'AUDIT']] }, then: qtyAbs },
         { case: { $in: [typeValue, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [qtyAbs, -1] } },
         { case: { $eq: [typeValue, 'VERIFICATION'] }, then: 0 }
       ],
-      default: 0
+      default: qtyAbs
     }
   };
 }
@@ -3712,20 +3712,31 @@ router.get('/parts-inventory-refresh-template', auth.requireAuth, async (req, re
       });
       return record;
     });
+    const columns = [
+      { header: 'Part Number', key: 'partNumber' },
+      { header: 'Qty', key: 'qty' },
+      { header: 'Physical Bin Qty', key: 'physicalBinQty' },
+      { header: 'Fitted Qty', key: 'fittedQty' },
+      { header: 'Fitted Regd No', key: 'fittedRegdNo' },
+      { header: 'Fitted Job Card No', key: 'fittedJobCardNo' },
+      ...binColumns
+    ];
+    if (req.query.format === 'excel') {
+      return sendSelectedColumnsWorkbook(
+        res,
+        'Parts_Inventory_Refresh_Template.xlsx',
+        'Parts Inventory Refresh',
+        columns,
+        previewRows,
+        reportQuery
+      );
+    }
     res.json({
       success: true,
       type: 'parts-inventory-refresh-template',
-      title: 'Part Inventory Refresh Template CSV',
+      title: 'Part Inventory Refresh Template',
       summary: { rows: previewRows.length },
-      columns: [
-        { header: 'Part Number', key: 'partNumber' },
-        { header: 'Qty', key: 'qty' },
-        { header: 'Physical Bin Qty', key: 'physicalBinQty' },
-        { header: 'Fitted Qty', key: 'fittedQty' },
-        { header: 'Fitted Regd No', key: 'fittedRegdNo' },
-        { header: 'Fitted Job Card No', key: 'fittedJobCardNo' },
-        ...binColumns
-      ],
+      columns,
       rows: previewRows,
       totalRows: previewRows.length,
       message: previewRows.length ? '' : 'No scan data found for selected filter'
