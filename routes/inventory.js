@@ -110,7 +110,9 @@ function normalizeCategory(value) {
 function normalizeDealerCode(value) {
   const text = String(value || '').trim();
   const paren = text.match(/\(([^()]+)\)\s*$/);
-  return upper(paren ? paren[1] : text);
+  if (paren) return upper(paren[1]);
+  const dash = text.match(/^([A-Za-z0-9_]{3,})\s+-\s+.+$/);
+  return upper(dash ? dash[1] : text);
 }
 
 async function findMasterPart(partNumber, dealerCode = '') {
