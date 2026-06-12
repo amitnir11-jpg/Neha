@@ -98,6 +98,8 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
+const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();
+const DEFAULT_ADMIN_PASSWORD = String(process.env.DEFAULT_ADMIN_PASSWORD || 'admin');
 const DEFAULT_MONGO_URI = 'mongodb://127.0.0.1:27017/daksh_inventory_v2';
 const IS_PRODUCTION = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 const DEPLOY_TARGET = String(process.env.DAKSH_DEPLOY_TARGET || process.env.DEPLOY_TARGET || '').trim().toLowerCase();
@@ -1304,7 +1306,7 @@ io.on('connection', (socket) => {
 });
 
 async function createDefaultAdmin() {
-  const existingAdmin = await User.findOne({ username: 'admin' });
+  const existingAdmin = await User.findOne({ username: DEFAULT_ADMIN_USERNAME });
   if (existingAdmin) {
     const update = {};
     const defaultEmail = process.env.REPORT_EMAIL || 'amitsvision4u@gmail.com';
@@ -1312,7 +1314,7 @@ async function createDefaultAdmin() {
     if (existingAdmin.active === false || existingAdmin.active === undefined) update.active = true;
     if (existingAdmin.isActive === false || existingAdmin.isActive === undefined) update.isActive = true;
     if (!existingAdmin.passwordHash && !existingAdmin.password) {
-      const passwordHash = await bcrypt.hash('admin', 10);
+      const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
       update.passwordHash = passwordHash;
       update.password = passwordHash;
     }
@@ -1328,9 +1330,9 @@ async function createDefaultAdmin() {
     return;
   }
 
-  const passwordHash = await bcrypt.hash('admin', 10);
+  const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
   await User.create({
-    username: 'admin',
+    username: DEFAULT_ADMIN_USERNAME,
     email: process.env.REPORT_EMAIL || 'amitsvision4u@gmail.com',
     passwordHash,
     password: passwordHash,

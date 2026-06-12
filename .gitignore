@@ -18,3 +18,5 @@ logs/
 .dart_tool/
 .gradle/
 .idea/
+.codex-artifacts/
+*.code-workspace

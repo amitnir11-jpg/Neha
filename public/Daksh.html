@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAKSH INVENTORY SYSTEM</title>
-  <link rel="stylesheet" href="/style.css?v=20260612-scan-detail-edit" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/style.css?v=20260612-manual-save-guard" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -263,7 +263,7 @@
               <label>Part Description<input name="partName" data-fill="partName" readonly></label>
               <label>Bin<input name="bin" data-fill="bin"></label>
               <label>Category<input name="category" data-fill="category"></label>
-              <label>Quantity<input name="qty" type="number" min="0" value="1" required></label>
+              <label>Quantity<input name="qty" type="number" min="0.001" step="any" value="1" required></label>
               <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>VERIFICATION</option><option>FITTED</option><option>DAMAGE</option></select></label>
               <label class="fitted-only hidden">Regd No<input name="regdNo" autocomplete="off"></label>
               <label class="fitted-only hidden">Job Card No<input name="jobCardNo" autocomplete="off"></label>
@@ -1373,7 +1373,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260612-scan-detail-edit" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
+  <script src="/ui.js?v=20260612-manual-save-guard" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
   <script>
     (function () {
       function setPill(id, text, ok) {

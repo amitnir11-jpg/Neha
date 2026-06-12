@@ -1136,6 +1136,103 @@ function inwardQty(scan = {}) {
     : 0;
 }
 
+function manualDuplicatePayload(existing = {}, requestedQty = 1) {
+  const partNumber = normalizePartNumber(existing.normalizedPartNumber || existing.partNumber || existing.part || '');
+  const binLocation = upper(existing.binLocation || existing.bin || '');
+  const existingQty = numberValue(existing.qty !== undefined ? existing.qty : existing.quantity, 0);
+  const addQty = Math.abs(numberValue(requestedQty, 1));
+  return {
+    manualDuplicate: true,
+    partNumber,
+    binLocation,
+    existingQty,
+    requestedQty: addQty,
+    message: `Part ${partNumber} is already available in bin ${binLocation}. Current quantity: ${existingQty}. Do you want to add ${addQty} more?`
+  };
+}
+
+async function addManualQuantity(existing = {}, input = {}, req) {
+  const addQty = Math.abs(numberValue(firstValue(input, ['qty', 'quantity', 'count']), 0));
+  if (!(addQty > 0)) return { error: 'Quantity to add must be greater than zero.' };
+  const requestId = clean(input.manualAddRequestId || input.uniqueScanId || input.scanId || input.clientScanId || input.syncKey || '');
+  if (!requestId) return { error: 'Manual quantity update request ID is required.' };
+
+  const now = new Date();
+  const currentQtyExpression = {
+    $convert: {
+      input: { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] },
+      to: 'double',
+      onError: 0,
+      onNull: 0
+    }
+  };
+  const currentMrpExpression = {
+    $convert: {
+      input: { $ifNull: ['$valuationMRP', { $ifNull: ['$manualMRP', { $ifNull: ['$mrp', 0] }] }] },
+      to: 'double',
+      onError: 0,
+      onNull: 0
+    }
+  };
+  const nextQtyExpression = { $add: [currentQtyExpression, addQty] };
+  let updated = await Inventory.findOneAndUpdate(
+    { _id: existing._id, lastManualAddRequestId: { $ne: requestId } },
+    [{
+      $set: {
+        qty: nextQtyExpression,
+        quantity: nextQtyExpression,
+        finalInventoryValue: { $multiply: [nextQtyExpression, currentMrpExpression] },
+        lastManualAddRequestId: requestId,
+        lastManualMergedAt: now,
+        syncStatus: 'synced',
+        synced: true,
+        isSynced: true,
+        updatedAt: now
+      }
+    }],
+    { new: true }
+  ).lean();
+  const alreadyApplied = !updated;
+  if (!updated) updated = await Inventory.findById(existing._id).lean();
+  if (!updated) return { error: 'Existing manual scan record was not found.' };
+
+  const actor = req.user || {};
+  if (!alreadyApplied) {
+    await AuditLog.create({
+      eventType: 'scan.manual.quantity.added',
+      module: 'inventory',
+      severity: 'info',
+      message: `Manual quantity added for ${updated.partNumber || updated.part}`,
+      actorId: String(actor.id || actor._id || actor.username || actor.email || ''),
+      actorName: String(actor.name || actor.username || actor.email || ''),
+      actorRole: String(actor.role || ''),
+      deviceId: String(input.deviceId || updated.deviceId || ''),
+      ipAddress: req.ip || '',
+      userAgent: req.headers['user-agent'] || '',
+      dealerCode: updated.dealerCode || '',
+      auditId: updated.auditId || '',
+      scanId: updated.scanId || updated.uniqueScanId || String(updated._id),
+      partNumber: updated.partNumber || updated.part || '',
+      metadata: {
+        added_quantity: addQty,
+        new_quantity: numberValue(updated.qty !== undefined ? updated.qty : updated.quantity, 0),
+        bin_location: updated.binLocation || updated.bin || '',
+        request_id: requestId,
+        updated_at: now
+      }
+    }).catch(() => undefined);
+  }
+
+  const publicRow = publicScan(updated);
+  if (req.io && !alreadyApplied) {
+    req.io.emit('scan:saved', publicRow);
+    req.io.emit('inventory:update', { reason: 'manual-quantity-added', scan: publicRow, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: now });
+    req.io.emit('reports:update', { reason: 'manual-quantity-added', scan: publicRow, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: now });
+    req.io.emit('stats:update');
+  }
+  return { updated: publicRow, alreadyApplied, addQty };
+}
+
 function partStockMatch({ dealerCode = '', auditId = '', partNumber = '', rawScan = '' } = {}) {
   const dealer = normalizeDealerCode(dealerCode);
   const audit = clean(auditId);
@@ -1848,6 +1945,9 @@ async function saveScanRequest(req, res) {
     const serverSavedSynced = serverSavedStatus === 'synced';
     const syncKey = String(req.body.syncKey || buildSyncKey({ dealerCode, upiId, partNumber: part, scanType: type, timestamp })).trim();
     const uniqueScanId = scanIdentity({ ...req.body, syncKey }, parsed);
+    const manualAddRequestId = manualEntryMode
+      ? clean(req.body.manualAddRequestId || uniqueScanId)
+      : '';
     const rawUpiHash = duplicatePolicy.rawUpiHash({
       ...req.body,
       dealerCode,
@@ -1876,15 +1976,29 @@ async function saveScanRequest(req, res) {
     let existing = null;
     let duplicateReason = '';
     let duplicateMessage = '';
-    if (type === 'FITTED' && regdNo && jobCardNo) {
+    let manualBinDuplicate = false;
+    if (manualEntryMode && ['INWARD', 'DAMAGE'].includes(type) && binLocation) {
+      const manualDuplicateFilter = duplicatePolicy.manualBinDuplicateFilter({
+        dealerCode,
+        auditId,
+        partNumber: part,
+        scanType: type,
+        binLocation
+      });
+      existing = manualDuplicateFilter
+        ? await Inventory.findOne(manualDuplicateFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
+        : null;
+      manualBinDuplicate = Boolean(existing);
+    }
+    if (!existing && type === 'FITTED' && regdNo && jobCardNo) {
       existing = await Inventory.findOne(fittedIdentityFilter({ dealerCode, partNumber: part, regdNo, jobCardNo, auditId })).lean();
-    } else if (type === 'OUTWARD') {
+    } else if (!existing && type === 'OUTWARD') {
       existing = rawScanText ? await Inventory.findOne(outwardDoneFilter(rawScanText, dealerCode, auditId)).lean() : null;
       if (existing) {
         duplicateReason = 'Duplicate QR/UPI already outwarded';
         duplicateMessage = 'This QR/UPI is already outwarded and cannot be outwarded again.';
       }
-    } else {
+    } else if (!existing) {
       existing = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
     }
     if (!existing && type !== 'FITTED') {
@@ -1912,6 +2026,46 @@ async function saveScanRequest(req, res) {
       }
     }
     if (existing) {
+      if (manualBinDuplicate) {
+        if (manualAddRequestId && existing.lastManualAddRequestId === manualAddRequestId) {
+          const publicRow = publicScan(existing);
+          const currentQty = numberValue(publicRow.qty !== undefined ? publicRow.qty : publicRow.quantity, 0);
+          return res.json({
+            success: true,
+            updated: true,
+            duplicate: false,
+            alreadyApplied: true,
+            addedQuantity: 0,
+            newQuantity: currentQty,
+            message: `This manual save was already applied. Current quantity: ${currentQty}.`,
+            scan: publicRow
+          });
+        }
+        if (booleanFlag(req.body.addManualQuantity || req.body.confirmAddQuantity)) {
+          const result = await addManualQuantity(existing, { ...req.body, qty: preQty }, req);
+          if (result.error) return res.status(400).json({ success: false, message: result.error });
+          const newQty = numberValue(result.updated.qty !== undefined ? result.updated.qty : result.updated.quantity, 0);
+          return res.json({
+            success: true,
+            updated: true,
+            duplicate: false,
+            alreadyApplied: result.alreadyApplied,
+            addedQuantity: result.addQty,
+            newQuantity: newQty,
+            message: result.alreadyApplied
+              ? `Quantity was already added. Current quantity: ${newQty}.`
+              : `Added ${result.addQty} more. New quantity: ${newQty}.`,
+            scan: result.updated
+          });
+        }
+        return res.status(409).json({
+          success: false,
+          duplicate: true,
+          skipped: true,
+          ...manualDuplicatePayload(existing, preQty),
+          scan: publicScan(existing)
+        });
+      }
       existing = await backfillDuplicateMrp(existing, {
         partNumber: part,
         rawScanText,
@@ -2147,6 +2301,7 @@ async function saveScanRequest(req, res) {
       scanStatus: type === 'OUTWARD' ? 'OUTWARD_DONE' : 'ACCEPTED',
       syncError: '',
       syncKey,
+      lastManualAddRequestId: manualAddRequestId,
       warnings,
       remarks: warnings.join(', '),
       masterFound: Boolean(master),

@@ -2648,7 +2648,7 @@
     }
   }
 
-  function openScanEditModal(scanId = '') {
+  function openScanEditModal(scanId = '', focusField = 'partNumber') {
     const scan = scanHistoryRecord(scanId);
     if (!scan) throw new Error('Scan record not found');
     const form = $('#scanEditForm');
@@ -2663,13 +2663,15 @@
     form.elements.scanType.value = scanType;
     form.elements.binLocation.disabled = scanType === 'FITTED';
     form.elements.binLocation.required = ['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType);
+    const title = $('#scanEditTitle');
+    if (title) title.textContent = focusField === 'quantity' ? 'Edit Part Quantity' : 'Edit Scanned Part';
     const message = $('#scanEditMessage');
     if (message) {
       message.className = 'form-message';
       message.textContent = scanType === 'FITTED' ? 'Fitted rows remain assigned to the vehicle.' : '';
     }
     $('#scanEditModal')?.classList.remove('hidden');
-    setTimeout(() => form.elements.partNumber.focus(), 0);
+    setTimeout(() => form.elements[focusField]?.focus(), 0);
   }
 
   function scanHistoryRow(scan = {}) {
@@ -2677,7 +2679,7 @@
     const rowMrp = scan.displayMRP || scan.mrp || scan.currentCatalogueMRP || 0;
     const totalQty = scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1);
     const canEditDetails = canEditScanDetails(scan);
-    const editOption = canEditDetails ? '<option value="edit">Edit Part Details</option>' : '';
+    const editOption = canEditDetails ? '<option value="edit-qty">Edit Quantity</option><option value="edit">Edit Part Details</option>' : '';
     const deleteOption = isAdminUser() ? '<option value="delete">Delete Row</option>' : '';
     const actionDropdown = editOption || deleteOption
       ? `<select class="app-action-dropdown scan-row-action" data-id="${escapeHtml(id)}" data-details-edit="${canEditDetails ? 'true' : 'false'}" aria-label="Scan row action"><option value="">Edit / Delete</option>${editOption}${deleteOption}</select>`
@@ -2716,6 +2718,13 @@
         if (action === 'edit') {
           try {
             openScanEditModal(select.dataset.id);
+          } catch (error) {
+            toast(error.message, 'error');
+          }
+        }
+        if (action === 'edit-qty') {
+          try {
+            openScanEditModal(select.dataset.id, 'quantity');
           } catch (error) {
             toast(error.message, 'error');
           }
@@ -3090,6 +3099,22 @@
       return;
     }
 
+    if (!isBarcodeForm && options.confirmBeforeSave !== false) {
+      const confirmMessage = [
+        'Do you want to save this manual scan?',
+        `Part: ${normalized.partNumber}`,
+        `Quantity: ${normalized.qty}`,
+        `Bin: ${normalized.binLocation || '-'}`
+      ].join('\n');
+      if (!window.confirm(confirmMessage)) return;
+    }
+    if (!isBarcodeForm) {
+      const requestId = normalized.manualAddRequestId || normalized.uniqueScanId || `WEB-MANUAL-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      normalized.manualAddRequestId = requestId;
+      normalized.uniqueScanId = normalized.uniqueScanId || requestId;
+      normalized.scanId = normalized.scanId || requestId;
+    }
+
     try {
       const data = await api('/api/scans/manual', { method: 'POST', body: normalized });
       if (data && data.scan) {
@@ -3117,6 +3142,26 @@
       }
       queueRealtimeReportRefresh(isBarcodeForm ? 'barcode scan' : 'manual scan');
     } catch (error) {
+      if (!isBarcodeForm && error.status === 409 && error.data?.manualDuplicate) {
+        playScanTone('duplicate');
+        const duplicate = error.data;
+        const partNumber = duplicate.partNumber || normalized.partNumber;
+        const binLocation = duplicate.binLocation || normalized.binLocation || '-';
+        const existingQty = Number(duplicate.existingQty ?? duplicate.scan?.qty ?? duplicate.scan?.quantity ?? 0);
+        const addQty = Number(duplicate.requestedQty ?? normalized.qty ?? normalized.quantity ?? 0);
+        const message = `Part ${partNumber} is already available in bin ${binLocation}.\nCurrent quantity: ${existingQty}.\nDo you want to add ${addQty} more?`;
+        if (window.confirm(message)) {
+          normalized.addManualQuantity = true;
+          normalized.confirmAddQuantity = true;
+          const updateData = await api('/api/scans/manual', { method: 'POST', body: normalized });
+          playScanTone('success');
+          toast(updateData.message || 'Manual quantity updated');
+          resetManualScanFields(form);
+          if (updateData.scan) handleNewScan(updateData.scan, { showSuccess: true }).catch(() => undefined);
+          queueRealtimeReportRefresh('manual quantity update');
+        }
+        return;
+      }
       if (error.status === 409 && error.data?.fittedDuplicate) {
         playScanTone('duplicate');
         if (window.confirm(error.data.message || 'This fitted part already exists for this vehicle/job card. Add quantity?')) {
@@ -3668,6 +3713,21 @@
       box.textContent = 'Please select filters and click Submit.';
     }
     return true;
+  }
+
+  function setScanFormSubmitting(form, submitting) {
+    if (!form) return;
+    form.dataset.submitting = submitting ? 'true' : 'false';
+    const submitButton = $('button[type="submit"]', form);
+    if (!submitButton) return;
+    if (submitting) {
+      submitButton.dataset.idleText = submitButton.textContent;
+      submitButton.textContent = 'Saving...';
+      submitButton.disabled = true;
+    } else {
+      submitButton.textContent = submitButton.dataset.idleText || 'Save Manual Scan';
+      submitButton.disabled = false;
+    }
   }
 
   function reportDownloadName(extension) {
@@ -8263,9 +8323,19 @@
     $('#binLabelPreviewBtn')?.addEventListener('click', () => previewBinLabels().catch((error) => toast(error.message, 'error')));
     $('#binLabelPrintBtn')?.addEventListener('click', () => printBinLabels().catch((error) => toast(error.message, 'error')));
     $('#binLabelLogExportBtn')?.addEventListener('click', () => exportBinLabelLog().catch((error) => toast(error.message, 'error')));
-    $('#manualScanForm').addEventListener('submit', (event) => {
+    $('#manualScanForm').addEventListener('submit', async (event) => {
       event.preventDefault();
-      submitScan(event.currentTarget);
+      const form = event.currentTarget;
+      if (form.dataset.submitting === 'true') return;
+      setScanFormSubmitting(form, true);
+      try {
+        await submitScan(form, { confirmBeforeSave: true });
+      } catch (error) {
+        playScanTone('error');
+        toast(error.message || 'Manual scan could not be saved', 'error');
+      } finally {
+        setScanFormSubmitting(form, false);
+      }
     });
     $('#barcodeScanForm').addEventListener('submit', (event) => {
       event.preventDefault();

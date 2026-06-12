@@ -10,6 +10,8 @@ const smtpConfig = require('../utils/smtpConfig');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
+const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();
+const DEFAULT_ADMIN_PASSWORD = String(process.env.DEFAULT_ADMIN_PASSWORD || 'admin');
 const DEFAULT_OTP_MAIL_ID = 'amitsvision4u@gmail.com';
 const RESET_TTL_MINUTES = 15;
 const ROLES = ['admin', 'supervisor', 'scanner', 'outward_counter', 'staff', 'mobile_user'];
@@ -509,16 +511,6 @@ router.post('/login', async (req, res) => {
     let valid = false;
     if (user.role === 'admin') {
       valid = await compareAndUpgradeSecret(user, password, ['passwordHash', 'password']);
-      if (!valid && username === 'admin' && password === 'admin') {
-        const hash = await bcrypt.hash('admin', 10);
-        user.passwordHash = hash;
-        user.password = hash;
-        user.active = true;
-        user.isActive = true;
-        user.approved = true;
-        await user.save();
-        valid = true;
-      }
     } else if (user.role === 'staff') {
       const secret = pin || password;
       valid = await compareAndUpgradeSecret(user, secret, ['pinHash', 'pin']);
@@ -1014,16 +1006,17 @@ setTimeout(async () => {
   try {
     const adminExists = await User.findOne({ role: 'admin' });
     if (!adminExists) {
+      const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
       await User.create({
-        username: 'admin',
+        username: DEFAULT_ADMIN_USERNAME,
         email: 'admin@localhost',
         name: 'Administrator',
         role: 'admin',
         active: true,
         isActive: true,
         approved: true,
-        passwordHash: await bcrypt.hash('admin', 10),
-        password: await bcrypt.hash('admin', 10)
+        passwordHash,
+        password: passwordHash
       });
       await User.create({
         username: 'staff',

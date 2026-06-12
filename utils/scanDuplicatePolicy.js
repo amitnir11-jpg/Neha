@@ -101,6 +101,19 @@ function businessDuplicateFilter(input = {}) {
   };
 }
 
+function manualBinDuplicateFilter(input = {}) {
+  const filter = businessDuplicateFilter(input);
+  const binLocation = upper(input.binLocation || input.bin || input.location || '');
+  if (!filter || !binLocation) return null;
+  filter.$and.push({
+    $or: [
+      { binLocation },
+      { bin: binLocation }
+    ]
+  });
+  return filter;
+}
+
 function identityDuplicateFilter(input = {}) {
   const dealerCode = scanDealerCode(input);
   const auditId = scanAuditId(input);
@@ -137,6 +150,7 @@ module.exports = {
   businessDuplicateFilter,
   businessDuplicateKey,
   identityDuplicateFilter,
+  manualBinDuplicateFilter,
   rawUpiHash,
   rawScanText,
   scanAuditId,

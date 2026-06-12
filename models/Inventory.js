@@ -420,6 +420,15 @@ const inventorySchema = new mongoose.Schema(
       trim: true,
       default: ''
     },
+    lastManualAddRequestId: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    lastManualMergedAt: {
+      type: Date,
+      default: null
+    },
     syncStatus: {
       type: String,
       enum: ['pending', 'synced', 'failed', 'duplicate', 'rejected'],
