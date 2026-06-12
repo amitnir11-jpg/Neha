@@ -411,6 +411,11 @@
       `<option value="${escapeHtml(dealer.dealerCode || dealer.code || dealer.id || '')}">${escapeHtml(dealerLabel(dealer))}</option>`
     )).join('');
     $$('.login-form').forEach((item) => item.classList.remove('active'));
+    $$('.reset-flow > form').forEach((item) => item.classList.remove('active'));
+    $$('.tab-button').forEach((item) => {
+      item.classList.remove('active');
+      item.setAttribute('aria-selected', 'false');
+    });
     form.classList.add('active');
     return true;
   }
@@ -493,24 +498,37 @@
       return;
     }
 
-    $$('.tab-button').forEach((button) => {
-      button.addEventListener('click', () => {
-        $$('.tab-button').forEach((item) => item.classList.remove('active'));
-        button.classList.add('active');
-        $$('.login-form').forEach((form) => form.classList.remove('active'));
-        
-        const tab = button.dataset.loginTab;
-        if (tab === 'reset') {
-          const tokenInput = $('#resetTokenInput');
-          if (tokenInput && tokenInput.value) {
-            const f = $('#resetPasswordForm'); if (f) f.classList.add('active');
-          } else {
-            const f = $('#resetRequestForm'); if (f) f.classList.add('active');
-          }
-        } else {
-          const f = $(`#${tab}LoginForm`); if (f) f.classList.add('active');
-        }
+    const activateLoginTab = (tab) => {
+      if (!tab) return;
+      $$('.tab-button').forEach((item) => {
+        const active = item.dataset.loginTab === tab;
+        item.classList.toggle('active', active);
+        item.setAttribute('aria-selected', active ? 'true' : 'false');
       });
+      $$('.login-form').forEach((form) => form.classList.remove('active'));
+      $$('.reset-flow > form').forEach((form) => form.classList.remove('active'));
+
+      const message = $('#loginMessage');
+      if (message) {
+        message.className = 'form-message';
+        message.textContent = '';
+      }
+
+      if (tab === 'reset') {
+        const resetFlow = $('#resetLoginForm');
+        if (resetFlow) resetFlow.classList.add('active');
+        const tokenInput = $('#resetTokenInput');
+        const targetForm = tokenInput && tokenInput.value ? $('#resetPasswordForm') : $('#resetRequestForm');
+        if (targetForm) targetForm.classList.add('active');
+        return;
+      }
+
+      const form = $(`#${tab}LoginForm`);
+      if (form) form.classList.add('active');
+    };
+
+    $$('[data-login-tab]').forEach((button) => {
+      button.addEventListener('click', () => activateLoginTab(button.dataset.loginTab));
     });
 
     if (params.get('resetToken')) {
@@ -521,6 +539,26 @@
       const resetButton = $('[data-login-tab="reset"]');
       if (resetButton) resetButton.click();
     }
+
+    $$('[data-password-toggle]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const input = button.closest('.input-wrap')?.querySelector('input');
+        if (!input) return;
+        const showSecret = input.type === 'password';
+        input.type = showSecret ? 'text' : 'password';
+        button.classList.toggle('is-visible', showSecret);
+        button.setAttribute('aria-label', `${showSecret ? 'Hide' : 'Show'} ${input.name === 'pin' ? 'PIN' : 'password'}`);
+      });
+    });
+
+    $('#emailLoginButton')?.addEventListener('click', () => {
+      activateLoginTab('admin');
+      const username = $('#adminLoginForm input[name="username"]');
+      if (username) {
+        username.placeholder = 'Enter email or user ID';
+        username.focus();
+      }
+    });
 
     $('#adminLoginForm').addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -1478,6 +1516,8 @@
       return;
     }
     params.dealerCode = dealerCode;
+    params.page = params.page || '1';
+    params.limit = params.limit || '250';
     const query = new URLSearchParams(params).toString();
     const url = `/api/reports/data?${query}`;
     const message = $('#legacyReportMessage');

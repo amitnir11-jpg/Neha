@@ -21,10 +21,21 @@ const { serverInfo } = require('../utils/network');
 const { normalizePartNumber } = require('../utils/normalize');
 const { formatDateLikeFields } = require('../utils/time');
 const { decorateScanValue } = require('../utils/inventoryValueEngine');
+const { uniqueReportScans } = require('../utils/reportScanIdentity');
+const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
 const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.0.5';
+const MOBILE_SCAN_SELECT = [
+  'uniqueScanId scanId syncKey qrFingerprint rawUpiHash',
+  'part partNumber normalizedPartNumber partName partDescription category productCategory productGroup partSubGroup model year manufacturingYear',
+  'qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue finalMRP dlc',
+  'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin regdNo jobCardNo isFitted fittedQty fittedLocation status type scanType',
+  'upiId upiNo dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi',
+  'deviceId deviceName userId loginId staffName userName role timestamp scanTime createdAt',
+  'syncStatus synced isSynced scanStatus source scanMode warnings remarks masterFound masterMatch isMasterMatched'
+].join(' ');
 
 function clean(value) {
   return String(value || '').trim();
@@ -144,25 +155,19 @@ function transactionFilter(query = {}) {
   return inventoryRoute.applyTransactionScanFilter(dealerFilter(query));
 }
 
-function scanQtyExpression() {
-  const qty = { $ifNull: ['$qty', { $ifNull: ['$quantity', 0] }] };
-  const type = { $toUpper: { $ifNull: ['$scanType', { $ifNull: ['$type', ''] }] } };
-  return {
-    $switch: {
-      branches: [
-        { case: { $eq: [type, 'INWARD'] }, then: { $abs: qty } },
-        { case: { $in: [type, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: qty }, -1] } },
-        { case: { $eq: [type, 'VERIFICATION'] }, then: 0 }
-      ],
-      default: 0
-    }
-  };
+function scanQty(scan = {}) {
+  if (scan._reportSignedQty !== undefined) return signedScanQuantity(scan, 0);
+  const qty = Number(scan.qty !== undefined ? scan.qty : scan.quantity || 0);
+  const safeQty = Number.isFinite(qty) ? qty : 0;
+  const type = upper(scan.scanType || scan.type || '');
+  if (type === 'INWARD') return Math.abs(safeQty);
+  if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -Math.abs(safeQty);
+  if (type === 'VERIFICATION') return 0;
+  return 0;
 }
 
-function reportFilter(query = {}, scanType = '') {
-  const filter = transactionFilter(query);
-  if (scanType) filter.$or = [{ scanType }, { type: scanType }];
-  return filter;
+function newestFirst(a = {}, b = {}) {
+  return new Date(b.timestamp || b.createdAt || 0) - new Date(a.timestamp || a.createdAt || 0);
 }
 
 function reportRow(scan) {
@@ -199,8 +204,10 @@ function partFromVerificationValue(value) {
 
 async function scanReport(req, res, scanType) {
   try {
-    const records = await Inventory.find(reportFilter(req.query, scanType)).sort({ timestamp: -1, createdAt: -1 }).limit(1000).lean();
-    return res.json({ success: true, type: scanType.toLowerCase(), count: records.length, rows: records.map(reportRow) });
+    const records = await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: 1, createdAt: 1 }).limit(5000).lean();
+    const normalized = applyMovementCountRules(uniqueReportScans(records));
+    const rows = normalized.filter((scan) => upper(scan.scanType || scan.type || '') === scanType).sort(newestFirst).slice(0, 1000).map(reportRow);
+    return res.json({ success: true, type: scanType.toLowerCase(), count: rows.length, rows });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -649,7 +656,7 @@ router.get('/status/:deviceId', auth.optionalAuth, async (req, res) => {
 
 router.get('/inventory', auth.optionalAuth, async (req, res) => {
   try {
-    const records = await Inventory.find(transactionFilter(req.query))
+    const records = await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT)
       .sort({ timestamp: -1 })
       .limit(1000)
       .lean();
@@ -661,19 +668,11 @@ router.get('/inventory', auth.optionalAuth, async (req, res) => {
 
 router.get('/reports/unique-upi', auth.optionalAuth, async (req, res) => {
   try {
-    const records = await Inventory.find(transactionFilter(req.query))
+    const records = await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT)
       .sort({ timestamp: -1 })
       .limit(1000)
       .lean();
-    const seen = new Set();
-    const unique = [];
-    records.forEach((scan) => {
-      const key = scan.upiId || scan.rawScan || scan.rawScanString || scan.uniqueScanId || String(scan._id);
-      if (seen.has(key)) return;
-      seen.add(key);
-      unique.push(mobileItem(scan));
-    });
-    return res.json(unique);
+    return res.json(applyMovementCountRules(uniqueReportScans(records)).sort(newestFirst).map(mobileItem));
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -682,38 +681,44 @@ router.get('/reports/unique-upi', auth.optionalAuth, async (req, res) => {
 router.get('/reports/summary', auth.optionalAuth, async (req, res) => {
   try {
     const filter = transactionFilter(req.query);
-    const [summaryRows, lastScan, duplicateCount] = await Promise.all([
-      Inventory.aggregate([
-        { $match: filter },
-        {
-          $group: {
-            _id: null,
-            total: { $sum: 1 },
-            totalQty: { $sum: scanQtyExpression() },
-            inward: { $sum: { $cond: [{ $eq: ['$scanType', 'INWARD'] }, 1, 0] } },
-            outward: { $sum: { $cond: [{ $eq: ['$scanType', 'OUTWARD'] }, 1, 0] } },
-            fitted: { $sum: { $cond: [{ $eq: ['$scanType', 'FITTED'] }, 1, 0] } },
-            damage: { $sum: { $cond: [{ $eq: ['$scanType', 'DAMAGE'] }, 1, 0] } },
-            pending: { $sum: { $cond: [{ $eq: ['$syncStatus', 'pending'] }, 1, 0] } },
-            failed: { $sum: { $cond: [{ $eq: ['$syncStatus', 'failed'] }, 1, 0] } },
-            synced: { $sum: { $cond: [{ $eq: ['$syncStatus', 'synced'] }, 1, 0] } },
-            lastScanAt: { $max: '$timestamp' }
-          }
-        }
-      ]),
-      Inventory.findOne(filter).sort({ timestamp: -1, createdAt: -1 }).lean(),
+    const [rawRecords, duplicateCount] = await Promise.all([
+      Inventory.find(filter).select(MOBILE_SCAN_SELECT).sort({ timestamp: -1, createdAt: -1 }).lean(),
       DuplicateScanLog.countDocuments(filter)
     ]);
-    const row = summaryRows[0] || {};
+    const records = applyMovementCountRules(uniqueReportScans(rawRecords));
+    const lastScan = records.slice().sort((a, b) => new Date(b.timestamp || b.createdAt || 0) - new Date(a.timestamp || a.createdAt || 0))[0] || null;
+    const totals = reportTotals(records);
+    const row = records.reduce((summary, scan) => {
+      const type = upper(scan.scanType || scan.type || '');
+      const syncStatus = clean(scan.syncStatus).toLowerCase();
+      summary.total += 1;
+      summary.totalQty += Math.abs(scanQty(scan));
+      if (type === 'INWARD') summary.inward += 1;
+      if (type === 'OUTWARD') summary.outward += 1;
+      if (type === 'FITTED') summary.fitted += 1;
+      if (type === 'DAMAGE') summary.damage += 1;
+      if (syncStatus === 'pending') summary.pending += 1;
+      if (syncStatus === 'failed') summary.failed += 1;
+      if (syncStatus === 'synced' || scan.synced === true || scan.isSynced === true) summary.synced += 1;
+      return summary;
+    }, { total: 0, totalQty: 0, inward: 0, outward: 0, fitted: 0, damage: 0, pending: 0, failed: 0, synced: 0 });
     return res.json({
       success: true,
       summary: {
         dealerCode: clean(req.query.dealerCode).toUpperCase(),
         dealerName: lastScan?.dealerName || '',
-        total: Number(row.total || 0),
-        totalQty: Number(row.totalQty || 0),
-        inward: Number(row.inward || 0),
-        outward: Number(row.outward || 0),
+        total: Number(totals.scanRows || row.total || 0),
+        scanRows: Number(totals.scanRows || row.total || 0),
+        uniqueParts: Number(totals.uniqueParts || 0),
+        totalQty: Number(totals.totalQuantity || row.totalQty || 0),
+        totalQuantity: Number(totals.totalQuantity || row.totalQty || 0),
+        partsScanned: Number(totals.partsScanned || row.totalQty || 0),
+        inward: Number(totals.inwardCount ?? row.inward ?? 0),
+        inwardCount: Number(totals.inwardCount ?? row.inward ?? 0),
+        outward: Number(totals.outwardCount ?? row.outward ?? 0),
+        outwardCount: Number(totals.outwardCount ?? row.outward ?? 0),
+        netAvailableCount: Number(totals.netAvailableCount || 0),
+        unknownPartsCount: Number(totals.unknownPartsCount || 0),
         fitted: Number(row.fitted || 0),
         damage: Number(row.damage || 0),
         pending: Number(row.pending || 0),
@@ -721,7 +726,7 @@ router.get('/reports/summary', auth.optionalAuth, async (req, res) => {
         synced: Number(row.synced || 0),
         duplicates: Number(duplicateCount || 0),
         duplicateCount: Number(duplicateCount || 0),
-        lastScanAt: row.lastScanAt || ''
+        lastScanAt: lastScan ? lastScan.timestamp || lastScan.createdAt || '' : ''
       }
     });
   } catch (error) {
@@ -732,7 +737,7 @@ router.get('/reports/summary', auth.optionalAuth, async (req, res) => {
 router.get('/reports/last-scans', auth.optionalAuth, async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 100);
-    const records = await Inventory.find(transactionFilter(req.query)).sort({ timestamp: -1, createdAt: -1 }).limit(limit).lean();
+    const records = await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: -1, createdAt: -1 }).limit(limit).lean();
     return res.json({ success: true, records: records.map(mobileItem) });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -799,7 +804,8 @@ router.get('/reports/export-excel', auth.optionalAuth, async (req, res) => {
     const map = { inward: 'INWARD', outward: 'OUTWARD', fitted: 'FITTED', damage: 'DAMAGE' };
     let rows = [];
     if (map[type]) {
-      rows = (await Inventory.find(reportFilter(req.query, map[type])).sort({ timestamp: -1 }).limit(5000).lean()).map(reportRow);
+      const scans = applyMovementCountRules(uniqueReportScans(await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: 1, createdAt: 1 }).limit(5000).lean()));
+      rows = scans.filter((scan) => upper(scan.scanType || scan.type || '') === map[type]).sort(newestFirst).map(reportRow);
     } else if (type === 'verification') {
       rows = (await VerificationLog.find({ ...dealerFilter(req.query), scanType: { $ne: 'VERIFICATION' } }).sort({ time: -1 }).limit(5000).lean()).map((row) => ({
         time: row.time,
@@ -833,41 +839,49 @@ router.get('/reports/export-excel', auth.optionalAuth, async (req, res) => {
 
 router.get('/reports/bin-wise', auth.optionalAuth, async (req, res) => {
   try {
-    const records = await Inventory.aggregate([
-      { $match: transactionFilter(req.query) },
-      { $addFields: { _movementQty: scanQtyExpression() } },
-      {
-        $group: {
-          _id: {
-            dealerCode: '$dealerCode',
-            binLocation: '$binLocation',
-            partNumber: '$partNumber',
-            mrp: '$mrp',
-            scanType: '$scanType',
-            deviceId: '$deviceId'
-          },
-          qty: { $sum: '$_movementQty' },
-          partDescription: { $first: '$partDescription' },
-          productCategory: { $first: '$productCategory' },
-          lastScanTime: { $max: '$timestamp' }
-        }
-      },
-      { $sort: { lastScanTime: -1 } },
-      { $limit: 1000 }
-    ]);
+    const scans = applyMovementCountRules(uniqueReportScans(await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: 1, createdAt: 1 }).limit(5000).lean()));
+    const groups = new Map();
+    scans.forEach((scan) => {
+      const key = [
+        scan.dealerCode || '',
+        scan.binLocation || scan.bin || '',
+        scan.partNumber || scan.part || '',
+        scan.mrp || '',
+        scan.scanType || scan.type || '',
+        scan.deviceId || ''
+      ].join('|');
+      const group = groups.get(key) || {
+        dealerCode: scan.dealerCode || '',
+        binLocation: scan.binLocation || scan.bin || '',
+        partNumber: scan.partNumber || scan.part || '',
+        partDescription: scan.partDescription || scan.partName || '',
+        productCategory: scan.productCategory || scan.category || '',
+        qty: 0,
+        mrp: Number(scan.mrp || 0),
+        scanType: scan.scanType || scan.type || '',
+        lastScanTime: scan.timestamp || scan.createdAt || '',
+        deviceId: scan.deviceId || ''
+      };
+      group.qty += scanQty(scan);
+      if (new Date(scan.timestamp || scan.createdAt || 0) > new Date(group.lastScanTime || 0)) group.lastScanTime = scan.timestamp || scan.createdAt || '';
+      groups.set(key, group);
+    });
+    const records = Array.from(groups.values())
+      .sort((a, b) => new Date(b.lastScanTime || 0) - new Date(a.lastScanTime || 0))
+      .slice(0, 1000);
     return res.json({
       success: true,
       records: records.map((row) => ({
-        dealerCode: row._id.dealerCode || '',
-        binLocation: row._id.binLocation || '',
-        partNumber: row._id.partNumber || '',
+        dealerCode: row.dealerCode || '',
+        binLocation: row.binLocation || '',
+        partNumber: row.partNumber || '',
         partDescription: row.partDescription || '',
         productCategory: row.productCategory || '',
         qty: Number(row.qty || 0),
-        mrp: Number(row._id.mrp || 0),
-        scanType: row._id.scanType || '',
+        mrp: Number(row.mrp || 0),
+        scanType: row.scanType || '',
         lastScanTime: row.lastScanTime || '',
-        deviceId: row._id.deviceId || ''
+        deviceId: row.deviceId || ''
       }))
     });
   } catch (error) {

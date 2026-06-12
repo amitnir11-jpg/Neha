@@ -1488,29 +1488,65 @@
         rawScan: raw
       };
     }
+    const data = {};
+    try {
+      const params = new URLSearchParams(raw.includes('?') ? raw.slice(raw.indexOf('?') + 1) : raw.replace(/[|;]/g, '&'));
+      params.forEach((value, key) => {
+        data[key.toLowerCase().replace(/[^a-z0-9]/g, '')] = value;
+      });
+    } catch (error) {
+      raw.split(/[|,;\n\r]+/).forEach((token) => {
+        const splitAt = token.search(/[:=]/);
+        if (splitAt <= 0) return;
+        data[token.slice(0, splitAt).toLowerCase().replace(/[^a-z0-9]/g, '')] = token.slice(splitAt + 1).trim();
+      });
+    }
+    raw.split(/[|,;\n\r]+/).forEach((token) => {
+      const splitAt = token.search(/[:=]/);
+      if (splitAt <= 0) return;
+      data[token.slice(0, splitAt).toLowerCase().replace(/[^a-z0-9]/g, '')] = token.slice(splitAt + 1).trim();
+    });
+    const firstRaw = (keys) => {
+      for (const key of keys) {
+        const value = data[key.toLowerCase()];
+        if (value !== undefined && String(value).trim() !== '') return String(value).trim();
+      }
+      return '';
+    };
     const kvMatch = raw.match(/(?:part\s*no|part|pn|sku)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
     const qtyMatch = raw.match(/(?:qty|quantity|q)\s*[:=]\s*([0-9][0-9,]*(?:\.[0-9]+)?)/i);
-    const explicitQty = qtyMatch ? optionalScanNumber(qtyMatch[1]) : undefined;
+    const explicitQty = optionalScanNumber(firstRaw(['qty', 'quantity', 'q']) || (qtyMatch ? qtyMatch[1] : ''));
     const mrpMatch = raw.match(/(?:mrp|price)\s*[:=]\s*([0-9][0-9,]*(?:\.[0-9]+)?)/i);
-    const explicitMrp = mrpMatch ? Number(String(mrpMatch[1]).replace(/,/g, '')) : undefined;
-    if (kvMatch) {
-      const partNumber = normalizePartText(kvMatch[1]);
+    const explicitMrp = optionalScanNumber(firstRaw(['mrp', 'price']) || (mrpMatch ? mrpMatch[1] : ''));
+    const parsedPart = firstRaw(['partno', 'partnumber', 'part', 'pn', 'sku', 'item', 'p']) || (kvMatch ? kvMatch[1] : '');
+    const meta = {
+      dealerCode: normalizePartText(firstRaw(['dealercode', 'dealer', 'dc'])),
+      auditId: firstRaw(['auditid', 'audit', 'auditno', 'auditnumber']),
+      binLocation: firstRaw(['bin', 'binlocation', 'location', 'rack']),
+      scanType: normalizePartText(firstRaw(['type', 'scantype', 'movement'])),
+      staffName: firstRaw(['staffname', 'staff', 'username', 'user', 'operator', 'scannedby']),
+      upiId: normalizePartText(firstRaw(['upino', 'upi', 'upiid', 'serial', 'sequence']))
+    };
+    if (parsedPart) {
+      const partNumber = normalizePartText(parsedPart);
       return {
+        ...meta,
         partNumber: validPartText(partNumber) ? partNumber : '',
         qty: explicitQty,
         qtyProvided: explicitQty !== undefined,
-        mrp: Number.isFinite(explicitMrp) ? explicitMrp : undefined,
-        mrpProvided: Number.isFinite(explicitMrp),
+        mrp: explicitMrp,
+        mrpProvided: explicitMrp !== undefined,
         rawScan: raw
       };
     }
     const simple = normalizePartText(raw);
     return {
+      ...meta,
       partNumber: validPartText(simple) ? simple : '',
       qty: undefined,
       qtyProvided: false,
-      mrp: Number.isFinite(explicitMrp) ? explicitMrp : undefined,
-      mrpProvided: Number.isFinite(explicitMrp),
+      mrp: explicitMrp,
+      mrpProvided: explicitMrp !== undefined,
       rawScan: raw
     };
   }
@@ -1530,9 +1566,9 @@
     const parsedRaw = parseRawScanText(rawScanValue);
     const timestamp = new Date().toISOString();
     const partNumber = normalizePartText(parsedRaw.partNumber || payload.partNumber || payload.partNo || payload.part || payload.sku || payload.itemCode || '');
-    const scanType = String(payload.scanType || payload.action || payload.type || payload.movement || 'INWARD').trim().toUpperCase();
-    const dealerCode = String(payload.dealerCode || payload.dealer || '').trim().toUpperCase();
-    const upiId = extractUpiIdFromText(payload);
+    const scanType = String(payload.scanType || payload.action || payload.type || payload.movement || parsedRaw.scanType || 'INWARD').trim().toUpperCase();
+    const dealerCode = String(payload.dealerCode || payload.dealer || parsedRaw.dealerCode || '').trim().toUpperCase();
+    const upiId = extractUpiIdFromText(payload) || parsedRaw.upiId || '';
     const payloadMrp = optionalScanNumber(payload.mrp);
     const parsedMrp = optionalScanNumber(parsedRaw.mrp);
     const manualPayload = /\bmanual\b/i.test([payload.source, payload.scanMode, payload.entryMode].filter(Boolean).join(' '));
@@ -1558,17 +1594,17 @@
       type: scanType,
       dealerCode,
       dealerName: payload.dealerName || '',
-      auditId: payload.auditId || '',
+      auditId: payload.auditId || parsedRaw.auditId || '',
       upiId,
       quantity: finalQty,
       qty: finalQty,
-      binLocation: payload.binLocation || payload.bin || '',
-      bin: payload.bin || payload.binLocation || '',
+      binLocation: payload.binLocation || payload.bin || parsedRaw.binLocation || '',
+      bin: payload.bin || payload.binLocation || parsedRaw.binLocation || '',
       rawScanString: rawScanValue || partNumber,
       rawScan: rawScanValue || partNumber,
       rawBarcode: payload.rawBarcode || rawScanValue || partNumber,
       rawScanValue: payload.rawScanValue || rawScanValue || partNumber,
-      staffName: payload.staffName || (state.user ? state.user.name || state.user.username : ''),
+      staffName: payload.staffName || parsedRaw.staffName || (state.user ? state.user.name || state.user.username : ''),
       userId: payload.userId || payload.loginId || (state.user ? state.user.id || state.user.username || '' : ''),
       loginId: payload.loginId || payload.userId || (state.user ? state.user.username || state.user.email || state.user.id || '' : ''),
       deviceId: payload.deviceId || ensureDeviceId()
@@ -2283,6 +2319,65 @@
     setText('scanHistoryVisibleRows', wholeNumber(totals.visibleRows));
   }
 
+  function scanHistoryQueryParams() {
+    const params = new URLSearchParams(queryFromForm($('#scanHistoryFilters')));
+    const dealerCode = cleanDealerCode(params.get('dealerCode') || selectedScanDealerCode());
+    if (dealerCode && dealerCode !== 'ALL') {
+      params.set('dealerCode', dealerCode);
+      params.delete('dealer');
+    } else {
+      params.delete('dealerCode');
+    }
+    if (!params.has('page')) params.set('page', '1');
+    if (!params.has('limit')) params.set('limit', '100');
+    return params;
+  }
+
+  function scanHistoryFieldText(scan = {}, fields = []) {
+    return fields.map((field) => scan[field] || '').join(' ').toUpperCase();
+  }
+
+  function scanLooksLikeTestRecord(scan = {}) {
+    return /SYNCPT|SCAN TEST|SYNC TEST/i.test([
+      scan.dealerCode,
+      scan.dealerName,
+      scan.deviceId,
+      scan.deviceName,
+      scan.rawUpi,
+      scan.rawScan,
+      scan.rawScanString,
+      scan.staffName,
+      scan.partName,
+      scan.partDescription
+    ].filter(Boolean).join(' '));
+  }
+
+  function scanMatchesScanHistoryFilters(scan = {}) {
+    const params = scanHistoryQueryParams();
+    const dealerCode = cleanDealerCode(params.get('dealerCode') || '');
+    if (dealerCode && dealerCode !== 'ALL' && cleanDealerCode(scan.dealerCode || '') !== dealerCode) return false;
+
+    const part = normalizePartText(params.get('part') || '');
+    if (part) {
+      const text = scanHistoryFieldText(scan, ['part', 'partNumber', 'normalizedPartNumber', 'rawScan', 'rawScanString', 'rawUpi']);
+      if (!text.includes(part)) return false;
+    }
+
+    const bin = String(params.get('bin') || '').trim().toUpperCase();
+    if (bin) {
+      const text = scanHistoryFieldText(scan, ['bin', 'binLocation']);
+      if (!text.includes(bin)) return false;
+    }
+
+    const type = String(params.get('type') || '').trim().toUpperCase();
+    if (type && String(scan.scanType || scan.type || '').trim().toUpperCase() !== type) return false;
+
+    const testScanMode = String(params.get('testScanMode') || 'real').trim().toLowerCase();
+    if (testScanMode === 'real' && scanLooksLikeTestRecord(scan)) return false;
+    if (testScanMode === 'test' && !scanLooksLikeTestRecord(scan)) return false;
+    return true;
+  }
+
   function scanEntrySourceLabel(scan = {}) {
     if (scan.scanSourceLabel) return scan.scanSourceLabel;
     const source = String(scan.source || scan.scanSource || '').trim().toLowerCase();
@@ -2455,7 +2550,7 @@
     enhanceCoreTables();
   }
 
-  async function handleNewScan(scan = {}) {
+  async function handleNewScan(scan = {}, options = {}) {
     if (String(scan.scanType || scan.type || '').trim().toUpperCase() === 'VERIFICATION') return;
     if (!activeAuditMatchesScan(scan)) {
       return;
@@ -2467,7 +2562,7 @@
       setTimeout(() => state.recentRealtimeScanIds.delete(realtimeId), 15000);
     }
     state.lastRealtimeAt = Date.now();
-    showScanPopup(scan);
+    if (options.showSuccess === true) showScanPopup(scan);
     addScanToStream(scan);
     prependScanHistory(scan);
     const currentToday = Number(String(($('#dashToday') || {}).textContent || 0).replace(/,/g, ''));
@@ -2517,16 +2612,12 @@
   }
 
   async function loadScanHistory() {
-    const params = new URLSearchParams(queryFromForm($('#scanHistoryFilters')));
-    const dealerCode = cleanDealerCode(params.get('dealerCode') || selectedScanDealerCode());
-    if (dealerCode && dealerCode !== 'ALL') {
-      params.set('dealerCode', dealerCode);
-      params.delete('dealer');
-    } else {
-      params.delete('dealerCode');
-    }
+    const params = scanHistoryQueryParams();
     const query = params.toString();
+    const requestId = `${Date.now()}:${Math.random()}`;
+    state.scanHistoryLoadRequestId = requestId;
     const data = await api(`/api/scans/history?${query}`);
+    if (state.scanHistoryLoadRequestId !== requestId) return;
     const records = data.records || [];
     state.scanHistoryRecords = records;
     state.scanHistorySummary = data.summary || {};
@@ -2536,21 +2627,60 @@
     bindScanHistoryActions();
   }
 
-  function canEditScanPricing(scan = {}) {
+  function canEditScanDetails(scan = {}) {
     return Boolean(scan);
+  }
+
+  function scanHistoryRecord(scanId = '') {
+    return (state.scanHistoryRecords || []).find((scan) => {
+      const id = scan.scanId || scan.uniqueScanId || scan._id || '';
+      return String(id) === String(scanId);
+    }) || null;
+  }
+
+  function closeScanEditModal() {
+    $('#scanEditModal')?.classList.add('hidden');
+    $('#scanEditForm')?.reset();
+    const message = $('#scanEditMessage');
+    if (message) {
+      message.className = 'form-message';
+      message.textContent = '';
+    }
+  }
+
+  function openScanEditModal(scanId = '') {
+    const scan = scanHistoryRecord(scanId);
+    if (!scan) throw new Error('Scan record not found');
+    const form = $('#scanEditForm');
+    if (!form) throw new Error('Scan edit form is unavailable');
+    const scanType = String(scan.scanType || scan.type || '').trim().toUpperCase();
+    form.elements.scanId.value = scanId;
+    form.elements.partNumber.value = scan.partNumber || scan.part || scan.normalizedPartNumber || '';
+    form.elements.quantity.value = scanQuantity(scan, 1);
+    form.elements.mrp.value = scan.displayMRP ?? scan.manualMRP ?? scan.valuationMRP ?? scan.mrp ?? scan.currentCatalogueMRP ?? 0;
+    form.elements.dlc.value = scan.dlc ?? 0;
+    form.elements.binLocation.value = scan.binLocation || scan.bin || '';
+    form.elements.scanType.value = scanType;
+    form.elements.binLocation.disabled = scanType === 'FITTED';
+    form.elements.binLocation.required = ['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType);
+    const message = $('#scanEditMessage');
+    if (message) {
+      message.className = 'form-message';
+      message.textContent = scanType === 'FITTED' ? 'Fitted rows remain assigned to the vehicle.' : '';
+    }
+    $('#scanEditModal')?.classList.remove('hidden');
+    setTimeout(() => form.elements.partNumber.focus(), 0);
   }
 
   function scanHistoryRow(scan = {}) {
     const id = scan.scanId || scan.uniqueScanId || scan._id || '';
     const rowMrp = scan.displayMRP || scan.mrp || scan.currentCatalogueMRP || 0;
-    const currentMrp = scan.manualMRP || scan.valuationMRP || rowMrp || '';
-    const currentDlc = scan.dlc || '';
     const totalQty = scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1);
-    const canEditPricing = canEditScanPricing(scan);
-    const editOption = canEditPricing ? '<option value="edit">Update MRP / DLC</option>' : '';
+    const canEditDetails = canEditScanDetails(scan);
+    const editOption = canEditDetails ? '<option value="edit">Edit Part Details</option>' : '';
     const deleteOption = isAdminUser() ? '<option value="delete">Delete Row</option>' : '';
     const actionDropdown = editOption || deleteOption
-      ? `<select class="app-action-dropdown scan-row-action" data-id="${escapeHtml(id)}" data-mrp="${escapeHtml(currentMrp)}" data-dlc="${escapeHtml(currentDlc)}" data-pricing-edit="${canEditPricing ? 'true' : 'false'}" aria-label="Scan row action"><option value="">Edit / Delete</option>${editOption}${deleteOption}</select>`
+      ? `<select class="app-action-dropdown scan-row-action" data-id="${escapeHtml(id)}" data-details-edit="${canEditDetails ? 'true' : 'false'}" aria-label="Scan row action"><option value="">Edit / Delete</option>${editOption}${deleteOption}</select>`
       : '<span class="muted">No action</span>';
     return `
       <tr>
@@ -2584,7 +2714,11 @@
         const action = select.value;
         select.value = '';
         if (action === 'edit') {
-          editScanPricing(select.dataset.id, select.dataset.mrp, select.dataset.dlc).catch((error) => toast(error.message, 'error'));
+          try {
+            openScanEditModal(select.dataset.id);
+          } catch (error) {
+            toast(error.message, 'error');
+          }
         }
         if (action === 'delete') {
           deleteSingleScan(select.dataset.id).catch((error) => toast(error.message, 'error'));
@@ -2596,8 +2730,7 @@
   function prependScanHistory(scan = {}) {
     const body = $('#scanHistoryRows');
     if (!body || !activeAuditMatchesScan(scan)) return;
-    const selectedDealer = selectedScanDealerCode();
-    if (selectedDealer && selectedDealer !== 'ALL' && cleanDealerCode(scan.dealerCode || '') !== selectedDealer) return;
+    if (!scanMatchesScanHistoryFilters(scan)) return;
     if (body.querySelector('.muted')) body.innerHTML = '';
     const id = scan.scanId || scan.uniqueScanId || scan._id || '';
     const existingBox = id ? Array.from(body.querySelectorAll('.scan-history-checkbox')).find((box) => box.value === id) : null;
@@ -2620,10 +2753,18 @@
     Array.from(body.querySelectorAll('tr')).slice(500).forEach((row) => row.remove());
     state.scanHistoryRecords = [scan].concat(state.scanHistoryRecords || []).slice(0, 500);
     const previousRows = Number(state.scanHistorySummary?.scanRows ?? state.scanHistorySummary?.totalRecords ?? Math.max(0, state.scanHistoryRecords.length - 1));
+    const previousQty = Number(state.scanHistorySummary?.partsScanned ?? state.scanHistorySummary?.totalQuantity ?? Math.max(0, state.scanHistoryRecords.slice(1).reduce((sum, item) => sum + scanHistoryQuantity(item, 1), 0)));
+    const visibleParts = new Set(state.scanHistoryRecords.map(scanHistoryPartNumber).filter(Boolean));
+    const previousUnique = Number(state.scanHistorySummary?.uniqueParts ?? state.scanHistorySummary?.uniquePartCount ?? 0);
     state.scanHistorySummary = {
       ...(state.scanHistorySummary || {}),
       scanRows: previousRows + 1,
-      totalRecords: previousRows + 1
+      totalRecords: previousRows + 1,
+      totalRows: previousRows + 1,
+      partsScanned: previousQty + scanHistoryQuantity(scan, 1),
+      totalQuantity: previousQty + scanHistoryQuantity(scan, 1),
+      uniqueParts: Math.max(previousUnique, visibleParts.size),
+      visibleRows: state.scanHistoryRecords.length
     };
     updateScanHistorySummary(state.scanHistoryRecords, state.scanHistorySummary);
     bindScanHistoryActions();
@@ -2960,7 +3101,7 @@
           errorMessage: data.duplicate ? 'Duplicate scan skipped' : ''
         });
         rememberLastSyncTime(data.completedAt || data.lastSyncTime || data.lastSync || new Date().toISOString());
-        handleNewScan(data.scan).catch((error) => console.warn('[SCAN] latest row update failed', error));
+        handleNewScan(data.scan, { showSuccess: !data.duplicate }).catch((error) => console.warn('[SCAN] latest row update failed', error));
       }
       playScanTone(data.duplicate ? 'duplicate' : 'success');
       if (isBarcodeForm) {
@@ -2985,7 +3126,7 @@
           toast(updateData.message || 'Fitted part quantity updated');
           if (isBarcodeForm) resetBarcodeScanFields(form, normalized, options.expectedRaw);
           else resetManualScanFields(form);
-          if (updateData.scan) handleNewScan(updateData.scan).catch(() => undefined);
+          if (updateData.scan) handleNewScan(updateData.scan, { showSuccess: true }).catch(() => undefined);
         }
         return;
       }
@@ -3002,7 +3143,7 @@
           const overrideData = await api('/api/scans/manual', { method: 'POST', body: normalized });
           playScanTone(overrideData.duplicate ? 'duplicate' : 'success');
           resetManualScanFields(form);
-          if (overrideData.scan) handleNewScan(overrideData.scan).catch(() => undefined);
+          if (overrideData.scan) handleNewScan(overrideData.scan, { showSuccess: true }).catch(() => undefined);
         }
         return;
       }
@@ -3407,6 +3548,10 @@
       }
     }
     if (format) params.set('format', format);
+    if (!format) {
+      params.set('page', '1');
+      params.set('limit', '250');
+    }
     const query = params.toString();
     const url = `/api/reports/${paramsObject.reportType || activeReportType()}${query ? `?${query}` : ''}`;
     return url;
@@ -6608,40 +6753,44 @@
     await Promise.all([loadDashboard(), loadScanHistory(), loadDealers(), loadCategories(), loadSyncStatus()].map((job) => job.catch ? job : Promise.resolve(job)));
   }
 
-  async function editScanPricing(scanId, currentMrp = '', currentDlc = '') {
-    if (!scanId) {
-      toast('Select a scan first', 'error');
-      return;
+  async function saveEditedScan(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const message = $('#scanEditMessage');
+    const scanId = String(form.elements.scanId.value || '').trim();
+    const quantity = Number(form.elements.quantity.value);
+    const mrp = Number(form.elements.mrp.value);
+    const dlc = Number(form.elements.dlc.value);
+    const scanType = String(form.elements.scanType.value || '').trim().toUpperCase();
+    const binLocation = scanType === 'FITTED' ? '' : cleanDealerCode(form.elements.binLocation.value || '');
+    if (!scanId) throw new Error('Scan record not found');
+    if (!String(form.elements.partNumber.value || '').trim()) throw new Error('Part number is required');
+    if (!(quantity > 0)) throw new Error('Quantity must be greater than zero');
+    if (!Number.isFinite(mrp) || mrp < 0) throw new Error('MRP must be zero or greater');
+    if (!Number.isFinite(dlc) || dlc < 0) throw new Error('DLC must be zero or greater');
+    if (['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType) && !binLocation) throw new Error('Bin location is required');
+    if (message) {
+      message.className = 'form-message loading';
+      message.textContent = 'Saving changes...';
     }
-    const mrpValue = window.prompt('Update MRP', String(currentMrp || ''));
-    if (mrpValue === null) return;
-    const mrp = Number(String(mrpValue).replace(/,/g, '').trim());
-    if (!Number.isFinite(mrp) || mrp <= 0) {
-      toast('MRP is mandatory for price update.', 'error');
-      return;
-    }
-    const dlcValue = window.prompt('Update DLC (optional)', String(currentDlc || ''));
-    if (dlcValue === null) return;
-    const dlcText = String(dlcValue).replace(/,/g, '').trim();
-    const dlc = dlcText ? Number(dlcText) : undefined;
-    if (dlc !== undefined && (!Number.isFinite(dlc) || dlc < 0)) {
-      toast('DLC must be zero or greater.', 'error');
-      return;
-    }
-    const dlcMessage = dlc !== undefined ? ` and DLC ${money(dlc)}` : '';
-    if (!window.confirm(`Save MRP ${money(mrp)}${dlcMessage} for this scan part?`)) return;
-    const body = { mrp, deviceId: ensureDeviceId() };
-    if (dlc !== undefined) body.dlc = dlc;
-    const data = await api(`/api/scans/${encodeURIComponent(scanId)}/mrp`, {
+    const data = await api(`/api/scans/${encodeURIComponent(scanId)}/details`, {
       method: 'PATCH',
-      body
+      body: {
+        partNumber: normalizePartText(form.elements.partNumber.value),
+        quantity,
+        mrp,
+        dlc,
+        binLocation,
+        deviceId: ensureDeviceId()
+      }
     });
-    toast(data.message || 'MRP/DLC updated');
+    closeScanEditModal();
+    toast(data.message || 'Part details updated');
     if (data.scan) {
       addScanToStream(data.scan);
-      queueRealtimeReportRefresh('scan pricing update');
+      queueRealtimeReportRefresh('scan details update');
     }
-    await loadScanHistory();
+    await Promise.all([loadDashboard(), loadScanHistory()]);
     if (state.reportHasRun && activeReportType()) {
       await loadReport({ forceRefresh: true, showLoading: false });
     }
@@ -7869,17 +8018,33 @@
     const savedView = requestedView || localStorage.getItem(ACTIVE_VIEW_KEY) || 'dashboard';
     const viewId = $(`#${savedView}`) ? savedView : 'dashboard';
     openView(viewId, VIEW_TITLES[viewId]);
+    let hasPartSearch = false;
     if (viewId === 'reports') {
       restoreReportState();
       const reportType = params.get('reportType');
       if (reportType && REPORT_TITLES[reportType]) setReportTab(reportType, { persist: false });
     }
-    return { viewId };
+    if (viewId === 'master') {
+      const form = $('#partSearchForm');
+      ['partNumber', 'category', 'group', 'year', 'model', 'mrp'].forEach((key) => {
+        const value = params.get(key);
+        if (!value || !form) return;
+        const field = $(`[name="${CSS.escape(key)}"]`, form);
+        if (field) {
+          field.value = value;
+          hasPartSearch = true;
+        }
+      });
+    }
+    return { viewId, hasPartSearch };
   }
 
   async function finishRestoredViewLoad(restored = {}) {
     if (restored.viewId === 'reports') {
       resetReportPreview('Saved report filters loaded. Click Submit to fetch report data.');
+    }
+    if (restored.viewId === 'master' && restored.hasPartSearch) {
+      await loadParts();
     }
   }
 
@@ -7952,7 +8117,22 @@
       if (!event.target.closest('#userMenu')) setUserMenuOpen(false);
     });
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') setUserMenuOpen(false);
+      if (event.key === 'Escape') {
+        setUserMenuOpen(false);
+        closeScanEditModal();
+      }
+    });
+    $('#scanEditForm')?.addEventListener('submit', (event) => saveEditedScan(event).catch((error) => {
+      const message = $('#scanEditMessage');
+      if (message) {
+        message.className = 'form-message error';
+        message.textContent = error.message || 'Part update failed';
+      }
+    }));
+    $('#scanEditClose')?.addEventListener('click', closeScanEditModal);
+    $('#scanEditCancel')?.addEventListener('click', closeScanEditModal);
+    $('#scanEditModal')?.addEventListener('click', (event) => {
+      if (event.target.id === 'scanEditModal') closeScanEditModal();
     });
     window.addEventListener('resize', () => fitDashboardDealerSelect());
     $('#copyServerUrlBtn').addEventListener('click', () => copyServerUrl().catch((error) => toast(error.message, 'error')));
@@ -8974,9 +9154,6 @@
       state.lastRealtimeAt = Date.now();
       prependScanHistory(scan);
       queueRealtimeReportRefresh('scan pricing update');
-      if (state.reportHasRun && activeReportType()) {
-        loadReport({ forceRefresh: true, showLoading: false }).catch(console.warn);
-      }
     });
     socket.on('scanner:activity', (activity = {}) => {
       state.lastRealtimeAt = Date.now();
@@ -9113,7 +9290,7 @@
       startDashboardFallbackRefresh();
       const auditStartDate = $('[name="auditStartDate"]', $('#dealerMasterForm'));
       if (auditStartDate && !auditStartDate.value) auditStartDate.value = new Date().toISOString().slice(0, 10);
-      clearPartSearch();
+      if (!(restoredView.viewId === 'master' && restoredView.hasPartSearch)) clearPartSearch();
       setAutoSyncState();
       window.addEventListener('online', () => syncPendingQueue({ silent: true, includeFailed: true }).catch(console.warn));
       window.addEventListener('storage', (event) => {

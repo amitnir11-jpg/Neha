@@ -10,6 +10,30 @@ function validDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function parseIstFilterDate(value, endOfDay = false) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    const year = Number(dateOnly[1]);
+    const month = Number(dateOnly[2]);
+    const day = Number(dateOnly[3]);
+    const utcTime = Date.UTC(
+      year,
+      month - 1,
+      day,
+      endOfDay ? 23 : 0,
+      endOfDay ? 59 : 0,
+      endOfDay ? 59 : 0,
+      endOfDay ? 999 : 0
+    );
+    return new Date(utcTime - 330 * 60 * 1000);
+  }
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
 function formatIstDateTime(value) {
   const date = validDate(value);
   if (!date) return '';
@@ -60,5 +84,6 @@ module.exports = {
   formatIstDateTime,
   dateDebugPayload,
   isDateLikeKey,
+  parseIstFilterDate,
   validDate
 };

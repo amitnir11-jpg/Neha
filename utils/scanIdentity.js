@@ -23,7 +23,6 @@ function makeQrFingerprint(input = {}) {
   const scope = [
     input.dealerCode || input.dealer || '',
     input.auditId || input.audit || '',
-    input.userId || input.loginId || input.userName || '',
     input.scanType || input.type || '',
     identity
   ].map(normalizeToken).filter(Boolean).join('|');

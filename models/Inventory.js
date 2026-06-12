@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { randomUUID } = require('crypto');
 const { normalizePartNumber } = require('../utils/normalize');
+const { rawUpiHash } = require('../utils/scanDuplicatePolicy');
 
 const inventorySchema = new mongoose.Schema(
   {
@@ -316,6 +317,12 @@ const inventorySchema = new mongoose.Schema(
       type: String,
       default: ''
     },
+    rawUpiHash: {
+      type: String,
+      trim: true,
+      default: '',
+      index: true
+    },
     qrFingerprint: {
       type: String,
       trim: true,
@@ -498,6 +505,16 @@ inventorySchema.index({ dealerCode: 1, auditId: 1, timestamp: -1, createdAt: -1 
 inventorySchema.index({ dealerCode: 1, type: 1, timestamp: -1 });
 inventorySchema.index({ dealerCode: 1, binLocation: 1, timestamp: -1 });
 inventorySchema.index({ dealerCode: 1, partNumber: 1, timestamp: -1 });
+inventorySchema.index({ createdAt: -1 });
+inventorySchema.index({ bin: 1 });
+inventorySchema.index({ binLocation: 1 });
+inventorySchema.index({ rawUpi: 1 });
+inventorySchema.index({ clientScanId: 1 });
+inventorySchema.index({ clientSyncKey: 1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, scanType: 1, normalizedPartNumber: 1, createdAt: -1 }, { name: 'business_duplicate_lookup' });
+inventorySchema.index({ dealerCode: 1, auditId: 1, scanType: 1, rawUpiHash: 1, createdAt: -1 }, { name: 'raw_upi_hash_lookup' });
+inventorySchema.index({ dealerCode: 1, auditId: 1, scanType: 1, binLocation: 1, createdAt: -1 }, { name: 'report_filter_bin_created_at' });
+inventorySchema.index({ dealerCode: 1, auditId: 1, scanType: 1, timestamp: -1, createdAt: -1 }, { name: 'report_filter_type_timestamp' });
 inventorySchema.index({ dealerCode: 1, auditId: 1, scanStatus: 1, rawScan: 1 });
 inventorySchema.index({ dealerCode: 1, auditId: 1, scanStatus: 1, rawScanString: 1 });
 inventorySchema.index({ rawScan: 1, dealerCode: 1, auditId: 1 });
@@ -514,13 +531,13 @@ inventorySchema.index({ dealerCode: 1, auditId: 1, loginId: 1, scanType: 1, rawS
 inventorySchema.index({ dealerCode: 1, auditId: 1, userId: 1, scanType: 1, rawScan: 1 });
 inventorySchema.index({ dealerCode: 1, auditId: 1, loginId: 1, scanType: 1, rawScan: 1 });
 inventorySchema.index(
-  { rawUpi: 1, dealerCode: 1, auditId: 1, scanType: 1, userId: 1, syncBatchId: 1 },
+  { rawUpi: 1, dealerCode: 1, auditId: 1, scanType: 1 },
   {
     name: 'raw_upi_scan_identity_lookup',
     partialFilterExpression: {
       rawUpi: { $type: 'string', $gt: '' },
-      scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] },
-      scanType: { $in: ['AUDIT', 'INWARD', 'DAMAGE'] }
+      scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] },
+      scanType: { $in: ['AUDIT', 'INWARD', 'OUTWARD', 'DAMAGE'] }
     }
   }
 );
@@ -593,6 +610,7 @@ inventorySchema.pre('save', function syncInventoryAliases(next) {
   if (!this.rawUpi && (this.rawScan || this.rawScanString)) this.rawUpi = this.rawScan || this.rawScanString;
   if (!this.rawBarcode && (this.rawScan || this.rawScanString)) this.rawBarcode = this.rawScan || this.rawScanString;
   if (!this.rawQR && (this.rawScan || this.rawScanString)) this.rawQR = this.rawScan || this.rawScanString;
+  if (!this.rawUpiHash) this.rawUpiHash = rawUpiHash(this);
   if (!this.upiNo && this.upiId) this.upiNo = this.upiId;
   if (!this.upiId && this.upiNo) this.upiId = this.upiNo;
   next();

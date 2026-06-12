@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Daksh Inventory v2 Login</title>
-  <link rel="stylesheet" href="/css/style.css" onerror="console.error('[DAKSH_LOGIN_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/css/style.css?v=20260612-login-redesign" onerror="console.error('[DAKSH_LOGIN_ASSET] style.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -71,116 +71,312 @@
   </script>
 </head>
 <body data-page="login" class="login-body">
-  <main class="login-shell">
-    <section class="login-brand">
-      <div class="brand-mark">DI</div>
-      <h1>Daksh Inventory v2</h1>
-      <p>Advanced part inventory audit software</p>
-      <div class="login-metrics">
-        <span>Real-time sync</span>
-        <span>MongoDB audit store</span>
-        <span>Excel and PDF reports</span>
+  <main class="login-shell" aria-label="Daksh Inventory authentication">
+    <section class="login-brand" aria-labelledby="loginHeroTitle">
+      <div class="login-brand-content">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 48 48" focusable="false">
+              <path d="M24 4 42 14v20L24 44 6 34V14L24 4Z" fill="#1d4ed8"/>
+              <path d="M24 4 42 14 24 24 6 14 24 4Z" fill="#60a5fa"/>
+              <path d="M24 24v20L6 34V14l18 10Z" fill="#2563eb"/>
+              <path d="M24 24 42 14v20L24 44V24Z" fill="#1e40af"/>
+              <path d="M24 14 34 20l-10 6-10-6 10-6Z" fill="#f8fafc"/>
+            </svg>
+          </span>
+          <span>
+            <strong>Daksh Inventory v2</strong>
+            <small>Advanced Inventory Audit Software</small>
+          </span>
+        </div>
+
+        <div class="hero-copy">
+          <h1 id="loginHeroTitle"><span>Smarter</span> Inventory. <span>Stronger</span> Decisions.</h1>
+          <p>Daksh Inventory v2 helps dealerships track, audit, and manage parts with real-time visibility across every location.</p>
+        </div>
+
+        <div class="benefits-block">
+          <h2>Key Benefits</h2>
+          <div class="benefit-grid">
+            <article class="benefit-item">
+              <span class="benefit-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false"><path d="M4 14a8 8 0 1 1 16 0"/><path d="M12 14 16 9"/><path d="M8 14h.01M12 6v2M18 14h.01"/></svg>
+              </span>
+              <span><strong>Real-time Accuracy</strong><small>Live synchronization keeps inventory data consistent across locations.</small></span>
+            </article>
+            <article class="benefit-item">
+              <span class="benefit-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false"><path d="M9 5h6"/><path d="M9 3h6v4H9z"/><path d="M5 6h14v15H5z"/><path d="M9 14l2 2 4-5"/></svg>
+              </span>
+              <span><strong>Audit Made Easy</strong><small>Part-level tracking and mismatch detection streamline audits.</small></span>
+            </article>
+            <article class="benefit-item">
+              <span class="benefit-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false"><path d="M7 7h11l-3-3"/><path d="M17 17H6l3 3"/><path d="M18 7l-3 3"/><path d="M6 17l3-3"/></svg>
+              </span>
+              <span><strong>Complete Visibility</strong><small>Monitor bin transfers, fitted parts, and stock movement in one place.</small></span>
+            </article>
+            <article class="benefit-item">
+              <span class="benefit-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false"><path d="M4 19h16"/><path d="M7 16V9"/><path d="M12 16V5"/><path d="M17 16v-4"/></svg>
+              </span>
+              <span><strong>Better Insights</strong><small>Use reports and analytics to make informed decisions.</small></span>
+            </article>
+            <article class="benefit-item">
+              <span class="benefit-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false"><path d="M12 3 20 7v5c0 5-3.3 8-8 9-4.7-1-8-4-8-9V7l8-4Z"/><path d="m9 12 2 2 4-5"/></svg>
+              </span>
+              <span><strong>Secure &amp; Reliable</strong><small>Role-based access and enterprise-grade security protect your data.</small></span>
+            </article>
+            <article class="benefit-item">
+              <span class="benefit-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false"><path d="M16 16a4 4 0 0 0-8 0"/><path d="M8 17H6a4 4 0 0 1 0-8 6 6 0 0 1 11.3-2A4.5 4.5 0 0 1 18 17h-2"/><path d="M12 12v8"/><path d="m9 17 3-3 3 3"/></svg>
+              </span>
+              <span><strong>Accessible Anywhere</strong><small>Cloud-enabled access from any device, anytime.</small></span>
+            </article>
+          </div>
+        </div>
+      </div>
+
+      <div class="login-stat-stack" aria-label="Platform statistics">
+        <article class="login-stat-card">
+          <span class="stat-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M21 16V8l-9-5-9 5v8l9 5 9-5Z"/><path d="M3.5 8.5 12 13l8.5-4.5"/><path d="M12 21v-8"/></svg></span>
+          <span><strong>25K+</strong><small>Parts Managed</small><em>Across all locations</em></span>
+        </article>
+        <article class="login-stat-card">
+          <span class="stat-icon violet" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M3 21h18"/><path d="M5 21V9l7-5 7 5v12"/><path d="M9 21v-6h6v6"/><path d="M10 11h.01M14 11h.01"/></svg></span>
+          <span><strong>120+</strong><small>Warehouses</small><em>Connected facilities</em></span>
+        </article>
+        <article class="login-stat-card">
+          <span class="stat-icon green" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/></svg></span>
+          <span><strong>500+</strong><small>Active Users</small><em>Operational teams</em></span>
+        </article>
+        <article class="login-stat-card">
+          <span class="stat-icon orange" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="m9 16 2 2 4-5"/></svg></span>
+          <span><strong>1M+</strong><small>Transactions</small><em>Processed reliably</em></span>
+        </article>
       </div>
     </section>
 
-    <section class="login-panel">
-      <div class="login-tabs">
-        <button class="tab-button active" data-login-tab="admin">Admin Login</button>
-        <button class="tab-button" data-login-tab="staff">PIN Login</button>
-        <button class="tab-button" data-login-tab="register">New User</button>
-        <button class="tab-button" data-login-tab="reset">Reset</button>
+    <section class="login-panel" aria-label="Secure login">
+      <div class="login-tabs" role="tablist" aria-label="Login options">
+        <button class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="adminLoginForm" data-login-tab="admin">
+          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg></span>
+          Admin Login
+        </button>
+        <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="staffLoginForm" data-login-tab="staff">
+          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+          PIN Login
+        </button>
+        <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="registerLoginForm" data-login-tab="register">
+          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg></span>
+          New User
+        </button>
+        <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="resetLoginForm" data-login-tab="reset">
+          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12A9 9 0 0 1 18.5 5.8"/><path d="M18 2v4h4"/><path d="M6 22v-4H2"/></svg></span>
+          Reset
+        </button>
       </div>
 
-      <form id="adminLoginForm" class="login-form active">
-        <label>
-          Username
-          <input name="username" placeholder="Enter user ID" autocomplete="username" required>
-        </label>
-        <label>
-          Password
-          <input name="password" type="password" placeholder="Enter password" autocomplete="current-password" required>
-        </label>
-        <button class="primary-button" type="submit">Login</button>
-      </form>
-
-      <form id="staffLoginForm" class="login-form">
-        <label>
-          Username
-          <input name="username" placeholder="Enter user ID" autocomplete="username" required>
-        </label>
-        <label>
-          4-digit PIN
-          <input name="pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="one-time-code" required>
-        </label>
-        <button class="primary-button" type="submit">PIN Login</button>
-      </form>
-
-      <form id="dealerSelectLoginForm" class="login-form">
-        <label>
-          Dealer
-          <select id="loginDealerSelect" name="dealerCode" required></select>
-        </label>
-        <button class="primary-button" type="submit">Continue</button>
-      </form>
-
-      <form id="registerLoginForm" class="login-form">
-        <label>
-          Full Name
-          <input name="name" autocomplete="name" required>
-        </label>
-        <label>
-          Username
-          <input name="username" autocomplete="username" required>
-        </label>
-        <label>
-          Email ID
-          <input name="email" type="email" autocomplete="email" required>
-        </label>
-        <label>
-          Password
-          <input name="password" type="password" autocomplete="new-password">
-        </label>
-        <label>
-          4-digit PIN
-          <input name="pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}">
-        </label>
-        <button class="primary-button" type="submit">Request User Login</button>
-      </form>
-
-      <section id="resetLoginForm" class="login-form reset-flow">
-        <form id="resetRequestForm">
-          <label>
-            Username or Email ID
-            <input name="usernameOrEmail" type="text" autocomplete="username" required>
+      <div class="login-panel-body">
+        <form id="adminLoginForm" class="login-form active" autocomplete="on">
+          <label class="login-field">
+            <span class="field-label">Username</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              <input name="username" placeholder="Enter user ID" autocomplete="username" required>
+            </span>
           </label>
-          <button class="primary-button" type="submit">Send OTP Reset Link</button>
+          <label class="login-field">
+            <span class="field-label">Password</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+              <input name="password" type="password" placeholder="Enter password" autocomplete="current-password" required>
+              <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </span>
+          </label>
+          <div class="login-options">
+            <label class="remember-option"><input type="checkbox" checked><span>Remember me</span></label>
+            <button class="text-link" type="button" data-login-tab="reset">Forgot Password?</button>
+          </div>
+          <button class="primary-button login-submit" type="submit">
+            <span>Login</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
+          </button>
+          <div class="login-divider"><span>or continue with</span></div>
+          <button class="email-button" id="emailLoginButton" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+            Continue with Email
+          </button>
         </form>
 
-        <form id="resetPasswordForm">
-          <label>
-            Email ID
-            <input name="email" id="resetEmailInput" type="email" autocomplete="email" required>
+        <form id="staffLoginForm" class="login-form" autocomplete="on">
+          <label class="login-field">
+            <span class="field-label">Username</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              <input name="username" placeholder="Enter user ID" autocomplete="username" required>
+            </span>
           </label>
-          <label>
-            Reset Link Token
-            <input name="token" id="resetTokenInput" autocomplete="one-time-code" required>
+          <label class="login-field">
+            <span class="field-label">4-digit PIN</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+              <input name="pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="Enter PIN" autocomplete="one-time-code" required>
+              <button class="password-toggle" type="button" data-password-toggle aria-label="Show PIN">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </span>
           </label>
-          <label>
-            OTP
-            <input name="otp" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required>
-          </label>
-          <label>
-            New Password
-            <input name="password" type="password" autocomplete="new-password" required>
-          </label>
-          <button class="primary-button" type="submit">Reset Password</button>
+          <div class="login-options">
+            <label class="remember-option"><input type="checkbox" checked><span>Remember me</span></label>
+            <button class="text-link" type="button" data-login-tab="reset">Forgot Password?</button>
+          </div>
+          <button class="primary-button login-submit" type="submit">
+            <span>PIN Login</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
+          </button>
         </form>
-      </section>
 
-      <div id="loginMessage" class="form-message"></div>
+        <form id="dealerSelectLoginForm" class="login-form" autocomplete="off">
+          <label class="login-field">
+            <span class="field-label">Dealer</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 21h18"/><path d="M5 21V9l7-5 7 5v12"/><path d="M9 21v-6h6v6"/></svg>
+              <select id="loginDealerSelect" name="dealerCode" required></select>
+            </span>
+          </label>
+          <button class="primary-button login-submit" type="submit">
+            <span>Continue</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
+          </button>
+        </form>
+
+        <form id="registerLoginForm" class="login-form compact-form" autocomplete="on">
+          <label class="login-field">
+            <span class="field-label">Full Name</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              <input name="name" autocomplete="name" required>
+            </span>
+          </label>
+          <label class="login-field">
+            <span class="field-label">Username</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Z"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+              <input name="username" autocomplete="username" required>
+            </span>
+          </label>
+          <label class="login-field">
+            <span class="field-label">Email ID</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+              <input name="email" type="email" autocomplete="email" required>
+            </span>
+          </label>
+          <label class="login-field">
+            <span class="field-label">Password</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+              <input name="password" type="password" autocomplete="new-password">
+              <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </span>
+          </label>
+          <label class="login-field">
+            <span class="field-label">4-digit PIN</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 17h.01"/><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 6h6"/></svg>
+              <input name="pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="one-time-code">
+            </span>
+          </label>
+          <button class="primary-button login-submit" type="submit">
+            <span>Request User Login</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
+          </button>
+        </form>
+
+        <section id="resetLoginForm" class="login-form reset-flow" aria-label="Reset access">
+          <form id="resetRequestForm" class="reset-step">
+            <label class="login-field">
+              <span class="field-label">Username or Email ID</span>
+              <span class="input-wrap">
+                <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+                <input name="usernameOrEmail" type="text" autocomplete="username" required>
+              </span>
+            </label>
+            <button class="primary-button login-submit" type="submit">
+              <span>Send OTP Reset Link</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
+            </button>
+          </form>
+
+          <form id="resetPasswordForm" class="reset-step">
+            <label class="login-field">
+              <span class="field-label">Email ID</span>
+              <span class="input-wrap">
+                <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+                <input name="email" id="resetEmailInput" type="email" autocomplete="email" required>
+              </span>
+            </label>
+            <label class="login-field">
+              <span class="field-label">Reset Link Token</span>
+              <span class="input-wrap">
+                <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 7h.01"/><path d="M10 14 21 3"/><path d="M21 3h-6v6"/><circle cx="8" cy="16" r="5"/></svg>
+                <input name="token" id="resetTokenInput" autocomplete="one-time-code" required>
+              </span>
+            </label>
+            <label class="login-field">
+              <span class="field-label">OTP</span>
+              <span class="input-wrap">
+                <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg>
+                <input name="otp" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required>
+              </span>
+            </label>
+            <label class="login-field">
+              <span class="field-label">New Password</span>
+              <span class="input-wrap">
+                <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                <input name="password" type="password" autocomplete="new-password" required>
+                <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </span>
+            </label>
+            <button class="primary-button login-submit" type="submit">
+              <span>Reset Password</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
+            </button>
+          </form>
+        </section>
+
+        <div id="loginMessage" class="form-message" aria-live="polite"></div>
+
+        <aside class="secure-access" aria-label="Secure access">
+          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/><path d="M12 15v2"/></svg></span>
+          <div>
+            <strong>Secure Access</strong>
+            <small>Your data is protected with enterprise-grade security.</small>
+          </div>
+        </aside>
+      </div>
     </section>
   </main>
 
-  <script src="/js/app.js?v=20260527-login-redirect" onerror="console.error('[DAKSH_LOGIN_ASSET] app.js failed', this.src)"></script>
+  <footer class="login-footer">
+    <div>
+      <strong>Daksh Inventory v2</strong>
+      <span>&copy; 2026 Daksh Technologies. All Rights Reserved.</span>
+    </div>
+    <div>
+      <span>Version 2.5.0</span>
+      <span class="status-online"><i aria-hidden="true"></i>Online</span>
+    </div>
+  </footer>
+
+  <script src="/js/app.js?v=20260612-login-redesign" onerror="console.error('[DAKSH_LOGIN_ASSET] app.js failed', this.src)"></script>
 </body>
 </html>

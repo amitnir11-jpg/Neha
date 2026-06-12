@@ -1377,8 +1377,19 @@ async function fixInventoryIndexes() {
           && (!index.key || index.key.rawUpi !== 1 || index.key.dealerCode !== 1 || index.key.auditId !== 1)
         )
         || (index.unique && index.key && index.key.rawUpi === 1 && (!index.key.dealerCode || !index.key.auditId));
+      const isOldRawUpiLookup = index.name === 'raw_upi_scan_identity_lookup'
+        && (
+          !index.key
+          || index.key.rawUpi !== 1
+          || index.key.dealerCode !== 1
+          || index.key.auditId !== 1
+          || index.key.scanType !== 1
+          || index.key.userId
+          || index.key.loginId
+          || index.key.syncBatchId
+        );
       const isNonUniqueScanId = index.name === 'scanId_1' && !index.unique;
-      if (isOldSyncUnique || isOldUpiUnique || isOldRawUpiUnique || isNonUniqueScanId) {
+      if (isOldSyncUnique || isOldUpiUnique || isOldRawUpiUnique || isOldRawUpiLookup || isNonUniqueScanId) {
         await collection.dropIndex(index.name);
       }
     }
@@ -1400,13 +1411,13 @@ async function fixInventoryIndexes() {
       }
     );
     await collection.createIndex(
-      { rawUpi: 1, dealerCode: 1, auditId: 1, scanType: 1, userId: 1, syncBatchId: 1 },
+      { rawUpi: 1, dealerCode: 1, auditId: 1, scanType: 1 },
       {
         name: 'raw_upi_scan_identity_lookup',
         partialFilterExpression: {
           rawUpi: { $type: 'string', $gt: '' },
-          scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] },
-          scanType: { $in: ['AUDIT', 'INWARD', 'DAMAGE'] }
+          scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] },
+          scanType: { $in: ['AUDIT', 'INWARD', 'OUTWARD', 'DAMAGE'] }
         }
       }
     );

@@ -23,6 +23,7 @@ const masterValidation = require('../utils/masterValidation');
 const { dateDebugPayload, formatIstDateTime, validDate: validTimestamp } = require('../utils/time');
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { findPricePeriod, pricePeriodPayload } = require('../utils/priceHistory');
+const duplicatePolicy = require('../utils/scanDuplicatePolicy');
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
@@ -679,9 +680,7 @@ function normalizeScan(item = {}) {
   const idSource = scanSource === 'manual'
     ? { deviceId: item.deviceId }
     : { ...item, deviceId: item.deviceId };
-  const uniqueScanId = scanSource === 'manual'
-    ? makeScanId(idSource, timestamp)
-    : (explicitScanId || makeScanId(idSource, timestamp));
+  const uniqueScanId = explicitScanId || makeScanId(idSource, timestamp);
   const itemMrpValue = firstValue(item, ['mrp', 'scanMRP', 'scanMrp', 'scannedMRP', 'scannedMrp', 'upiMRP', 'upiMrp', 'valuationMRP', 'valuationMrp', 'finalMRP', 'finalMrp']);
   const itemMrpNumber = optionalNumber(itemMrpValue);
   const itemMrpFlag = item.mrpProvided === true || String(item.mrpProvided).toLowerCase() === 'true';
@@ -733,9 +732,9 @@ function normalizeScan(item = {}) {
     rawScanString: rawScan || (scanSource === 'manual' ? partNumber : ''),
     dealerCode,
     dealerName: clean(item.dealerName),
-    auditId: clean(item.auditId),
-    staffName: clean(item.staffName),
-    userName: clean(item.userName || item.staffName),
+    auditId: clean(item.auditId || parsed.auditId),
+    staffName: clean(item.staffName || parsed.staffName),
+    userName: clean(item.userName || item.staffName || parsed.userName || parsed.staffName),
     role: clean(item.role),
     userId: clean(item.userId || item.userID || item.user || item.loginId || item.username),
     loginId: clean(item.loginId || item.username || item.userId || item.user),
@@ -759,6 +758,7 @@ function applyActiveAudit(scan, activeAudit) {
     timestamp: scan.timestamp
   });
   scan.qrFingerprint = makeQrFingerprint(scan);
+  scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
   return scan;
 }
 
@@ -803,17 +803,6 @@ function duplicateQuery(scan) {
 
 function isManualEntry(scan = {}) {
   return normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, 'mobile') === 'manual';
-}
-
-function manualMergeKey(scan = {}) {
-  const source = normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, '');
-  if (source !== 'manual') return '';
-  const dealerCode = upper(scan.dealerCode);
-  const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
-  const scanType = upper(scan.scanType || scan.type || 'INWARD');
-  const binLocation = upper(scan.binLocation || scan.bin);
-  if (!dealerCode || !partNumber || !scanType) return '';
-  return [dealerCode, partNumber, scanType, binLocation].join('::');
 }
 
 async function logDuplicateScan(scan = {}, existing = {}, reason = 'Duplicate scan skipped') {
@@ -885,7 +874,6 @@ async function emitEnterpriseRealtime(io, scans = []) {
 }
 
 async function scanPolicyResult(scan = {}) {
-  const raw = rawIdentity(scan);
   if (scan.scanType === 'FITTED') {
     const duplicate = await Inventory.findOne(duplicateQuery(scan)).sort({ timestamp: 1, createdAt: 1 }).lean();
     if (duplicate) {
@@ -899,21 +887,28 @@ async function scanPolicyResult(scan = {}) {
     }
     return { ok: true };
   }
-  if (!raw || isManualEntry(scan)) return { ok: true };
+  scan.rawUpiHash = scan.rawUpiHash || duplicatePolicy.rawUpiHash(scan);
+  const identityFilter = duplicatePolicy.identityDuplicateFilter(scan);
+  const identityDuplicate = identityFilter ? await Inventory.findOne(identityFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  if (identityDuplicate) {
+    return { ok: false, status: 'duplicate', existing: identityDuplicate, reason: 'Duplicate exact UPI/barcode or scan id', message: 'Duplicate exact UPI/barcode already scanned.' };
+  }
+  const businessFilter = duplicatePolicy.businessDuplicateFilter(scan);
+  const businessDuplicate = businessFilter ? await Inventory.findOne(businessFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  if (businessDuplicate) {
+    return { ok: false, status: 'duplicate', existing: businessDuplicate, reason: duplicatePolicy.DUPLICATE_PART_MESSAGE, message: duplicatePolicy.DUPLICATE_PART_MESSAGE };
+  }
+  const raw = rawIdentity(scan);
   if (scan.scanType === 'OUTWARD') {
-    const outwardDone = await Inventory.findOne(outwardDoneFilter(raw, scan)).lean();
+    const outwardDone = raw ? await Inventory.findOne(outwardDoneFilter(raw, scan)).lean() : null;
     if (outwardDone) {
       return { ok: false, status: 'duplicate', existing: outwardDone, reason: 'Duplicate QR/UPI already outwarded', message: 'This QR/UPI is already outwarded and cannot be outwarded again.' };
     }
-    const inbound = await Inventory.findOne(inboundAcceptedFilter(raw, scan)).sort({ timestamp: 1, createdAt: 1 }).lean();
+    const inbound = raw ? await Inventory.findOne(inboundAcceptedFilter(raw, scan)).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
     if (!inbound) {
       return { ok: true };
     }
     return { ok: true, sourceScan: inbound };
-  }
-  const duplicate = await Inventory.findOne(duplicateQuery(scan)).sort({ timestamp: 1, createdAt: 1 }).lean();
-  if (duplicate) {
-    return { ok: false, status: 'duplicate', existing: duplicate, reason: 'Duplicate exact UPI/barcode', message: `Duplicate exact UPI/barcode already scanned. First scanned by ${duplicate.userName || duplicate.staffName || duplicate.loginId || 'Unknown'}, at ${formatIstDateTime(duplicate.timestamp) || '-'}, Bin ${duplicate.binLocation || duplicate.bin || '-'}.` };
   }
   return { ok: true };
 }
@@ -1040,7 +1035,8 @@ async function saveNormalizedScan(scan, req) {
   scan.qrFingerprint = manualEntry ? '' : makeQrFingerprint(scan);
   if (scan.scanType === 'FITTED') scan.qrFingerprint = '';
   if (scan.scanType === 'OUTWARD' && scan.qrFingerprint) scan.qrFingerprint = `OUTWARD:${scan.qrFingerprint}`;
-  const policy = manualEntry ? { ok: true } : await scanPolicyResult(scan);
+  scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
+  const policy = await scanPolicyResult(scan);
   if (!policy.ok) {
     if (policy.existing) await logDuplicateScan(scan, policy.existing, policy.reason);
     logSync('scan policy blocked', { status: policy.status, reason: policy.reason, deviceId: scan.deviceId, scanId: scan.uniqueScanId, existingId: policy.existing && policy.existing._id });
@@ -1127,6 +1123,7 @@ async function saveNormalizedScan(scan, req) {
     uniqueScanId: scan.uniqueScanId,
     scanId: scan.uniqueScanId,
     qrFingerprint: scan.qrFingerprint,
+    rawUpiHash: scan.rawUpiHash,
     part: scan.partNumber,
     partNumber: scan.partNumber,
     normalizedPartNumber: scan.normalizedPartNumber || scan.partNumber,
@@ -1400,10 +1397,12 @@ async function pushHandler(req, res) {
       scan.syncBatchId = item.syncBatchId || syncBatchId;
       scan.serverTimeZone = item.serverTimeZone || serverTimeZone;
       scan.qrFingerprint = isManualEntry(scan) ? '' : makeQrFingerprint(scan);
+      scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
       return { index, scan };
     });
     normalized.forEach(({ scan }) => {
       if (isManualEntry(scan)) scan.qrFingerprint = '';
+      scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
     });
     const verificationResults = [];
     const transactionRows = [];
@@ -1447,7 +1446,9 @@ async function pushHandler(req, res) {
     const partNumbers = Array.from(new Set(normalized.map((item) => item.scan.partNumber).filter(Boolean)));
     const dealerCodes = Array.from(new Set(normalized.map((item) => item.scan.dealerCode).filter(Boolean)));
     const normalizedScanIds = normalized.map((item) => item.scan.uniqueScanId).filter(Boolean);
+    const normalizedSyncKeys = normalized.map((item) => item.scan.syncKey).filter(Boolean);
     const normalizedQrFingerprints = normalized.map((item) => item.scan.qrFingerprint).filter(Boolean);
+    const normalizedRawUpiHashes = normalized.map((item) => item.scan.rawUpiHash || duplicatePolicy.rawUpiHash(item.scan)).filter(Boolean);
     const normalizedRawScans = normalized
       .filter((item) => !isManualEntry(item.scan))
       .map((item) => item.scan.rawScanString)
@@ -1471,6 +1472,9 @@ async function pushHandler(req, res) {
           { part: normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part) }
         ]
       }));
+    const businessDuplicateClauses = normalized
+      .map((item) => duplicatePolicy.businessDuplicateFilter(item.scan))
+      .filter(Boolean);
     const [catalogueMasters, legacyMasters, dealers, existingScans] = await Promise.all([
       MasterCatalogue.find({ normalizedPartNumber: { $in: partNumbers } }).lean(),
       MasterPart.find({ $or: [{ normalizedPartNumber: { $in: partNumbers } }, { partNo: { $in: partNumbers } }, { partNumber: { $in: partNumbers } }] }).lean(),
@@ -1479,15 +1483,18 @@ async function pushHandler(req, res) {
         $or: [
           { uniqueScanId: { $in: normalizedScanIds } },
           { scanId: { $in: normalizedScanIds } },
+          { syncKey: { $in: normalizedSyncKeys } },
           { qrFingerprint: { $in: normalizedQrFingerprints } },
+          { rawUpiHash: { $in: normalizedRawUpiHashes } },
           { dealerCode, auditId: activeAuditId, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawScan: { $in: normalizedRawScans } },
           { dealerCode, auditId: activeAuditId, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawScanString: { $in: normalizedRawScans } },
           { dealerCode, auditId: activeAuditId, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, rawUpi: { $in: normalizedRawScans } },
           { dealerCode, auditId: activeAuditId, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiNo: { $in: normalizedUpiNos } },
           { dealerCode, auditId: activeAuditId, scanType: { $in: normalized.map((item) => item.scan.scanType).filter(Boolean) }, upiId: { $in: normalizedUpiNos } },
-          ...fittedDuplicateClauses
+          ...fittedDuplicateClauses,
+          ...businessDuplicateClauses
         ]
-        }).select('uniqueScanId scanId qrFingerprint rawScan rawScanString rawUpi upiNo upiId dealerCode auditId syncBatchId userId loginId userName staffName binLocation bin scanType type normalizedPartNumber partNumber part regdNo jobCardNo qty quantity mrp scanMRP manualMRP valuationMRP finalMRP valuationSource').lean()
+        }).select('uniqueScanId scanId syncKey qrFingerprint rawUpiHash rawScan rawScanString rawUpi upiNo upiId dealerCode auditId syncBatchId userId loginId userName staffName binLocation bin scanType type normalizedPartNumber partNumber part regdNo jobCardNo qty quantity mrp scanMRP manualMRP valuationMRP finalMRP valuationSource').lean()
     ]);
     const masterByPart = new Map();
     const masterByDealer = new Map();
@@ -1506,6 +1513,7 @@ async function pushHandler(req, res) {
         uniqueScanId: scan.uniqueScanId,
         scanId: scan.scanId,
         qrFingerprint: scan.qrFingerprint,
+        rawUpiHash: scan.rawUpiHash,
         partNumber: scan.partNumber,
         part: scan.part,
         qty: scan.qty,
@@ -1523,6 +1531,11 @@ async function pushHandler(req, res) {
       const scanBin = upper(scan.binLocation || scan.bin);
       const scanUser = identityUserKey(scan);
       const scanSession = identitySessionKey(scan);
+      const businessKey = duplicatePolicy.businessDuplicateKey(scan);
+      if (businessKey) {
+        existingScanIds.add(businessKey);
+        existingIdentityByKey.set(businessKey, identity);
+      }
       if (scanType === 'FITTED') {
         const fittedKey = [
           scanDealer,
@@ -1543,9 +1556,17 @@ async function pushHandler(req, res) {
         existingScanIds.add(scan.scanId);
         existingIdentityByKey.set(scan.scanId, identity);
       }
+      if (scan.syncKey) {
+        existingScanIds.add(scan.syncKey);
+        existingIdentityByKey.set(scan.syncKey, identity);
+      }
       if (scan.qrFingerprint) {
         existingScanIds.add(scan.qrFingerprint);
         existingIdentityByKey.set(scan.qrFingerprint, identity);
+      }
+      if (scan.rawUpiHash) {
+        existingScanIds.add(scan.rawUpiHash);
+        existingIdentityByKey.set(scan.rawUpiHash, identity);
       }
       [scan.rawScan, scan.rawScanString, scan.rawUpi].filter(Boolean).forEach((raw) => {
         const key = `${scanDealer}::${scanAudit}::${scanUser}::${scanSession}::${scanType}::${scanBin}::RAW::${clean(raw)}`;
@@ -1559,9 +1580,9 @@ async function pushHandler(req, res) {
       });
     });
     const duplicateScanIds = new Set();
-    let operations = [];
-    let insertDocs = [];
-    let insertMeta = [];
+    const operations = [];
+    const insertDocs = [];
+    const insertMeta = [];
 
     for (const { scan } of normalized) {
       if (scan.scanType === 'FITTED') {
@@ -1604,9 +1625,11 @@ async function pushHandler(req, res) {
       }
       if (scan.scanType === 'OUTWARD' && scan._autoBinError) rowErrors.push(scan._autoBinError);
       if (!scan.dealerCode) rowErrors.push('dealerCode missing');
+      if (scan.dealerCode && !dealer) rowErrors.push('Valid dealer code is required');
       if (!VALID_TYPES.includes(scan.scanType)) rowErrors.push('invalid scanType');
       if (!(scan.timestamp instanceof Date) || Number.isNaN(scan.timestamp.getTime())) rowErrors.push('invalid timestamp');
       if (scan.quantity === undefined || scan.quantity === null || Number.isNaN(Number(scan.quantity))) rowErrors.push('qty missing or invalid');
+      if (!(Number(scan.quantity) > 0)) rowErrors.push('qty must be greater than zero');
       const manualMrpForValidation = scan.mrpProvided ? optionalNumber(scan.mrp) : undefined;
       if (manualEntry && !(Number(manualMrpForValidation || 0) > 0)) rowErrors.push('MRP is mandatory for manual part entry.');
       if (!master && manualEntry) {
@@ -1673,18 +1696,50 @@ async function pushHandler(req, res) {
       const identityAudit = clean(scan.auditId);
       const identityUser = identityUserKey(scan);
       const identitySession = identitySessionKey(scan);
+      scan.rawUpiHash = scan.rawUpiHash || duplicatePolicy.rawUpiHash(scan);
+      const businessKey = duplicatePolicy.businessDuplicateKey(scan);
       const rawIdentityKey = !manualEntry && clean(scan.rawScanString) ? `${upper(scan.dealerCode)}::${identityAudit}::${identityUser}::${identitySession}::${identityType}::${identityBin}::RAW::${clean(scan.rawScanString)}` : '';
       const upiIdentityKey = !manualEntry && upper(scan.upiNo || scan.upiId) ? `${upper(scan.dealerCode)}::${identityAudit}::${identityUser}::${identitySession}::${identityType}::${identityBin}::UPI::${upper(scan.upiNo || scan.upiId)}` : '';
       const fittedDuplicate = fittedKey && (existingScanIds.has(fittedKey) || duplicateScanIds.has(fittedKey));
-      const normalDuplicate = !manualEntry && !fittedKey && (existingScanIds.has(scan.qrFingerprint) || (rawIdentityKey && existingScanIds.has(rawIdentityKey)) || (upiIdentityKey && existingScanIds.has(upiIdentityKey)) || duplicateScanIds.has(scan.qrFingerprint) || (rawIdentityKey && duplicateScanIds.has(rawIdentityKey)) || (upiIdentityKey && duplicateScanIds.has(upiIdentityKey)));
+      const businessDuplicate = Boolean(businessKey && (existingScanIds.has(businessKey) || duplicateScanIds.has(businessKey)));
+      const storedIdentityDuplicate = Boolean(
+        (scan.uniqueScanId && existingScanIds.has(scan.uniqueScanId))
+        || (scan.scanId && existingScanIds.has(scan.scanId))
+        || (scan.syncKey && existingScanIds.has(scan.syncKey))
+        || (scan.rawUpiHash && existingScanIds.has(scan.rawUpiHash))
+      );
+      const batchIdentityDuplicate = Boolean(
+        (scan.uniqueScanId && duplicateScanIds.has(scan.uniqueScanId))
+        || (scan.scanId && duplicateScanIds.has(scan.scanId))
+        || (scan.syncKey && duplicateScanIds.has(scan.syncKey))
+        || (scan.rawUpiHash && duplicateScanIds.has(scan.rawUpiHash))
+      );
+      const barcodeDuplicate = !manualEntry && Boolean(
+        (scan.qrFingerprint && (existingScanIds.has(scan.qrFingerprint) || duplicateScanIds.has(scan.qrFingerprint)))
+        || (rawIdentityKey && (existingScanIds.has(rawIdentityKey) || duplicateScanIds.has(rawIdentityKey)))
+        || (upiIdentityKey && (existingScanIds.has(upiIdentityKey) || duplicateScanIds.has(upiIdentityKey)))
+      );
+      const normalDuplicate = !fittedKey && (
+        businessDuplicate
+        || storedIdentityDuplicate
+        || batchIdentityDuplicate
+        || barcodeDuplicate
+      );
       if (fittedDuplicate || normalDuplicate) {
-        duplicateScanIds.add(scan.qrFingerprint);
+        if (scan.qrFingerprint) duplicateScanIds.add(scan.qrFingerprint);
         if (fittedKey) duplicateScanIds.add(fittedKey);
+        if (businessKey) duplicateScanIds.add(businessKey);
+        if (scan.rawUpiHash) duplicateScanIds.add(scan.rawUpiHash);
         if (rawIdentityKey) duplicateScanIds.add(rawIdentityKey);
         if (upiIdentityKey) duplicateScanIds.add(upiIdentityKey);
-        let existingIdentity = existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(rawIdentityKey) || existingIdentityByKey.get(upiIdentityKey) || existingIdentityByKey.get(scan.qrFingerprint) || {};
+        let existingIdentity = existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(businessKey) || existingIdentityByKey.get(scan.rawUpiHash) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.scanId) || existingIdentityByKey.get(scan.syncKey) || existingIdentityByKey.get(rawIdentityKey) || existingIdentityByKey.get(upiIdentityKey) || existingIdentityByKey.get(scan.qrFingerprint) || {};
         existingIdentity = await backfillDuplicateMrp(existingIdentity, scan, { manualEntry });
-        logDuplicateScan(scan, existingIdentity, fittedKey ? 'Fitted part already exists for this vehicle/job card' : 'Duplicate exact UPI/barcode skipped').catch(() => undefined);
+        const duplicateMessage = fittedKey
+          ? 'Fitted part already exists for this vehicle/job card'
+          : businessDuplicate
+            ? duplicatePolicy.DUPLICATE_PART_MESSAGE
+            : 'Duplicate exact UPI/barcode skipped';
+        logDuplicateScan(scan, existingIdentity, duplicateMessage).catch(() => undefined);
         logSync('duplicate scan skipped', {
           row: index + 1,
           scanId: scan.uniqueScanId,
@@ -1693,13 +1748,17 @@ async function pushHandler(req, res) {
           dealerCode: scan.dealerCode,
           existing: existingIdentity || 'same request batch'
         });
-        logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'duplicate', fittedKey ? 'Fitted part already exists for this vehicle/job card' : 'Duplicate exact UPI/barcode already scanned'));
+        logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'duplicate', duplicateMessage));
         continue;
       }
-      duplicateScanIds.add(scan.uniqueScanId);
+      if (scan.uniqueScanId) duplicateScanIds.add(scan.uniqueScanId);
+      if (scan.scanId) duplicateScanIds.add(scan.scanId);
+      if (scan.syncKey) duplicateScanIds.add(scan.syncKey);
       scan.qrFingerprint = manualEntry || fittedKey ? '' : makeQrFingerprint(scan);
-      duplicateScanIds.add(scan.qrFingerprint);
+      if (scan.qrFingerprint) duplicateScanIds.add(scan.qrFingerprint);
       if (fittedKey) duplicateScanIds.add(fittedKey);
+      if (businessKey) duplicateScanIds.add(businessKey);
+      if (scan.rawUpiHash) duplicateScanIds.add(scan.rawUpiHash);
       if (rawIdentityKey) duplicateScanIds.add(rawIdentityKey);
       if (upiIdentityKey) duplicateScanIds.add(upiIdentityKey);
 
@@ -1723,6 +1782,7 @@ async function pushHandler(req, res) {
         uniqueScanId: scan.uniqueScanId,
         scanId: scan.uniqueScanId,
         qrFingerprint: scan.qrFingerprint,
+        rawUpiHash: scan.rawUpiHash,
         part: scan.partNumber,
         partNumber: scan.partNumber,
         normalizedPartNumber: scan.normalizedPartNumber || scan.partNumber,
@@ -1813,106 +1873,6 @@ async function pushHandler(req, res) {
       logSync('saved valid scan', { scanId: doc.uniqueScanId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'sync' });
     }
 
-    const manualBatch = new Map();
-    const mergedDocs = [];
-    const mergedMeta = [];
-    insertDocs.forEach((doc, index) => {
-      const key = manualMergeKey(doc);
-      if (!key) {
-        mergedDocs.push(doc);
-        mergedMeta.push(insertMeta[index]);
-        return;
-      }
-      const existing = manualBatch.get(key);
-      if (existing) {
-        const addQty = Number(doc.qty || doc.quantity || 0);
-        const trustedMrp = Number(existing.doc.valuationMRP || doc.valuationMRP || 0);
-        existing.meta.acks = ackList(existing.meta).concat(ackList(insertMeta[index]));
-        existing.doc.qty = Number(existing.doc.qty || 0) + addQty;
-        existing.doc.quantity = Number(existing.doc.quantity || 0) + addQty;
-        existing.doc.mrp = trustedMrp;
-        existing.doc.valuationMRP = trustedMrp;
-        existing.doc.valuationSource = existing.doc.valuationSource || doc.valuationSource || 'MANUAL_ENTERED_MRP';
-        existing.doc.manualMRP = Number(existing.doc.manualMRP || doc.manualMRP || trustedMrp || 0);
-        existing.doc.finalInventoryValue = money(Number(existing.doc.quantity || 0) * trustedMrp);
-        existing.doc.rawScan = [existing.doc.rawScan, doc.rawScan].filter(Boolean).join(' | ');
-        existing.doc.rawScanString = [existing.doc.rawScanString, doc.rawScanString].filter(Boolean).join(' | ');
-        existing.doc.rawUpi = [existing.doc.rawUpi, doc.rawUpi].filter(Boolean).join(' | ');
-        if (new Date(doc.timestamp) > new Date(existing.doc.timestamp || 0)) existing.doc.timestamp = doc.timestamp;
-        return;
-      }
-      const entry = { doc, meta: insertMeta[index] };
-      manualBatch.set(key, entry);
-      mergedDocs.push(doc);
-      mergedMeta.push(insertMeta[index]);
-    });
-    insertDocs = mergedDocs;
-    insertMeta = mergedMeta;
-    operations = insertDocs.map((doc) => ({ insertOne: { document: doc } }));
-
-    const manualUpdatedScans = [];
-    if (insertDocs.length) {
-      const remainingDocs = [];
-      const remainingMeta = [];
-      for (let index = 0; index < insertDocs.length; index += 1) {
-        const doc = insertDocs[index];
-        const key = manualMergeKey(doc);
-        if (!key) {
-          remainingDocs.push(doc);
-          remainingMeta.push(insertMeta[index]);
-          continue;
-        }
-        const meta = insertMeta[index] || {};
-        const existing = await Inventory.findOneAndUpdate(
-          {
-            dealerCode: doc.dealerCode,
-            normalizedPartNumber: doc.normalizedPartNumber || doc.partNumber,
-            scanType: doc.scanType,
-            binLocation: doc.binLocation || '',
-            source: 'manual',
-            syncStatus: { $ne: 'deleted' }
-          },
-          {
-            $inc: { qty: Number(doc.qty || 0), quantity: Number(doc.quantity || doc.qty || 0) },
-            $set: {
-              timestamp: doc.timestamp,
-              scanTime: doc.scanTime || doc.timestamp,
-              serverReceivedAt: doc.serverReceivedAt || doc.timestamp,
-              mobileReceivedTime: doc.mobileReceivedTime || '',
-              mobileReceivedTimeUtc: doc.mobileReceivedTimeUtc || '',
-              lastManualMergedAt: new Date(),
-              syncStatus: 'synced',
-              synced: true,
-              isSynced: true,
-              clientScanId: doc.clientScanId || '',
-              clientSyncKey: doc.clientSyncKey || ''
-            }
-          },
-          { sort: { timestamp: -1, createdAt: -1 }, new: true }
-        ).lean();
-        if (existing) {
-          const trustedMrp = Number(existing.valuationMRP || doc.valuationMRP || 0);
-          const valuationUpdate = {
-            mrp: trustedMrp,
-            manualMRP: Number(existing.manualMRP || doc.manualMRP || trustedMrp || 0),
-            valuationMRP: trustedMrp,
-            valuationSource: existing.valuationSource || doc.valuationSource || 'MANUAL_ENTERED_MRP',
-            finalInventoryValue: money(Number(existing.quantity || existing.qty || 0) * trustedMrp)
-          };
-          await Inventory.updateOne({ _id: existing._id }, { $set: valuationUpdate });
-          const updatedExisting = { ...existing, ...valuationUpdate };
-          manualUpdatedScans.push(updatedExisting);
-          ackList(meta).forEach((ack) => logs.push(syncLogFromAck(updatedExisting, ack, 'inserted', '')));
-          continue;
-        }
-        remainingDocs.push(doc);
-        remainingMeta.push(insertMeta[index]);
-      }
-      insertDocs = remainingDocs;
-      insertMeta = remainingMeta;
-      operations = insertDocs.map((doc) => ({ insertOne: { document: doc } }));
-    }
-
     let insertedCount = 0;
     const failedOperationIndexes = new Set();
     if (operations.length) {
@@ -1980,7 +1940,6 @@ async function pushHandler(req, res) {
     const savedScans = insertedScanIds.length
       ? await Inventory.find({ uniqueScanId: { $in: insertedScanIds } }).lean()
       : [];
-    savedScans.push(...manualUpdatedScans);
     const verifiedInsertedCount = savedScans.length;
     if (insertedCount !== verifiedInsertedCount) {
       logSync('DB insert verification mismatch', {

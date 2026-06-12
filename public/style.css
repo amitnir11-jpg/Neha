@@ -2104,6 +2104,25 @@ textarea:focus {
   box-shadow: 0 22px 70px rgba(15, 23, 42, 0.28);
 }
 
+.scan-edit-card {
+  width: min(720px, 94vw);
+}
+
+.scan-edit-form {
+  max-height: min(620px, 76vh);
+  overflow: auto;
+  padding: 18px;
+}
+
+.scan-edit-actions {
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.scan-edit-actions .form-message {
+  margin-right: auto;
+}
+
 .modal-head,
 .modal-actions {
   display: flex;

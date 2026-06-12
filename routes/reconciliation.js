@@ -12,6 +12,8 @@ const auth = require('./auth');
 const { getActiveAudit } = require('../utils/audit');
 const { validScanClause } = require('../utils/masterValidation');
 const { normalizePartNumber } = require('../utils/normalize');
+const { uniqueReportScans } = require('../utils/reportScanIdentity');
+const { applyMovementCountRules, signedScanQuantity } = require('../utils/reportTotals');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
@@ -556,31 +558,59 @@ function scanMatch(scope, filters = {}) {
   return match;
 }
 
+function scanQty(scan = {}) {
+  if (scan._reportSignedQty !== undefined) return signedScanQuantity(scan, 0);
+  const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
+  const type = upper(scan.scanType || scan.type || 'INWARD');
+  if (POSITIVE_SCAN_TYPES.includes(type)) return Math.abs(qty);
+  if (NEGATIVE_SCAN_TYPES.includes(type)) return -Math.abs(qty);
+  if (type === 'VERIFICATION') return 0;
+  return Math.abs(qty);
+}
+
 async function physicalRows(scope, filters = {}) {
-  const rows = await Inventory.aggregate([
-    { $match: scanMatch(scope, filters) },
-    {
-      $group: {
-        _id: { $ifNull: ['$normalizedPartNumber', { $ifNull: ['$partNumber', '$part'] }] },
-        partNumber: { $first: { $ifNull: ['$partNumber', '$part'] } },
-        partDescription: { $first: { $ifNull: ['$partDescription', '$partName'] } },
-        productCategory: { $first: { $ifNull: ['$productCategory', '$category'] } },
-        model: { $first: '$model' },
-        year: { $first: { $ifNull: ['$manufacturingYear', '$year'] } },
-        productGroup: { $first: '$productGroup' },
-        partSubGroup: { $first: '$partSubGroup' },
-        mrp: { $max: { $ifNull: ['$valuationMRP', { $ifNull: ['$finalMRP', '$mrp'] }] } },
-        dlp: { $max: '$dlc' },
-        actualStock: { $sum: stockQtyExpression() },
-        bins: { $addToSet: { $ifNull: ['$binLocation', '$bin'] } },
-        sources: { $addToSet: '$source' },
-        scanModes: { $addToSet: '$scanMode' },
-        valuationSources: { $addToSet: '$valuationSource' }
-      }
-    },
-    { $match: { actualStock: { $ne: 0 }, _id: { $nin: [null, ''] } } }
-  ]);
-  return rows;
+  const scans = applyMovementCountRules(uniqueReportScans(await Inventory.find(scanMatch(scope, filters)).sort({ timestamp: 1, createdAt: 1 }).lean()));
+  const groups = new Map();
+  scans.forEach((scan) => {
+    const partNumber = normalizePart(scan.normalizedPartNumber || scan.partNumber || scan.part);
+    if (!partNumber) return;
+    const group = groups.get(partNumber) || {
+      _id: partNumber,
+      partNumber,
+      partDescription: clean(scan.partDescription || scan.partName),
+      productCategory: clean(scan.productCategory || scan.category),
+      model: clean(scan.model),
+      year: clean(scan.manufacturingYear || scan.year),
+      productGroup: clean(scan.productGroup),
+      partSubGroup: clean(scan.partSubGroup),
+      mrp: 0,
+      dlp: 0,
+      actualStock: 0,
+      bins: new Set(),
+      sources: new Set(),
+      scanModes: new Set(),
+      valuationSources: new Set()
+    };
+    group.mrp = Math.max(group.mrp, numberValue(scan.valuationMRP || scan.finalMRP || scan.mrp, 0));
+    group.dlp = Math.max(group.dlp, numberValue(scan.dlc, 0));
+    group.actualStock += scanQty(scan);
+    const bin = clean(scan.binLocation || scan.bin);
+    if (bin) group.bins.add(bin);
+    if (scan.source) group.sources.add(scan.source);
+    if (scan.scanMode) group.scanModes.add(scan.scanMode);
+    if (scan.valuationSource) group.valuationSources.add(scan.valuationSource);
+    groups.set(partNumber, group);
+  });
+  return Array.from(groups.values())
+    .filter((row) => row.actualStock !== 0 && row._id)
+    .map((row) => ({
+      ...row,
+      actualStock: money(row.actualStock),
+      bins: Array.from(row.bins),
+      sources: Array.from(row.sources),
+      scanModes: Array.from(row.scanModes),
+      valuationSources: Array.from(row.valuationSources)
+    }));
 }
 
 function stockFilter(row, filters = {}) {

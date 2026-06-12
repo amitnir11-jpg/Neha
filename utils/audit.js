@@ -29,7 +29,13 @@ function activeStatusFilter() {
           { auditStatus: '' }
         ]
       },
-      { auditClosedDate: null }
+      {
+        $or: [
+          { auditClosedDate: { $exists: false } },
+          { auditClosedDate: null },
+          { auditClosedDate: '' }
+        ]
+      }
     ]
   };
 }

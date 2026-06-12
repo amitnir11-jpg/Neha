@@ -38,4 +38,8 @@ const duplicateScanLogSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+duplicateScanLogSchema.index({ dealerCode: 1, auditId: 1, scanType: 1, partNumber: 1, timestamp: -1 }, { name: 'duplicate_report_scope_lookup' });
+duplicateScanLogSchema.index({ dealerCode: 1, auditId: 1, timestamp: -1, createdAt: -1 }, { name: 'duplicate_report_date_lookup' });
+duplicateScanLogSchema.index({ rawUpi: 1, dealerCode: 1, auditId: 1, scanType: 1 }, { name: 'duplicate_raw_upi_lookup' });
+
 module.exports = mongoose.model('DuplicateScanLog', duplicateScanLogSchema);

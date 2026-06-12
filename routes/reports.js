@@ -7,9 +7,10 @@ const reportModule = require('./report');
 const auth = require('./auth');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const RejectedScan = require('../models/RejectedScan');
-const { formatDateLikeFields } = require('../utils/time');
+const { formatDateLikeFields, parseIstFilterDate } = require('../utils/time');
 const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
+const { reportTotals, signedScanQuantity } = require('../utils/reportTotals');
 
 const autoTable = autoTableModule.default || autoTableModule;
 
@@ -48,19 +49,7 @@ function applyCommonMetadataFilters(filter, query = {}, options = {}) {
 }
 
 function parseFilterDate(value, endOfDay = false) {
-  const text = clean(value);
-  if (!text) return null;
-  const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (dateOnly) {
-    const [, year, month, day] = dateOnly;
-    const date = new Date(Number(year), Number(month) - 1, Number(day));
-    date.setHours(endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
-    return date;
-  }
-  const date = new Date(text);
-  if (Number.isNaN(date.getTime())) return null;
-  if (endOfDay) date.setHours(23, 59, 59, 999);
-  return date;
+  return parseIstFilterDate(value, endOfDay);
 }
 
 function duplicateReportFilter(query = {}) {
@@ -635,6 +624,7 @@ function isMovementScan(scan = {}) {
 }
 
 function scanQuantity(scan) {
+  if (scan._reportSignedQty !== undefined) return signedScanQuantity(scan, 0);
   const qty = Math.abs(Number(scan.qty !== undefined ? scan.qty : scan.quantity || 0));
   const type = String(scan.scanType || scan.type || '').toUpperCase();
   if (type === 'INWARD') return qty;
@@ -811,6 +801,25 @@ function selectedColumns(columns, query = {}) {
   return filtered.length ? filtered : columns;
 }
 
+function pagination(query = {}) {
+  const page = Math.max(1, Number.parseInt(query.page || '1', 10) || 1);
+  const limit = Math.min(1000, Math.max(25, Number.parseInt(query.limit || '250', 10) || 250));
+  const skip = (page - 1) * limit;
+  return { page, limit, skip };
+}
+
+function pageRows(rows = [], query = {}) {
+  const { page, limit, skip } = pagination(query);
+  return {
+    rows: rows.slice(skip, skip + limit),
+    page,
+    limit,
+    skip,
+    totalRows: rows.length,
+    totalPages: Math.max(1, Math.ceil(rows.length / limit))
+  };
+}
+
 async function sendExcel(res, title, rows, type, query = {}) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet(title.slice(0, 31));
@@ -895,31 +904,47 @@ async function handleReport(req, res, type, title) {
     if (!selectedDealerCode(query)) return requireDealerSelection(res);
     if (type === 'scan-register') {
       const rows = await scanRegisterRows(query);
+      const statuses = rows.map((row) => normalizeRegisterStatus(row.scanStatus || row.syncStatus || row.reason));
+      const duplicateCount = statuses.filter((status) => status === 'duplicate').length;
+      const rejectedRows = rows.filter((row, index) => statuses[index] === 'rejected');
+      const failedCount = statuses.filter((status) => status === 'failed sync').length;
+      const validRows = rows.filter((row, index) => !['duplicate', 'rejected', 'failed sync', 'deleted'].includes(statuses[index]));
+      const totals = reportTotals(validRows, { visibleRows: rows.length, duplicateCount });
+      totals.unknownPartsCount = rejectedRows.length;
+      totals.unknownPartCount = rejectedRows.length;
+      totals.unknownUniqueParts = new Set(rejectedRows.map((row) => normalizePartNumber(row.partNumber)).filter(Boolean)).size;
+      totals.rejectedCount = rejectedRows.length;
+      totals.failedCount = failedCount;
       if (query.format === 'excel') return sendExcel(res, title, rows, type, query);
       if (query.format === 'pdf') return sendPdf(res, title, rows, type, query);
+      const paged = pageRows(rows, query);
       return res.json({
         success: true,
         type,
         title,
-        summary: { totalRows: rows.length },
-        columns: columnsForReport(type, rows).map(({ header, key }) => ({ header, key })),
-        rows,
+        summary: { ...totals, totalRows: rows.length, visibleRows: rows.length, pageRows: paged.rows.length },
+        columns: columnsForReport(type, paged.rows.length ? paged.rows : rows).map(({ header, key }) => ({ header, key })),
+        rows: paged.rows,
         totalRows: rows.length,
+        pagination: { page: paged.page, limit: paged.limit, skip: paged.skip, totalRows: paged.totalRows, totalPages: paged.totalPages },
         message: rows.length ? '' : 'No scan register data found for selected filter'
       });
     }
     const data = await reportModule.buildReportData(query);
     const rows = selectRows(data, type);
+    const totals = reportTotals(data.scans || [], { visibleRows: rows.length });
     if (query.format === 'excel') return sendExcel(res, title, rows, type, query);
     if (query.format === 'pdf') return sendPdf(res, title, rows, type, query);
+    const paged = pageRows(rows, query);
     return res.json({
       success: true,
       type,
       title,
-      summary: data.summary[0],
-      columns: columnsForReport(type, rows).map(({ header, key }) => ({ header, key })),
-      rows,
+      summary: { ...(data.summary[0] || {}), ...totals, visibleRows: rows.length, pageRows: paged.rows.length },
+      columns: columnsForReport(type, paged.rows.length ? paged.rows : rows).map(({ header, key }) => ({ header, key })),
+      rows: paged.rows,
       totalRows: rows.length,
+      pagination: { page: paged.page, limit: paged.limit, skip: paged.skip, totalRows: paged.totalRows, totalPages: paged.totalPages },
       message: rows.length ? '' : 'No report data found for selected filter'
     });
   } catch (error) {
