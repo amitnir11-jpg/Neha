@@ -511,6 +511,10 @@ inventorySchema.index({ dealerCode: 1, auditId: 1, normalizedPartNumber: 1, valu
 inventorySchema.index({ dealerCode: 1, auditId: 1, normalizedPartNumber: 1, scanType: 1, scanMRP: 1, timestamp: -1 });
 inventorySchema.index({ dealerCode: 1, auditId: 1, partNumber: 1, scanType: 1, valuationMRP: 1, scanTime: -1 });
 inventorySchema.index({ dealerCode: 1, auditId: 1, timestamp: -1, createdAt: -1 });
+inventorySchema.index({ dealerCode: 1, auditId: 1, normalizedPartNumber: 1, createdAt: -1 }, { name: 'report_part_created_at' });
+inventorySchema.index({ dealerCode: 1, auditId: 1, category: 1, createdAt: -1 }, { name: 'report_category_created_at' });
+inventorySchema.index({ dealerCode: 1, auditId: 1, binLocation: 1, createdAt: -1 }, { name: 'report_bin_created_at' });
+inventorySchema.index({ dealerCode: 1, auditId: 1, scanStatus: 1, createdAt: -1 }, { name: 'report_status_created_at' });
 inventorySchema.index({ dealerCode: 1, type: 1, timestamp: -1 });
 inventorySchema.index({ dealerCode: 1, binLocation: 1, timestamp: -1 });
 inventorySchema.index({ dealerCode: 1, partNumber: 1, timestamp: -1 });

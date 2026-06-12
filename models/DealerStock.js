@@ -56,6 +56,8 @@ const dealerStockSchema = new mongoose.Schema(
     rop: { type: Number, default: 0 },
     pendingOrder: { type: Number, default: 0 },
     stockValue: { type: Number, default: 0 },
+    stockValueMrp: { type: Number, default: 0 },
+    stockValueDlc: { type: Number, default: 0 },
     uploadBatchId: { type: String, trim: true, index: true, default: '' },
     uploadedBy: { type: String, trim: true, default: '' },
     uploadedAt: { type: Date, default: Date.now }
@@ -67,6 +69,8 @@ dealerStockSchema.index({ dealerCode: 1, auditId: 1, normalizedPartNumber: 1 }, 
 dealerStockSchema.index({ dealerCode: 1, auditId: 1, partNumber: 1 }, { name: 'dealer_audit_part_lookup' });
 dealerStockSchema.index({ dealerCode: 1, auditId: 1, productCategory: 1 }, { name: 'dealer_audit_category_lookup' });
 dealerStockSchema.index({ dealerCode: 1, auditId: 1, systemBinLoc1: 1 }, { name: 'dealer_audit_bin_lookup' });
+dealerStockSchema.index({ dealerCode: 1, auditId: 1, category: 1, updatedAt: -1 }, { name: 'dealer_audit_category_updated' });
+dealerStockSchema.index({ dealerCode: 1, auditId: 1, updatedAt: -1 }, { name: 'dealer_audit_updated' });
 
 dealerStockSchema.pre('validate', function syncDealerStockAliases(next) {
   if (!this.normalizedPartNumber && this.partNumber) {
@@ -82,7 +86,10 @@ dealerStockSchema.pre('validate', function syncDealerStockAliases(next) {
   if (!this.systemBinLoc1 && this.binLoc1) this.systemBinLoc1 = this.binLoc1;
   if (!this.systemBinLoc2 && this.binLoc2) this.systemBinLoc2 = this.binLoc2;
   if (!this.systemBinLoc3 && this.binLoc3) this.systemBinLoc3 = this.binLoc3;
-  this.stockValue = Number(this.dmsStock || this.systemQty || 0) * Number(this.dlp || this.dlc || 0);
+  const qty = Number(this.dmsStock || this.systemQty || 0);
+  this.stockValueMrp = qty * Number(this.mrp || 0);
+  this.stockValueDlc = qty * Number(this.dlp || this.dlc || 0);
+  this.stockValue = this.stockValueDlc;
   next();
 });
 

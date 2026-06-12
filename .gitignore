@@ -10,6 +10,7 @@ _archive_unused/
 Audit Data/
 *.zip
 *.apk
+DEPLOYMENT_NOTES_*.md
 
 # Runtime markers and local caches
 server_process.pid

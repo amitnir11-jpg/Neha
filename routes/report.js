@@ -23,6 +23,7 @@ const { latestCurrentPriceFromRows } = require('../utils/priceHistory');
 const { getActiveAudit } = require('../utils/audit');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
+const { getCachedReport } = require('../utils/reportCache');
 
 const router = express.Router();
 const autoTable = autoTableModule.default || autoTableModule;
@@ -36,6 +37,31 @@ const REPORT_SCAN_SELECT = [
   'syncStatus synced isSynced scanStatus source scanMode warnings remarks masterFound masterMatch isMasterMatched',
   'priceHistoryId pricePeriodFrom pricePeriodTo pricePeriodMatched pricePeriodStatus'
 ].join(' ');
+
+async function cachedReport(namespace, query, builder) {
+  const result = await getCachedReport(namespace, query, builder);
+  return result.data;
+}
+
+function cachedBuildReportData(query = {}) {
+  return cachedReport('report-data', query, buildReportData);
+}
+
+function cachedBuildPartwiseInventoryAuditReport(query = {}) {
+  return cachedReport('partwise-inventory-audit', query, buildPartwiseInventoryAuditReport);
+}
+
+function cachedBuildCategoryWiseVarianceSummary(query = {}) {
+  return cachedReport('category-wise-variance-summary', query, buildCategoryWiseVarianceSummary);
+}
+
+function cachedBuildStockSummaryReport(query = {}) {
+  return cachedReport('stock-summary', query, buildStockSummaryReport);
+}
+
+function cachedBuildPartsInventoryRefreshRows(query = {}) {
+  return cachedReport('parts-inventory-refresh', query, buildPartsInventoryRefreshRows);
+}
 
 /**
  * ====================================================================
@@ -1003,9 +1029,9 @@ function scanColumns() {
 
 async function createWorkbook(query) {
   const [data, categoryVarianceData, partwiseInventoryAuditData] = await Promise.all([
-    buildReportData(query),
-    buildCategoryWiseVarianceSummary(query),
-    buildPartwiseInventoryAuditReport(query)
+    cachedBuildReportData(query),
+    cachedBuildCategoryWiseVarianceSummary(query),
+    cachedBuildPartwiseInventoryAuditReport(query)
   ]);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Daksh Inventory v2';
@@ -2591,7 +2617,7 @@ function addCategoryVarianceGroup(groupMap, productCategory, action, varianceQty
 async function buildCategoryWiseVarianceSummary(query = {}) {
   query = normalizeReportQuery(query);
   {
-  const partwise = await buildPartwiseInventoryAuditReport(query);
+  const partwise = await cachedBuildPartwiseInventoryAuditReport(query);
   const groupMap = new Map();
   partwise.rows.forEach((row) => {
     const category = displayCategory(row.productCategory);
@@ -3526,7 +3552,7 @@ router.get('/movement_wise_stock_analysis', auth.requireAuth, async (req, res) =
 router.get('/stock-summary', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
-    const data = await buildStockSummaryReport(reportQuery);
+    const data = await cachedBuildStockSummaryReport(reportQuery);
     if (req.query.format === 'excel') {
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'Daksh Inventory v2';
@@ -3555,7 +3581,7 @@ router.get('/stock-summary', auth.requireAuth, async (req, res) => {
 
 router.get('/category-wise-variance-summary', auth.requireAuth, async (req, res) => {
   try {
-    const data = await buildCategoryWiseVarianceSummary(req.query);
+    const data = await cachedBuildCategoryWiseVarianceSummary(req.query);
     if (req.query.format === 'excel') {
       if (hasRequestedReportColumns(req.query)) {
         const exportRows = data.rows.concat([{ productCategory: 'Grand Total', action: '', ...data.grandTotal, rowType: 'grandTotal' }]);
@@ -3596,7 +3622,7 @@ router.get('/category-wise-variance-summary', auth.requireAuth, async (req, res)
 router.get('/partwise-inventory-audit', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
-    const data = await buildPartwiseInventoryAuditReport(reportQuery);
+    const data = await cachedBuildPartwiseInventoryAuditReport(reportQuery);
     if (req.query.format === 'excel') {
       if (hasRequestedReportColumns(reportQuery)) {
         return sendSelectedColumnsWorkbook(res, 'Partwise_Inventory_Audit_Report.xlsx', 'Partwise Inventory Audit', data.columns, data.rows, reportQuery);
@@ -3640,7 +3666,7 @@ async function handlePartwiseVarianceReport(req, res, varianceType, title, type 
       varianceType,
       showFullMasterWithZeroScan: forceFullMaster ? 'on' : req.query.showFullMasterWithZeroScan
     });
-    const data = await buildPartwiseInventoryAuditReport(reportQuery);
+    const data = await cachedBuildPartwiseInventoryAuditReport(reportQuery);
     const fileBase = title.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'Report';
     if (req.query.format === 'excel') {
       return sendSelectedColumnsWorkbook(res, `${fileBase}.xlsx`, title, data.columns, data.rows, reportQuery);
@@ -3682,7 +3708,7 @@ router.post('/partwise-inventory-audit/email', auth.requireAuth, auth.requireAdm
     }
 
     const reportFilters = requireDealerForReport(req.body.filters || {});
-    const data = await buildPartwiseInventoryAuditReport(reportFilters);
+    const data = await cachedBuildPartwiseInventoryAuditReport(reportFilters);
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Daksh Inventory v2';
     workbook.created = new Date();
@@ -3720,7 +3746,7 @@ router.get('/data', auth.requireAuth, async (req, res) => {
     const page = Math.max(1, Number.parseInt(req.query.page || '1', 10) || 1);
     const limit = Math.min(1000, Math.max(25, Number.parseInt(req.query.limit || '250', 10) || 250));
     const skip = (page - 1) * limit;
-    const data = await buildReportData(reportQuery);
+    const data = await cachedBuildReportData(reportQuery);
     const finalRows = data.finalRows || [];
     const rawLogRows = data.rawLogRows || [];
     res.json({
@@ -3750,7 +3776,7 @@ router.get('/data', auth.requireAuth, async (req, res) => {
 router.get('/parts-inventory-refresh-template.csv', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
-    const rows = await buildPartsInventoryRefreshRows(reportQuery);
+    const rows = await cachedBuildPartsInventoryRefreshRows(reportQuery);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="Parts_Inventory_Refresh_Template.csv"');
     res.send(partsInventoryRefreshCsv(rows));
@@ -3762,7 +3788,7 @@ router.get('/parts-inventory-refresh-template.csv', auth.requireAuth, async (req
 router.get('/parts-inventory-refresh-template', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
-    const rows = await buildPartsInventoryRefreshRows(reportQuery);
+    const rows = await cachedBuildPartsInventoryRefreshRows(reportQuery);
     const maxBinCount = Math.max(1, ...rows.map((row) => (row.binLocations || []).length));
     const binColumns = Array.from({ length: maxBinCount }, (_, index) => ({
       header: `Bin Loc ${index + 1}`,
@@ -3833,7 +3859,7 @@ router.get('/full', auth.requireAuth, async (req, res) => {
 router.get('/full.csv', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
-    const data = await buildReportData(reportQuery);
+    const data = await cachedBuildReportData(reportQuery);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Inventory_Full_Report.csv"');
     res.send(finalReportCsv(data.finalRows || []));
@@ -3845,7 +3871,7 @@ router.get('/full.csv', auth.requireAuth, async (req, res) => {
 router.get('/pdf', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
-    const data = await buildReportData(reportQuery);
+    const data = await cachedBuildReportData(reportQuery);
     const doc = new jsPDF({ orientation: 'landscape' });
     doc.setFontSize(15);
     doc.text('Daksh Inventory v2 - Inventory Audit Report', 14, 15);
@@ -3927,10 +3953,10 @@ router.post('/email', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 });
 
 module.exports = router;
-module.exports.buildReportData = buildReportData;
+module.exports.buildReportData = cachedBuildReportData;
 module.exports.createWorkbook = createWorkbook;
-module.exports.buildCategoryWiseVarianceSummary = buildCategoryWiseVarianceSummary;
-module.exports.buildStockSummaryReport = buildStockSummaryReport;
-module.exports.buildPartwiseInventoryAuditReport = buildPartwiseInventoryAuditReport;
-module.exports.buildPartsInventoryRefreshRows = buildPartsInventoryRefreshRows;
+module.exports.buildCategoryWiseVarianceSummary = cachedBuildCategoryWiseVarianceSummary;
+module.exports.buildStockSummaryReport = cachedBuildStockSummaryReport;
+module.exports.buildPartwiseInventoryAuditReport = cachedBuildPartwiseInventoryAuditReport;
+module.exports.buildPartsInventoryRefreshRows = cachedBuildPartsInventoryRefreshRows;
 module.exports.addStockSummarySheet = addStockSummarySheet;
