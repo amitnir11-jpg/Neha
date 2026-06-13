@@ -2,7 +2,6 @@ const express = require('express');
 const mongoose = require('mongoose');
 const Inventory = require('../models/Inventory');
 const MasterPart = require('../models/MasterPart');
-const MasterCatalogue = require('../models/MasterCatalogue');
 const Bin = require('../models/Bin');
 const Dealer = require('../models/Dealer');
 const Device = require('../models/Device');
@@ -12,20 +11,10 @@ const SkewEvent = require('../models/SkewEvent');
 const auth = require('./auth');
 const inventory = require('./inventory');
 const smtpConfig = require('../utils/smtpConfig');
-const { cleanText, normalizePartNumber, normalizeCategory } = require('../utils/normalize');
-const { decorateScanValue } = require('../utils/inventoryValueEngine');
+const { cleanText, normalizePartNumber } = require('../utils/normalize');
 
 const router = express.Router();
 const DELETE_MESSAGE = 'Are you sure you want to delete this data? This action cannot be undone.';
-
-function numberValue(value, fallback = 0) {
-  const parsed = Number(String(value ?? '').replace(/,/g, '').trim());
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function masterMrp(master = {}) {
-  return numberValue(master.currentCatalogueMRP ?? master.currentCatalogueMrp ?? master.mrp, 0);
-}
 
 function publicMobileDevice(device = {}) {
   return {
@@ -59,27 +48,6 @@ function normalizedPartNumber(value) {
 
 function dealerCode(value) {
   return inventory.normalizeDealerCode(value);
-}
-
-function masterCompletenessScore(part = {}) {
-  return [
-    part.partDescription || part.partName || part.description || part.name,
-    part.productCategory || part.category || part.partCategory || part.categories,
-    part.manufacturingYear || part.year,
-    part.model,
-    Number(part.mrp || part.price || part.rate || 0) > 0 ? 'mrp' : '',
-    Number(part.dlc || 0) > 0 ? 'dlc' : '',
-    Number(part.openingStockQty || part.quantity || part.qty || 0) > 0 ? 'qty' : '',
-    part.bin || part.binLocation
-  ].filter(Boolean).length;
-}
-
-function pickCanonicalMaster(parts = []) {
-  return parts.slice().sort((a, b) => {
-    const scoreDiff = masterCompletenessScore(b) - masterCompletenessScore(a);
-    if (scoreDiff) return scoreDiff;
-    return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
-  })[0];
 }
 
 function partMatch(partNumber, dealer = '') {
@@ -249,124 +217,6 @@ async function deleteDealerData(req, res, scope) {
     return res.status(500).json({ success: false, message: error.message });
   }
 }
-
-async function reprocessScans(req, res) {
-  try {
-    const mastersBeforeNormalize = await MasterPart.find({}).lean();
-    const duplicateGroups = new Map();
-    mastersBeforeNormalize.forEach((part) => {
-      const partNo = normalizedPartNumber(part.normalizedPartNumber || part.partNumber || part.partNo);
-      if (!partNo) return;
-      const group = duplicateGroups.get(partNo) || [];
-      group.push(part);
-      duplicateGroups.set(partNo, group);
-    });
-    const duplicateIdsToDelete = [];
-    duplicateGroups.forEach((group) => {
-      if (group.length < 2) return;
-      const keeper = pickCanonicalMaster(group);
-      group.forEach((part) => {
-        if (String(part._id) !== String(keeper._id)) duplicateIdsToDelete.push(part._id);
-      });
-    });
-    if (duplicateIdsToDelete.length) {
-      await MasterPart.deleteMany({ _id: { $in: duplicateIdsToDelete } });
-    }
-
-    const mastersToNormalize = await MasterPart.find({}).lean();
-    const masterOperations = mastersToNormalize.map((part) => {
-      const partNo = normalizedPartNumber(part.normalizedPartNumber || part.partNumber || part.partNo);
-      const partDescription = cleanText(part.partDescription || part.partName || part.description || part.name || '');
-      const productCategory = normalizeCategory(part.productCategory || part.category || part.partCategory || part.categories || '');
-      const manufacturingYear = cleanText(part.manufacturingYear || part.year || '');
-      return {
-        updateOne: {
-          filter: { _id: part._id },
-          update: {
-            $set: {
-              partNo,
-              partNumber: partNo,
-              normalizedPartNumber: partNo,
-              partName: partDescription,
-              partDescription,
-              category: productCategory,
-              productCategory,
-              manufacturingYear,
-              year: manufacturingYear,
-              model: cleanText(part.model || ''),
-              mrp: Number(part.mrp || part.price || part.rate || 0),
-              dlc: Number(part.dlc || 0)
-            }
-          }
-        }
-      };
-    });
-    if (masterOperations.length) await MasterPart.bulkWrite(masterOperations, { ordered: false });
-
-    const [scans, masters, catalogues] = await Promise.all([Inventory.find({}).lean(), MasterPart.find({}).lean(), MasterCatalogue.find({}).lean()]);
-    const masterByDealer = new Map();
-    const masterByPart = new Map();
-    catalogues.forEach((master) => {
-      const partNo = normalizedPartNumber(master.normalizedPartNumber || master.partNo || master.partNumber);
-      if (partNo && !masterByPart.has(partNo)) masterByPart.set(partNo, master);
-    });
-    masters.forEach((master) => {
-      const partNo = normalizedPartNumber(master.normalizedPartNumber || master.partNo || master.partNumber);
-      const code = dealerCode(master.dealerCode);
-      if (!partNo) return;
-      if (code) masterByDealer.set(`${partNo}::${code}`, master);
-      if (!masterByPart.has(partNo)) masterByPart.set(partNo, master);
-    });
-
-    let matchedCount = 0;
-    const operations = scans.map((scan) => {
-      const partNo = normalizedPartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
-      const code = dealerCode(scan.dealerCode);
-      const master = masterByDealer.get(`${partNo}::${code}`) || masterByPart.get(partNo);
-      const update = {
-        scanId: scan.scanId || scan.uniqueScanId,
-        part: partNo,
-        partNumber: partNo,
-        normalizedPartNumber: partNo,
-        rawUpi: scan.rawUpi || scan.rawScan || scan.rawScanString || '',
-        isMasterMatched: Boolean(master)
-      };
-      const valued = decorateScanValue({ ...scan, partNumber: partNo, normalizedPartNumber: partNo });
-      const fallbackMrp = masterMrp(master);
-      const valuedMrp = Number(valued.valuationMRP || 0);
-      const finalMrp = valuedMrp > 0 ? valuedMrp : fallbackMrp;
-      const finalSource = valuedMrp > 0 ? (valued.valuationSource || 'NO_SCANNED_OR_MANUAL_MRP') : (fallbackMrp > 0 ? 'CATALOGUE_MRP_FALLBACK' : 'NO_SCANNED_OR_MANUAL_MRP');
-      const qty = Number(scan.qty ?? scan.quantity ?? 0) || 0;
-      update.mrp = Number(finalMrp || 0);
-      update.scanMRP = Number(valued.scanMRP || 0);
-      update.manualMRP = Number(valued.manualMRP || 0);
-      update.valuationMRP = Number(finalMrp || 0);
-      update.valuationSource = finalSource;
-      update.finalInventoryValue = qty * Number(finalMrp || 0);
-      if (master) {
-        matchedCount += 1;
-        update.partName = master.partDescription || master.partName || '';
-        update.partDescription = master.partDescription || master.partName || '';
-        update.category = master.productCategory || master.category || '';
-        update.productCategory = master.productCategory || master.category || '';
-        update.model = master.model || '';
-        update.manufacturingYear = master.manufacturingYear || master.year || '';
-        update.year = master.manufacturingYear || master.year || '';
-        update.dlc = Number(master.dlc || 0);
-      }
-      return { updateOne: { filter: { _id: scan._id }, update: { $set: update } } };
-    });
-
-    if (operations.length) await Inventory.bulkWrite(operations, { ordered: false });
-    await emitRefresh(req);
-    res.json({ success: true, masterUpdatedCount: masterOperations.length, duplicateMasterDeleted: duplicateIdsToDelete.length, scannedRecords: scans.length, matchedCount, updatedCount: operations.length });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-}
-
-router.post('/reprocess-scans', auth.requireAuth, auth.requireAdmin, reprocessScans);
-router.post('/reprocess-master-lookup', auth.requireAuth, auth.requireAdmin, reprocessScans);
 
 router.get('/mobile-devices', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
@@ -547,86 +397,6 @@ router.post('/smtp-test', auth.requireAuth, auth.requireAdmin, async (req, res) 
     res.json({ success: true, message: 'SMTP verified and OTP sent successfully' });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message || 'SMTP configuration failed. Please check email/app password.' });
-  }
-});
-
-router.post('/reprocess-master-data', auth.requireAuth, auth.requireAdmin, async (req, res) => {
-  try {
-    const parts = await MasterPart.find({}).lean();
-    const operations = parts.map((part) => {
-      const partNo = normalizedPartNumber(part.normalizedPartNumber || part.partNumber || part.partNo);
-      const partDescription = cleanText(part.partDescription || part.partName || part.description || part.name || '');
-      const productCategory = normalizeCategory(part.productCategory || part.category || part.partCategory || part.categories || '');
-      const year = cleanText(part.year || part.manufacturingYear || '');
-      return {
-        updateOne: {
-          filter: { _id: part._id },
-          update: {
-            $set: {
-              partNo,
-              partNumber: partNo,
-              normalizedPartNumber: partNo,
-              partName: partDescription,
-              partDescription,
-              category: productCategory,
-              productCategory,
-              year,
-              manufacturingYear: year,
-              model: cleanText(part.model || ''),
-              mrp: Number(part.mrp || part.price || part.rate || 0),
-              dlc: Number(part.dlc || 0)
-            }
-          }
-        }
-      };
-    });
-    if (operations.length) await MasterPart.bulkWrite(operations, { ordered: false });
-    const [scans, masters] = await Promise.all([Inventory.find({}).lean(), MasterPart.find({}).lean()]);
-    const masterByDealer = new Map();
-    const masterByPart = new Map();
-    masters.forEach((master) => {
-      const partNo = normalizedPartNumber(master.normalizedPartNumber || master.partNo || master.partNumber);
-      const code = dealerCode(master.dealerCode);
-      if (!partNo) return;
-      if (code) masterByDealer.set(`${partNo}::${code}`, master);
-      if (!masterByPart.has(partNo)) masterByPart.set(partNo, master);
-    });
-    let matchedCount = 0;
-    const scanOperations = scans.map((scan) => {
-      const partNo = normalizedPartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
-      const code = dealerCode(scan.dealerCode);
-      const master = masterByDealer.get(`${partNo}::${code}`) || masterByPart.get(partNo);
-      const update = {
-        part: partNo,
-        partNumber: partNo,
-        normalizedPartNumber: partNo,
-        isMasterMatched: Boolean(master)
-      };
-      const valued = decorateScanValue({ ...scan, partNumber: partNo, normalizedPartNumber: partNo });
-      update.mrp = Number(valued.valuationMRP || 0);
-      update.scanMRP = Number(valued.scanMRP || 0);
-      update.manualMRP = Number(valued.manualMRP || 0);
-      update.valuationMRP = Number(valued.valuationMRP || 0);
-      update.valuationSource = valued.valuationSource || 'NO_SCANNED_OR_MANUAL_MRP';
-      update.finalInventoryValue = Number(valued.finalInventoryValue || 0);
-      if (master) {
-        matchedCount += 1;
-        update.partName = master.partDescription || master.partName || '';
-        update.partDescription = master.partDescription || master.partName || '';
-        update.category = master.productCategory || master.category || '';
-        update.productCategory = master.productCategory || master.category || '';
-        update.model = master.model || '';
-        update.manufacturingYear = master.manufacturingYear || master.year || '';
-        update.year = master.manufacturingYear || master.year || '';
-        update.dlc = Number(master.dlc || 0);
-      }
-      return { updateOne: { filter: { _id: scan._id }, update: { $set: update } } };
-    });
-    if (scanOperations.length) await Inventory.bulkWrite(scanOperations, { ordered: false });
-    await emitRefresh(req);
-    res.json({ success: true, updatedCount: operations.length, scansUpdatedCount: scanOperations.length, matchedCount, unmatchedCount: scans.length - matchedCount });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
   }
 });
 

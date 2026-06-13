@@ -124,13 +124,18 @@ POST /api/devices/connect
 
 ## Upload Master
 
-Go to `Dashboard > Master Catalog` and upload an Excel sheet with these columns:
+Go to `Dashboard > Master Catalogue` and upload an Excel sheet with these columns:
 
 ```text
-Part No, Part Name, Model, Year, Category, MRP, DLC, Bin, Active Status, Opening Stock Qty
+Part Number, Part Description, Active Flag, Product Category, Product Group,
+Model, Product Type, Superceeded By, Part Group, Part SubGroup, GST Category,
+Split Flag, MRP, DLC
 ```
 
-The scan screen uses this master for part auto-suggestions and validation.
+Column names are trimmed and matched case-insensitively. Part Number and Part
+Description are mandatory; MRP and DLC must be numeric. The upload result shows
+total, imported, failed, duplicate, and skipped rows. Failed rows can be downloaded
+as an Excel workbook with the original row data and error reason.
 
 ## Scan
 

@@ -6,6 +6,8 @@ const masterCatalogueSchema = new mongoose.Schema(
     partNumber: { type: String, required: true, trim: true, uppercase: true, index: true },
     normalizedPartNumber: { type: String, required: true, trim: true, uppercase: true, unique: true, index: true },
     partDescription: { type: String, trim: true, uppercase: true, default: '', index: true },
+    activeFlag: { type: String, trim: true, uppercase: true, default: '' },
+    activeStatus: { type: Boolean, default: true, index: true },
     productCategory: { type: String, trim: true, uppercase: true, default: '', index: true },
     mrp: { type: Number, default: 0 },
     dlc: { type: Number, default: 0 },
@@ -18,6 +20,7 @@ const masterCatalogueSchema = new mongoose.Schema(
     partGroup: { type: String, trim: true, uppercase: true, default: '' },
     partSubGroup: { type: String, trim: true, uppercase: true, default: '', index: true },
     gstCategory: { type: String, trim: true, uppercase: true, default: '' },
+    splitFlag: { type: String, trim: true, uppercase: true, default: '' },
     sourceFileName: { type: String, trim: true, default: '' },
     uploadedAt: { type: Date, default: Date.now }
   },
@@ -30,6 +33,7 @@ masterCatalogueSchema.pre('save', function normalizeCatalogue(next) {
   this.normalizedPartNumber = partNo;
   [
     'partDescription',
+    'activeFlag',
     'productCategory',
     'productGroup',
     'model',
@@ -39,7 +43,8 @@ masterCatalogueSchema.pre('save', function normalizeCatalogue(next) {
     'superceededBy',
     'partGroup',
     'partSubGroup',
-    'gstCategory'
+    'gstCategory',
+    'splitFlag'
   ].forEach((field) => {
     this[field] = cleanText(this[field]).toUpperCase();
   });

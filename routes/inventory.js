@@ -16,7 +16,7 @@ const VerificationLog = require('../models/VerificationLog');
 const AuditLog = require('../models/AuditLog');
 const auth = require('./auth');
 const { normalizePartNumber } = require('../utils/normalize');
-const { findCataloguePart, cataloguePayload, reprocessScansWithCatalogue } = require('../utils/catalogue');
+const { findCataloguePart, cataloguePayload } = require('../utils/catalogue');
 const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentity');
 const masterValidation = require('../utils/masterValidation');
 const { getActiveAudit, isCompletedAudit, publicAudit } = require('../utils/audit');
@@ -2666,16 +2666,6 @@ router.post('/manual', auth.optionalAuth, saveScanRequest);
 router.post('/', auth.optionalAuth, saveScanRequest);
 router.patch('/:scanId/details', auth.requireAuth, updateScanDetails);
 router.patch('/:scanId/mrp', auth.requireAuth, updateManualMrp);
-router.post('/reprocess-with-catalogue', auth.requireAuth, auth.requireAdmin, async (req, res) => {
-  try {
-    const result = await reprocessScansWithCatalogue();
-    req.io.emit('scan:saved');
-    res.json({ success: true, ...result });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
 router.post('/sync', auth.optionalAuth, async (req, res) => {
   try {
     const incoming = Array.isArray(req.body.scans) ? req.body.scans : [];

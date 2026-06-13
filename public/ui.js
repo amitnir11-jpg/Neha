@@ -169,7 +169,7 @@
     reconRefreshTimer: null,
     validatorInvalidRows: [],
     validatorMapIndex: null,
-    catalogueWarningRows: [],
+    catalogueFailureDownloadId: '',
     masterCatalogueCount: 0,
     masterSearch: { q: '', page: 1, limit: 25, total: 0 },
     masterSearchRows: [],
@@ -5137,38 +5137,31 @@
   }
 
   function updateCatalogueUploadStats(data = {}) {
-    state.catalogueWarningRows = data.warningReportRows || [];
-    const warningButton = $('#downloadCatalogueWarningsBtn');
-    if (warningButton) warningButton.hidden = !state.catalogueWarningRows.length;
+    state.catalogueFailureDownloadId = String(data.failureDownloadId || '');
+    const failedRowsButton = $('#downloadCatalogueFailedRowsBtn');
+    if (failedRowsButton) failedRowsButton.hidden = !state.catalogueFailureDownloadId;
     const currentCount = Number(data.currentMasterRecordCount ?? data.masterCatalogueCount ?? data.uniquePartsCount ?? data.importedCount ?? 0);
     setPartMasterRecordCount(currentCount);
     $('#uploadStats').textContent = [
-      `Rows ${wholeNumber(data.totalRowsUploaded ?? data.uploadedRowsCount ?? 0)}`,
-      `Unique parts ${wholeNumber(data.uniquePartsCount ?? data.importedCount ?? 0)}`,
+      `Total rows ${wholeNumber(data.totalRowsCount ?? data.totalRowsUploaded ?? data.uploadedRowsCount ?? 0)}`,
+      `Imported ${wholeNumber(data.importedRowsCount ?? data.importedCount ?? 0)}`,
+      `Failed ${wholeNumber(data.failedRowsCount ?? data.skippedInvalidRowsCount ?? 0)}`,
+      `Duplicates ${wholeNumber(data.duplicateRowsCount ?? data.duplicateSkippedRows ?? 0)}`,
+      `Skipped ${wholeNumber(data.skippedRowsCount ?? 0)}`,
+      `Inserted ${wholeNumber(data.insertedRowsCount ?? 0)}`,
+      `Updated ${wholeNumber(data.updatedRowsCount ?? data.updatedDuplicateCount ?? 0)}`,
+      `Missing mandatory ${wholeNumber(data.missingMandatoryFieldsCount ?? 0)}`,
       `Current records ${wholeNumber(currentCount)}`,
-      `Price history ${wholeNumber(data.priceHistoryRowsCount ?? 0)}`,
-      `Duplicates skipped ${wholeNumber(data.duplicateSkippedRows ?? data.updatedDuplicateCount ?? 0)}`,
-      `Invalid ${wholeNumber(data.skippedInvalidRowsCount ?? 0)}`,
-      `Overlaps ${wholeNumber(data.overlapWarningCount ?? 0)}`
+      `Price history ${wholeNumber(data.priceHistoryRowsCount ?? 0)}`
     ].join(' | ');
   }
 
-  function downloadCatalogueWarnings() {
-    const rows = state.catalogueWarningRows || [];
-    if (!rows.length) return toast('No upload warnings to download', 'error');
-    const headers = ['Row', 'Part Number', 'Type', 'Message', 'MRP', 'DLC', 'Effective From', 'Effective To'];
-    const csvRows = rows.map((row) => [
-      row.row || '',
-      row.partNumber || '',
-      row.type || '',
-      row.message || '',
-      row.mrp || '',
-      row.dlc || '',
-      row.effectiveFrom || '',
-      row.effectiveTo || ''
-    ]);
-    const csv = [headers].concat(csvRows).map((cols) => cols.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
-    triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'Master_Catalogue_Upload_Warnings.csv');
+  function downloadCatalogueFailedRows() {
+    if (!state.catalogueFailureDownloadId) return toast('No failed rows are available for download', 'error');
+    return downloadGet(
+      `/api/master-catalogue/upload-failures/${encodeURIComponent(state.catalogueFailureDownloadId)}`,
+      'Master_Catalogue_Failed_Rows.xlsx'
+    );
   }
 
   function normalizeAuditWorkflowStatus(value) {
@@ -8560,7 +8553,6 @@
     $('#scanHistoryDeleteUnknownBtn')?.addEventListener('click', () => cleanUnknownParts({}).catch((error) => toast(error.message, 'error')));
     $('#scanHistoryDeleteDealerBtn')?.addEventListener('click', () => deleteByDealerCode().catch((error) => toast(error.message, 'error')));
     $('#validatorRefreshBtn')?.addEventListener('click', () => loadMasterScanValidator().catch((error) => toast(error.message, 'error')));
-    $('#reprocessMasterLookupBtn')?.addEventListener('click', () => runValidatorAction('/api/admin/reprocess-master-lookup', 'Master lookup reprocessed').catch((error) => toast(error.message, 'error')));
     $('#recheckInvalidPartsBtn')?.addEventListener('click', () => runValidatorAction('/api/master/scan-validator/normalize-scans', 'Invalid parts rechecked').catch((error) => toast(error.message, 'error')));
     $('#exportMissingMasterBtn')?.addEventListener('click', () => {
       const query = queryFromForm($('#validatorFilters'));
@@ -8772,9 +8764,10 @@
       try {
         const data = await api('/api/master-catalogue/upload', { method: 'POST', body: new FormData(event.currentTarget) });
         updateCatalogueUploadStats(data);
-        toast(`Master catalogue uploaded: ${data.uniquePartsCount || data.importedCount || 0} unique parts, ${data.priceHistoryRowsCount || 0} price rows`);
+        toast(`Master catalogue upload complete: ${data.importedRowsCount || 0} imported, ${data.failedRowsCount || 0} failed, ${data.duplicateRowsCount || 0} duplicates`);
         if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
       } catch (error) {
+        if (error.data) updateCatalogueUploadStats(error.data);
         toast(error.message, 'error');
       }
     });
@@ -8783,20 +8776,25 @@
       const data = await api('/api/master-catalogue', { method: 'DELETE', body: {} });
       $('#uploadStats').textContent = `Deleted old rows ${data.deletedOldRowsCount || 0} | Deleted price history ${data.deletedPriceHistoryRowsCount || 0}`;
       setPartMasterRecordCount(data.currentMasterRecordCount || 0);
-      state.catalogueWarningRows = [];
-      if ($('#downloadCatalogueWarningsBtn')) $('#downloadCatalogueWarningsBtn').hidden = true;
+      state.catalogueFailureDownloadId = '';
+      if ($('#downloadCatalogueFailedRowsBtn')) $('#downloadCatalogueFailedRowsBtn').hidden = true;
       clearPartSearch('Old catalogue deleted. Scan and audit data was not deleted.');
     });
-    $('#downloadCatalogueWarningsBtn')?.addEventListener('click', downloadCatalogueWarnings);
+    $('#downloadCatalogueFailedRowsBtn')?.addEventListener('click', () => downloadCatalogueFailedRows().catch((error) => toast(error.message, 'error')));
     $('#deleteReuploadCatalogueBtn')?.addEventListener('click', async () => {
       const form = $('#partUploadForm');
       const fileInput = $('[name="file"]', form);
       if (!fileInput || !fileInput.files.length) return toast('Select new master file first', 'error');
       if (!window.confirm('Are you sure you want to delete old catalogue? Scan and audit data will not be deleted.')) return;
-      const data = await api('/api/master-catalogue/delete-and-reupload', { method: 'POST', body: new FormData(form) });
-      updateCatalogueUploadStats(data);
-      toast('Catalogue deleted, reuploaded and reports reprocessed');
-      if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
+      try {
+        const data = await api('/api/master-catalogue/delete-and-reupload', { method: 'POST', body: new FormData(form) });
+        updateCatalogueUploadStats(data);
+        toast(`Catalogue replaced: ${data.importedRowsCount || 0} rows imported`);
+        if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
+      } catch (error) {
+        if (error.data) updateCatalogueUploadStats(error.data);
+        toast(error.message, 'error');
+      }
     });
     $('#partSearchForm').addEventListener('submit', (event) => {
       event.preventDefault();
@@ -8824,20 +8822,6 @@
     });
     $('#partPrevPageBtn')?.addEventListener('click', () => loadParts(Math.max(1, (state.masterSearch.page || 1) - 1)).catch((error) => toast(error.message, 'error')));
     $('#partNextPageBtn')?.addEventListener('click', () => loadParts((state.masterSearch.page || 1) + 1).catch((error) => toast(error.message, 'error')));
-    $('#reprocessMasterDataBtn')?.addEventListener('click', async () => {
-      const data = await api('/api/master-catalogue/reprocess', { method: 'POST', body: {} });
-      toast(`Reprocessed scans: updated ${data.updatedCount || 0}, unmatched ${data.unmatchedCount || 0}`);
-      if (hasPartSearchFilter()) await loadParts(state.masterSearch.page || 1);
-    });
-    $('#reprocessProductGroupBtn')?.addEventListener('click', async () => {
-      const data = await api('/api/master-catalogue/reprocess-product-groups', { method: 'POST', body: {} });
-      toast(`Reprocessed product groups: ${data.updatedCount || 0} catalogue rows`);
-      if (hasPartSearchFilter()) await loadParts(state.masterSearch.page || 1);
-    });
-    $('#reprocessScanCatalogueBtn')?.addEventListener('click', async () => {
-      const data = await api('/api/scans/reprocess-with-catalogue', { method: 'POST', body: {} });
-      toast(`Reprocessed scan history: updated ${data.updatedCount || 0}, unmatched ${data.unmatchedCount || 0}`);
-    });
     $('#dealerMasterForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       const payload = formObject(event.currentTarget);
@@ -8983,11 +8967,6 @@
       const data = await api('/api/scans/deduplicate', { method: 'POST', body: {} });
       toast(`Deduplication complete: ${data.deletedCount} removed`);
       await loadScanHistory();
-    });
-    $('#reprocessScansBtn')?.addEventListener('click', async () => {
-      const data = await api('/api/admin/reprocess-scans', { method: 'POST', body: {} });
-      toast(`Reprocessed ${data.updatedCount || 0} scans; matched ${data.matchedCount || 0}`);
-      await refreshAll();
     });
     $$('.admin-delete-tab').forEach((button) => button.addEventListener('click', () => switchAdminDeleteTab(button.dataset.adminDeleteTab)));
     $('#dealerDeleteDealer')?.addEventListener('change', () => {
