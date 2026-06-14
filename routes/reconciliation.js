@@ -5,6 +5,9 @@ const XLSX = require('xlsx');
 const { randomUUID } = require('crypto');
 const { jsPDF } = require('jspdf');
 const autoTableModule = require('jspdf-autotable');
+const MasterPart = require('../models/MasterPart');
+const MasterCatalogue = require('../models/MasterCatalogue');
+const PartPriceHistory = require('../models/PartPriceHistory');
 const DealerStock = require('../models/DealerStock');
 const Inventory = require('../models/Inventory');
 const Dealer = require('../models/Dealer');
@@ -15,6 +18,7 @@ const { normalizePartNumber } = require('../utils/normalize');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, signedScanQuantity } = require('../utils/reportTotals');
 const { calculateStockValuation } = require('../utils/stockValuation');
+const { resolvePartPricing } = require('../utils/partPricing');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
@@ -422,18 +426,19 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
   };
 }
 
-function publicStock(row) {
-  const dlp = Number(row.dlp || row.dlc || 0);
+function publicStock(row, pricing = null) {
+  const mrp = pricing ? pricing.mrp : Number(row.mrp || 0);
+  const dlp = pricing ? (pricing.dlc ?? pricing.dlp ?? null) : Number(row.dlp || row.dlc || 0);
   const dmsStock = Number(row.dmsStock || row.systemQty || 0);
   return {
     id: String(row._id || ''),
     auditId: row.auditId || '',
     dealerCode: row.dealerCode || '',
     partNumber: row.partNumber || '',
-    partDescription: row.partDescription || '',
-    productCategory: row.productCategory || row.category || '',
-    category: row.category || row.productCategory || '',
-    mrp: Number(row.mrp || 0),
+    partDescription: (pricing && pricing.partDescription) || row.partDescription || '',
+    productCategory: (pricing && pricing.productCategory) || row.productCategory || row.category || '',
+    category: (pricing && pricing.category) || row.category || row.productCategory || '',
+    mrp,
     dlp,
     dlc: dlp,
     dmsStock,
@@ -452,9 +457,13 @@ function publicStock(row) {
     safetyStock: Number(row.safetyStock || 0),
     rop: Number(row.rop || 0),
     pendingOrder: Number(row.pendingOrder || 0),
-    stockValue: money(row.stockValue || dmsStock * dlp),
+    stockValue: pricing ? (pricing.dmsStockValue ?? null) : money(row.stockValue || dmsStock * Number(dlp || 0)),
     uploadBatchId: row.uploadBatchId || '',
-    uploadedAt: row.uploadedAt || row.updatedAt || row.createdAt
+    uploadedAt: row.uploadedAt || row.updatedAt || row.createdAt,
+    pricingStatus: pricing ? pricing.pricingStatus : '',
+    pricingSource: pricing ? pricing.pricingSource : '',
+    pricingWarnings: pricing ? pricing.pricingWarnings : [],
+    warnings: pricing ? pricing.warnings : []
   };
 }
 
@@ -690,13 +699,15 @@ function statusForVariance(variance, notInDms = false, manual = false) {
   return variance < 0 ? 'Shortage' : 'Excess';
 }
 
-function reportRowFromStock(stock, physical) {
-  const publicRow = publicStock(stock);
+function reportRowFromStock(stock, physical, pricing = null) {
+  const publicRow = publicStock(stock, pricing);
   const actualStock = Number((physical && physical.actualStock) || 0);
   const dmsStock = Number(publicRow.dmsStock || 0);
   const variance = actualStock - dmsStock;
-  const dlp = Number(publicRow.dlp || 0);
-  const valuation = calculateStockValuation({ actualQuantity: actualStock, dmsQuantity: dmsStock, dlc: dlp, mrp: publicRow.mrp });
+  const dlp = publicRow.dlp ?? null;
+  const mrp = publicRow.mrp ?? null;
+  const hasDlc = Number(dlp || 0) > 0;
+  const hasMrp = Number(mrp || 0) > 0;
   const movement = classifyMovement(publicRow, actualStock);
   const binLocation = [publicRow.binLoc1, publicRow.binLoc2, publicRow.binLoc3].filter(Boolean).join(', ')
     || ((physical && physical.bins) || []).filter(Boolean).join(', ');
@@ -721,46 +732,58 @@ function reportRowFromStock(stock, physical) {
     deadStock: movement.deadStock,
     criticalShortage: movement.criticalShortage,
     excessStock: movement.excessStock,
-    actualStockValue: valuation.actualStockValue,
-    dmsStockValue: valuation.dmsStockValue,
-    actualMrpValue: valuation.actualMrpValue,
-    dmsMrpValue: valuation.dmsMrpValue,
-    stockValue: valuation.dmsStockValue,
+    actualStockValue: pricing ? pricing.actualStockValue : null,
+    dmsStockValue: pricing ? pricing.dmsStockValue : null,
+    actualMrpValue: pricing ? pricing.actualMrpValue : null,
+    dmsMrpValue: pricing ? pricing.dmsMrpValue : null,
+    stockValue: publicRow.stockValue ?? null,
     shortageQty: Math.max(variance * -1, 0),
     excessQty: Math.max(variance, 0),
     short: Math.max(variance * -1, 0),
     excess: Math.max(variance, 0),
-    shortageValue: money(Math.max(variance * -1, 0) * dlp),
-    excessValue: money(Math.max(variance, 0) * dlp),
-    varianceDlp: money(variance * dlp),
-    varianceDlc: money(variance * dlp),
-    varianceMrp: money(variance * Number(publicRow.mrp || 0)),
+    shortageValue: hasDlc ? money(Math.max(variance * -1, 0) * Number(dlp || 0)) : null,
+    excessValue: hasDlc ? money(Math.max(variance, 0) * Number(dlp || 0)) : null,
+    varianceDlp: hasDlc ? money(variance * Number(dlp || 0)) : null,
+    varianceDlc: hasDlc ? money(variance * Number(dlp || 0)) : null,
+    varianceMrp: hasMrp ? money(variance * Number(mrp || 0)) : null,
+    pricingStatus: publicRow.pricingStatus || '',
+    pricingSource: publicRow.pricingSource || '',
+    pricingWarnings: publicRow.pricingWarnings || [],
+    warnings: publicRow.warnings || [],
     notInDms: false,
     manual: false
   };
 }
 
-function reportRowFromPhysical(physical) {
+function reportRowFromPhysical(physical, pricing = null) {
+  const baseRow = {
+    ...physical,
+    partNumber: physical.partNumber || physical._id || '',
+    dmsStock: 0,
+    systemQty: 0
+  };
+  const publicRow = publicStock(baseRow, pricing);
   const actualStock = Number(physical.actualStock || 0);
-  const dlp = Number(physical.dlp || 0);
-  const mrp = Number(physical.mrp || 0);
+  const dlp = publicRow.dlp ?? null;
+  const mrp = publicRow.mrp ?? null;
+  const hasDlc = Number(dlp || 0) > 0;
+  const hasMrp = Number(mrp || 0) > 0;
   const manual = [...(physical.sources || []), ...(physical.scanModes || []), ...(physical.valuationSources || [])]
     .some((value) => /manual/i.test(String(value || '')));
   const variance = actualStock;
-  const valuation = calculateStockValuation({ actualQuantity: actualStock, dmsQuantity: 0, dlc: dlp, mrp });
   const status = statusForVariance(variance, true, manual);
   const binLocation = (physical.bins || []).filter(Boolean).join(', ');
   return {
     auditId: '',
     dealerCode: '',
-    partNo: physical.partNumber || physical._id || '',
-    partNumber: physical.partNumber || physical._id || '',
-    partDescription: physical.partDescription || '',
-    productCategory: physical.productCategory || '',
-    category: physical.productCategory || '',
-    model: physical.model || '',
-    year: physical.year || '',
-    manufacturingYear: physical.year || '',
+    partNo: publicRow.partNumber || physical.partNumber || physical._id || '',
+    partNumber: publicRow.partNumber || physical.partNumber || physical._id || '',
+    partDescription: publicRow.partDescription || physical.partDescription || '',
+    productCategory: publicRow.productCategory || physical.productCategory || '',
+    category: publicRow.category || physical.productCategory || '',
+    model: publicRow.model || physical.model || '',
+    year: publicRow.year || physical.year || '',
+    manufacturingYear: publicRow.manufacturingYear || physical.year || '',
     mrp,
     dlp,
     dlc: dlp,
@@ -776,20 +799,24 @@ function reportRowFromPhysical(physical) {
     movementType: manual ? 'Manual Entry' : 'Extra / Not in DMS',
     movementStatus: 'Not in DMS',
     fastSlowDeadStatus: 'Not in DMS',
-    actualStockValue: valuation.actualStockValue,
-    dmsStockValue: valuation.dmsStockValue,
-    actualMrpValue: valuation.actualMrpValue,
-    dmsMrpValue: valuation.dmsMrpValue,
-    stockValue: valuation.dmsStockValue,
+    actualStockValue: pricing ? pricing.actualStockValue : null,
+    dmsStockValue: pricing ? pricing.dmsStockValue : null,
+    actualMrpValue: pricing ? pricing.actualMrpValue : null,
+    dmsMrpValue: pricing ? pricing.dmsMrpValue : null,
+    stockValue: publicRow.stockValue ?? null,
     shortageQty: 0,
     excessQty: Math.max(actualStock, 0),
     short: 0,
     excess: Math.max(actualStock, 0),
     shortageValue: 0,
-    excessValue: money(Math.max(actualStock, 0) * dlp),
-    varianceDlp: money(variance * dlp),
-    varianceDlc: money(variance * dlp),
-    varianceMrp: money(variance * mrp),
+    excessValue: hasDlc ? money(Math.max(actualStock, 0) * Number(dlp || 0)) : null,
+    varianceDlp: hasDlc ? money(variance * Number(dlp || 0)) : null,
+    varianceDlc: hasDlc ? money(variance * Number(dlp || 0)) : null,
+    varianceMrp: hasMrp ? money(variance * Number(mrp || 0)) : null,
+    pricingStatus: publicRow.pricingStatus || '',
+    pricingSource: publicRow.pricingSource || '',
+    pricingWarnings: publicRow.pricingWarnings || [],
+    warnings: publicRow.warnings || [],
     notInDms: true,
     manual
   };
@@ -824,23 +851,70 @@ async function buildReconciliationReport(query = {}) {
     physicalRows(scope, filters)
   ]);
 
+  const partNumbers = Array.from(new Set([
+    ...stockRows.map((row) => normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo || row.part)),
+    ...scannedRows.map((row) => normalizePart(row._id || row.partNumber || row.partNo || row.part))
+  ].filter(Boolean)));
+  const [masterRows, catalogueRows, priceHistoryRows] = partNumbers.length ? await Promise.all([
+    MasterPart.find({
+      $or: [
+        { normalizedPartNumber: { $in: partNumbers } },
+        { partNo: { $in: partNumbers } },
+        { partNumber: { $in: partNumbers } }
+      ]
+    }).lean(),
+    MasterCatalogue.find({ normalizedPartNumber: { $in: partNumbers } }).lean(),
+    PartPriceHistory.find({ normalizedPartNumber: { $in: partNumbers } }).sort({ normalizedPartNumber: 1, isCurrentPrice: -1, effectiveFrom: -1 }).lean()
+  ]) : [[], [], []];
+  const masterByPart = new Map(masterRows.map((row) => [normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo), row]).filter(([partNo]) => partNo));
+  const catalogueByPart = new Map(catalogueRows.map((row) => [normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo), row]).filter(([partNo]) => partNo));
+  const priceHistoryByPart = new Map();
+  priceHistoryRows.forEach((row) => {
+    const partNo = normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo);
+    if (!partNo) return;
+    const list = priceHistoryByPart.get(partNo) || [];
+    list.push(row);
+    priceHistoryByPart.set(partNo, list);
+  });
+
   const physicalByPart = new Map(scannedRows.map((row) => [normalizePart(row._id || row.partNumber), row]));
   const usedPhysicalKeys = new Set();
-  const rows = stockRows.map((stock) => {
+  const stockRowsWithPricing = stockRows.map((stock) => {
     const key = normalizePart(stock.normalizedPartNumber || stock.partNumber);
     const physical = physicalByPart.get(key);
     if (physical) usedPhysicalKeys.add(key);
-    return reportRowFromStock(stock, physical);
+    const pricing = resolvePartPricing({
+      partNumber: key,
+      catalogue: catalogueByPart.get(key) || stock,
+      master: masterByPart.get(key) || stock,
+      stock,
+      priceHistories: priceHistoryByPart.get(key) || [],
+      actualQty: physical ? Number(physical.actualStock || 0) : 0,
+      dmsQty: Number(stock.dmsStock || stock.systemQty || 0)
+    });
+    return reportRowFromStock(stock, physical, pricing);
   });
 
-  scannedRows.forEach((physical) => {
+  const physicalOnlyRows = scannedRows.map((physical) => {
     const key = normalizePart(physical._id || physical.partNumber);
-    if (!usedPhysicalKeys.has(key)) rows.push(reportRowFromPhysical(physical));
+    if (usedPhysicalKeys.has(key)) return null;
+    const pricing = resolvePartPricing({
+      partNumber: key,
+      catalogue: catalogueByPart.get(key) || physical,
+      master: masterByPart.get(key) || physical,
+      stock: physical,
+      priceHistories: priceHistoryByPart.get(key) || [],
+      actualQty: Number(physical.actualStock || 0),
+      dmsQty: 0
+    });
+    return reportRowFromPhysical(physical, pricing);
   });
+  const rows = stockRowsWithPricing.concat(physicalOnlyRows.filter(Boolean));
 
   const filteredRows = rows.filter((row) => stockFilter(row, filters));
   filteredRows.sort((a, b) => String(a.partNumber || '').localeCompare(String(b.partNumber || ''), undefined, { numeric: true, sensitivity: 'base' }));
   const stockOnlyRows = filteredRows.filter((row) => !row.notInDms);
+  const totalInventoryValue = money(stockRowsWithPricing.reduce((sum, row) => sum + Number(row.stockValue || 0), 0));
   const summary = {
     dealerCode: scope.dealerCode,
     auditId: scope.auditId,
@@ -853,7 +927,7 @@ async function buildReconciliationReport(query = {}) {
     totalFastMovingParts: stockOnlyRows.filter((row) => row.movementStatus === 'Fast Moving').length,
     totalSlowMovingParts: stockOnlyRows.filter((row) => row.movementStatus === 'Slow Moving').length,
     totalDeadStockParts: stockOnlyRows.filter((row) => row.movementStatus === 'Dead Stock').length,
-    totalInventoryValue: money(stockRows.reduce((sum, row) => sum + Number(row.stockValue || (Number(row.dmsStock || row.systemQty || 0) * Number(row.dlp || row.dlc || 0))), 0)),
+    totalInventoryValue,
     actualStockValueDLC: money(filteredRows.reduce((sum, row) => sum + Number(row.actualStockValue || 0), 0)),
     dmsStockValueDLC: money(filteredRows.reduce((sum, row) => sum + Number(row.dmsStockValue || 0), 0)),
     actualStockValueMRP: money(filteredRows.reduce((sum, row) => sum + Number(row.actualMrpValue || 0), 0)),
@@ -900,7 +974,8 @@ function priorityMovementStatus(row = {}) {
 
 function movementAnalysisRow(row = {}) {
   const dmsStock = Number(row.dmsStock || row.systemQty || 0);
-  const dlp = Number(row.dlp || row.dlc || 0);
+  const dlp = row.dlp ?? row.dlc ?? null;
+  const mrp = row.mrp ?? null;
   const movementStatus = row.priorityMovementStatus || priorityMovementStatus(row);
   return {
     dealerCode: row.dealerCode || '',
@@ -912,9 +987,9 @@ function movementAnalysisRow(row = {}) {
     actualStock: Number(row.actualStock ?? row.physicalStock ?? 0),
     variance: Number(row.variance ?? row.netDifference ?? 0),
     reconciliationStatus: row.status || '',
-    mrp: Number(row.mrp || 0),
+    mrp,
     dlp,
-    stockValue: money(row.stockValue || dmsStock * dlp),
+    stockValue: row.stockValue ?? row.dmsStockValue ?? null,
     movementCodeA: row.movementCodeA || '',
     movementCodeB: row.movementCodeB || '',
     averageDemand: Number(row.averageDemand || 0),
@@ -931,7 +1006,11 @@ function movementAnalysisRow(row = {}) {
     slowMoving: Boolean(row.slowMoving || row.movementStatus === 'Slow Moving'),
     deadStock: Boolean(row.deadStock || row.movementStatus === 'Dead Stock'),
     criticalShortage: Boolean(row.criticalShortage || row.movementType === 'Critical Shortage'),
-    excessStock: Boolean(row.excessStock || row.movementType === 'Excess Stock')
+    excessStock: Boolean(row.excessStock || row.movementType === 'Excess Stock'),
+    pricingStatus: row.pricingStatus || '',
+    pricingSource: row.pricingSource || '',
+    pricingWarnings: Array.isArray(row.pricingWarnings) ? row.pricingWarnings : [],
+    warnings: Array.isArray(row.warnings) ? row.warnings : []
   };
 }
 
@@ -1068,7 +1147,9 @@ function reportColumns() {
     { header: 'Variance', key: 'variance', width: 12 },
     { header: 'Status', key: 'status', width: 20 },
     { header: 'MRP', key: 'mrp', width: 12 },
-    { header: 'DLP', key: 'dlp', width: 12 },
+    { header: 'DLC/DLP', key: 'dlp', width: 12 },
+    { header: 'Pricing Status', key: 'pricingStatus', width: 24 },
+    { header: 'Pricing Source', key: 'pricingSource', width: 20 },
     { header: 'Actual Stock Value (DLC)', key: 'actualStockValue', width: 24 },
     { header: 'DMS Stock Value (DLC)', key: 'dmsStockValue', width: 24 },
     { header: 'Actual MRP Value (Reference)', key: 'actualMrpValue', width: 28 },
@@ -1098,7 +1179,9 @@ function movementAnalysisColumns() {
     { header: 'Variance', key: 'variance', width: 12 },
     { header: 'Reconciliation Status', key: 'reconciliationStatus', width: 22 },
     { header: 'MRP', key: 'mrp', width: 12 },
-    { header: 'DLP', key: 'dlp', width: 12 },
+    { header: 'DLC/DLP', key: 'dlp', width: 12 },
+    { header: 'Pricing Status', key: 'pricingStatus', width: 24 },
+    { header: 'Pricing Source', key: 'pricingSource', width: 20 },
     { header: 'Stock Value', key: 'stockValue', width: 16 },
     { header: 'Bin Location', key: 'binLocation', width: 26 },
     { header: 'Movement Code A', key: 'movementCodeA', width: 16 },
@@ -1192,10 +1275,11 @@ async function sendReportExport(res, report, format, reportType = 'dealer') {
     doc.text('DAKSH INVENTORY SYSTEM - Dealer Reconciliation', 14, 15);
     doc.setFontSize(9);
     doc.text(`Dealer: ${report.summary.dealerCode || '-'} | Audit: ${report.summary.auditId || '-'} | Report: ${reportType || 'dealer'}`, 14, 21);
+    const columns = reportColumns();
     autoTable(doc, {
       startY: 28,
-      head: [['Part Number', 'Description', 'Category', 'DMS', 'Actual', 'Variance', 'Status', 'MRP', 'DLP', 'Stock Value', 'Bin', 'Movement', 'Fast/Slow/Dead']],
-      body: rows.slice(0, 1000).map((row) => [row.partNumber, row.partDescription, row.productCategory, row.dmsStock, row.actualStock, row.variance, row.status, row.mrp, row.dlp, row.stockValue, row.binLocation, row.movementType, row.movementStatus]),
+      head: [columns.map((column) => column.header)],
+      body: rows.slice(0, 1000).map((row) => columns.map((column) => row[column.key] ?? '')),
       styles: { fontSize: 7, cellPadding: 1.6 },
       headStyles: { fillColor: [21, 58, 91] }
     });
@@ -1233,10 +1317,11 @@ async function sendMovementAnalysisExport(res, analysis, format) {
     doc.text('DAKSH INVENTORY SYSTEM - Movement Analysis Report', 14, 15);
     doc.setFontSize(9);
     doc.text(`Dealer: ${analysis.summary.dealerCode || '-'} | Audit: ${analysis.summary.auditId || '-'} | Rows: ${rows.length}`, 14, 21);
+    const columns = movementAnalysisColumns();
     autoTable(doc, {
       startY: 28,
-      head: [['Part Number', 'Description', 'Category', 'DMS', 'Actual', 'Variance', 'MRP', 'DLP', 'Stock Value', 'Move A', 'Move B', 'Avg Demand', 'Forecast', 'Safety', 'ROP', 'Movement Status']],
-      body: rows.slice(0, 1000).map((row) => [row.partNumber, row.partDescription, row.productCategory, row.dmsStock, row.actualStock, row.variance, row.mrp, row.dlp, row.stockValue, row.movementCodeA, row.movementCodeB, row.averageDemand, row.forecast, row.safetyStock, row.rop, row.movementStatus]),
+      head: [columns.map((column) => column.header)],
+      body: rows.slice(0, 1000).map((row) => columns.map((column) => row[column.key] ?? '')),
       styles: { fontSize: 6.6, cellPadding: 1.2 },
       headStyles: { fillColor: [21, 58, 91] }
     });

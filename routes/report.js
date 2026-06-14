@@ -25,6 +25,7 @@ const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
 const { getCachedReport } = require('../utils/reportCache');
 const { assertDlcReconciliation, calculateStockValuation, stockValuationTotals } = require('../utils/stockValuation');
+const { resolvePartPricing } = require('../utils/partPricing');
 
 const router = express.Router();
 const autoTable = autoTableModule.default || autoTableModule;
@@ -972,6 +973,8 @@ function finalColumns() {
     { header: 'Product Category', key: 'productCategory', width: 20 },
     { header: 'MRP', key: 'mrp', width: 12 },
     { header: 'DLC', key: 'dlc', width: 12 },
+    { header: 'Pricing Status', key: 'pricingStatus', width: 24 },
+    { header: 'Pricing Source', key: 'pricingSource', width: 20 },
     { header: 'Latest MRP Effective Date', key: 'latestMrpEffectiveDate', width: 24 },
     { header: 'Physical Qty', key: 'physicalQty', width: 14 },
     { header: 'Fitted Qty', key: 'fittedQty', width: 12 },
@@ -1068,6 +1071,25 @@ async function createWorkbook(query) {
 
   addSheet(workbook, 'Final Compile Report', finalColumns(), data.finalRows);
   addPartwiseInventoryAuditSheet(workbook, partwiseInventoryAuditData);
+  if (partwiseInventoryAuditData.pricingIssues && partwiseInventoryAuditData.pricingIssues.length) {
+    addSheet(workbook, 'Missing DLC Report', [
+      { header: 'Part Number', key: 'partNumber', width: 18 },
+      { header: 'Part Description', key: 'partDescription', width: 34 },
+      { header: 'Product Category', key: 'productCategory', width: 20 },
+      { header: 'MRP', key: 'mrp', width: 12, numFmt: '#,##0.00' },
+      { header: 'DLC', key: 'dlc', width: 12, numFmt: '#,##0.00' },
+      { header: 'Pricing Status', key: 'pricingStatus', width: 24 },
+      { header: 'Pricing Source', key: 'pricingSource', width: 20 },
+      { header: 'System Qty', key: 'systemQty', width: 14, numFmt: '#,##0.00' },
+      { header: 'Physical Qty', key: 'physicalQty', width: 14, numFmt: '#,##0.00' },
+      { header: 'DMS Value (DLC)', key: 'dmsStockValue', width: 18, numFmt: '#,##0.00' },
+      { header: 'Actual Value (DLC)', key: 'actualStockValue', width: 18, numFmt: '#,##0.00' },
+      { header: 'Warnings', key: 'warnings', width: 36 }
+    ], partwiseInventoryAuditData.pricingIssues.map((row) => ({
+      ...row,
+      warnings: Array.isArray(row.warnings) ? row.warnings.join(' | ') : row.pricingStatus || ''
+    })));
+  }
   addCategoryWiseVarianceSheet(workbook, categoryVarianceData);
 
   addSheet(workbook, 'Counting Raw Data', scanColumns(), data.scans.map((scan) => ({ ...scan, time: scan.timestamp, warnings: (scan.warnings || []).join(', ') })));
@@ -1690,12 +1712,12 @@ function finalReportCsv(rows = []) {
     ['Outward Qty', (row) => row.outwardQty || 0],
     ['System Qty', (row) => row.systemQty || 0],
     ['Variance Qty', (row) => (row.varianceQty ?? row.differenceQty ?? row.difference) || 0],
-    ['Actual Stock Value (DLC)', (row) => row.actualStockValue ?? row.physicalValueOnDlc ?? 0],
-    ['DMS Stock Value (DLC)', (row) => row.dmsStockValue ?? row.systemValueOnDlc ?? 0],
-    ['Variance Value (DLC)', (row) => row.varianceStockValue ?? row.varianceOnDlc ?? 0],
-    ['Actual MRP Value (Reference)', (row) => row.actualMrpValue ?? row.physicalValueOnMrp ?? 0],
-    ['DMS MRP Value (Reference)', (row) => row.dmsMrpValue ?? row.systemValueOnMrp ?? 0],
-    ['Variance MRP Value (Reference)', (row) => row.varianceMrpValue ?? row.varianceOnMrp ?? 0],
+    ['Actual Stock Value (DLC)', (row) => row.actualStockValue ?? row.physicalValueOnDlc ?? ''],
+    ['DMS Stock Value (DLC)', (row) => row.dmsStockValue ?? row.systemValueOnDlc ?? ''],
+    ['Variance Value (DLC)', (row) => row.varianceStockValue ?? row.varianceOnDlc ?? ''],
+    ['Actual MRP Value (Reference)', (row) => row.actualMrpValue ?? row.physicalValueOnMrp ?? ''],
+    ['DMS MRP Value (Reference)', (row) => row.dmsMrpValue ?? row.systemValueOnMrp ?? ''],
+    ['Variance MRP Value (Reference)', (row) => row.varianceMrpValue ?? row.varianceOnMrp ?? ''],
     ['Inventory Risk Status', (row) => row.inventoryRiskStatus || row.status || ''],
     ['Action / Remarks', (row) => row.actionRemarks || row.action || ''],
     ['Bin Locations', (row) => row.binLocations || [row.binLoc1, row.binLoc2, row.binLoc3, row.otherBinLocations, row.binLocation, row.bin].filter(Boolean).join(', ')]
@@ -1748,16 +1770,24 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
   const diffQty = auditedQty - dmsQty;
   const valueSummary = rowValueSummary(group.scans, master);
   const latestPrice = latestPriceForReport(priceHistories);
-  const mrp = finalMrpForReport(valueSummary, master, priceHistories, group.scans);
-  const dlc = Number(hasMaster ? master.dlc || 0 : 0);
-  const valuation = calculateStockValuation({ actualQuantity: auditedQty, dmsQuantity: dmsQty, dlc, mrp });
-  const physicalValueOnMrp = valuation.actualMrpValue;
-  const systemValueOnMrp = valuation.dmsMrpValue;
-  const varianceValueOnMrp = valuation.varianceMrpValue;
+  const pricing = resolvePartPricing({
+    partNumber: partNo,
+    catalogue: master,
+    master,
+    stock: first,
+    priceHistories,
+    actualQty: auditedQty,
+    dmsQty
+  });
+  const mrp = pricing.mrp;
+  const dlc = pricing.dlc;
+  const physicalValueOnMrp = pricing.actualMrpValue;
+  const systemValueOnMrp = pricing.dmsMrpValue;
+  const varianceValueOnMrp = pricing.varianceMrpValue;
   const physicalBins = binDisplayWithFitted(group.scans);
   const systemBins = splitBins(master.binLocation || master.bin || '');
-  const partDescription = rowDescription(first, hasMaster ? master : {});
-  const category = rowCategory(first, hasMaster ? master : {});
+  const partDescription = unknownIfBlank(pricing.partDescription || rowDescription(first, hasMaster ? master : {}));
+  const category = unknownIfBlank(pricing.productCategory || rowCategory(first, hasMaster ? master : {}));
   const fitted = fittedDetails(group.scans);
   const status = auditStockStatus({ mrp, physicalQty, fittedQty, systemQty: dmsQty });
   const actionRemarks = inventoryRiskAction(status);
@@ -1766,27 +1796,27 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     partNumber: group.partNo,
     partName: partDescription,
     partDescription,
-    model: hasMaster ? master.model || '' : '',
-    year: hasMaster ? master.manufacturingYear || master.year || '' : '',
-    manufacturingYear: hasMaster ? master.manufacturingYear || master.year || '' : '',
+    model: pricing.model || (hasMaster ? master.model || '' : ''),
+    year: pricing.year || (hasMaster ? master.manufacturingYear || master.year || '' : ''),
+    manufacturingYear: pricing.manufacturingYear || (hasMaster ? master.manufacturingYear || master.year || '' : ''),
     category,
     productCategory: category,
     bin: physicalBins.bin1 || '',
     binLocation: physicalBins.bin1 || '',
     mrp,
     scanUPIMRP: valueSummary.scanUPIMRP,
-    currentCatalogueMRP: valueSummary.currentCatalogueMRP,
+    currentCatalogueMRP: pricing.mrp,
     averageScannedMRP: valueSummary.averageScannedMRP,
     minScannedMRP: valueSummary.minScannedMRP,
     maxScannedMRP: valueSummary.maxScannedMRP,
     totalScanValue: valueSummary.totalScanValue,
     totalManualValue: valueSummary.totalManualValue,
-    finalInventoryValue: valuation.actualStockValue,
+    finalInventoryValue: pricing.actualStockValue,
     pricePeriod: valueSummary.pricePeriod,
     latestMrpEffectiveDate: latestPrice ? formatDate(latestPrice.effectiveFrom) : '',
     dlc,
-    productGroup: hasMaster ? master.productGroup || '' : first.productGroup || '',
-    partSubGroup: hasMaster ? master.partSubGroup || '' : first.partSubGroup || '',
+    productGroup: pricing.productGroup || (hasMaster ? master.productGroup || '' : first.productGroup || ''),
+    partSubGroup: pricing.partSubGroup || (hasMaster ? master.partSubGroup || '' : first.partSubGroup || ''),
     dmsQty,
     systemQty: dmsQty,
     physicalQty,
@@ -1820,26 +1850,30 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     systemBin3: systemBins[2],
     systemMrpValue: systemValueOnMrp,
     physicalMrpValue: physicalValueOnMrp,
-    actualStockValue: valuation.actualStockValue,
-    dmsStockValue: valuation.dmsStockValue,
-    varianceStockValue: valuation.varianceStockValue,
-    actualMrpValue: valuation.actualMrpValue,
-    dmsMrpValue: valuation.dmsMrpValue,
-    varianceMrpValue: valuation.varianceMrpValue,
+    actualStockValue: pricing.actualStockValue,
+    dmsStockValue: pricing.dmsStockValue,
+    varianceStockValue: pricing.varianceStockValue,
+    actualMrpValue: pricing.actualMrpValue,
+    dmsMrpValue: pricing.dmsMrpValue,
+    varianceMrpValue: pricing.varianceMrpValue,
     systemValueOnMrp,
     physicalValueOnMrp,
-    systemDlcValue: valuation.dmsStockValue,
-    physicalDlcValue: valuation.actualStockValue,
-    systemValueOnDlc: valuation.dmsStockValue,
-    physicalValueOnDlc: valuation.actualStockValue,
+    systemDlcValue: pricing.dmsStockValue,
+    physicalDlcValue: pricing.actualStockValue,
+    systemValueOnDlc: pricing.dmsStockValue,
+    physicalValueOnDlc: pricing.actualStockValue,
     differenceQty: diffQty,
     varianceQty: diffQty,
-    varianceValue: valuation.varianceStockValue,
+    varianceValue: pricing.varianceStockValue,
     varianceValueOnMrp,
     varianceOnMrp: varianceValueOnMrp,
     differenceMrpValue: varianceValueOnMrp,
-    differenceDlcValue: valuation.varianceStockValue,
-    varianceOnDlc: valuation.varianceStockValue,
+    differenceDlcValue: pricing.varianceStockValue,
+    varianceOnDlc: pricing.varianceStockValue,
+    pricingStatus: pricing.pricingStatus,
+    pricingSource: pricing.pricingSource,
+    pricingWarnings: pricing.pricingWarnings,
+    warnings: pricing.warnings,
     inventoryRiskStatus: status,
     actionRemarks,
     action: actionRemarks,
@@ -2101,6 +2135,8 @@ function partwiseInventoryAuditColumns() {
     { header: 'Product Category', key: 'productCategory', width: 20 },
     { header: 'MRP', key: 'mrp', width: 12, numFmt: '#,##0.00' },
     { header: 'DLC', key: 'dlc', width: 12, numFmt: '#,##0.00' },
+    { header: 'Pricing Status', key: 'pricingStatus', width: 24 },
+    { header: 'Pricing Source', key: 'pricingSource', width: 20 },
     { header: 'Latest MRP Effective Date', key: 'latestMrpEffectiveDate', width: 24 },
     { header: 'Physical Qty', key: 'physicalQty', width: 16, numFmt: '#,##0.00' },
     { header: 'Fitted Qty', key: 'fittedQty', width: 16, numFmt: '#,##0.00' },
@@ -2169,9 +2205,6 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const detailSource = hasCatalogue ? catalogue : (hasSystemStock ? system : firstScan);
   const valueSummary = rowValueSummary(scans, detailSource, priceHistories);
   const latestPrice = latestPriceForReport(priceHistories);
-  const mrp = finalMrpForReport(valueSummary, detailSource, priceHistories, scans);
-  // Uploaded dealer stock is the corrected DMS source and overrides catalogue/scan DLC.
-  const dlc = numberValue(firstPresent(system.dlp, system.dlc, catalogue.dlc, detailSource.dlc, firstScan.dlc), 0);
   const auditTypes = new Set(['AUDIT']);
   const userSummary = new Map();
   const breakdown = scans.reduce((total, scan) => {
@@ -2206,14 +2239,24 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const physicalQty = binPhysicalQty;
   const auditedQty = physicalQty;
   const systemQty = hasSystemStock ? systemQtyValue(system) : 0;
+  const pricing = resolvePartPricing({
+    partNumber: partNo,
+    catalogue,
+    master: system,
+    stock: firstScan,
+    priceHistories,
+    actualQty: auditedQty,
+    dmsQty: systemQty
+  });
+  const mrp = pricing.mrp;
+  const dlc = pricing.dlc;
   const finalAvailableQty = systemQty;
   const varianceQty = auditedQty - finalAvailableQty;
   const shortQty = Math.max(finalAvailableQty - auditedQty, 0);
   const excessQty = Math.max(auditedQty - finalAvailableQty, 0);
-  const valuation = calculateStockValuation({ actualQuantity: auditedQty, dmsQuantity: systemQty, dlc, mrp });
-  const physicalValueOnMrp = valuation.actualMrpValue;
-  const systemValueOnMrp = valuation.dmsMrpValue;
-  const varianceValueOnMrp = valuation.varianceMrpValue;
+  const physicalValueOnMrp = pricing.actualMrpValue;
+  const systemValueOnMrp = pricing.dmsMrpValue;
+  const varianceValueOnMrp = pricing.varianceMrpValue;
   const physicalBins = binDisplayWithFitted(scans);
   const fitted = fittedDetails(scans);
   const status = partwiseStatus({ mrp, physicalQty, fittedQty, systemQty });
@@ -2247,21 +2290,21 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   return {
     partNum: partNo,
     partNumber: partNo,
-    partDescription: unknownIfBlank(firstPresent(detailSource.partDescription, detailSource.partName, firstScan.partDescription, firstScan.partName)),
-    productCategory: unknownIfBlank(firstPresent(detailSource.productCategory, detailSource.category, firstScan.productCategory, firstScan.category)),
-    productGroup: unknownIfBlank(firstPresent(detailSource.productGroup, firstScan.productGroup)),
-    partSubGroup: unknownIfBlank(firstPresent(detailSource.partSubGroup, detailSource.productSubGroup, firstScan.partSubGroup, firstScan.productSubGroup)),
-    model: firstPresent(detailSource.model, firstScan.model) || '',
-    year: firstPresent(detailSource.manufacturingYear, detailSource.year, firstScan.manufacturingYear, firstScan.year) || '',
+    partDescription: unknownIfBlank(pricing.partDescription || firstPresent(detailSource.partDescription, detailSource.partName, firstScan.partDescription, firstScan.partName)),
+    productCategory: unknownIfBlank(pricing.productCategory || firstPresent(detailSource.productCategory, detailSource.category, firstScan.productCategory, firstScan.category)),
+    productGroup: unknownIfBlank(pricing.productGroup || firstPresent(detailSource.productGroup, firstScan.productGroup)),
+    partSubGroup: unknownIfBlank(pricing.partSubGroup || firstPresent(detailSource.partSubGroup, detailSource.productSubGroup, firstScan.partSubGroup, firstScan.productSubGroup)),
+    model: pricing.model || firstPresent(detailSource.model, firstScan.model) || '',
+    year: pricing.year || firstPresent(detailSource.manufacturingYear, detailSource.year, firstScan.manufacturingYear, firstScan.year) || '',
     mrp,
     scanUPIMRP: valueSummary.scanUPIMRP,
-    currentCatalogueMRP: valueSummary.currentCatalogueMRP,
+    currentCatalogueMRP: pricing.mrp,
     averageScannedMRP: valueSummary.averageScannedMRP,
     minScannedMRP: valueSummary.minScannedMRP,
     maxScannedMRP: valueSummary.maxScannedMRP,
     totalScanValue: valueSummary.totalScanValue,
     totalManualValue: valueSummary.totalManualValue,
-    finalInventoryValue: valuation.actualStockValue,
+    finalInventoryValue: pricing.actualStockValue,
     priceChangeCount: valueSummary.priceChangeCount,
     pricePeriod: valueSummary.pricePeriod,
     latestMrpEffectiveDate: latestPrice ? formatDate(latestPrice.effectiveFrom) : '',
@@ -2284,21 +2327,25 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     finalAvailableQty,
     shortQty,
     excessQty,
-    actualStockValue: valuation.actualStockValue,
-    dmsStockValue: valuation.dmsStockValue,
-    varianceStockValue: valuation.varianceStockValue,
-    actualMrpValue: valuation.actualMrpValue,
-    dmsMrpValue: valuation.dmsMrpValue,
-    varianceMrpValue: valuation.varianceMrpValue,
+    pricingStatus: pricing.pricingStatus,
+    pricingSource: pricing.pricingSource,
+    pricingWarnings: pricing.pricingWarnings,
+    warnings: pricing.warnings,
+    actualStockValue: pricing.actualStockValue,
+    dmsStockValue: pricing.dmsStockValue,
+    varianceStockValue: pricing.varianceStockValue,
+    actualMrpValue: pricing.actualMrpValue,
+    dmsMrpValue: pricing.dmsMrpValue,
+    varianceMrpValue: pricing.varianceMrpValue,
     physicalValueOnMrp,
-    physicalValueOnDlc: valuation.actualStockValue,
+    physicalValueOnDlc: pricing.actualStockValue,
     systemQty,
     systemValueOnMrp,
-    systemValueOnDlc: valuation.dmsStockValue,
+    systemValueOnDlc: pricing.dmsStockValue,
     varianceQty,
     varianceValueOnMrp,
     varianceOnMrp: varianceValueOnMrp,
-    varianceOnDlc: valuation.varianceStockValue,
+    varianceOnDlc: pricing.varianceStockValue,
     reservedQty: reservedQtyValue(system) || reservedQtyValue(detailSource),
     action,
     inventoryRiskStatus: status,
@@ -2562,12 +2609,25 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   validationLog.totalVarianceQuantity = money(validationLog.totalVarianceQuantity);
   validationLog.totalVarianceOnMRP = money(validationLog.totalVarianceOnMRP);
   validationLog.totalVarianceOnDLC = money(validationLog.totalVarianceOnDLC);
+  const pricingIssues = rows.filter((row) => row.missingMrp || row.missingDlc);
+  const pricingCoverage = {
+    totalRows: rows.length,
+    partsWithValidMrp: rows.filter((row) => Number(row.mrp || 0) > 0).length,
+    partsWithValidDlc: rows.filter((row) => Number(row.dlc || 0) > 0).length,
+    partsMissingMrp: rows.filter((row) => row.missingMrp).length,
+    partsMissingDlc: rows.filter((row) => row.missingDlc).length,
+    totalDmsQuantity: money(rows.reduce((sum, row) => sum + Number(row.systemQty || 0), 0)),
+    totalActualQuantity: money(rows.reduce((sum, row) => sum + Number(row.physicalQty || 0), 0)),
+    totalDmsValue: stockValuationTotals(rows).dmsDlcTotal,
+    totalActualValue: stockValuationTotals(rows).actualDlcTotal
+  };
   Object.assign(validationLog, {
-    actualStockValueDLC: stockValuationTotals(rows).actualDlcTotal,
-    dmsStockValueDLC: stockValuationTotals(rows).dmsDlcTotal,
+    actualStockValueDLC: pricingCoverage.totalActualValue,
+    dmsStockValueDLC: pricingCoverage.totalDmsValue,
     actualStockValueMRP: stockValuationTotals(rows).actualMrpTotal,
     dmsStockValueMRP: stockValuationTotals(rows).dmsMrpTotal,
-    valuationBasis: 'DLC'
+    valuationBasis: 'DLC',
+    pricingCoverage
   });
 
   const selectedDealer = query.dealerCode ? dealers.find((dealer) => dealer.dealerCode === String(query.dealerCode).trim().toUpperCase()) : null;
@@ -2583,10 +2643,11 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     partNumber: query.partNumber || 'All',
     status: query.status || 'All',
     action: query.action || 'All',
-    binLocation: query.bin || 'All'
+    binLocation: query.bin || 'All',
+    pricingCoverage
   };
 
-  return { rows, columns: partwiseInventoryAuditColumns(), summary, validationLog, selectedDealer, selectedAudit };
+  return { rows, columns: partwiseInventoryAuditColumns(), summary, validationLog, selectedDealer, selectedAudit, pricingIssues };
 }
 
 function addPartwiseInventoryAuditSheet(workbook, data, name = 'Partwise Inventory Audit') {
@@ -3143,7 +3204,11 @@ function stockSummaryGrandTotal(rows = []) {
 }
 
 function stockSummaryDamageValue(rows = []) {
-  return money(rows.reduce((sum, row) => sum + Math.abs(Number(row.damageQty || 0)) * Number(row.dlc || 0), 0));
+  return money(rows.reduce((sum, row) => {
+    const dlc = Number(row.dlc ?? row.dlp ?? 0);
+    if (!(dlc > 0)) return sum;
+    return sum + Math.abs(Number(row.damageQty || 0)) * dlc;
+  }, 0));
 }
 
 function stockSummaryDate(value) {
@@ -3898,8 +3963,10 @@ router.get('/pdf', auth.requireAuth, async (req, res) => {
       row.partNumber || row.partNo,
       row.partDescription || row.partName,
       row.productCategory || row.category,
-      row.mrp || 0,
-      row.dlc || 0,
+      row.mrp ?? '',
+      row.dlc ?? '',
+      row.pricingStatus || '',
+      row.pricingSource || '',
       row.latestMrpEffectiveDate || '',
       row.systemQty,
       row.physicalQty,
@@ -3912,7 +3979,7 @@ router.get('/pdf', auth.requireAuth, async (req, res) => {
       row.actionRemarks || row.action || ''
     ]);
     autoTable(doc, {
-      head: [['Part Number', 'Part Description', 'Product Category', 'MRP', 'DLC', 'Latest MRP Effective Date', 'System Qty', 'Physical Qty', 'Fitted Qty', 'Variance Qty', 'Physical Value on MRP', 'System Value on MRP', 'Variance Value on MRP', 'Inventory Risk Status', 'Action / Remarks']],
+      head: [['Part Number', 'Part Description', 'Product Category', 'MRP', 'DLC', 'Pricing Status', 'Pricing Source', 'Latest MRP Effective Date', 'System Qty', 'Physical Qty', 'Fitted Qty', 'Variance Qty', 'Physical Value on MRP', 'System Value on MRP', 'Variance Value on MRP', 'Inventory Risk Status', 'Action / Remarks']],
       body,
       startY: 28,
       styles: { fontSize: 7, cellPadding: 2 },
