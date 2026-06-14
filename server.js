@@ -80,7 +80,7 @@ const OfflineSyncService = require('./services/OfflineSyncService');
 
 const app = express();
 app.locals.reportRoutesVersion = 'dealer-report-dlc-20260602';
-app.locals.deployConfigVersion = 'render-mongo-env-20260605';
+app.locals.deployConfigVersion = 'railway-mongo-env-20260614';
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -107,7 +107,9 @@ const DEPLOY_TARGET = String(process.env.DAKSH_DEPLOY_TARGET || process.env.DEPL
 const IS_RENDER = DEPLOY_TARGET === 'render' ||
   String(process.env.RENDER || '').toLowerCase() === 'true' ||
   Boolean(process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_EXTERNAL_HOSTNAME);
-const DEPLOYMENT_NAME = IS_RENDER ? 'Render' : (IS_PRODUCTION ? 'hosting provider' : 'local PC');
+const IS_RAILWAY = DEPLOY_TARGET === 'railway' ||
+  Boolean(process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.RAILWAY_ENVIRONMENT_NAME);
+const DEPLOYMENT_NAME = IS_RENDER ? 'Render' : (IS_RAILWAY ? 'Railway' : (IS_PRODUCTION ? 'hosting provider' : 'local PC'));
 const MONGO_URI_ENV_NAMES = IS_RENDER
   ? ['RENDER_MONGO_URI', 'MONGO_URI', 'MONGODB_URI', 'MONGO_URL', 'DATABASE_URL']
   : ['MONGO_URI', 'MONGODB_URI', 'MONGO_URL', 'DATABASE_URL'];
@@ -256,6 +258,7 @@ function isProductionLocalMongoBlocked(uri) {
 
 function mongoEnvLocation() {
   if (IS_RENDER) return 'Render Environment Variables';
+  if (IS_RAILWAY) return 'Railway Variables';
   if (IS_PRODUCTION) return 'your hosting environment variables';
   return 'your .env file or environment variables';
 }
@@ -275,6 +278,9 @@ function missingMongoMessage() {
 function databaseOfflineMessage() {
   if (IS_RENDER) {
     return 'Database is offline on Render. Set RENDER_MONGO_URI or MONGO_URI to your MongoDB Atlas connection string in Render Environment Variables, then allow Render access in MongoDB Atlas Network Access.';
+  }
+  if (IS_RAILWAY) {
+    return 'Database is offline on Railway. Set MONGO_URI to your MongoDB Atlas connection string in Railway Variables, then allow Railway access in MongoDB Atlas Network Access.';
   }
   if (IS_PRODUCTION) {
     return `Database is offline. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} to ${hostedMongoDescription()} in ${mongoEnvLocation()} and check MongoDB Atlas Network Access.`;
@@ -746,12 +752,15 @@ function mongoConnectionHelp(error, uri = activeMongoUri || MONGO_URI) {
     ].join('\n');
   }
   const isAtlas = /^mongodb\+srv:\/\//i.test(uri);
+  const atlasAccessHint = IS_RENDER
+    ? 'In Atlas Network Access, allow access for testing with 0.0.0.0/0 or allow your Render outbound IP if your plan provides one.'
+    : (IS_RAILWAY
+      ? 'In Atlas Network Access, allow access for testing with 0.0.0.0/0 or allow your Railway outbound IP if your plan provides one.'
+      : 'Add your server IP address in Atlas Network Access, or use 0.0.0.0/0 during testing.');
   const hints = isAtlas
     ? [
         `Check MongoDB Atlas username/password in ${MONGO_URI_SOURCE || 'MONGO_URI'}.`,
-        IS_RENDER
-          ? 'In Atlas Network Access, allow access for testing with 0.0.0.0/0 or allow your Render outbound IP if your plan provides one.'
-          : 'Add your server IP address in Atlas Network Access, or use 0.0.0.0/0 during testing.',
+        atlasAccessHint,
         `If the error mentions querySrv, set MONGO_DNS_SERVERS=8.8.8.8,1.1.1.1 in ${mongoEnvLocation()}.`,
         'Confirm the Atlas database user has readWrite permission.',
         `Keep the MongoDB URI inside ${mongoEnvLocation()}, not in GitHub.`
@@ -906,6 +915,7 @@ app.get('/api/health', async (req, res) => {
     deployConfigVersion: req.app.locals.deployConfigVersion || '',
     deploymentTarget: DEPLOYMENT_NAME,
     render: IS_RENDER,
+    railway: IS_RAILWAY,
     acceptedMongoEnvVars: MONGO_URI_ENV_NAMES,
     configuredMongoEnvVar: MONGO_URI_SOURCE,
     mongodb: dbStatus === 'connected' ? 'online' : 'offline',
@@ -943,6 +953,7 @@ app.get('/api/ping', (req, res) => {
     deployConfigVersion: req.app.locals.deployConfigVersion || '',
     deploymentTarget: DEPLOYMENT_NAME,
     render: IS_RENDER,
+    railway: IS_RAILWAY,
     db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     serverUrl: info.serverUrl
   });
@@ -960,6 +971,7 @@ app.get('/api/ready', (req, res) => {
     activeDatabaseUri: maskMongoUri(activeMongoUri),
     deploymentTarget: DEPLOYMENT_NAME,
     render: IS_RENDER,
+    railway: IS_RAILWAY,
     acceptedMongoEnvVars: MONGO_URI_ENV_NAMES,
     configuredMongoEnvVar: MONGO_URI_SOURCE,
     message: mongoReady
