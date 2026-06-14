@@ -66,9 +66,45 @@ function isLocalhostUrl(value) {
   }
 }
 
-function publicBaseUrl(port, remoteIp = '') {
+function parseRequestHost(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return { host: '', hostname: '' };
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(text) ? text : `http://${text}`);
+    return {
+      host: parsed.host,
+      hostname: parsed.hostname.toLowerCase()
+    };
+  } catch (error) {
+    const host = text.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    const hostname = host.replace(/^\[|\]$/g, '').split(':')[0].toLowerCase();
+    return { host, hostname };
+  }
+}
+
+function isLoopbackHost(value = '') {
+  const { hostname } = parseRequestHost(value);
+  return ['localhost', '127.0.0.1', '::1'].includes(hostname) || hostname.endsWith('.localhost');
+}
+
+function isPlaceholderPublicUrl(value = '') {
+  const text = String(value || '').trim().toLowerCase();
+  return !text || text.includes('your-app.up.railway.app') || text.includes('your-live-app-url');
+}
+
+function inferRequestProtocol(requestProtocol = '', requestHost = '') {
+  const explicit = String(requestProtocol || '').trim().toLowerCase();
+  if (explicit === 'http' || explicit === 'https') return explicit;
+  const { hostname } = parseRequestHost(requestHost);
+  if (!hostname) return 'http';
+  if (['localhost', '127.0.0.1', '::1'].includes(hostname) || hostname.endsWith('.localhost')) return 'http';
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)) return 'http';
+  return 'https';
+}
+
+function publicBaseUrl(port, remoteIp = '', requestProtocol = '', requestHost = '') {
   const explicit = String(process.env.PUBLIC_BASE_URL || process.env.SERVER_URL || '').trim().replace(/\/+$/, '');
-  if (explicit) return /^https?:\/\//i.test(explicit) ? explicit : `https://${explicit}`;
+  if (explicit && !isPlaceholderPublicUrl(explicit)) return /^https?:\/\//i.test(explicit) ? explicit : `https://${explicit}`;
 
   const renderUrl = String(process.env.RENDER_EXTERNAL_URL || process.env.RENDER_EXTERNAL_HOSTNAME || '').trim().replace(/\/+$/, '');
   if (renderUrl) return /^https?:\/\//i.test(renderUrl) ? renderUrl : `https://${renderUrl}`;
@@ -79,13 +115,19 @@ function publicBaseUrl(port, remoteIp = '') {
   const railwayDomain = String(process.env.RAILWAY_PUBLIC_DOMAIN || '').trim().replace(/\/+$/, '');
   if (railwayDomain) return /^https?:\/\//i.test(railwayDomain) ? railwayDomain : `https://${railwayDomain}`;
 
+  const requestHostInfo = parseRequestHost(requestHost);
+  if (requestHostInfo.host && !isLoopbackHost(requestHostInfo.host) && !isPlaceholderPublicUrl(requestHostInfo.host)) {
+    const protocol = inferRequestProtocol(requestProtocol, requestHostInfo.host);
+    return `${protocol}://${requestHostInfo.host}`;
+  }
+
   const activePort = Number(port || process.env.PORT || 3001);
   return `http://${detectLanIpForRemote(remoteIp)}:${activePort}`;
 }
 
-function serverInfo(port, remoteIp = '') {
+function serverInfo(port, remoteIp = '', requestProtocol = '', requestHost = '') {
   const activePort = Number(port || process.env.PORT || 3001);
-  const serverUrl = publicBaseUrl(activePort, remoteIp);
+  const serverUrl = publicBaseUrl(activePort, remoteIp, requestProtocol, requestHost);
   const parsed = new URL(serverUrl);
   const ip = parsed.hostname;
   const hostPort = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
@@ -107,6 +149,7 @@ module.exports = {
   detectLanIp,
   detectLanIpForRemote,
   isLocalhostUrl,
+  parseRequestHost,
   publicBaseUrl,
   serverInfo
 };

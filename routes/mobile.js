@@ -383,7 +383,7 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
 
 router.get('/config', auth.optionalAuth, async (req, res) => {
   try {
-    const info = serverInfo(req.app.locals.activePort);
+    const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
     const activeAudit = await getActiveAudit({ dealerCode: req.query.dealerCode }).catch(() => null);
     return res.json({
       success: true,
@@ -436,7 +436,7 @@ router.post('/device-register', auth.requireAuth, async (req, res) => {
         userName: clean(req.body.userName || req.user.name || req.user.username),
         staffName: clean(req.body.staffName || req.body.userName || req.user.name || req.user.username),
         role: clean(req.body.role || req.user.role).toLowerCase(),
-        serverUrl: clean(req.body.serverUrl || serverInfo(req.app.locals.activePort).serverUrl),
+        serverUrl: clean(req.body.serverUrl || serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '').serverUrl),
         status: 'online',
         syncStatus: Number(req.body.failedCount || 0) > 0 ? 'failed' : 'idle',
         scannerStatus: 'ready',
@@ -468,7 +468,7 @@ router.post('/realtime-scan', auth.requireAuth, sync.pushHandler);
 
 router.get('/status', auth.optionalAuth, async (req, res) => {
   try {
-    const info = serverInfo(req.app.locals.activePort);
+    const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
     const activeAudit = await getActiveAudit({ dealerCode: req.query.dealerCode }).catch(() => null);
     const status = await mobileDeviceStatus(clean(req.query.deviceId));
     return res.json({

@@ -1235,7 +1235,7 @@ async function saveNormalizedScan(scan, req) {
   return { status: 'synced', scan: doc, error: '' };
 }
 
-async function syncSummary(activePort, dealerCode = '') {
+async function syncSummary(activePort, dealerCode = '', req = null) {
   await Device.updateMany({ status: 'online', lastSeen: { $lt: liveCutoff() } }, { status: 'offline' });
   const dealer = upper(dealerCode);
   const scope = dealer ? { dealerCode: dealer } : {};
@@ -1247,7 +1247,12 @@ async function syncSummary(activePort, dealerCode = '') {
     Device.countDocuments({ ...scope, status: 'online', lastSeen: { $gte: liveCutoff() } }),
     latestSuccessfulSyncTime(dealer)
   ]);
-  const info = serverInfo(activePort);
+  const info = serverInfo(
+    activePort,
+    '',
+    req ? req.protocol : '',
+    req ? (req.get('x-forwarded-host') || req.get('host') || '') : ''
+  );
   const lastSync = lastSyncAt ? lastSyncAt.toISOString() : '';
 
   return {
@@ -2035,7 +2040,7 @@ async function pushHandler(req, res) {
     });
 
     if (deviceId) {
-      const info = serverInfo(req.app.locals.activePort);
+      const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
       const deviceUpdate = {
         deviceId,
         deviceName: clean(body.deviceName || 'Scanner Device'),
@@ -2067,7 +2072,7 @@ async function pushHandler(req, res) {
       if (io) io.emit('device:heartbeat', { deviceId, dealerCode, status: 'online', lastSeen: completedAt });
     }
 
-    const summary = await syncSummary(req.app.locals.activePort, dealerCode);
+    const summary = await syncSummary(req.app.locals.activePort, dealerCode, req);
     await emitEnterpriseRealtime(io, savedScans);
     const payload = {
       success: !allRowsRejected,
@@ -2165,7 +2170,7 @@ router.get('/status', auth.optionalAuth, async (req, res) => {
       if (!access.allowed) return res.status(403).json({ success: false, message: 'Unauthorized dealer access', requestedDealer: access.requestedDealer });
     }
     const [summary, lastLog] = await Promise.all([
-      syncSummary(req.app.locals.activePort, dealerCode),
+      syncSummary(req.app.locals.activePort, dealerCode, req),
       SyncLog.findOne(dealerCode ? { dealerCode } : {}).sort({ createdAt: -1 }).lean()
     ]);
     res.json({ success: true, ...summary, syncEngineStatus: 'running', lastApiResponse: lastLog || null });

@@ -634,7 +634,7 @@ router.get('/part', auth.requireAuth, async (req, res) => {
 router.get('/pairing', auth.requireAuth, async (req, res) => {
   try {
     const port = req.app.locals.activePort || process.env.PORT || 3001;
-    const info = serverInfo(port);
+    const info = serverInfo(port, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
     const activeAudit = await getActiveAudit();
     const pairService = req.app.get('qrPairService');
     const securePairing = pairService

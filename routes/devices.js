@@ -596,7 +596,7 @@ router.post('/bluetooth/clear-ghosts', auth.requireAuth, auth.requireAdmin, asyn
 
 async function connectHandler(req, res) {
   try {
-    const info = serverInfo(req.app.locals.activePort);
+    const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
     const requestedDealerCode = clean(req.body.dealerCode || req.query.dealerCode);
     const activeAudit = await getActiveAudit(requestedDealerCode ? { dealerCode: requestedDealerCode } : {});
     const payload = cleanDevicePayload(req, {
@@ -652,7 +652,7 @@ async function heartbeatHandler(req, res) {
       req.io.emit('devices:update');
       return res.status(403).json({ success: false, approved: false, status: 'blocked', message: 'This mobile device is blocked by admin.' });
     }
-    const info = serverInfo(req.app.locals.activePort);
+    const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
     const requestedDealerCode = clean(req.body.dealerCode || req.query.dealerCode);
     const activeAudit = await getActiveAudit(requestedDealerCode ? { dealerCode: requestedDealerCode } : {});
     const payload = cleanDevicePayload(req, {
@@ -761,7 +761,7 @@ router.post('/remove', auth.requireAuth, auth.requireAdmin, async (req, res) => 
 
 router.get('/network-test', auth.requireAuth, async (req, res) => {
   try {
-    const info = serverInfo(req.app.locals.activePort);
+    const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
     const activeAudit = await getActiveAudit();
     return res.json({
       success: true,
@@ -784,7 +784,7 @@ router.get('/network-test', auth.requireAuth, async (req, res) => {
 
 router.get('/discovery', auth.optionalAuth, async (req, res) => {
   try {
-    const info = serverInfo(req.app.locals.activePort);
+    const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
     const activeAudit = await getActiveAudit();
     return res.json({
       success: true,

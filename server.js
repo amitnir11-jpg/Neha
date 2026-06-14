@@ -888,7 +888,7 @@ app.get('/force-login', (req, res) => {
 
 app.get('/api/health', async (req, res) => {
   const activePort = req.app.locals.activePort || PORT;
-  const info = serverInfo(activePort, req.ip || req.socket.remoteAddress);
+  const info = serverInfo(activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
   const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
   const databaseDetails = mongoHealthDetails();
   const [connectedDevices, pending, failed, lastSyncDoc, lastSyncLog, lastSyncDevice] = await Promise.all([
@@ -943,7 +943,7 @@ app.get('/api/health', async (req, res) => {
 });
 
 app.get('/api/ping', (req, res) => {
-  const info = serverInfo(req.app.locals.activePort || PORT, req.ip || req.socket.remoteAddress);
+  const info = serverInfo(req.app.locals.activePort || PORT, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
   res.json({
     success: true,
     status: 'online',
@@ -981,7 +981,7 @@ app.get('/api/ready', (req, res) => {
 });
 
 app.get('/api/discovery', (req, res) => {
-  const info = serverInfo(req.app.locals.activePort || PORT, req.ip || req.socket.remoteAddress);
+  const info = serverInfo(req.app.locals.activePort || PORT, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
   res.json({
     success: true,
     app: 'daksh-inventory-v2',
