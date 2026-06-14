@@ -45,20 +45,37 @@ async function cachedReport(namespace, query, builder) {
   return result.data;
 }
 
-function cachedBuildReportData(query = {}) {
-  return cachedReport('report-data', query, buildReportData);
+async function resolveReportAuditQuery(query = {}) {
+  const resolved = normalizeReportQuery(query);
+  const auditHint = reportQueryValue(query.auditId || query.audit || resolved.auditId || '');
+  if (auditHint && auditHint.toLowerCase() !== 'active') {
+    resolved.auditId = auditHint;
+    return resolved;
+  }
+  if (!resolved.dealerCode) return resolved;
+  const [dealer, activeAudit] = await Promise.all([
+    Dealer.findOne({ dealerCode: resolved.dealerCode }).lean().catch(() => null),
+    getActiveAudit({ dealerCode: resolved.dealerCode }).catch(() => null)
+  ]);
+  const resolvedAuditId = cleanText((dealer && dealer.currentAuditId) || (activeAudit && activeAudit.auditId) || '');
+  if (resolvedAuditId) resolved.auditId = resolvedAuditId;
+  return resolved;
 }
 
-function cachedBuildPartwiseInventoryAuditReport(query = {}) {
-  return cachedReport('partwise-inventory-audit', query, buildPartwiseInventoryAuditReport);
+async function cachedBuildReportData(query = {}) {
+  return cachedReport('report-data', await resolveReportAuditQuery(query), buildReportData);
 }
 
-function cachedBuildCategoryWiseVarianceSummary(query = {}) {
-  return cachedReport('category-wise-variance-summary', query, buildCategoryWiseVarianceSummary);
+async function cachedBuildPartwiseInventoryAuditReport(query = {}) {
+  return cachedReport('partwise-inventory-audit', await resolveReportAuditQuery(query), buildPartwiseInventoryAuditReport);
 }
 
-function cachedBuildStockSummaryReport(query = {}) {
-  return cachedReport('stock-summary', query, buildStockSummaryReport);
+async function cachedBuildCategoryWiseVarianceSummary(query = {}) {
+  return cachedReport('category-wise-variance-summary', await resolveReportAuditQuery(query), buildCategoryWiseVarianceSummary);
+}
+
+async function cachedBuildStockSummaryReport(query = {}) {
+  return cachedReport('stock-summary', await resolveReportAuditQuery(query), buildStockSummaryReport);
 }
 
 function cachedBuildPartsInventoryRefreshRows(query = {}) {
@@ -3138,6 +3155,42 @@ function emptyStockSummaryCategory(category) {
   };
 }
 
+function stockSummaryDlcRate(row = {}) {
+  return numberValue(row.dlc ?? row.dlp ?? 0, 0);
+}
+
+function stockSummarySystemQty(row = {}) {
+  return numberValue(row.systemQty ?? row.dmsQty ?? row.openingStock ?? row.dmsStock ?? 0, 0);
+}
+
+function stockSummaryPhysicalQty(row = {}) {
+  return numberValue(row.finalAuditQty ?? row.actualAuditQty ?? row.physicalQty ?? row.actualQty ?? 0, 0);
+}
+
+function stockSummaryDmsValue(row = {}) {
+  const value = row.dmsStockValue ?? row.systemValueOnDlc ?? row.systemDlcValue;
+  if (value !== undefined && value !== null && value !== '') return numberValue(value, 0);
+  const dlc = stockSummaryDlcRate(row);
+  const qty = stockSummarySystemQty(row);
+  return dlc > 0 ? money(qty * dlc) : 0;
+}
+
+function stockSummaryActualValue(row = {}) {
+  const value = row.actualStockValue ?? row.physicalValueOnDlc;
+  if (value !== undefined && value !== null && value !== '') return numberValue(value, 0);
+  const dlc = stockSummaryDlcRate(row);
+  const qty = stockSummaryPhysicalQty(row);
+  return dlc > 0 ? money(qty * dlc) : 0;
+}
+
+function stockSummaryVarianceValue(row = {}) {
+  const value = row.varianceStockValue ?? row.varianceOnDlc ?? row.differenceDlcValue;
+  if (value !== undefined && value !== null && value !== '') return numberValue(value, 0);
+  const dlc = stockSummaryDlcRate(row);
+  if (!(dlc > 0)) return 0;
+  return money((stockSummaryPhysicalQty(row) - stockSummarySystemQty(row)) * dlc);
+}
+
 function stockSummaryCategory(row = {}) {
   const text = stockSummaryCategoryText(row);
   if (/\bVIDA\b/i.test(text)) return 'VIDA Parts';
@@ -3153,12 +3206,12 @@ function stockSummaryCategory(row = {}) {
 }
 
 function addStockSummaryMatrixValues(total, row = {}) {
-  const systemQty = Number(row.systemQty || 0);
-  const physicalQty = Number(row.finalAuditQty ?? row.actualAuditQty ?? row.physicalQty ?? 0);
+  const systemQty = stockSummarySystemQty(row);
+  const physicalQty = stockSummaryPhysicalQty(row);
   const varianceQty = physicalQty - systemQty;
-  const dmsValue = Number(row.dmsStockValue ?? row.systemValueOnDlc ?? 0);
-  const physicalValue = Number(row.actualStockValue ?? row.physicalValueOnDlc ?? row.finalInventoryValue ?? 0);
-  const varianceValue = Math.abs(Number(row.varianceStockValue ?? row.varianceOnDlc ?? 0));
+  const dmsValue = stockSummaryDmsValue(row);
+  const physicalValue = stockSummaryActualValue(row);
+  const varianceValue = Math.abs(stockSummaryVarianceValue(row));
   total.dmsValue += dmsValue;
   total.dmsQuantity += systemQty;
   if (systemQty !== 0) total.dmsPartLines += 1;
@@ -3172,7 +3225,7 @@ function addStockSummaryMatrixValues(total, row = {}) {
     total.shortValue += varianceValue;
     total.shortPartLines += 1;
   }
-  total.netDifference += Number(row.varianceStockValue ?? row.varianceOnDlc ?? 0);
+  total.netDifference += stockSummaryVarianceValue(row);
 }
 
 function roundStockSummaryMatrixRow(row = {}) {
@@ -3205,10 +3258,41 @@ function stockSummaryGrandTotal(rows = []) {
 
 function stockSummaryDamageValue(rows = []) {
   return money(rows.reduce((sum, row) => {
-    const dlc = Number(row.dlc ?? row.dlp ?? 0);
+    const dlc = stockSummaryDlcRate(row);
     if (!(dlc > 0)) return sum;
     return sum + Math.abs(Number(row.damageQty || 0)) * dlc;
   }, 0));
+}
+
+function stockSummaryFooterTotals(rows = []) {
+  const totals = rows.reduce((summary, row) => {
+    const dlc = stockSummaryDlcRate(row);
+    const manualQty = Math.abs(numberValue(row.manualQty || 0, 0));
+    const damageQty = Math.abs(numberValue(row.damageQty || 0, 0));
+    const varianceQty = stockSummaryPhysicalQty(row) - stockSummarySystemQty(row);
+    const varianceValue = stockSummaryVarianceValue(row);
+
+    if (dlc > 0) {
+      summary.manualContribution += manualQty * dlc;
+      summary.damagedItemsValue += damageQty * dlc;
+    }
+    if (varianceQty > 0) summary.totalExcessValue += Math.abs(varianceValue);
+    else if (varianceQty < 0) summary.totalShortValue += Math.abs(varianceValue);
+    return summary;
+  }, {
+    damagedItemsValue: 0,
+    manualContribution: 0,
+    totalShortValue: 0,
+    totalExcessValue: 0
+  });
+
+  return {
+    damagedItemsValue: money(totals.damagedItemsValue),
+    manualContribution: money(totals.manualContribution),
+    totalShortValue: money(totals.totalShortValue),
+    totalExcessValue: money(totals.totalExcessValue),
+    netDiff: money(totals.totalExcessValue - totals.totalShortValue)
+  };
 }
 
 function stockSummaryDate(value) {
@@ -3252,12 +3336,13 @@ async function buildStockSummaryReport(query = {}) {
   const selectedAudit = partwise.selectedAudit || null;
   const matrixRows = stockSummaryMatrixRows(rows);
   const grandTotal = stockSummaryGrandTotal(matrixRows);
+  const footerTotals = stockSummaryFooterTotals(rows);
   const footer = {
-    damagedItemsValue: stockSummaryDamageValue(rows),
-    manualContribution: '',
-    totalShortValue: grandTotal.shortValue,
-    totalExcessValue: grandTotal.excessValue,
-    netDiff: grandTotal.netDifference,
+    damagedItemsValue: footerTotals.damagedItemsValue,
+    manualContribution: footerTotals.manualContribution,
+    totalShortValue: footerTotals.totalShortValue,
+    totalExcessValue: footerTotals.totalExcessValue,
+    netDiff: footerTotals.netDiff,
     undefinedItemsDeadline: '',
     damagedItemsDeadline: ''
   };
@@ -3282,10 +3367,17 @@ async function buildStockSummaryReport(query = {}) {
     model: query.model || 'All',
     year: query.year || 'All',
     totalSkuCount: rows.length,
-    totalStockRows: rows.filter((row) => Number(row.systemQty || 0) !== 0).length,
-    totalPhysicalParts: rows.filter((row) => Number(row.physicalQty || 0) !== 0).length,
+    totalStockRows: rows.filter((row) => stockSummarySystemQty(row) !== 0).length,
+    totalPhysicalParts: rows.filter((row) => stockSummaryPhysicalQty(row) !== 0).length,
     actualStockValueDLC: grandTotal.physicalValue,
     dmsStockValueDLC: grandTotal.dmsValue,
+    damagedItemsValue: footer.damagedItemsValue,
+    manualContribution: footer.manualContribution,
+    totalShortValue: footer.totalShortValue,
+    totalExcessValue: footer.totalExcessValue,
+    netDiff: footer.netDiff,
+    pricingCoverage: partwise.pricingCoverage || null,
+    pricingIssues: partwise.pricingIssues || [],
     valuationBasis: 'DLC'
   };
   return { rows: matrixRows.concat([grandTotal]), columns: stockSummaryColumns(), sections, summary, detailRows: rows, selectedDealer, selectedAudit, message: rows.length ? '' : 'No stock summary data found for selected dealer/filter' };
