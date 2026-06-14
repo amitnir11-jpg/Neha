@@ -1,3 +1,5 @@
+const { firstNonZeroNumber, firstPositiveNumber } = require('./normalize');
+
 function numberValue(value, fallback = 0) {
   const parsed = Number(String(value === undefined || value === null || value === '' ? fallback : value).replace(/,/g, '').trim());
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -31,12 +33,12 @@ function calculateStockValuation({ actualQuantity = 0, dmsQuantity = 0, dlc = 0,
 
 function stockValuationTotals(rows = []) {
   const totals = (Array.isArray(rows) ? rows : []).reduce((summary, row = {}) => {
-    summary.actualDlcTotal += numberValue(row.actualStockValue ?? row.physicalValueOnDlc, 0);
-    summary.dmsDlcTotal += numberValue(row.dmsStockValue ?? row.systemValueOnDlc, 0);
-    summary.varianceDlcTotal += numberValue(row.varianceStockValue ?? row.varianceOnDlc, 0);
-    summary.actualMrpTotal += numberValue(row.actualMrpValue ?? row.physicalValueOnMrp, 0);
-    summary.dmsMrpTotal += numberValue(row.dmsMrpValue ?? row.systemValueOnMrp, 0);
-    summary.varianceMrpTotal += numberValue(row.varianceMrpValue ?? row.varianceOnMrp, 0);
+    summary.actualDlcTotal += firstPositiveNumber(row.actualStockValue, row.physicalValueOnDlc);
+    summary.dmsDlcTotal += firstPositiveNumber(row.dmsStockValue, row.systemValueOnDlc, row.systemDlcValue, row.stockValueDlc, row.stockValue);
+    summary.varianceDlcTotal += firstNonZeroNumber(row.varianceStockValue, row.varianceOnDlc, row.differenceDlcValue);
+    summary.actualMrpTotal += firstPositiveNumber(row.actualMrpValue, row.physicalValueOnMrp);
+    summary.dmsMrpTotal += firstPositiveNumber(row.dmsMrpValue, row.systemValueOnMrp);
+    summary.varianceMrpTotal += firstNonZeroNumber(row.varianceMrpValue, row.varianceOnMrp, row.differenceMrpValue);
     return summary;
   }, {
     actualDlcTotal: 0,

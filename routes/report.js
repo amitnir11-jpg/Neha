@@ -15,7 +15,7 @@ const Device = require('../models/Device');
 const auth = require('./auth');
 const inventoryRoute = require('./inventory');
 const reconciliationRoute = require('./reconciliation');
-const { normalizePartNumber: normalizePartNo, cleanText: normalizedCleanText, numberValue } = require('../utils/normalize');
+const { firstNonZeroNumber, firstPositiveNumber, normalizePartNumber: normalizePartNo, cleanText: normalizedCleanText, numberValue } = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
 const { formatDateLikeFields, formatIstDateTime, isDateLikeKey } = require('../utils/time');
 const { auditStockStatus, calculateInventoryValue, decorateScanValue, scanValueRow, validateReportValueSource } = require('../utils/inventoryValueEngine');
@@ -179,18 +179,18 @@ function latestPriceForReport(priceHistories = [], asOf = new Date()) {
 
 function finalMrpForReport(valueSummary = {}, detailSource = {}, priceHistories = [], scans = []) {
   const scanFinalMrps = (Array.isArray(scans) ? scans : [])
-    .map((scan) => numberValue(firstPresent(scan.finalMRP, scan.finalMrp, scan.valuationMRP, scan.mrp), 0))
+    .map((scan) => firstPositiveNumber(scan.finalMRP, scan.finalMrp, scan.valuationMRP, scan.mrp))
     .filter((mrp) => mrp > 0);
   if (scanFinalMrps.length) return scanFinalMrps[scanFinalMrps.length - 1];
   const latestPrice = latestPriceForReport(priceHistories);
-  return numberValue(firstPresent(
+  return firstPositiveNumber(
     latestPrice && latestPrice.mrp,
     valueSummary.averageScannedMRP,
     valueSummary.currentCatalogueMRP,
     detailSource.mrp,
     detailSource.currentCatalogueMRP,
     detailSource.currentCatalogueMrp
-  ), 0);
+  );
 }
 
 function latestMrpEffectiveDate(priceHistories = []) {
@@ -1230,12 +1230,12 @@ function mainAuditRows(data) {
     outwardQty: row.outwardQty || 0,
     systemQty: row.systemQty,
     varianceQty: row.varianceQty,
-    actualStockValue: row.actualStockValue ?? row.physicalValueOnDlc ?? 0,
-    dmsStockValue: row.dmsStockValue ?? row.systemValueOnDlc ?? 0,
-    varianceStockValue: row.varianceStockValue ?? row.varianceOnDlc ?? 0,
-    actualMrpValue: row.actualMrpValue ?? row.physicalValueOnMrp ?? 0,
-    dmsMrpValue: row.dmsMrpValue ?? row.systemValueOnMrp ?? 0,
-    varianceMrpValue: row.varianceMrpValue ?? row.varianceOnMrp ?? 0,
+    actualStockValue: firstPositiveNumber(row.actualStockValue, row.physicalValueOnDlc, 0),
+    dmsStockValue: firstPositiveNumber(row.dmsStockValue, row.systemValueOnDlc, row.systemDlcValue, row.stockValueDlc, row.stockValue, 0),
+    varianceStockValue: firstNonZeroNumber(row.varianceStockValue, row.varianceOnDlc, row.differenceDlcValue, 0),
+    actualMrpValue: firstPositiveNumber(row.actualMrpValue, row.physicalValueOnMrp, 0),
+    dmsMrpValue: firstPositiveNumber(row.dmsMrpValue, row.systemValueOnMrp, 0),
+    varianceMrpValue: firstNonZeroNumber(row.varianceMrpValue, row.varianceOnMrp, row.differenceMrpValue, 0),
     inventoryRiskStatus: row.inventoryRiskStatus || row.status || '',
     actionRemarks: row.actionRemarks || row.action || '',
     binLocations: row.binLocations || [row.binLoc1, row.binLoc2, row.binLoc3, row.otherBinLocations, row.binLocation, row.bin].filter(Boolean).join(', ')
@@ -1511,7 +1511,7 @@ function realReportText(value) {
 }
 
 function masterQty(master = {}) {
-  return Number(master.dmsStock !== undefined ? master.dmsStock : master.systemQty !== undefined ? master.systemQty : master.qty !== undefined ? master.qty : master.openingStockQty !== undefined ? master.openingStockQty : master.quantity || 0);
+  return firstPositiveNumber(master.dmsStock, master.systemQty, master.qty, master.openingStockQty, master.quantity, master.stockOnHand);
 }
 
 function enrichScan(scan = {}, master = {}) {
@@ -1549,7 +1549,7 @@ function enrichScan(scan = {}, master = {}) {
     valuationSource: scan.valuationSource || '',
     finalInventoryValue: Number(scan.finalInventoryValue || 0),
     currentCatalogueMRP: Number(master.mrp || 0),
-    dlc: Number(master.dlc !== undefined ? master.dlc : scan.dlc || 0),
+    dlc: firstPositiveNumber(master.dlc, master.dlp, scan.dlc, scan.dlp),
     productGroup: hasMaster ? master.productGroup || scan.productGroup || '' : scan.productGroup || '',
     partSubGroup: hasMaster ? master.partSubGroup || scan.partSubGroup || '' : scan.partSubGroup || '',
     qty,
@@ -1729,12 +1729,12 @@ function finalReportCsv(rows = []) {
     ['Outward Qty', (row) => row.outwardQty || 0],
     ['System Qty', (row) => row.systemQty || 0],
     ['Variance Qty', (row) => (row.varianceQty ?? row.differenceQty ?? row.difference) || 0],
-    ['Actual Stock Value (DLC)', (row) => row.actualStockValue ?? row.physicalValueOnDlc ?? ''],
-    ['DMS Stock Value (DLC)', (row) => row.dmsStockValue ?? row.systemValueOnDlc ?? ''],
-    ['Variance Value (DLC)', (row) => row.varianceStockValue ?? row.varianceOnDlc ?? ''],
-    ['Actual MRP Value (Reference)', (row) => row.actualMrpValue ?? row.physicalValueOnMrp ?? ''],
-    ['DMS MRP Value (Reference)', (row) => row.dmsMrpValue ?? row.systemValueOnMrp ?? ''],
-    ['Variance MRP Value (Reference)', (row) => row.varianceMrpValue ?? row.varianceOnMrp ?? ''],
+    ['Actual Stock Value (DLC)', (row) => firstPositiveNumber(row.actualStockValue, row.physicalValueOnDlc, '')],
+    ['DMS Stock Value (DLC)', (row) => firstPositiveNumber(row.dmsStockValue, row.systemValueOnDlc, row.systemDlcValue, row.stockValueDlc, row.stockValue, '')],
+    ['Variance Value (DLC)', (row) => firstNonZeroNumber(row.varianceStockValue, row.varianceOnDlc, row.differenceDlcValue, '')],
+    ['Actual MRP Value (Reference)', (row) => firstPositiveNumber(row.actualMrpValue, row.physicalValueOnMrp, '')],
+    ['DMS MRP Value (Reference)', (row) => firstPositiveNumber(row.dmsMrpValue, row.systemValueOnMrp, '')],
+    ['Variance MRP Value (Reference)', (row) => firstNonZeroNumber(row.varianceMrpValue, row.varianceOnMrp, row.differenceMrpValue, '')],
     ['Inventory Risk Status', (row) => row.inventoryRiskStatus || row.status || ''],
     ['Action / Remarks', (row) => row.actionRemarks || row.action || ''],
     ['Bin Locations', (row) => row.binLocations || [row.binLoc1, row.binLoc2, row.binLoc3, row.otherBinLocations, row.binLocation, row.bin].filter(Boolean).join(', ')]
@@ -2081,9 +2081,9 @@ async function buildReportData(query = {}) {
     const merged = {
       ...(masterByPart.get(partNo) || {}),
       ...stock,
-      dlc: numberValue(firstPresent(stock.dlp, stock.dlc), 0),
-      dmsStock: numberValue(firstPresent(stock.dmsStock, stock.systemQty), 0),
-      systemQty: numberValue(firstPresent(stock.systemQty, stock.dmsStock), 0)
+      dlc: firstPositiveNumber(stock.dlp, stock.dlc),
+      dmsStock: firstPositiveNumber(stock.dmsStock, stock.systemQty),
+      systemQty: firstPositiveNumber(stock.systemQty, stock.dmsStock)
     };
     masterByPart.set(partNo, merged);
     if (dealerCode) masterByDealer.set(masterKey(partNo, dealerCode), merged);
@@ -2179,11 +2179,11 @@ function firstPresent(...values) {
 }
 
 function systemQtyValue(master = {}) {
-  return numberValue(firstPresent(master.dmsStock, master.systemQty, master.openingStockQty, master.quantity, master.qty, master.stockOnHand), 0);
+  return firstPositiveNumber(master.dmsStock, master.systemQty, master.openingStockQty, master.quantity, master.qty, master.stockOnHand);
 }
 
 function reservedQtyValue(master = {}) {
-  return numberValue(firstPresent(master.reservedQty, master.onHandReserved, master.reserved, master.reserveQty), 0);
+  return firstPositiveNumber(master.reservedQty, master.onHandReserved, master.reserved, master.reserveQty);
 }
 
 function scanDetailsForPartwise(scans = []) {
@@ -2925,7 +2925,7 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
     const valueRow = scanValueRow(scan);
     const mrp = numberValue(valueRow.valuationMRP, 0);
-    const dlc = numberValue(master && master.dlc !== undefined ? master.dlc : scan.dlc, 0);
+    const dlc = firstPositiveNumber(master && master.dlc, scan.dlc);
     if (actionFilter === 'Inventory Matched') {
       if (master) addCategoryVarianceGroup(groupMap, category, 'Inventory Matched', 0, mrp, dlc);
       return;
@@ -3156,36 +3156,40 @@ function emptyStockSummaryCategory(category) {
 }
 
 function stockSummaryDlcRate(row = {}) {
-  return numberValue(row.dlc ?? row.dlp ?? 0, 0);
+  const rate = firstPositiveNumber(row.dlc, row.dlp);
+  if (rate > 0) return rate;
+  const qty = stockSummarySystemQty(row);
+  const directValue = firstPositiveNumber(row.dmsStockValue, row.systemValueOnDlc, row.systemDlcValue, row.stockValueDlc, row.stockValue);
+  return qty > 0 && directValue > 0 ? money(directValue / qty) : 0;
 }
 
 function stockSummarySystemQty(row = {}) {
-  return numberValue(row.systemQty ?? row.dmsQty ?? row.openingStock ?? row.dmsStock ?? 0, 0);
+  return firstPositiveNumber(row.systemQty, row.dmsQty, row.openingStock, row.dmsStock);
 }
 
 function stockSummaryPhysicalQty(row = {}) {
-  return numberValue(row.finalAuditQty ?? row.actualAuditQty ?? row.physicalQty ?? row.actualQty ?? 0, 0);
+  return firstPositiveNumber(row.finalAuditQty, row.actualAuditQty, row.physicalQty, row.actualQty);
 }
 
 function stockSummaryDmsValue(row = {}) {
-  const value = row.dmsStockValue ?? row.systemValueOnDlc ?? row.systemDlcValue;
-  if (value !== undefined && value !== null && value !== '') return numberValue(value, 0);
+  const value = firstPositiveNumber(row.dmsStockValue, row.systemValueOnDlc, row.systemDlcValue, row.stockValueDlc, row.stockValue);
+  if (value > 0) return value;
   const dlc = stockSummaryDlcRate(row);
   const qty = stockSummarySystemQty(row);
   return dlc > 0 ? money(qty * dlc) : 0;
 }
 
 function stockSummaryActualValue(row = {}) {
-  const value = row.actualStockValue ?? row.physicalValueOnDlc;
-  if (value !== undefined && value !== null && value !== '') return numberValue(value, 0);
+  const value = firstPositiveNumber(row.actualStockValue, row.physicalValueOnDlc, row.physicalDlcValue);
+  if (value > 0) return value;
   const dlc = stockSummaryDlcRate(row);
   const qty = stockSummaryPhysicalQty(row);
   return dlc > 0 ? money(qty * dlc) : 0;
 }
 
 function stockSummaryVarianceValue(row = {}) {
-  const value = row.varianceStockValue ?? row.varianceOnDlc ?? row.differenceDlcValue;
-  if (value !== undefined && value !== null && value !== '') return numberValue(value, 0);
+  const value = firstNonZeroNumber(row.varianceStockValue, row.varianceOnDlc, row.differenceDlcValue);
+  if (value !== 0) return value;
   const dlc = stockSummaryDlcRate(row);
   if (!(dlc > 0)) return 0;
   return money((stockSummaryPhysicalQty(row) - stockSummarySystemQty(row)) * dlc);

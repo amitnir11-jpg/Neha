@@ -24,8 +24,32 @@ function numberValue(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function toNumericOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(cleanText(value).replace(/,/g, ''));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function firstPositiveNumber(...values) {
+  for (const value of values) {
+    const parsed = toNumericOrNull(value);
+    if (parsed !== null && parsed > 0) return parsed;
+  }
+  return 0;
+}
+
+function firstNonZeroNumber(...values) {
+  for (const value of values) {
+    const parsed = toNumericOrNull(value);
+    if (parsed !== null && parsed !== 0) return parsed;
+  }
+  return 0;
+}
+
 module.exports = {
   cleanText,
+  firstNonZeroNumber,
+  firstPositiveNumber,
   normalizePartNumber,
   normalizeCategory,
   numberValue

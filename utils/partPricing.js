@@ -1,4 +1,4 @@
-const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
+const { cleanText, firstPositiveNumber, normalizePartNumber, numberValue } = require('./normalize');
 const { latestCurrentPriceFromRows } = require('./priceHistory');
 const { calculateStockValuation } = require('./stockValuation');
 
@@ -37,8 +37,8 @@ function normalizePricingRecord(record = {}, source = '') {
     manufacturingYear: upper(sourceRecord.manufacturingYear || sourceRecord.year || ''),
     productGroup: upper(sourceRecord.productGroup || ''),
     partSubGroup: upper(sourceRecord.partSubGroup || sourceRecord.productSubGroup || ''),
-    mrp: numberValue(sourceRecord.mrp ?? sourceRecord.currentCatalogueMRP ?? sourceRecord.currentCatalogueMrp ?? 0, 0),
-    dlc: numberValue(sourceRecord.dlc ?? sourceRecord.dlp ?? 0, 0),
+    mrp: firstPositiveNumber(sourceRecord.mrp, sourceRecord.currentCatalogueMRP, sourceRecord.currentCatalogueMrp),
+    dlc: firstPositiveNumber(sourceRecord.dlc, sourceRecord.dlp),
     dealerCode: upper(sourceRecord.dealerCode || '')
   };
 }
