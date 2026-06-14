@@ -239,7 +239,6 @@ function isDealerScopedRequest(req) {
   return [
     '/api/scans',
     '/api/inventory',
-    '/api/dashboard',
     '/api/reports',
     '/api/reconciliation',
     '/api/dealer-stock',

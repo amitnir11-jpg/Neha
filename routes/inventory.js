@@ -648,73 +648,165 @@ function stampDashboardScope(stats = {}, filter = {}) {
   return stats;
 }
 
+function dashboardUpperExpression(fields, fallback = '') {
+  return { $toUpper: firstNonBlankExpression(fields, fallback) };
+}
+
+function dashboardIdentityExpression() {
+  const raw = dashboardUpperExpression(['rawUpi', 'rawScan', 'rawScanString', 'rawBarcode', 'rawQR', 'upiNo', 'upiId']);
+  const qrFingerprint = firstNonBlankExpression(['qrFingerprint']);
+  const syncKey = firstNonBlankExpression(['syncKey']);
+  const source = dashboardUpperExpression(['source', 'scanMode', 'entryMode']);
+  const scope = {
+    $concat: [
+      dashboardUpperExpression(['dealerCode']),
+      '|',
+      firstNonBlankExpression(['auditId']),
+      '|',
+      dashboardUpperExpression(['scanType', 'type'], 'INWARD')
+    ]
+  };
+  return {
+    $concat: [
+      scope,
+      '|',
+      {
+        $switch: {
+          branches: [
+            { case: { $ne: [raw, ''] }, then: { $concat: ['RAW|', raw] } },
+            { case: { $ne: [qrFingerprint, ''] }, then: { $concat: ['QR|', qrFingerprint] } },
+            {
+              case: {
+                $and: [
+                  { $ne: [syncKey, ''] },
+                  { $not: [{ $regexMatch: { input: source, regex: /MANUAL/i } }] }
+                ]
+              },
+              then: { $concat: ['SYNC|', syncKey] }
+            }
+          ],
+          default: { $concat: ['ROW|', { $toString: '$_id' }] }
+        }
+      }
+    ]
+  };
+}
+
+function dashboardUniqueScanStages(filter = {}) {
+  return [
+    { $match: applyTestScanMode({ ...(filter || {}) }, 'real') },
+    {
+      $addFields: {
+        __dashboardIdentity: dashboardIdentityExpression(),
+        __dashboardEventAt: { $ifNull: ['$timestamp', { $ifNull: ['$scanTime', '$createdAt'] }] },
+        __dashboardType: dashboardUpperExpression(['scanType', 'type'], 'INWARD'),
+        __dashboardPart: dashboardUpperExpression(['normalizedPartNumber', 'partNumber', 'part']),
+        __dashboardQty: numberExpression(['qty', 'quantity']),
+        __dashboardMrp: numberExpression(['valuationMRP', 'manualMRP', 'scanMRP', 'mrp']),
+        __dashboardStoredValue: numberExpression(['finalInventoryValue']),
+        __dashboardDlc: numberExpression(['dlc']),
+        __dashboardGroup: dashboardUpperExpression(['productGroup', 'partGroup', 'productCategory', 'category'], 'OTHERS'),
+        __dashboardSubGroup: dashboardUpperExpression(['partSubGroup', 'productSubGroup', 'productType'], 'GENERAL')
+      }
+    },
+    {
+      $addFields: {
+        __dashboardValue: {
+          $cond: [
+            { $gt: ['$__dashboardStoredValue', 0] },
+            '$__dashboardStoredValue',
+            { $multiply: ['$__dashboardQty', '$__dashboardMrp'] }
+          ]
+        }
+      }
+    },
+    { $sort: { __dashboardEventAt: 1, _id: 1 } },
+    { $group: { _id: '$__dashboardIdentity', scan: { $first: '$$ROOT' } } },
+    { $replaceRoot: { newRoot: '$scan' } }
+  ];
+}
+
 async function dashboardStats(filter) {
-  filter = applyTestScanMode({ ...(filter || {}) }, 'real');
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const activeUserFilter = { ...filter, timestamp: { ...(filter.timestamp || {}), $gte: new Date(Date.now() - 30 * 1000) }, userId: { $nin: [null, ''] } };
   const liveCutoff = new Date(Date.now() - 30 * 1000);
-
   const duplicateFilter = {};
-  if (filter.dealerCode) duplicateFilter.dealerCode = filter.dealerCode;
-  if (filter.auditId) duplicateFilter.auditId = filter.auditId;
-  if (filter.timestamp) duplicateFilter.timestamp = filter.timestamp;
+  if (filter && filter.dealerCode) duplicateFilter.dealerCode = filter.dealerCode;
+  if (filter && filter.auditId) duplicateFilter.auditId = filter.auditId;
+  if (filter && filter.timestamp) duplicateFilter.timestamp = filter.timestamp;
 
-  const [rawRecords, activeDevices, activeUsers, duplicateCount] = await Promise.all([
-    Inventory.find(filter).select('qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue type scanType source scanMode entryMode synced isSynced warnings part partNumber normalizedPartNumber rawScan rawScanString rawBarcode rawQR rawUpi upiNo upiId qrFingerprint dealerCode auditId scanId uniqueScanId syncKey category productCategory timestamp createdAt').lean(),
+  const mismatchText = {
+    $concat: [
+      {
+        $reduce: {
+          input: { $ifNull: ['$warnings', []] },
+          initialValue: '',
+          in: { $concat: ['$$value', ' ', { $toString: '$$this' }] }
+        }
+      },
+      ' ',
+      { $ifNull: ['$remarks', ''] }
+    ]
+  };
+  const [aggregateRows, activeDevices, duplicateCount] = await Promise.all([
+    Inventory.aggregate([
+      ...dashboardUniqueScanStages(filter),
+      {
+        $facet: {
+          summary: [{
+            $group: {
+              _id: null,
+              totalScanRecords: { $sum: 1 },
+              totalScannedQuantity: { $sum: '$__dashboardQty' },
+              uniqueParts: { $addToSet: '$__dashboardPart' },
+              totalInward: { $sum: { $cond: [{ $eq: ['$__dashboardType', 'INWARD'] }, '$__dashboardQty', 0] } },
+              totalOutward: { $sum: { $cond: [{ $eq: ['$__dashboardType', 'OUTWARD'] }, '$__dashboardQty', 0] } },
+              fittedCount: { $sum: { $cond: [{ $eq: ['$__dashboardType', 'FITTED'] }, '$__dashboardQty', 0] } },
+              auditCount: { $sum: { $cond: [{ $eq: ['$__dashboardType', 'AUDIT'] }, '$__dashboardQty', 0] } },
+              damageCount: { $sum: { $cond: [{ $eq: ['$__dashboardType', 'DAMAGE'] }, '$__dashboardQty', 0] } },
+              pendingSync: { $sum: { $cond: [{ $eq: ['$synced', true] }, 0, 1] } },
+              mismatchCount: { $sum: { $cond: [{ $regexMatch: { input: mismatchText, regex: /mismatch|inactive|not found/i } }, 1, 0] } },
+              totalScannedValue: { $sum: '$__dashboardValue' }
+            }
+          }],
+          today: [{ $match: { __dashboardEventAt: { $gte: today } } }, { $count: 'count' }],
+          last: [{ $sort: { __dashboardEventAt: -1, _id: -1 } }, { $limit: 1 }, { $project: { _id: 0, time: '$__dashboardEventAt', part: '$__dashboardPart' } }],
+          activeUsers: [
+            { $match: { __dashboardEventAt: { $gte: liveCutoff }, userId: { $nin: [null, ''] } } },
+            { $group: { _id: '$userId' } },
+            { $count: 'count' }
+          ]
+        }
+      }
+    ]).allowDiskUse(true),
     Device.countDocuments({ status: 'online', lastSeen: { $gte: liveCutoff } }),
-    Inventory.distinct('userId', activeUserFilter),
     DuplicateScanLog.countDocuments(duplicateFilter)
   ]);
-  const records = uniqueReportScans(rawRecords);
-  const recentRecords = records.slice().sort((a, b) => new Date(b.timestamp || b.createdAt || 0) - new Date(a.timestamp || a.createdAt || 0));
-  const todayCount = uniqueReportScans(rawRecords.filter((record) => new Date(record.timestamp || record.createdAt || 0) >= today)).length;
-  const lastScan = recentRecords[0] || null;
-  const last10Scans = recentRecords.slice(0, 10);
-  const uniqueParts = new Set();
-  const categoryWiseScannedCount = {};
-
-  const stats = {
-    totalUniqueScannedParts: 0,
-    totalScanRecords: records.length,
-    totalScannedQuantity: 0,
-    categoryWiseScannedCount,
-    last10Scans: last10Scans.map(publicScan),
-    totalScannedToday: todayCount,
-    totalInward: 0,
-    totalOutward: 0,
-    fittedCount: 0,
-    auditCount: 0,
-    damageCount: 0,
+  const aggregate = aggregateRows[0] || {};
+  const summary = (aggregate.summary && aggregate.summary[0]) || {};
+  const lastScan = (aggregate.last && aggregate.last[0]) || {};
+  const uniqueParts = Array.isArray(summary.uniqueParts) ? summary.uniqueParts.filter(Boolean).length : 0;
+  return {
+    totalUniqueScannedParts: uniqueParts,
+    totalScanRecords: Number(summary.totalScanRecords || 0),
+    totalScannedQuantity: Number(summary.totalScannedQuantity || 0),
+    categoryWiseScannedCount: {},
+    last10Scans: [],
+    totalScannedToday: Number(aggregate.today && aggregate.today[0] ? aggregate.today[0].count : 0),
+    totalInward: Number(summary.totalInward || 0),
+    totalOutward: Number(summary.totalOutward || 0),
+    fittedCount: Number(summary.fittedCount || 0),
+    auditCount: Number(summary.auditCount || 0),
+    damageCount: Number(summary.damageCount || 0),
     activeDevices,
-    activeUsers: activeUsers.length,
-    pendingSync: 0,
+    activeUsers: Number(aggregate.activeUsers && aggregate.activeUsers[0] ? aggregate.activeUsers[0].count : 0),
+    pendingSync: Number(summary.pendingSync || 0),
     duplicateCount,
-    mismatchCount: 0,
-    totalScannedValue: 0,
-    lastScanTime: lastScan ? lastScan.timestamp : null,
-    lastScannedPart: lastScan ? lastScan.partNumber || lastScan.part : ''
+    mismatchCount: Number(summary.mismatchCount || 0),
+    totalScannedValue: money(summary.totalScannedValue || 0),
+    lastScanTime: lastScan.time || null,
+    lastScannedPart: lastScan.part || ''
   };
-
-  records.forEach((record) => {
-    const scan = publicScan(record);
-    const qty = Number(scan.qty || 0);
-    if (scan.partNumber) uniqueParts.add(scan.partNumber);
-    const category = scan.productCategory || scan.category || 'UNKNOWN';
-    categoryWiseScannedCount[category] = (categoryWiseScannedCount[category] || 0) + 1;
-    stats.totalScannedQuantity += qty;
-    if (scan.type === 'INWARD') stats.totalInward += qty;
-    if (scan.type === 'OUTWARD') stats.totalOutward += qty;
-    if (scan.type === 'FITTED') stats.fittedCount += qty;
-    if (scan.type === 'AUDIT') stats.auditCount += qty;
-    if (scan.type === 'DAMAGE') stats.damageCount += qty;
-    if (!record.synced) stats.pendingSync += 1;
-    if ((record.warnings || []).some((warning) => /mismatch|inactive|not found/i.test(warning))) stats.mismatchCount += 1;
-    stats.totalScannedValue += Number(scan.finalInventoryValue || 0);
-  });
-  stats.totalUniqueScannedParts = uniqueParts.size;
-
-  return stats;
 }
 
 function masterPartNumber(record = {}) {
@@ -776,78 +868,49 @@ function masterForScan(scan = {}, lookup = {}) {
 async function dashboardProductGroupSummary({ limit = 100, q = '', filter = {} } = {}) {
   const search = String(q || '').trim();
   const regex = search ? new RegExp(escapeRegex(search), 'i') : null;
-  const records = await Inventory.find(applyTestScanMode({ ...(filter || {}) }, 'real'))
-    .select('part partNumber normalizedPartNumber dealerCode auditId productGroup partGroup productCategory category partSubGroup productSubGroup productType qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue rawScan rawScanString rawBarcode rawQR rawUpi upiNo upiId qrFingerprint scanId uniqueScanId syncKey source scanMode entryMode dlc timestamp createdAt')
-    .lean();
-  const scans = uniqueReportScans(records.map(publicScan));
-  const masterLookup = await masterLookupForScans(scans);
+  if (!filter.dealerCode) return [];
+  const partwise = await require('./report').buildPartwiseInventoryAuditReport(filter);
   const groups = new Map();
-  scans.forEach((scan) => {
-    const master = masterForScan(scan, masterLookup) || {};
-    const productGroup = clean(master.productGroup || scan.productGroup || scan.partGroup || scan.productCategory || scan.category || 'OTHERS') || 'OTHERS';
-    const partSubGroup = clean(master.partSubGroup || scan.partSubGroup || scan.productSubGroup || scan.productType || 'GENERAL') || 'GENERAL';
+  partwise.rows.forEach((row) => {
+    const productGroup = clean(row.productGroup || row.productCategory || 'OTHERS') || 'OTHERS';
+    const partSubGroup = clean(row.partSubGroup || 'GENERAL') || 'GENERAL';
     if (regex && !regex.test(productGroup) && !regex.test(partSubGroup)) return;
     const key = `${productGroup}::${partSubGroup}`;
-    const group = groups.get(key) || {
-      productGroup,
-      partSubGroup,
-      totalScans: 0,
-      scanCount: 0,
-      totalQuantity: 0,
-      qty: 0,
-      uniquePartSet: new Set(),
-      totalMrpValue: 0,
-      totalDlcValue: 0
-    };
-    const qty = Number(scan.qty || 0);
-    group.totalScans += 1;
-    group.scanCount = group.totalScans;
-    group.totalQuantity += qty;
-    group.qty = group.totalQuantity;
-    if (scan.partNumber) group.uniquePartSet.add(scan.partNumber);
-    group.totalMrpValue += Number(scan.finalInventoryValue || 0);
-    group.totalDlcValue += qty * Number(master.dlc !== undefined ? master.dlc : scan.dlc || 0);
-    groups.set(key, group);
+    const item = groups.get(key) || { productGroup, partSubGroup, totalScans: 0, scanCount: 0, totalQuantity: 0, qty: 0, uniqueParts: 0, totalMrpValue: 0, totalDlcValue: 0 };
+    item.totalScans += Number(row.scanCount || 0);
+    item.scanCount = item.totalScans;
+    item.totalQuantity += Number(row.physicalQty || 0);
+    item.qty = item.totalQuantity;
+    if (Number(row.physicalQty || 0) !== 0) item.uniqueParts += 1;
+    item.totalDlcValue += Number(row.actualStockValue || row.physicalValueOnDlc || 0);
+    item.totalMrpValue += Number(row.actualMrpValue || row.physicalValueOnMrp || 0);
+    groups.set(key, item);
   });
-  const rows = Array.from(groups.values()).map((row) => {
-    const uniqueParts = row.uniquePartSet.size;
-    delete row.uniquePartSet;
-    return { ...row, uniqueParts, totalMrpValue: money(row.totalMrpValue), totalDlcValue: money(row.totalDlcValue) };
-  }).sort((a, b) => Number(b.totalQuantity || 0) - Number(a.totalQuantity || 0) || Number(b.totalScans || 0) - Number(a.totalScans || 0) || String(a.productGroup).localeCompare(String(b.productGroup)) || String(a.partSubGroup).localeCompare(String(b.partSubGroup)));
+  const rows = Array.from(groups.values()).map((row) => ({ ...row, totalMrpValue: money(row.totalMrpValue), totalDlcValue: money(row.totalDlcValue) }))
+    .sort((a, b) => Number(b.totalQuantity || 0) - Number(a.totalQuantity || 0) || String(a.productGroup).localeCompare(String(b.productGroup)) || String(a.partSubGroup).localeCompare(String(b.partSubGroup)));
   return limit && Number(limit) > 0 ? rows.slice(0, Math.min(Number(limit), 5000)) : rows;
 }
 
 async function dashboardProductGroupDetails({ productGroup = '', partSubGroup = '', filter = {} } = {}) {
   const group = String(productGroup || 'OTHERS').trim() || 'OTHERS';
   const subGroup = String(partSubGroup || 'GENERAL').trim() || 'GENERAL';
-  const records = await Inventory.find(applyTestScanMode({ ...(filter || {}) }, 'real'))
-    .select('part partNumber normalizedPartNumber dealerCode auditId partDescription partName productGroup partGroup productCategory category partSubGroup productSubGroup productType binLocation bin qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue rawScan rawScanString rawBarcode rawQR rawUpi upiNo upiId qrFingerprint scanId uniqueScanId syncKey source scanMode entryMode timestamp createdAt')
-    .lean();
-  const scans = uniqueReportScans(records.map(publicScan));
-  const masterLookup = await masterLookupForScans(scans);
-  const groups = new Map();
-  scans.forEach((scan) => {
-    const master = masterForScan(scan, masterLookup) || {};
-    const productGroupText = clean(master.productGroup || scan.productGroup || scan.partGroup || scan.productCategory || scan.category || 'OTHERS') || 'OTHERS';
-    const partSubGroupText = clean(master.partSubGroup || scan.partSubGroup || scan.productSubGroup || scan.productType || 'GENERAL') || 'GENERAL';
-    if (!new RegExp(`^${escapeRegex(group)}$`, 'i').test(productGroupText)) return;
-    if (!new RegExp(`^${escapeRegex(subGroup)}$`, 'i').test(partSubGroupText)) return;
-    const key = [scan.partNumber, scan.partDescription || scan.partName, scan.binLocation || scan.bin, scan.valuationMRP || 0].join('::');
-    const item = groups.get(key) || {
-      partNumber: scan.partNumber,
-      partDescription: scan.partDescription || scan.partName || '',
-      qty: 0,
-      binLocation: scan.binLocation || scan.bin || '',
-      mrp: scan.valuationMRP || 0,
-      mrpTotal: 0,
-      scanCount: 0
-    };
-    item.qty += Number(scan.qty || 0);
-    item.mrpTotal += Number(scan.finalInventoryValue || 0);
-    item.scanCount += 1;
-    groups.set(key, item);
-  });
-  const rows = Array.from(groups.values()).map((row) => ({ ...row, mrpTotal: money(row.mrpTotal) })).sort((a, b) => String(a.partNumber).localeCompare(String(b.partNumber)) || String(a.binLocation).localeCompare(String(b.binLocation)));
+  if (!filter.dealerCode) return { productGroup: group, partSubGroup: subGroup, rows: [], totals: { partCount: 0, totalQty: 0, totalDlcValue: 0, totalMrpValue: 0 } };
+  const partwise = await require('./report').buildPartwiseInventoryAuditReport(filter);
+  const rows = partwise.rows.filter((row) => {
+    const productGroupText = clean(row.productGroup || row.productCategory || 'OTHERS') || 'OTHERS';
+    const partSubGroupText = clean(row.partSubGroup || 'GENERAL') || 'GENERAL';
+    return new RegExp(`^${escapeRegex(group)}$`, 'i').test(productGroupText) && new RegExp(`^${escapeRegex(subGroup)}$`, 'i').test(partSubGroupText);
+  }).map((row) => ({
+    partNumber: row.partNumber,
+    partDescription: row.partDescription || '',
+    qty: Number(row.physicalQty || 0),
+    binLocation: row.binLocations || '',
+    dlc: Number(row.dlc || 0),
+    dlcTotal: Number(row.actualStockValue || row.physicalValueOnDlc || 0),
+    mrp: Number(row.mrp || 0),
+    mrpTotal: Number(row.actualMrpValue || row.physicalValueOnMrp || 0),
+    scanCount: Number(row.scanCount || 0)
+  })).sort((a, b) => String(a.partNumber).localeCompare(String(b.partNumber)) || String(a.binLocation).localeCompare(String(b.binLocation)));
   return {
     productGroup: group,
     partSubGroup: subGroup,
@@ -855,7 +918,8 @@ async function dashboardProductGroupDetails({ productGroup = '', partSubGroup = 
     totals: {
       partCount: rows.length,
       totalQty: rows.reduce((sum, row) => sum + Number(row.qty || 0), 0),
-      totalMrpValue: rows.reduce((sum, row) => sum + Number(row.mrpTotal || 0), 0)
+      totalDlcValue: money(rows.reduce((sum, row) => sum + Number(row.dlcTotal || 0), 0)),
+      totalMrpValue: money(rows.reduce((sum, row) => sum + Number(row.mrpTotal || 0), 0))
     }
   };
 }
@@ -3055,6 +3119,7 @@ router.get('/history', auth.requireAuth, async (req, res) => {
 router.get('/dashboard/product-group-summary/export', auth.requireAuth, async (req, res) => {
   try {
     const { filter } = await activeDashboardScope(req.query);
+    if (filter.dealerCode) await require('./report').validateValuationReports(filter);
     const rows = await dashboardProductGroupSummary({ limit: 0, q: req.query.q || '', filter });
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Product Group Summary');
@@ -3064,8 +3129,8 @@ router.get('/dashboard/product-group-summary/export', auth.requireAuth, async (r
       { header: 'Total Scans', key: 'totalScans', width: 14 },
       { header: 'Total Quantity', key: 'totalQuantity', width: 16 },
       { header: 'Unique Parts', key: 'uniqueParts', width: 14 },
-      { header: 'Total MRP Value', key: 'totalMrpValue', width: 18 },
-      { header: 'Total DLC Value', key: 'totalDlcValue', width: 18 }
+      { header: 'Actual Stock Value (DLC)', key: 'totalDlcValue', width: 24 },
+      { header: 'MRP Value (Reference)', key: 'totalMrpValue', width: 22 }
     ];
     rows.forEach((row) => sheet.addRow(row));
     sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -3077,7 +3142,18 @@ router.get('/dashboard/product-group-summary/export', auth.requireAuth, async (r
     res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Product_Group_Summary.xlsx"');
     return res.send(Buffer.from(buffer));
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
+  }
+});
+
+router.get('/dashboard/product-group-summary', auth.requireAuth, async (req, res) => {
+  try {
+    const { filter } = await activeDashboardScope(req.query);
+    const rows = await dashboardProductGroupSummary({ limit: 100, q: req.query.q || '', filter });
+    const reconciliation = filter.dealerCode ? await require('./report').validateValuationReports(filter) : null;
+    return res.json({ success: true, rows, reconciliation });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 });
 
@@ -3089,6 +3165,7 @@ router.get('/dashboard/product-group-summary/details', auth.requireAuth, async (
       partSubGroup: req.query.partSubGroup || req.query.productSubGroup,
       filter
     });
+    const reconciliation = filter.dealerCode ? await require('./report').validateValuationReports(filter) : null;
     if (String(req.query.format || '').toLowerCase() === 'excel') {
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet('Group Parts');
@@ -3099,38 +3176,50 @@ router.get('/dashboard/product-group-summary/details', auth.requireAuth, async (
         { header: 'Part Description', key: 'partDescription', width: 36 },
         { header: 'Qty', key: 'qty', width: 12 },
         { header: 'Bin Location', key: 'binLocation', width: 16 },
-        { header: 'MRP', key: 'mrp', width: 12 },
-        { header: 'MRP Total', key: 'mrpTotal', width: 16 }
+        { header: 'DLC', key: 'dlc', width: 12 },
+        { header: 'Actual Stock Value (DLC)', key: 'dlcTotal', width: 24 },
+        { header: 'MRP (Reference)', key: 'mrp', width: 16 },
+        { header: 'MRP Value (Reference)', key: 'mrpTotal', width: 22 }
       ];
       data.rows.forEach((row) => sheet.addRow({ productGroup: data.productGroup, partSubGroup: data.partSubGroup, ...row }));
       sheet.addRow({});
       sheet.addRow({ partDescription: 'Total Parts', qty: data.totals.partCount });
       sheet.addRow({ partDescription: 'Total Qty', qty: data.totals.totalQty });
-      sheet.addRow({ partDescription: 'Total MRP Value', mrpTotal: data.totals.totalMrpValue });
+      sheet.addRow({ partDescription: 'Total DLC Stock Value', dlcTotal: data.totals.totalDlcValue });
+      sheet.addRow({ partDescription: 'Total MRP Value (Reference)', mrpTotal: data.totals.totalMrpValue });
       sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
       sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
       ['E'].forEach((column) => { sheet.getColumn(column).numFmt = '#,##0'; });
-      ['G', 'H'].forEach((column) => { sheet.getColumn(column).numFmt = '#,##0.00'; });
+      ['G', 'H', 'I', 'J'].forEach((column) => { sheet.getColumn(column).numFmt = '#,##0.00'; });
       const buffer = await workbook.xlsx.writeBuffer();
       const safeGroup = data.productGroup.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'Product_Group';
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename="Daksh_${safeGroup}_Parts.xlsx"`);
       return res.send(Buffer.from(buffer));
     }
-    return res.json({ success: true, ...data });
+    return res.json({ success: true, ...data, reconciliation });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 });
 
 router.get('/dashboard', auth.requireAuth, async (req, res) => {
   try {
     const { filter, activeAudit } = await activeDashboardScope(req.query);
-    const [stats, recent, productGroupSummary] = await Promise.all([
+    const [stats, recent] = await Promise.all([
       dashboardStats(filter),
-      Inventory.find(applyTestScanMode({ ...filter }, 'real')).sort({ timestamp: -1, createdAt: -1 }).limit(12).lean(),
-      dashboardProductGroupSummary({ limit: 100, filter })
+      Inventory.find(applyTestScanMode({ ...filter }, 'real'))
+        .select('scanId uniqueScanId part partNumber normalizedPartNumber qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue scanType type bin binLocation dealerCode dealerName auditId deviceId deviceName source scanMode entryMode syncStatus synced isSynced timestamp scanTime createdAt')
+        .sort({ timestamp: -1, createdAt: -1 })
+        .limit(12)
+        .lean()
     ]);
+    const reconciliation = filter.dealerCode ? await require('./report').validateValuationReports(filter) : null;
+    if (reconciliation) {
+      stats.totalScannedValue = reconciliation.totals.dashboard;
+      stats.actualStockValueDLC = reconciliation.totals.dashboard;
+      stats.valuationBasis = 'DLC';
+    }
     stampDashboardScope(stats, filter);
 
     res.json({
@@ -3139,21 +3228,11 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
       dealerCode: filter.dealerCode || '',
       auditId: filter.auditId || '',
       stats,
-      recent: recent.map(publicScan),
-      productGroupSummary: productGroupSummary.map((item) => ({
-        productGroup: item.productGroup || 'OTHERS',
-        partSubGroup: item.partSubGroup || 'GENERAL',
-        totalScans: item.totalScans || item.scanCount || 0,
-        scanCount: item.totalScans || item.scanCount || 0,
-        totalQuantity: item.totalQuantity || item.qty || 0,
-        qty: item.totalQuantity || item.qty || 0,
-        uniqueParts: item.uniqueParts || 0,
-        totalMrpValue: item.totalMrpValue || 0,
-        totalDlcValue: item.totalDlcValue || 0
-      }))
+      reconciliation,
+      recent: recent.map(publicScan)
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 });
 

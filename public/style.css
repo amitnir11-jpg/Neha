@@ -48,6 +48,11 @@ body,
   max-width: 100%;
 }
 
+html,
+body {
+  min-width: 320px;
+}
+
 .app,
 .view,
 .card,
@@ -278,8 +283,8 @@ a:focus-visible,
 
 .main {
   height: 100vh;
-  width: calc(100vw - var(--sidebar-width));
-  max-width: calc(100vw - var(--sidebar-width));
+  width: calc(100% - var(--sidebar-width));
+  max-width: calc(100% - var(--sidebar-width));
   margin-left: var(--sidebar-width);
   padding: 14px 16px;
   overflow-y: auto;
@@ -2102,6 +2107,42 @@ textarea:focus {
   border-radius: 8px;
   background: #fff;
   box-shadow: 0 22px 70px rgba(15, 23, 42, 0.28);
+}
+
+.dashboard-skeleton-row td {
+  height: 42px;
+  padding: 10px 12px;
+}
+
+.dashboard-skeleton-row span,
+.app-booting #dashboard .dashboard-kpi-summary-table td::after,
+.app-booting #dashboard .dashboard-sync-grid strong::after {
+  display: block;
+  width: 100%;
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #eef2f6 20%, #f8fafc 45%, #eef2f6 70%);
+  background-size: 220% 100%;
+  animation: dashboard-skeleton-shimmer 1.2s linear infinite;
+}
+
+.app-booting #dashboard .dashboard-kpi-summary-table td,
+.app-booting #dashboard .dashboard-sync-grid strong {
+  position: relative;
+  color: transparent !important;
+}
+
+.app-booting #dashboard .dashboard-kpi-summary-table td::after,
+.app-booting #dashboard .dashboard-sync-grid strong::after {
+  content: '';
+  position: absolute;
+  inset: 50% 18% auto;
+  width: 64%;
+  transform: translateY(-50%);
+}
+
+@keyframes dashboard-skeleton-shimmer {
+  to { background-position: -220% 0; }
 }
 
 .scan-edit-card {
@@ -5621,4 +5662,32 @@ body.sidebar-wide .side .side-link {
   border-radius: 0 !important;
   background: transparent !important;
   cursor: col-resize !important;
+}
+
+/* Keep the application shell stable before authentication and API data finish loading. */
+.app,
+.main,
+.side,
+.dashboard-page,
+.dashboard-card,
+.dashboard-sync-card,
+.dashboard-kpi-summary-wrap {
+  min-width: 0;
+}
+
+.main {
+  width: calc(100% - var(--sidebar-width)) !important;
+  max-width: calc(100% - var(--sidebar-width)) !important;
+}
+
+body.app-booting .main,
+body.app-booting .side {
+  transition: none !important;
+}
+
+@media (max-width: 820px) {
+  .main {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
 }

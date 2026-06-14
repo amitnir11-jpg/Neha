@@ -16,6 +16,8 @@ const { cataloguePayload } = require('../utils/catalogue');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
+const DEALER_LIST_CACHE_MS = 30000;
+let dealerListCache = { expiresAt: 0, dealers: [] };
 
 function normalizeHeader(value) {
   return normalizer.cleanText(value).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -721,6 +723,12 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
     const userAccess = await auth.userDealerAccessCodes(req.user);
     const canSeeAll = req.user.role === 'admin' || userAccess.includes('ALL');
     const allowedDealerSet = new Set(userAccess);
+    if (dealerListCache.expiresAt > Date.now()) {
+      const dealers = canSeeAll
+        ? dealerListCache.dealers
+        : dealerListCache.dealers.filter((dealer) => allowedDealerSet.has(normalizePart(dealer.dealerCode)));
+      return res.json({ success: true, dealers });
+    }
     const [dealerRows, masterDealerCodes, scanDealerCodes, binDealerCodes, auditRows] = await Promise.all([
       Dealer.find({}).sort({ dealerName: 1 }).lean(),
       MasterPart.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
@@ -744,7 +752,7 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
       if (!code || dealerMap.has(code)) return;
       dealerMap.set(code, { dealerCode: code, dealerName: code, active: true });
     });
-    const dealers = Array.from(dealerMap.values()).map((dealer) => {
+    const allDealers = Array.from(dealerMap.values()).map((dealer) => {
       const audit = auditMap.get(auditLookupKey(dealer.currentAuditId));
       return {
         ...dealer,
@@ -757,7 +765,11 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
       };
     }).sort((a, b) =>
       String(a.dealerName || a.dealerCode || '').localeCompare(String(b.dealerName || b.dealerCode || ''))
-    ).filter((dealer) => canSeeAll || allowedDealerSet.has(normalizePart(dealer.dealerCode)));
+    );
+    dealerListCache = { expiresAt: Date.now() + DEALER_LIST_CACHE_MS, dealers: allDealers };
+    const dealers = canSeeAll
+      ? allDealers
+      : allDealers.filter((dealer) => allowedDealerSet.has(normalizePart(dealer.dealerCode)));
     res.json({ success: true, dealers });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

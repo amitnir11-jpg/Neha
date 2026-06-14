@@ -24,6 +24,7 @@ const { getActiveAudit } = require('../utils/audit');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
 const { getCachedReport } = require('../utils/reportCache');
+const { assertDlcReconciliation, calculateStockValuation, stockValuationTotals } = require('../utils/stockValuation');
 
 const router = express.Router();
 const autoTable = autoTableModule.default || autoTableModule;
@@ -68,25 +69,17 @@ function cachedBuildPartsInventoryRefreshRows(query = {}) {
  * REPORT ROUTE - INVENTORY VALUE CALCULATION COMPLIANCE
  * ====================================================================
  *
- * ALL REPORTS MUST USE:
- *   - calculateInventoryValue() for value aggregation
- *   - scanValueRow() for per-scan decoration
- *   - validateReportValueSource() for data quality checks
+ * ALL STOCK REPORTS MUST USE calculateStockValuation(). DLC is the primary
+ * valuation basis. MRP values are retained only as separate reference fields.
  *
- * FINAL INVENTORY VALUE FORMULA (FOR ALL REPORTS):
- *   finalInventoryValue = SUM(scanned qty × scanned MRP) + SUM(manual qty × manual MRP)
- *
- * NEVER:
- *   - Recalculate inventory value independently
- *   - Use master MRP for inventory calculations
- *   - Use current catalogue MRP for value calculations
- *   - Aggregate values differently than calculateInventoryValue()
+ *   Actual Stock Value = Actual Quantity x DLC
+ *   DMS Stock Value = DMS Quantity x DLC
  *
  * REPORT CONSISTENCY CHECKS:
  *   1. Dashboard total must match Report total
  *   2. All reports use same calculation engine
- *   3. No report-specific MRP overrides allowed
- *   4. Risk status based on final MRP and audit stock condition
+ *   3. Category, dashboard and variance totals derive from partwise rows
+ *   4. Report generation is blocked when DLC totals do not reconcile
  *
  * ====================================================================
  */
@@ -985,9 +978,12 @@ function finalColumns() {
     { header: 'Outward Qty', key: 'outwardQty', width: 12 },
     { header: 'System Qty', key: 'systemQty', width: 12 },
     { header: 'Variance Qty', key: 'varianceQty', width: 14 },
-    { header: 'Physical Value on MRP', key: 'physicalValueOnMrp', width: 20 },
-    { header: 'System Value on MRP', key: 'systemValueOnMrp', width: 20 },
-    { header: 'Variance Value on MRP', key: 'varianceValueOnMrp', width: 20 },
+    { header: 'Actual Stock Value (DLC)', key: 'actualStockValue', width: 24 },
+    { header: 'DMS Stock Value (DLC)', key: 'dmsStockValue', width: 24 },
+    { header: 'Variance Value (DLC)', key: 'varianceStockValue', width: 22 },
+    { header: 'Actual MRP Value (Reference)', key: 'actualMrpValue', width: 28 },
+    { header: 'DMS MRP Value (Reference)', key: 'dmsMrpValue', width: 28 },
+    { header: 'Variance MRP Value (Reference)', key: 'varianceMrpValue', width: 30 },
     { header: 'Inventory Risk Status', key: 'inventoryRiskStatus', width: 22 },
     { header: 'Action / Remarks', key: 'actionRemarks', width: 34 },
     { header: 'Bin Locations', key: 'binLocations', width: 32 }
@@ -1033,6 +1029,15 @@ async function createWorkbook(query) {
     cachedBuildCategoryWiseVarianceSummary(query),
     cachedBuildPartwiseInventoryAuditReport(query)
   ]);
+  await validateValuationReports(query, { category: categoryVarianceData, partwise: partwiseInventoryAuditData });
+  const valuationTotals = stockValuationTotals(partwiseInventoryAuditData.rows);
+  (data.summary || []).forEach((row) => Object.assign(row, {
+    totalDmsDlcValue: valuationTotals.dmsDlcTotal,
+    totalActualDlcValue: valuationTotals.actualDlcTotal,
+    totalDmsMrpValue: valuationTotals.dmsMrpTotal,
+    totalActualMrpValue: valuationTotals.actualMrpTotal,
+    valuationBasis: 'DLC'
+  }));
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Daksh Inventory v2';
   workbook.created = new Date();
@@ -1049,8 +1054,10 @@ async function createWorkbook(query) {
     { header: 'Scans', key: 'totalScans', width: 10 },
     { header: 'System Qty', key: 'totalSystemQty', width: 14 },
     { header: 'Physical Qty', key: 'totalPhysicalQty', width: 14 },
-    { header: 'System MRP Value', key: 'totalSystemMrpValue', width: 18 },
-    { header: 'Physical MRP Value', key: 'totalPhysicalMrpValue', width: 18 },
+    { header: 'DMS Stock Value (DLC)', key: 'totalDmsDlcValue', width: 22 },
+    { header: 'Actual Stock Value (DLC)', key: 'totalActualDlcValue', width: 24 },
+    { header: 'DMS MRP Value (Reference)', key: 'totalDmsMrpValue', width: 26 },
+    { header: 'Actual MRP Value (Reference)', key: 'totalActualMrpValue', width: 28 },
     { header: 'Matched', key: 'matched', width: 10 },
     { header: 'Short', key: 'short', width: 10 },
     { header: 'Excess', key: 'excess', width: 10 },
@@ -1155,9 +1162,12 @@ function mainAuditColumns() {
     { header: 'OUTWARD QTY', key: 'outwardQty', width: 14, numFmt: '#,##0.00' },
     { header: 'SYSTEM QTY', key: 'systemQty', width: 16, numFmt: '#,##0.00' },
     { header: 'VARIANCE QTY', key: 'varianceQty', width: 16, numFmt: '#,##0.00' },
-    { header: 'PHYSICAL VALUE ON MRP', key: 'physicalValueOnMrp', width: 22, numFmt: '#,##0.00' },
-    { header: 'SYSTEM VALUE ON MRP', key: 'systemValueOnMrp', width: 22, numFmt: '#,##0.00' },
-    { header: 'VARIANCE VALUE ON MRP', key: 'varianceValueOnMrp', width: 22, numFmt: '#,##0.00' },
+    { header: 'ACTUAL STOCK VALUE (DLC)', key: 'actualStockValue', width: 24, numFmt: '#,##0.00' },
+    { header: 'DMS STOCK VALUE (DLC)', key: 'dmsStockValue', width: 24, numFmt: '#,##0.00' },
+    { header: 'VARIANCE VALUE (DLC)', key: 'varianceStockValue', width: 22, numFmt: '#,##0.00' },
+    { header: 'ACTUAL MRP VALUE (REFERENCE)', key: 'actualMrpValue', width: 28, numFmt: '#,##0.00' },
+    { header: 'DMS MRP VALUE (REFERENCE)', key: 'dmsMrpValue', width: 28, numFmt: '#,##0.00' },
+    { header: 'VARIANCE MRP VALUE (REFERENCE)', key: 'varianceMrpValue', width: 30, numFmt: '#,##0.00' },
     { header: 'INVENTORY RISK STATUS', key: 'inventoryRiskStatus', width: 22 },
     { header: 'ACTION / REMARKS', key: 'actionRemarks', width: 34 },
     { header: 'BIN LOCATIONS', key: 'binLocations', width: 32 }
@@ -1179,9 +1189,12 @@ function mainAuditRows(data) {
     outwardQty: row.outwardQty || 0,
     systemQty: row.systemQty,
     varianceQty: row.varianceQty,
-    physicalValueOnMrp: row.physicalValueOnMrp ?? row.physicalMrpValue ?? 0,
-    systemValueOnMrp: row.systemValueOnMrp ?? row.systemMrpValue ?? 0,
-    varianceValueOnMrp: row.varianceValueOnMrp ?? row.varianceOnMrp ?? row.differenceMrpValue ?? 0,
+    actualStockValue: row.actualStockValue ?? row.physicalValueOnDlc ?? 0,
+    dmsStockValue: row.dmsStockValue ?? row.systemValueOnDlc ?? 0,
+    varianceStockValue: row.varianceStockValue ?? row.varianceOnDlc ?? 0,
+    actualMrpValue: row.actualMrpValue ?? row.physicalValueOnMrp ?? 0,
+    dmsMrpValue: row.dmsMrpValue ?? row.systemValueOnMrp ?? 0,
+    varianceMrpValue: row.varianceMrpValue ?? row.varianceOnMrp ?? 0,
     inventoryRiskStatus: row.inventoryRiskStatus || row.status || '',
     actionRemarks: row.actionRemarks || row.action || '',
     binLocations: row.binLocations || [row.binLoc1, row.binLoc2, row.binLoc3, row.otherBinLocations, row.binLocation, row.bin].filter(Boolean).join(', ')
@@ -1675,9 +1688,12 @@ function finalReportCsv(rows = []) {
     ['Outward Qty', (row) => row.outwardQty || 0],
     ['System Qty', (row) => row.systemQty || 0],
     ['Variance Qty', (row) => (row.varianceQty ?? row.differenceQty ?? row.difference) || 0],
-    ['Physical Value on MRP', (row) => row.physicalValueOnMrp ?? row.physicalMrpValue ?? 0],
-    ['System Value on MRP', (row) => row.systemValueOnMrp ?? row.systemMrpValue ?? 0],
-    ['Variance Value on MRP', (row) => row.varianceValueOnMrp ?? row.varianceOnMrp ?? row.differenceMrpValue ?? 0],
+    ['Actual Stock Value (DLC)', (row) => row.actualStockValue ?? row.physicalValueOnDlc ?? 0],
+    ['DMS Stock Value (DLC)', (row) => row.dmsStockValue ?? row.systemValueOnDlc ?? 0],
+    ['Variance Value (DLC)', (row) => row.varianceStockValue ?? row.varianceOnDlc ?? 0],
+    ['Actual MRP Value (Reference)', (row) => row.actualMrpValue ?? row.physicalValueOnMrp ?? 0],
+    ['DMS MRP Value (Reference)', (row) => row.dmsMrpValue ?? row.systemValueOnMrp ?? 0],
+    ['Variance MRP Value (Reference)', (row) => row.varianceMrpValue ?? row.varianceOnMrp ?? 0],
     ['Inventory Risk Status', (row) => row.inventoryRiskStatus || row.status || ''],
     ['Action / Remarks', (row) => row.actionRemarks || row.action || ''],
     ['Bin Locations', (row) => row.binLocations || [row.binLoc1, row.binLoc2, row.binLoc3, row.otherBinLocations, row.binLocation, row.bin].filter(Boolean).join(', ')]
@@ -1732,9 +1748,10 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
   const latestPrice = latestPriceForReport(priceHistories);
   const mrp = finalMrpForReport(valueSummary, master, priceHistories, group.scans);
   const dlc = Number(hasMaster ? master.dlc || 0 : 0);
-  const physicalValueOnMrp = money(auditedQty * mrp);
-  const systemValueOnMrp = money(dmsQty * mrp);
-  const varianceValueOnMrp = money(diffQty * mrp);
+  const valuation = calculateStockValuation({ actualQuantity: auditedQty, dmsQuantity: dmsQty, dlc, mrp });
+  const physicalValueOnMrp = valuation.actualMrpValue;
+  const systemValueOnMrp = valuation.dmsMrpValue;
+  const varianceValueOnMrp = valuation.varianceMrpValue;
   const physicalBins = binDisplayWithFitted(group.scans);
   const systemBins = splitBins(master.binLocation || master.bin || '');
   const partDescription = rowDescription(first, hasMaster ? master : {});
@@ -1762,7 +1779,7 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     maxScannedMRP: valueSummary.maxScannedMRP,
     totalScanValue: valueSummary.totalScanValue,
     totalManualValue: valueSummary.totalManualValue,
-    finalInventoryValue: physicalValueOnMrp,
+    finalInventoryValue: valuation.actualStockValue,
     pricePeriod: valueSummary.pricePeriod,
     latestMrpEffectiveDate: latestPrice ? formatDate(latestPrice.effectiveFrom) : '',
     dlc,
@@ -1801,17 +1818,26 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     systemBin3: systemBins[2],
     systemMrpValue: systemValueOnMrp,
     physicalMrpValue: physicalValueOnMrp,
+    actualStockValue: valuation.actualStockValue,
+    dmsStockValue: valuation.dmsStockValue,
+    varianceStockValue: valuation.varianceStockValue,
+    actualMrpValue: valuation.actualMrpValue,
+    dmsMrpValue: valuation.dmsMrpValue,
+    varianceMrpValue: valuation.varianceMrpValue,
     systemValueOnMrp,
     physicalValueOnMrp,
-    systemDlcValue: money(dmsQty * dlc),
-    physicalDlcValue: money(auditedQty * dlc),
+    systemDlcValue: valuation.dmsStockValue,
+    physicalDlcValue: valuation.actualStockValue,
+    systemValueOnDlc: valuation.dmsStockValue,
+    physicalValueOnDlc: valuation.actualStockValue,
     differenceQty: diffQty,
     varianceQty: diffQty,
-    varianceValue: varianceValueOnMrp,
+    varianceValue: valuation.varianceStockValue,
     varianceValueOnMrp,
     varianceOnMrp: varianceValueOnMrp,
     differenceMrpValue: varianceValueOnMrp,
-    differenceDlcValue: money(diffQty * dlc),
+    differenceDlcValue: valuation.varianceStockValue,
+    varianceOnDlc: valuation.varianceStockValue,
     inventoryRiskStatus: status,
     actionRemarks,
     action: actionRemarks,
@@ -1943,10 +1969,14 @@ async function enrichScanUsers(scans = []) {
 
 async function buildReportData(query = {}) {
   query = normalizeReportQuery(query);
-  let [rawScans, dealers, audits] = await Promise.all([
+  const dealerStockFilter = query.dealerCode
+    ? { dealerCode: query.dealerCode, ...(query.auditId ? { auditId: query.auditId } : {}) }
+    : { _id: null };
+  let [rawScans, dealers, audits, dealerStockRows] = await Promise.all([
     Inventory.find(scanBasedFilter(query)).select(REPORT_SCAN_SELECT).sort({ timestamp: -1 }).lean(),
     Dealer.find({}).sort({ dealerName: 1 }).lean(),
-    Audit.find({}).sort({ createdAt: -1 }).lean()
+    Audit.find({}).sort({ createdAt: -1 }).lean(),
+    DealerStock.find(dealerStockFilter).lean()
   ]);
   const rawScanCountBeforeDedupe = rawScans.length;
   rawScans = applyMovementCountRules(uniqueReportScans(rawScans.map(inventoryRoute.publicScan)))
@@ -1990,6 +2020,20 @@ async function buildReportData(query = {}) {
     const dealerCode = cleanText(master.dealerCode).toUpperCase();
     if (partNo && dealerCode) masterByDealer.set(masterKey(partNo, dealerCode), master);
     if (partNo && !masterByPart.has(partNo)) masterByPart.set(partNo, master);
+  });
+  dealerStockRows.forEach((stock) => {
+    const partNo = masterPartNumber(stock);
+    if (!partNo) return;
+    const dealerCode = cleanText(stock.dealerCode || query.dealerCode).toUpperCase();
+    const merged = {
+      ...(masterByPart.get(partNo) || {}),
+      ...stock,
+      dlc: numberValue(firstPresent(stock.dlp, stock.dlc), 0),
+      dmsStock: numberValue(firstPresent(stock.dmsStock, stock.systemQty), 0),
+      systemQty: numberValue(firstPresent(stock.systemQty, stock.dmsStock), 0)
+    };
+    masterByPart.set(partNo, merged);
+    if (dealerCode) masterByDealer.set(masterKey(partNo, dealerCode), merged);
   });
   let scans = rawScans.map((scan) => {
     const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
@@ -2036,6 +2080,14 @@ async function buildReportData(query = {}) {
   const selectedDealer = query.dealerCode ? dealers.find((dealer) => dealer.dealerCode === String(query.dealerCode).trim().toUpperCase()) : null;
   const selectedAudit = query.auditId ? audits.find((audit) => audit.auditId === String(query.auditId).trim()) : null;
   const summary = [{ generatedAt: formatIstDateTime(new Date()), dealerName: query.dealerName || (selectedDealer ? selectedDealer.dealerName : 'All'), dealerCode: query.dealerCode || 'All', auditId: query.auditId || 'All', fromDate: query.from || '', toDate: query.to || '', category: query.category || 'All', partNumber: query.partNumber || 'All', binLocation: query.bin || 'All', varianceType: query.varianceType || 'All', scanType: query.type || 'All', totalMasterParts: masters.length, totalScans: scanTotalsSummary.scanRows, scanRows: scanTotalsSummary.scanRows, partsScanned: scanTotalsSummary.partsScanned, totalQuantity: scanTotalsSummary.totalQuantity, uniqueParts: scanTotalsSummary.uniqueParts, visibleRows: finalRows.length, duplicateCount: scanTotalsSummary.duplicateCount, unknownPartsCount: Math.max(0, realScansForLookup.length - matchedCount), inwardCount: scanTotalsSummary.inwardCount, outwardCount: scanTotalsSummary.outwardCount, netAvailableCount: scanTotalsSummary.netAvailableCount, mergedDuplicateScanRows, totalSystemQty: finalRows.reduce((sum, row) => sum + row.systemQty, 0), totalPhysicalQty: finalRows.reduce((sum, row) => sum + row.physicalQty, 0), totalSystemMrpValue: money(finalRows.reduce((sum, row) => sum + row.systemMrpValue, 0)), totalPhysicalMrpValue: money(finalRows.reduce((sum, row) => sum + row.physicalMrpValue, 0)), matched: finalRows.filter((row) => ['Matched', 'Inventory Matched'].includes(row.status)).length, short: finalRows.filter((row) => row.status === 'Short').length, excess: finalRows.filter((row) => row.status === 'Excess' || row.status === 'Extra Part').length, notScanned: 0 }];
+  const reportValuationTotals = stockValuationTotals(finalRows);
+  Object.assign(summary[0], {
+    totalActualStockValue: reportValuationTotals.actualDlcTotal,
+    totalDmsStockValue: reportValuationTotals.dmsDlcTotal,
+    totalActualMrpValue: reportValuationTotals.actualMrpTotal,
+    totalDmsMrpValue: reportValuationTotals.dmsMrpTotal,
+    valuationBasis: 'DLC'
+  });
 
   return { filters: query, summary, selectedDealer, selectedAudit, allFinalRows, finalRows, categoryRows: Array.from(categoryMap.values()).sort((a, b) => sortText(a.category, b.category)), scans, damageRows: scans.filter((scan) => scan.type === 'DAMAGE' || scan.scanType === 'DAMAGE'), openingRows: finalRows, oilRows: finalRows.filter((row) => /oil|lube|lubricant/i.test(row.category || row.partDescription || row.partName)), accessoryRows: finalRows.filter((row) => /accessor/i.test(row.category || row.partDescription || row.partName)), nonMovingRows: [], highValueNonMovingRows: [], binRows: binWiseRowsFromScans(scans, finalRows), rawLogRows: scans.map((scan) => ({ time: scan.timestamp, rawScan: scan.rawScan || scan.rawScanString || scan.rawUpi || '', partNumber: scan.partNumber || scan.part, partDescription: scan.partDescription || scan.partName, qty: scan.qty, type: scan.scanType || scan.type, bin: fittedScanQty(scan) ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin), dealerCode: scan.dealerCode, auditId: scan.auditId, userId: scan.userId || scan.loginId || '', userName: scan.userName || scan.staffName || scan.loginId || '', role: scan.role || '', deviceId: scan.deviceId, entryMode: scan.entryMode, entryChannel: scan.entryChannel, scanSourceLabel: scan.scanSourceLabel, staffName: scan.staffName, regdNo: scan.regdNo || '', jobCardNo: scan.jobCardNo || '', fittedQty: scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty : 0), fittedStatus: (scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'Fitted' : 'Not Fitted', autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No', stockDeductedFromBin: scan.stockDeductedFromBin || '', warnings: (scan.warnings || []).join(', ') })), dealerBackupRows: dealers.map((dealer) => ({ dealerName: dealer.dealerName, dealerCode: dealer.dealerCode, brand: dealer.brand, location: dealer.location, currentAuditId: dealer.currentAuditId, auditName: dealer.auditName, auditorName: dealer.auditorName, generalManager: dealer.generalManager, spmName: dealer.spmName })), dealers, audits };
 }
@@ -2055,9 +2107,12 @@ function partwiseInventoryAuditColumns() {
     { header: 'Outward Qty', key: 'outwardQty', width: 16, numFmt: '#,##0.00' },
     { header: 'System Qty', key: 'systemQty', width: 16, numFmt: '#,##0.00' },
     { header: 'Variance Qty', key: 'varianceQty', width: 16, numFmt: '#,##0.00' },
-    { header: 'Physical Value on MRP', key: 'physicalValueOnMrp', width: 22, numFmt: '#,##0.00' },
-    { header: 'System Value on MRP', key: 'systemValueOnMrp', width: 22, numFmt: '#,##0.00' },
-    { header: 'Variance Value on MRP', key: 'varianceValueOnMrp', width: 22, numFmt: '#,##0.00' },
+    { header: 'Actual Stock Value (DLC)', key: 'actualStockValue', width: 24, numFmt: '#,##0.00' },
+    { header: 'DMS Stock Value (DLC)', key: 'dmsStockValue', width: 24, numFmt: '#,##0.00' },
+    { header: 'Variance Value (DLC)', key: 'varianceStockValue', width: 22, numFmt: '#,##0.00' },
+    { header: 'Actual MRP Value (Reference)', key: 'actualMrpValue', width: 28, numFmt: '#,##0.00' },
+    { header: 'DMS MRP Value (Reference)', key: 'dmsMrpValue', width: 28, numFmt: '#,##0.00' },
+    { header: 'Variance MRP Value (Reference)', key: 'varianceMrpValue', width: 30, numFmt: '#,##0.00' },
     { header: 'Inventory Risk Status', key: 'inventoryRiskStatus', width: 22 },
     { header: 'Action / Remarks', key: 'actionRemarks', width: 34 },
     { header: 'Bin Locations', key: 'binLocations', width: 32 }
@@ -2113,7 +2168,8 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const valueSummary = rowValueSummary(scans, detailSource, priceHistories);
   const latestPrice = latestPriceForReport(priceHistories);
   const mrp = finalMrpForReport(valueSummary, detailSource, priceHistories, scans);
-  const dlc = numberValue(firstPresent(detailSource.dlc, firstScan.dlc), 0);
+  // Uploaded dealer stock is the corrected DMS source and overrides catalogue/scan DLC.
+  const dlc = numberValue(firstPresent(system.dlp, system.dlc, catalogue.dlc, detailSource.dlc, firstScan.dlc), 0);
   const auditTypes = new Set(['AUDIT']);
   const userSummary = new Map();
   const breakdown = scans.reduce((total, scan) => {
@@ -2152,9 +2208,10 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const varianceQty = auditedQty - finalAvailableQty;
   const shortQty = Math.max(finalAvailableQty - auditedQty, 0);
   const excessQty = Math.max(auditedQty - finalAvailableQty, 0);
-  const physicalValueOnMrp = money(auditedQty * mrp);
-  const systemValueOnMrp = money(systemQty * mrp);
-  const varianceValueOnMrp = money(varianceQty * mrp);
+  const valuation = calculateStockValuation({ actualQuantity: auditedQty, dmsQuantity: systemQty, dlc, mrp });
+  const physicalValueOnMrp = valuation.actualMrpValue;
+  const systemValueOnMrp = valuation.dmsMrpValue;
+  const varianceValueOnMrp = valuation.varianceMrpValue;
   const physicalBins = binDisplayWithFitted(scans);
   const fitted = fittedDetails(scans);
   const status = partwiseStatus({ mrp, physicalQty, fittedQty, systemQty });
@@ -2191,6 +2248,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     partDescription: unknownIfBlank(firstPresent(detailSource.partDescription, detailSource.partName, firstScan.partDescription, firstScan.partName)),
     productCategory: unknownIfBlank(firstPresent(detailSource.productCategory, detailSource.category, firstScan.productCategory, firstScan.category)),
     productGroup: unknownIfBlank(firstPresent(detailSource.productGroup, firstScan.productGroup)),
+    partSubGroup: unknownIfBlank(firstPresent(detailSource.partSubGroup, detailSource.productSubGroup, firstScan.partSubGroup, firstScan.productSubGroup)),
     model: firstPresent(detailSource.model, firstScan.model) || '',
     year: firstPresent(detailSource.manufacturingYear, detailSource.year, firstScan.manufacturingYear, firstScan.year) || '',
     mrp,
@@ -2201,7 +2259,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     maxScannedMRP: valueSummary.maxScannedMRP,
     totalScanValue: valueSummary.totalScanValue,
     totalManualValue: valueSummary.totalManualValue,
-    finalInventoryValue: physicalValueOnMrp,
+    finalInventoryValue: valuation.actualStockValue,
     priceChangeCount: valueSummary.priceChangeCount,
     pricePeriod: valueSummary.pricePeriod,
     latestMrpEffectiveDate: latestPrice ? formatDate(latestPrice.effectiveFrom) : '',
@@ -2224,15 +2282,21 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     finalAvailableQty,
     shortQty,
     excessQty,
+    actualStockValue: valuation.actualStockValue,
+    dmsStockValue: valuation.dmsStockValue,
+    varianceStockValue: valuation.varianceStockValue,
+    actualMrpValue: valuation.actualMrpValue,
+    dmsMrpValue: valuation.dmsMrpValue,
+    varianceMrpValue: valuation.varianceMrpValue,
     physicalValueOnMrp,
-    physicalValueOnDlc: auditedQty * dlc,
+    physicalValueOnDlc: valuation.actualStockValue,
     systemQty,
     systemValueOnMrp,
-    systemValueOnDlc: systemQty * dlc,
+    systemValueOnDlc: valuation.dmsStockValue,
     varianceQty,
     varianceValueOnMrp,
     varianceOnMrp: varianceValueOnMrp,
-    varianceOnDlc: varianceQty * dlc,
+    varianceOnDlc: valuation.varianceStockValue,
     reservedQty: reservedQtyValue(system) || reservedQtyValue(detailSource),
     action,
     inventoryRiskStatus: status,
@@ -2281,6 +2345,20 @@ function applyPartwiseFilters(rows, query = {}) {
   if (query.action) {
     const action = displayAction(query.action) || cleanText(query.action);
     filtered = filtered.filter((row) => cleanText(row.action).toUpperCase() === cleanText(action).toUpperCase());
+  }
+  if (query.productGroup) {
+    const productGroup = cleanText(query.productGroup);
+    filtered = filtered.filter((row) => new RegExp(escapeRegExp(productGroup), 'i').test(row.productGroup || ''));
+  }
+  if (query.partSubGroup || query.productSubGroup) {
+    const partSubGroup = cleanText(query.partSubGroup || query.productSubGroup);
+    filtered = filtered.filter((row) => new RegExp(escapeRegExp(partSubGroup), 'i').test(row.partSubGroup || ''));
+  }
+  if (query.model) {
+    filtered = filtered.filter((row) => new RegExp(escapeRegExp(query.model), 'i').test(row.model || ''));
+  }
+  if (query.year) {
+    filtered = filtered.filter((row) => new RegExp(escapeRegExp(query.year), 'i').test(row.year || row.manufacturingYear || ''));
   }
   switch (cleanText(query.varianceType).toLowerCase()) {
     case 'matched':
@@ -2335,7 +2413,11 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     unmatchedParts: 0,
     totalVarianceQuantity: 0,
     totalVarianceOnMRP: 0,
-    totalVarianceOnDLC: 0
+    totalVarianceOnDLC: 0,
+    actualStockValueDLC: 0,
+    dmsStockValueDLC: 0,
+    actualStockValueMRP: 0,
+    dmsStockValueMRP: 0
   };
 
   rawScans.forEach((scan) => {
@@ -2478,6 +2560,13 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   validationLog.totalVarianceQuantity = money(validationLog.totalVarianceQuantity);
   validationLog.totalVarianceOnMRP = money(validationLog.totalVarianceOnMRP);
   validationLog.totalVarianceOnDLC = money(validationLog.totalVarianceOnDLC);
+  Object.assign(validationLog, {
+    actualStockValueDLC: stockValuationTotals(rows).actualDlcTotal,
+    dmsStockValueDLC: stockValuationTotals(rows).dmsDlcTotal,
+    actualStockValueMRP: stockValuationTotals(rows).actualMrpTotal,
+    dmsStockValueMRP: stockValuationTotals(rows).dmsMrpTotal,
+    valuationBasis: 'DLC'
+  });
 
   const selectedDealer = query.dealerCode ? dealers.find((dealer) => dealer.dealerCode === String(query.dealerCode).trim().toUpperCase()) : null;
   const selectedAudit = query.auditId ? audits.find((audit) => audit.auditId === String(query.auditId).trim()) : null;
@@ -2565,10 +2654,12 @@ function categoryVarianceColumns() {
     { header: 'Action / Scan Type', key: 'action', width: 22 },
     { header: 'Total Scanned Parts', key: 'totalScannedParts', width: 22, numFmt: '#,##0' },
     { header: 'Total Scanned Quantity', key: 'totalScannedQuantity', width: 24, numFmt: '#,##0.00' },
-    { header: 'Sum of Physical Value On MRP', key: 'sumPhysicalValueOnMRP', width: 28, numFmt: '#,##0.00' },
-    { header: 'Sum of Physical Value On DLC', key: 'sumPhysicalValueOnDLC', width: 28, numFmt: '#,##0.00' },
-    { header: 'Sum of Variance On MRP', key: 'sumVarianceOnMRP', width: 24, numFmt: '#,##0.00' },
-    { header: 'Sum of Variance On DLC', key: 'sumVarianceOnDLC', width: 24, numFmt: '#,##0.00' }
+    { header: 'Actual Stock Value (DLC)', key: 'sumPhysicalValueOnDLC', width: 26, numFmt: '#,##0.00' },
+    { header: 'DMS Stock Value (DLC)', key: 'sumDmsValueOnDLC', width: 26, numFmt: '#,##0.00' },
+    { header: 'Variance Value (DLC)', key: 'sumVarianceOnDLC', width: 24, numFmt: '#,##0.00' },
+    { header: 'Actual MRP Value (Reference)', key: 'sumPhysicalValueOnMRP', width: 28, numFmt: '#,##0.00' },
+    { header: 'DMS MRP Value (Reference)', key: 'sumDmsValueOnMRP', width: 28, numFmt: '#,##0.00' },
+    { header: 'Variance MRP Value (Reference)', key: 'sumVarianceOnMRP', width: 30, numFmt: '#,##0.00' }
   ];
 }
 
@@ -2631,6 +2722,8 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
       totalScannedQuantity: 0,
       sumPhysicalValueOnMRP: 0,
       sumPhysicalValueOnDLC: 0,
+      sumDmsValueOnMRP: 0,
+      sumDmsValueOnDLC: 0,
       sumVarianceOnMRP: 0,
       sumVarianceOnDLC: 0,
       rowType: 'detail'
@@ -2639,6 +2732,8 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     group.totalScannedQuantity += Number(row.physicalQty || 0);
     group.sumPhysicalValueOnMRP += Number(row.physicalValueOnMrp || 0);
     group.sumPhysicalValueOnDLC += Number(row.physicalValueOnDlc || 0);
+    group.sumDmsValueOnMRP += Number(row.systemValueOnMrp || 0);
+    group.sumDmsValueOnDLC += Number(row.systemValueOnDlc || 0);
     group.sumVarianceOnMRP += Number(row.varianceOnMrp || 0);
     group.sumVarianceOnDLC += Number(row.varianceOnDlc || 0);
     groupMap.set(key, group);
@@ -2651,16 +2746,20 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     totalScannedQuantity: money(row.totalScannedQuantity),
     sumPhysicalValueOnMRP: money(row.sumPhysicalValueOnMRP),
     sumPhysicalValueOnDLC: money(row.sumPhysicalValueOnDLC),
+    sumDmsValueOnMRP: money(row.sumDmsValueOnMRP),
+    sumDmsValueOnDLC: money(row.sumDmsValueOnDLC),
     sumVarianceOnMRP: money(row.sumVarianceOnMRP),
     sumVarianceOnDLC: money(row.sumVarianceOnDLC)
   })).sort(sortCategoryVarianceRows);
   const byCategory = new Map();
   detailRows.forEach((row) => {
-    const subtotal = byCategory.get(row.productCategory) || { totalScannedParts: 0, totalScannedQuantity: 0, sumPhysicalValueOnMRP: 0, sumPhysicalValueOnDLC: 0, sumVarianceOnMRP: 0, sumVarianceOnDLC: 0 };
+    const subtotal = byCategory.get(row.productCategory) || { totalScannedParts: 0, totalScannedQuantity: 0, sumPhysicalValueOnMRP: 0, sumPhysicalValueOnDLC: 0, sumDmsValueOnMRP: 0, sumDmsValueOnDLC: 0, sumVarianceOnMRP: 0, sumVarianceOnDLC: 0 };
     subtotal.totalScannedParts += Number(row.totalScannedParts || 0);
     subtotal.totalScannedQuantity += Number(row.totalScannedQuantity || 0);
     subtotal.sumPhysicalValueOnMRP += Number(row.sumPhysicalValueOnMRP || 0);
     subtotal.sumPhysicalValueOnDLC += Number(row.sumPhysicalValueOnDLC || 0);
+    subtotal.sumDmsValueOnMRP += Number(row.sumDmsValueOnMRP || 0);
+    subtotal.sumDmsValueOnDLC += Number(row.sumDmsValueOnDLC || 0);
     subtotal.sumVarianceOnMRP += Number(row.sumVarianceOnMRP || 0);
     subtotal.sumVarianceOnDLC += Number(row.sumVarianceOnDLC || 0);
     byCategory.set(row.productCategory, subtotal);
@@ -2683,6 +2782,8 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
       totalScannedQuantity: money(subtotal.totalScannedQuantity),
       sumPhysicalValueOnMRP: money(subtotal.sumPhysicalValueOnMRP),
       sumPhysicalValueOnDLC: money(subtotal.sumPhysicalValueOnDLC),
+      sumDmsValueOnMRP: money(subtotal.sumDmsValueOnMRP),
+      sumDmsValueOnDLC: money(subtotal.sumDmsValueOnDLC),
       sumVarianceOnMRP: money(subtotal.sumVarianceOnMRP),
       sumVarianceOnDLC: money(subtotal.sumVarianceOnDLC),
       rowType: 'subtotal'
@@ -2694,6 +2795,8 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     totalScannedQuantity: money(rows.filter((row) => row.rowType === 'subtotal').reduce((sum, row) => sum + Number(row.totalScannedQuantity || 0), 0)),
     sumPhysicalValueOnMRP: money(rows.filter((row) => row.rowType === 'subtotal').reduce((sum, row) => sum + Number(row.sumPhysicalValueOnMRP || 0), 0)),
     sumPhysicalValueOnDLC: money(rows.filter((row) => row.rowType === 'subtotal').reduce((sum, row) => sum + Number(row.sumPhysicalValueOnDLC || 0), 0)),
+    sumDmsValueOnMRP: money(rows.filter((row) => row.rowType === 'subtotal').reduce((sum, row) => sum + Number(row.sumDmsValueOnMRP || 0), 0)),
+    sumDmsValueOnDLC: money(rows.filter((row) => row.rowType === 'subtotal').reduce((sum, row) => sum + Number(row.sumDmsValueOnDLC || 0), 0)),
     sumVarianceOnMRP: money(rows.filter((row) => row.rowType === 'subtotal').reduce((sum, row) => sum + Number(row.sumVarianceOnMRP || 0), 0)),
     sumVarianceOnDLC: money(rows.filter((row) => row.rowType === 'subtotal').reduce((sum, row) => sum + Number(row.sumVarianceOnDLC || 0), 0))
   };
@@ -2828,6 +2931,8 @@ function addCategoryWiseVarianceSheet(workbook, data, name = 'Category Wise Vari
     totalScannedQuantity: Number(row.totalScannedQuantity || 0),
     sumPhysicalValueOnMRP: Number(row.sumPhysicalValueOnMRP || 0),
     sumPhysicalValueOnDLC: Number(row.sumPhysicalValueOnDLC || 0),
+    sumDmsValueOnMRP: Number(row.sumDmsValueOnMRP || 0),
+    sumDmsValueOnDLC: Number(row.sumDmsValueOnDLC || 0),
     sumVarianceOnMRP: Number(row.sumVarianceOnMRP || 0),
     sumVarianceOnDLC: Number(row.sumVarianceOnDLC || 0)
   }));
@@ -2838,6 +2943,8 @@ function addCategoryWiseVarianceSheet(workbook, data, name = 'Category Wise Vari
     totalScannedQuantity: Number(data.grandTotal.totalScannedQuantity || 0),
     sumPhysicalValueOnMRP: Number(data.grandTotal.sumPhysicalValueOnMRP || 0),
     sumPhysicalValueOnDLC: Number(data.grandTotal.sumPhysicalValueOnDLC || 0),
+    sumDmsValueOnMRP: Number(data.grandTotal.sumDmsValueOnMRP || 0),
+    sumDmsValueOnDLC: Number(data.grandTotal.sumDmsValueOnDLC || 0),
     sumVarianceOnMRP: Number(data.grandTotal.sumVarianceOnMRP || 0),
     sumVarianceOnDLC: Number(data.grandTotal.sumVarianceOnDLC || 0)
   });
@@ -2913,17 +3020,17 @@ const STOCK_SUMMARY_CATEGORIES = [
 function stockSummaryColumns() {
   return [
     { header: 'Category', key: 'category', width: 20 },
-    { header: 'Value', key: 'dmsValue', width: 16 },
+    { header: 'DMS Value (DLC)', key: 'dmsValue', width: 18 },
     { header: 'Part Lines', key: 'dmsPartLines', width: 12 },
     { header: 'Quantity', key: 'dmsQuantity', width: 14 },
-    { header: 'Value', key: 'physicalValue', width: 16 },
+    { header: 'Actual Value (DLC)', key: 'physicalValue', width: 18 },
     { header: 'Part Lines', key: 'physicalPartLines', width: 12 },
     { header: 'Quantity', key: 'physicalQuantity', width: 14 },
-    { header: 'Value', key: 'excessValue', width: 16 },
+    { header: 'Excess Value (DLC)', key: 'excessValue', width: 18 },
     { header: 'Part Lines', key: 'excessPartLines', width: 12 },
-    { header: 'Value', key: 'shortValue', width: 16 },
+    { header: 'Short Value (DLC)', key: 'shortValue', width: 18 },
     { header: 'Part Lines', key: 'shortPartLines', width: 12 },
-    { header: 'Value', key: 'netDifference', width: 16 }
+    { header: 'Net Difference (DLC)', key: 'netDifference', width: 20 }
   ];
 }
 
@@ -2986,9 +3093,9 @@ function addStockSummaryMatrixValues(total, row = {}) {
   const systemQty = Number(row.systemQty || 0);
   const physicalQty = Number(row.finalAuditQty ?? row.actualAuditQty ?? row.physicalQty ?? 0);
   const varianceQty = physicalQty - systemQty;
-  const dmsValue = Number(row.systemValueOnMrp || row.systemMrpValue || 0);
-  const physicalValue = Number(row.physicalValueOnMrp || row.finalInventoryValue || 0);
-  const varianceValue = Math.abs(Number(row.varianceValueOnMrp || row.varianceOnMrp || 0));
+  const dmsValue = Number(row.dmsStockValue ?? row.systemValueOnDlc ?? 0);
+  const physicalValue = Number(row.actualStockValue ?? row.physicalValueOnDlc ?? row.finalInventoryValue ?? 0);
+  const varianceValue = Math.abs(Number(row.varianceStockValue ?? row.varianceOnDlc ?? 0));
   total.dmsValue += dmsValue;
   total.dmsQuantity += systemQty;
   if (systemQty !== 0) total.dmsPartLines += 1;
@@ -3002,7 +3109,7 @@ function addStockSummaryMatrixValues(total, row = {}) {
     total.shortValue += varianceValue;
     total.shortPartLines += 1;
   }
-  total.netDifference += Number(row.varianceValueOnMrp || row.varianceOnMrp || 0);
+  total.netDifference += Number(row.varianceStockValue ?? row.varianceOnDlc ?? 0);
 }
 
 function roundStockSummaryMatrixRow(row = {}) {
@@ -3033,14 +3140,8 @@ function stockSummaryGrandTotal(rows = []) {
   return { ...roundStockSummaryMatrixRow(total), rowType: 'total' };
 }
 
-function stockSummaryDamageValue(scans = [], rowByPart = new Map()) {
-  return scans.reduce((sum, scan) => {
-    const type = cleanText(scan.scanType || scan.type).toUpperCase();
-    if (type !== 'DAMAGE') return sum;
-    const qty = Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
-    const valueRow = scanValueRow(scan);
-    return sum + qty * Number(valueRow.valuationMRP || 0);
-  }, 0);
+function stockSummaryDamageValue(rows = []) {
+  return money(rows.reduce((sum, row) => sum + Math.abs(Number(row.damageQty || 0)) * Number(row.dlc || 0), 0));
 }
 
 function stockSummaryDate(value) {
@@ -3078,132 +3179,14 @@ function stockSummaryMetadata(selectedDealer = {}, selectedAudit = {}, query = {
 async function buildStockSummaryReport(query = {}) {
   query = normalizeReportQuery(query);
   const dealerCode = query.dealerCode;
-  const scanFilter = scanBasedFilter({ ...query, category: '', productCategory: '', productGroup: '', partSubGroup: '', productSubGroup: '', model: '', year: '', type: '', scanType: '' });
-  scanFilter.$and = (scanFilter.$and || []).concat([
-    { syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] } },
-    { isDuplicate: { $ne: true } }
-  ]);
-  const stockFilter = query.auditId ? { dealerCode, auditId: query.auditId } : { dealerCode };
-  const [rawScans, stockRows, selectedDealer, audits] = await Promise.all([
-    Inventory.find(scanFilter).select(REPORT_SCAN_SELECT).sort({ timestamp: 1 }).lean(),
-    DealerStock.find(stockFilter).sort({ partNumber: 1 }).lean(),
-    dealerCode ? Dealer.findOne({ dealerCode }).lean() : Promise.resolve(null),
-    Audit.find({ dealerCode }).sort({ createdAt: -1 }).lean()
-  ]);
-  const scans = applyMovementCountRules(uniqueReportScans(rawScans.map(inventoryRoute.publicScan)));
-  const physicalGroups = new Map();
-  scans.forEach((scan) => {
-    const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
-    if (!partNo || /^SYNC/i.test(partNo)) return;
-    const group = physicalGroups.get(partNo) || { partNo, scans: [], physicalQty: 0, fittedQty: 0, firstScan: scan };
-    const qty = stockSummaryQty(scan);
-    group.scans.push({ ...scan, qty });
-    group.physicalQty += qty;
-    if (cleanText(scan.scanType || scan.type).toUpperCase() === 'FITTED') group.fittedQty += Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
-    physicalGroups.set(partNo, group);
-  });
-  const stockByPart = new Map();
-  stockRows.forEach((stock) => {
-    const partNo = normalizePartNumber(stock.normalizedPartNumber || stock.partNumber);
-    if (!partNo) return;
-    const existing = stockByPart.get(partNo);
-    if (existing) {
-      existing.systemQty = Number(existing.systemQty || existing.dmsStock || 0) + Number(stock.systemQty || stock.dmsStock || 0);
-      existing.dmsStock = existing.systemQty;
-    } else {
-      stockByPart.set(partNo, { ...stock, systemQty: Number(stock.systemQty || stock.dmsStock || 0), dmsStock: Number(stock.systemQty || stock.dmsStock || 0) });
-    }
-  });
-  const allParts = Array.from(new Set([...stockByPart.keys(), ...physicalGroups.keys()]));
-  const [catalogueRows, priceHistoryRows] = allParts.length ? await Promise.all([
-    MasterCatalogue.find({ normalizedPartNumber: { $in: allParts } }).lean(),
-    PartPriceHistory.find({ normalizedPartNumber: { $in: allParts } }).sort({ normalizedPartNumber: 1, isCurrentPrice: -1, effectiveFrom: -1 }).lean()
-  ]) : [[], []];
-  const catalogueByPart = new Map(catalogueRows.map((row) => [masterPartNumber(row), cataloguePayload(row)]).filter(([partNo]) => partNo));
-  const priceHistoryByPart = new Map();
-  priceHistoryRows.forEach((row) => {
-    const partNo = normalizePartNumber(row.normalizedPartNumber || row.partNumber);
-    if (!partNo) return;
-    const rowsForPart = priceHistoryByPart.get(partNo) || [];
-    rowsForPart.push(row);
-    priceHistoryByPart.set(partNo, rowsForPart);
-  });
-  const rows = allParts.filter((partNo) => stockByPart.has(partNo) || catalogueByPart.has(partNo)).map((partNo) => {
-    const stock = stockByPart.get(partNo) || {};
-    const physical = physicalGroups.get(partNo) || {};
-    const firstScan = physical.firstScan || {};
-    const catalogue = catalogueByPart.get(partNo) || {};
-    const detail = Object.keys(stock).length ? stock : (Object.keys(catalogue).length ? catalogue : firstScan);
-    const priceHistories = priceHistoryByPart.get(partNo) || [];
-    const latestPrice = latestPriceForReport(priceHistories);
-    const valueSummary = rowValueSummary(physical.scans || [], catalogue, priceHistories);
-    const mrp = finalMrpForReport(valueSummary, detail, priceHistories, physical.scans || []);
-    const dlc = numberValue(firstPresent(catalogue.dlc, stock.dlc, firstScan.dlc), 0);
-    const systemQty = numberValue(firstPresent(stock.systemQty, stock.dmsStock), 0);
-    const physicalQty = numberValue(physical.physicalQty, 0);
-    const fittedQty = numberValue(physical.fittedQty, 0);
-    const finalAuditQty = physicalQty;
-    const varianceQty = finalAuditQty - systemQty;
-    const physicalValueOnMrp = money(finalAuditQty * mrp);
-    const systemValueOnMrp = money(systemQty * mrp);
-    const varianceValueOnMrp = money(varianceQty * mrp);
-    const fitted = fittedDetails(physical.scans || []);
-    const status = auditStockStatus({ mrp, physicalQty, fittedQty, systemQty });
-    return {
-      partNumber: partNo,
-      partNo,
-      partDescription: firstPresent(detail.partDescription, detail.partName, firstScan.partDescription, firstScan.partName) || '',
-      productCategory: firstPresent(detail.productCategory, detail.category, firstScan.productCategory, firstScan.category) || '',
-      category: firstPresent(detail.category, detail.productCategory, firstScan.category, firstScan.productCategory) || '',
-      productGroup: firstPresent(detail.productGroup, firstScan.productGroup) || '',
-      partSubGroup: firstPresent(detail.partSubGroup, firstScan.partSubGroup) || '',
-      model: firstPresent(detail.model, firstScan.model) || '',
-      year: firstPresent(detail.year, detail.manufacturingYear, firstScan.year, firstScan.manufacturingYear) || '',
-      manufacturingYear: firstPresent(detail.manufacturingYear, detail.year, firstScan.manufacturingYear, firstScan.year) || '',
-      mrp,
-      latestMrpEffectiveDate: latestPrice ? formatDate(latestPrice.effectiveFrom) : '',
-      currentCatalogueMRP: valueSummary.currentCatalogueMRP,
-      averageScannedMRP: valueSummary.averageScannedMRP,
-      minScannedMRP: valueSummary.minScannedMRP,
-      maxScannedMRP: valueSummary.maxScannedMRP,
-      totalScanValue: valueSummary.totalScanValue,
-      totalManualValue: valueSummary.totalManualValue,
-      finalInventoryValue: physicalValueOnMrp,
-      dlc,
-      systemQty,
-      physicalQty,
-      physicalBinQty: physicalQty,
-      fittedQty,
-      finalAuditQty,
-      actualAuditQty: finalAuditQty,
-      fittedRegdNo: fitted.fittedRegdNo,
-      fittedJobCardNo: fitted.fittedJobCardNo,
-      regdNo: fitted.fittedRegdNo,
-      jobCardNo: fitted.fittedJobCardNo,
-      fittedStatus: fittedQty > 0 ? 'Fitted' : 'Not Fitted',
-      varianceQty,
-      systemValueOnMrp,
-      systemValueOnDlc: systemQty * dlc,
-      physicalValueOnMrp,
-      physicalValueOnDlc: finalAuditQty * dlc,
-      varianceValueOnMrp,
-      varianceOnMrp: varianceValueOnMrp,
-      varianceOnDlc: varianceQty * dlc,
-      inventoryRiskStatus: status,
-      actionRemarks: inventoryRiskAction(status),
-      status
-    };
-  }).filter((row) => stockSummaryRowMatchesFilters(row, query));
-  const selectedAudit = query.auditId
-    ? audits.find((audit) => audit.auditId === query.auditId)
-    : (selectedDealer && selectedDealer.currentAuditId
-      ? audits.find((audit) => audit.auditId === selectedDealer.currentAuditId)
-      : audits[0]);
+  const partwise = await cachedBuildPartwiseInventoryAuditReport({ ...query, showFullMasterWithZeroScan: 'on' });
+  const rows = partwise.rows.filter((row) => stockSummaryRowMatchesFilters(row, query));
+  const selectedDealer = partwise.selectedDealer || null;
+  const selectedAudit = partwise.selectedAudit || null;
   const matrixRows = stockSummaryMatrixRows(rows);
   const grandTotal = stockSummaryGrandTotal(matrixRows);
-  const rowByPart = new Map(rows.map((row) => [normalizePartNumber(row.partNo || row.partNumber), row]).filter(([partNo]) => partNo));
   const footer = {
-    damagedItemsValue: money(stockSummaryDamageValue(scans, rowByPart)),
+    damagedItemsValue: stockSummaryDamageValue(rows),
     manualContribution: '',
     totalShortValue: grandTotal.shortValue,
     totalExcessValue: grandTotal.excessValue,
@@ -3232,10 +3215,30 @@ async function buildStockSummaryReport(query = {}) {
     model: query.model || 'All',
     year: query.year || 'All',
     totalSkuCount: rows.length,
-    totalStockRows: stockRows.length,
-    totalPhysicalParts: physicalGroups.size
+    totalStockRows: rows.filter((row) => Number(row.systemQty || 0) !== 0).length,
+    totalPhysicalParts: rows.filter((row) => Number(row.physicalQty || 0) !== 0).length,
+    actualStockValueDLC: grandTotal.physicalValue,
+    dmsStockValueDLC: grandTotal.dmsValue,
+    valuationBasis: 'DLC'
   };
   return { rows: matrixRows.concat([grandTotal]), columns: stockSummaryColumns(), sections, summary, detailRows: rows, selectedDealer, selectedAudit, message: rows.length ? '' : 'No stock summary data found for selected dealer/filter' };
+}
+
+async function validateValuationReports(query = {}, provided = {}) {
+  const reportQuery = requireDealerForReport(query);
+  const partwise = provided.partwise || await cachedBuildPartwiseInventoryAuditReport(reportQuery);
+  const [stockSummary, category] = await Promise.all([
+    provided.stockSummary ? Promise.resolve(provided.stockSummary) : cachedBuildStockSummaryReport(reportQuery),
+    provided.category ? Promise.resolve(provided.category) : cachedBuildCategoryWiseVarianceSummary(reportQuery)
+  ]);
+  const partwiseTotal = stockValuationTotals(partwise.rows).actualDlcTotal;
+  const dashboardTotal = stockValuationTotals(partwise.rows).actualDlcTotal;
+  return assertDlcReconciliation({
+    partwise: partwiseTotal,
+    stockSummary: Number(stockSummary.sections && stockSummary.sections.grandTotal ? stockSummary.sections.grandTotal.physicalValue : 0),
+    category: Number(category.grandTotal ? category.grandTotal.sumPhysicalValueOnDLC : 0),
+    dashboard: dashboardTotal
+  });
 }
 
 function addStockSummarySheet(workbook, data) {
@@ -3531,6 +3534,7 @@ router.get('/movement_wise_stock_analysis', auth.requireAuth, async (req, res) =
   try {
     const reportQuery = await movementWiseStockAnalysisQuery(req.query);
     const data = await reconciliationRoute.buildMovementAnalysisReport(reportQuery);
+    const reconciliation = await validateValuationReports(reportQuery);
     const columns = movementWiseStockAnalysisColumns();
     if (req.query.format === 'excel') return sendMovementWiseStockAnalysisWorkbook(res, data);
     return res.json({
@@ -3541,11 +3545,12 @@ router.get('/movement_wise_stock_analysis', auth.requireAuth, async (req, res) =
       rows: data.rows || [],
       sections: data.sections || {},
       summary: data.summary || {},
+      reconciliation,
       totalRows: (data.rows || []).length,
       message: data.message
     });
   } catch (error) {
-    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
+    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 });
 
@@ -3553,6 +3558,7 @@ router.get('/stock-summary', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
     const data = await cachedBuildStockSummaryReport(reportQuery);
+    const reconciliation = await validateValuationReports(reportQuery, { stockSummary: data });
     if (req.query.format === 'excel') {
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'Daksh Inventory v2';
@@ -3571,17 +3577,20 @@ router.get('/stock-summary', auth.requireAuth, async (req, res) => {
       rows: data.rows,
       sections: data.sections,
       summary: data.summary,
+      reconciliation,
       totalRows: data.rows.length,
       message: data.message
     });
   } catch (error) {
-    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
+    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 });
 
 router.get('/category-wise-variance-summary', auth.requireAuth, async (req, res) => {
   try {
-    const data = await cachedBuildCategoryWiseVarianceSummary(req.query);
+    const reportQuery = requireDealerForReport(req.query);
+    const data = await cachedBuildCategoryWiseVarianceSummary(reportQuery);
+    const reconciliation = await validateValuationReports(reportQuery, { category: data });
     if (req.query.format === 'excel') {
       if (hasRequestedReportColumns(req.query)) {
         const exportRows = data.rows.concat([{ productCategory: 'Grand Total', action: '', ...data.grandTotal, rowType: 'grandTotal' }]);
@@ -3611,11 +3620,12 @@ router.get('/category-wise-variance-summary', auth.requireAuth, async (req, res)
       grandTotal: data.grandTotal,
       validationLog: data.validationLog,
       summary: data.summary,
+      reconciliation,
       totalRows: data.rows.length,
       message: data.rows.length ? '' : 'No report data found for selected filter'
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 });
 
@@ -3623,6 +3633,7 @@ router.get('/partwise-inventory-audit', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
     const data = await cachedBuildPartwiseInventoryAuditReport(reportQuery);
+    const reconciliation = await validateValuationReports(reportQuery, { partwise: data });
     if (req.query.format === 'excel') {
       if (hasRequestedReportColumns(reportQuery)) {
         return sendSelectedColumnsWorkbook(res, 'Partwise_Inventory_Audit_Report.xlsx', 'Partwise Inventory Audit', data.columns, data.rows, reportQuery);
@@ -3650,11 +3661,12 @@ router.get('/partwise-inventory-audit', auth.requireAuth, async (req, res) => {
       rows: data.rows,
       summary: data.summary,
       validationLog: data.validationLog,
+      reconciliation,
       totalRows: data.rows.length,
       message: data.rows.length ? '' : 'No report data found for selected filter'
     });
   } catch (error) {
-    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
+    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 });
 
@@ -3667,6 +3679,7 @@ async function handlePartwiseVarianceReport(req, res, varianceType, title, type 
       showFullMasterWithZeroScan: forceFullMaster ? 'on' : req.query.showFullMasterWithZeroScan
     });
     const data = await cachedBuildPartwiseInventoryAuditReport(reportQuery);
+    const reconciliation = await validateValuationReports(reportQuery, { partwise: data });
     const fileBase = title.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'Report';
     if (req.query.format === 'excel') {
       return sendSelectedColumnsWorkbook(res, `${fileBase}.xlsx`, title, data.columns, data.rows, reportQuery);
@@ -3685,11 +3698,12 @@ async function handlePartwiseVarianceReport(req, res, varianceType, title, type 
       rows: data.rows,
       summary: data.summary,
       validationLog: data.validationLog,
+      reconciliation,
       totalRows: data.rows.length,
       message: data.rows.length ? '' : 'No report data found for selected filter'
     });
   } catch (error) {
-    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
+    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 }
 
@@ -3709,6 +3723,7 @@ router.post('/partwise-inventory-audit/email', auth.requireAuth, auth.requireAdm
 
     const reportFilters = requireDealerForReport(req.body.filters || {});
     const data = await cachedBuildPartwiseInventoryAuditReport(reportFilters);
+    await validateValuationReports(reportFilters, { partwise: data });
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Daksh Inventory v2';
     workbook.created = new Date();
@@ -3960,3 +3975,4 @@ module.exports.buildStockSummaryReport = cachedBuildStockSummaryReport;
 module.exports.buildPartwiseInventoryAuditReport = cachedBuildPartwiseInventoryAuditReport;
 module.exports.buildPartsInventoryRefreshRows = cachedBuildPartsInventoryRefreshRows;
 module.exports.addStockSummarySheet = addStockSummarySheet;
+module.exports.validateValuationReports = validateValuationReports;

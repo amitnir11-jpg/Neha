@@ -4,74 +4,22 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DAKSH INVENTORY SYSTEM</title>
-  <link rel="stylesheet" href="/style.css?v=20260612-manual-save-guard" onerror="console.error('[DAKSH_DASHBOARD_ASSET] style.css failed', this.href)">
   <script>
     (function () {
-      var startedAt = Date.now();
-      window.__DAKSH_DASHBOARD_BOOT__ = {
-        startedAt: new Date(startedAt).toISOString(),
-        markers: []
-      };
-
-      function safeStorage(key) {
-        try {
-          return window.localStorage ? localStorage.getItem(key) : null;
-        } catch (error) {
-          console.warn('[DAKSH_DASHBOARD_BOOT] localStorage read failed', key, error);
-          return null;
-        }
-      }
-
-      function mark(label, details) {
-        var entry = {
-          label: label,
-          ms: Date.now() - startedAt,
-          details: details || {}
-        };
-        window.__DAKSH_DASHBOARD_BOOT__.markers.push(entry);
-      }
-
-      window.addEventListener('error', function (event) {
-        console.error('[DAKSH_DASHBOARD_BOOT] window error', {
-          message: event.message,
-          source: event.filename,
-          line: event.lineno,
-          column: event.colno,
-          error: event.error ? event.error.stack || event.error.message : null
-        });
-      });
-
-      window.addEventListener('unhandledrejection', function (event) {
-        var reason = event.reason || {};
-        console.error('[DAKSH_DASHBOARD_BOOT] unhandled promise rejection', reason.stack || reason.message || reason);
-      });
-
-      mark('Daksh.html inline diagnostics ready', {
-        href: window.location.href,
-        readyState: document.readyState,
-        tokenPresent: Boolean(safeStorage('dakshToken')),
-        userPresent: Boolean(safeStorage('dakshUser'))
-      });
-
-      document.addEventListener('DOMContentLoaded', function () {
-        mark('DOMContentLoaded fired', {
-          appShell: Boolean(document.querySelector('.app')),
-          dashboardView: Boolean(document.getElementById('dashboard')),
-          uiScriptPresent: Boolean(document.querySelector('script[src*="/ui.js"]')),
-          styleSheets: document.styleSheets ? document.styleSheets.length : 0
-        });
-      });
-
-      window.addEventListener('load', function () {
-        mark('window load fired', {
-          bodyChildren: document.body ? document.body.children.length : 0,
-          activeView: document.querySelector('.view.active') ? document.querySelector('.view.active').id : ''
-        });
-      });
+      var width = 90;
+      try {
+        width = Math.min(260, Math.max(90, parseInt(localStorage.getItem('dakshSidebarWidth'), 10) || 90));
+      } catch (error) {}
+      document.documentElement.style.setProperty('--sidebar-width-desktop', width + 'px');
+      if (width >= 132) document.documentElement.classList.add('sidebar-wide-initial');
     })();
   </script>
+  <link rel="stylesheet" href="/style.css?v=20260613-dashboard-performance">
 </head>
-<body>
+<body class="app-booting dashboard-view-active">
+  <script>
+    if (document.documentElement.classList.contains('sidebar-wide-initial')) document.body.classList.add('sidebar-wide');
+  </script>
   <div class="app">
     <aside class="side">
       <div class="side-brand">
@@ -141,6 +89,7 @@
               <tr>
                 <th>Total Scanned Today</th>
                 <th>Total Scan Qty</th>
+                <th>Actual Stock Value (DLC)</th>
                 <th>Last Scanned Part</th>
                 <th>Damage Count</th>
                 <th>Duplicate Scans</th>
@@ -150,6 +99,7 @@
               <tr>
                 <td id="dashToday">0</td>
                 <td id="dashTotalScanQty">0</td>
+                <td id="dashStockValueDlc">0.00</td>
                 <td id="dashLastScannedPart">-</td>
                 <td id="dashDamage">0</td>
                 <td id="dashDuplicates">0</td>
@@ -185,7 +135,12 @@
             <div class="table-wrap compact-table dashboard-table-wrap dashboard-stream-wrap">
               <table class="dashboard-data-table dashboard-stream-table">
                 <thead><tr><th data-col-key="time">Time</th><th data-col-key="part-number">Part Number</th><th data-col-key="qty">Qty</th><th data-col-key="mrp">MRP</th><th data-col-key="scan-type">Scan Type</th><th data-col-key="bin-location">Bin Location</th><th data-col-key="dealer-code">Dealer Code</th><th data-col-key="entry-source">Entry Source</th><th data-col-key="device-id">Device ID</th><th data-col-key="sync-status">Sync Status</th></tr></thead>
-                <tbody id="streamRows"></tbody>
+                <tbody id="streamRows">
+                  <tr class="dashboard-skeleton-row"><td colspan="10"><span></span></td></tr>
+                  <tr class="dashboard-skeleton-row"><td colspan="10"><span></span></td></tr>
+                  <tr class="dashboard-skeleton-row"><td colspan="10"><span></span></td></tr>
+                  <tr class="dashboard-skeleton-row"><td colspan="10"><span></span></td></tr>
+                </tbody>
               </table>
             </div>
           </section>
@@ -208,12 +163,15 @@
                   <th data-col-key="total-scans">Total Scans</th>
                   <th data-col-key="total-quantity">Total Quantity</th>
                   <th data-col-key="unique-parts">Unique Parts</th>
-                  <th data-col-key="total-mrp-value">Total MRP Value</th>
-                  <th data-col-key="total-dlc-value">Total DLC Value</th>
+                  <th data-col-key="total-dlc-value">Actual Stock Value (DLC)</th>
+                  <th data-col-key="total-mrp-value">MRP Value (Reference)</th>
                 </tr>
               </thead>
               <tbody id="productGroupSummaryRows">
-                <tr><td colspan="7" class="muted">No product group data yet</td></tr>
+                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
+                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
+                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
+                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
               </tbody>
             </table>
           </div>
@@ -233,12 +191,14 @@
                     <th>Part Description</th>
                     <th>Qty</th>
                     <th>Bin Location</th>
-                    <th>MRP</th>
-                    <th>MRP Total</th>
+                    <th>DLC</th>
+                    <th>Actual Stock Value (DLC)</th>
+                    <th>MRP (Reference)</th>
+                    <th>MRP Value (Reference)</th>
                   </tr>
                 </thead>
                 <tbody id="productGroupDetailRows">
-                  <tr><td colspan="6" class="muted">Click a product group to view parts</td></tr>
+                  <tr><td colspan="8" class="muted">Click a product group to view parts</td></tr>
                 </tbody>
               </table>
             </div>
@@ -643,7 +603,7 @@
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Part Number</th><th>Description</th><th>Category</th><th>DMS Stock</th><th>Actual Scanned Stock</th><th>Variance</th><th>Status</th><th>MRP</th><th>DLP</th><th>Stock Value</th><th>Bin Location</th><th>Movement Type</th><th>Fast/Slow/Dead Status</th></tr></thead>
+                <thead><tr><th>Part Number</th><th>Description</th><th>Category</th><th>DMS Stock</th><th>Actual Scanned Stock</th><th>Variance</th><th>Status</th><th>MRP (Reference)</th><th>DLC / DLP</th><th>DMS Stock Value (DLC)</th><th>Actual Stock Value (DLC)</th><th>Bin Location</th><th>Movement Type</th><th>Fast/Slow/Dead Status</th></tr></thead>
                 <tbody id="reconRows"></tbody>
               </table>
             </div>
@@ -1372,36 +1332,6 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260612-manual-save-guard" onerror="console.error('[DAKSH_DASHBOARD_ASSET] ui.js failed', this.src)"></script>
-  <script>
-    (function () {
-      function setPill(id, text, ok) {
-        var node = document.getElementById(id);
-        if (!node) return;
-        node.textContent = text;
-        node.classList.toggle('green-dot', Boolean(ok));
-        node.classList.toggle('red-dot', !ok);
-      }
-
-      async function refreshMongoHealth() {
-        try {
-          var response = await fetch('/api/health', { cache: 'no-store' });
-          var data = await response.json();
-          var serverOk = data.server === 'online';
-          var dbOk = data.db === 'connected';
-          setPill('syncServerStatus', serverOk ? 'Connected' : 'Offline', serverOk);
-          setPill('syncMongoStatus', dbOk ? 'Connected' : 'Offline', dbOk);
-        } catch (error) {
-          setPill('syncServerStatus', 'Offline', false);
-          setPill('syncMongoStatus', 'Offline', false);
-        }
-      }
-
-      window.addEventListener('DOMContentLoaded', function () {
-        refreshMongoHealth();
-        setInterval(refreshMongoHealth, 30000);
-      });
-    })();
-  </script>
+  <script src="/ui.js?v=20260613-dashboard-performance"></script>
 </body>
 </html>

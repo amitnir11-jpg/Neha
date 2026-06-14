@@ -22,8 +22,8 @@
     };
     if (!Array.isArray(uiBootRoot.markers)) uiBootRoot.markers = [];
     uiBootRoot.markers.push(entry);
-    const method = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
-    console[method](`[DAKSH_UI_BOOT] ${label}`, entry);
+    if (level === 'error') console.error(`[DAKSH_UI_BOOT] ${label}`, entry);
+    else if (level === 'warn') console.warn(`[DAKSH_UI_BOOT] ${label}`, entry);
   }
 
   const bootLog = (label, details = {}) => bootMark('log', label, details);
@@ -119,6 +119,10 @@
     reportGroupSubGroups: {},
     autoSyncTimer: null,
     dashboardFallbackTimer: null,
+    dashboardRefreshTimer: null,
+    dashboardLoadPromise: null,
+    dashboardLoaded: false,
+    dashboardLastLoadedAt: 0,
     scanRefreshTimer: null,
     scanRefreshInFlight: false,
     scanRefreshQueued: false,
@@ -127,6 +131,8 @@
     dashboardFallbackBusy: false,
     recentRealtimeScanIds: new Set(),
     dashboardProductGroupRows: [],
+    dashboardProductGroupLoadPromise: null,
+    dashboardProductGroupLoadedAt: 0,
     selectedProductGroupSummary: null,
     productGroupDetailRows: [],
     productGroupDetailTotals: null,
@@ -165,6 +171,8 @@
     reportFilterDropdownsLoadedAt: 0,
     reportSort: { reportType: '', key: '', direction: 'asc' },
     dashboardDealerCode: '',
+    dealersLoadPromise: null,
+    dealersLoadedAt: 0,
     reconLoaded: false,
     reconRefreshTimer: null,
     validatorInvalidRows: [],
@@ -330,9 +338,7 @@
       gain.connect(scanAudioContext.destination);
       oscillator.start(startAt);
       oscillator.stop(startAt + duration + 0.02);
-    } catch (error) {
-      console.debug('Scan audio unavailable', error.message);
-    }
+    } catch (error) {}
   }
 
   function playScanTone(type = 'success') {
@@ -1256,12 +1262,12 @@
     state.productGroupDetailRows = [];
     state.productGroupDetailTotals = null;
     renderProductGroupDetails({ rows: [], totals: {} });
-    await Promise.all([
-      loadDashboard().catch((error) => toast(error.message, 'error')),
-      loadScanHistory().catch((error) => toast(error.message, 'error')),
-      loadSyncStatus().catch((error) => toast(error.message, 'error')),
-      loadDevices().catch((error) => toast(error.message, 'error'))
-    ]);
+    const jobs = [];
+    if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
+    if ($('#scan')?.classList.contains('active')) jobs.push(loadScanHistory());
+    if ($('#syncCenter')?.classList.contains('active')) jobs.push(loadSyncStatus());
+    if ($('#devices')?.classList.contains('active')) jobs.push(loadDevices());
+    await Promise.all(jobs.map((job) => job.catch((error) => toast(error.message, 'error'))));
   }
 
   function updateActiveAuditUi() {
@@ -2156,7 +2162,11 @@
     }
   }
 
-  async function loadDealers() {
+  async function loadDealers(options = {}) {
+    const force = options.force === true;
+    if (state.dealersLoadPromise) return state.dealersLoadPromise;
+    if (!force && state.dealers.length && Date.now() - state.dealersLoadedAt < 60000) return state.dealers;
+    state.dealersLoadPromise = (async () => {
     const data = await api('/api/master/dealers');
     state.dealers = data.dealers || [];
     if (!isAdminUser() && (!state.assignedDealers || !state.assignedDealers.length)) {
@@ -2198,6 +2208,14 @@
       syncDealerSelectDisplay(select);
     });
     renderDealerMaster();
+    state.dealersLoadedAt = Date.now();
+    return state.dealers;
+    })();
+    try {
+      return await state.dealersLoadPromise;
+    } finally {
+      state.dealersLoadPromise = null;
+    }
   }
 
   function fillSelectOptions(select, values, emptyLabel) {
@@ -2278,12 +2296,15 @@
   function updateDashboardCards(stats = {}) {
     setDashboardKpiValue('dashToday', wholeNumber(stats.totalScannedToday || 0));
     setDashboardKpiValue('dashTotalScanQty', wholeNumber(stats.totalScannedQuantity || stats.totalScanQty || 0));
+    setDashboardKpiValue('dashStockValueDlc', groupSummaryValue(stats.actualStockValueDLC || stats.totalScannedValue || 0));
     setDashboardKpiValue('dashDamage', wholeNumber(stats.damageCount || 0));
     setDashboardKpiValue('dashDuplicates', wholeNumber(stats.duplicateCount || 0));
     setDashboardKpiValue('dashInventoryCount', wholeNumber(stats.totalScanRecords || stats.totalUniqueScannedParts || 0));
+    setDashboardKpiValue('dashConnectedScanners', wholeNumber(stats.activeDevices || 0));
     setDashboardKpiValue('dashFailedScans', wholeNumber(stats.failedCount || stats.mismatchCount || 0));
     setDashboardKpiValue('dashLastScanTime', stats.lastScanTime ? compactDateTime(stats.lastScanTime) : 'Never', { time: true });
     setDashboardKpiValue('dashLastScannedPart', stats.lastScannedPart || '-');
+    if (stats.activeDevices !== undefined) setHeaderDeviceStatus(Number(stats.activeDevices || 0));
   }
 
   function scanQuantity(scan = {}, fallback = 0) {
@@ -2460,14 +2481,33 @@
             <td class="number-cell">${escapeHtml(groupSummaryNumber(totalScans))}</td>
             <td class="number-cell">${escapeHtml(groupSummaryNumber(totalQuantity))}</td>
             <td class="number-cell">${escapeHtml(groupSummaryNumber(item.uniqueParts || 0))}</td>
-            <td class="number-cell">${escapeHtml(groupSummaryValue(item.totalMrpValue || 0))}</td>
             <td class="number-cell">${escapeHtml(groupSummaryValue(item.totalDlcValue || 0))}</td>
+            <td class="number-cell">${escapeHtml(groupSummaryValue(item.totalMrpValue || 0))}</td>
           </tr>
         `;
       }).join('') : '<tr><td colspan="7" class="muted">No product group data found</td></tr>';
     }
     setText('productGroupSummaryCount', `${rows.length} of ${allRows.length} groups`);
     enhanceCoreTables();
+  }
+
+  async function loadDashboardProductGroupSummary(options = {}) {
+    const force = options.force === true;
+    if (state.dashboardProductGroupLoadPromise) return state.dashboardProductGroupLoadPromise;
+    if (!force && state.dashboardProductGroupLoadedAt && Date.now() - state.dashboardProductGroupLoadedAt < 5000) return state.dashboardProductGroupRows;
+    state.dashboardProductGroupLoadPromise = (async () => {
+      const query = dashboardQueryString();
+      const data = await api(`/api/scans/dashboard/product-group-summary${query ? `?${query}` : ''}`);
+      state.dashboardProductGroupRows = data.rows || [];
+      state.dashboardProductGroupLoadedAt = Date.now();
+      renderProductGroupSummary();
+      return state.dashboardProductGroupRows;
+    })();
+    try {
+      return await state.dashboardProductGroupLoadPromise;
+    } finally {
+      state.dashboardProductGroupLoadPromise = null;
+    }
   }
 
   function renderProductGroupDetails(data = {}) {
@@ -2483,13 +2523,15 @@
     const totals = data.totals || state.productGroupDetailTotals || {};
     panel.hidden = false;
     setText('productGroupDetailTitle', `${selected.productGroup} / ${selected.partSubGroup}`);
-    setText('productGroupDetailTotals', `Parts ${groupSummaryNumber(totals.partCount || rows.length)} | Qty ${groupSummaryNumber(totals.totalQty || 0)} | MRP ${groupSummaryValue(totals.totalMrpValue || 0)}`);
+    setText('productGroupDetailTotals', `Parts ${groupSummaryNumber(totals.partCount || rows.length)} | Qty ${groupSummaryNumber(totals.totalQty || 0)} | DLC Value ${groupSummaryValue(totals.totalDlcValue || 0)} | MRP Reference ${groupSummaryValue(totals.totalMrpValue || 0)}`);
     body.innerHTML = rows.length ? rows.map((row) => `
       <tr>
         <td>${partLink(row.partNumber)}</td>
         <td>${escapeHtml(row.partDescription || '')}</td>
         <td class="number-cell">${escapeHtml(groupSummaryNumber(row.qty || 0))}</td>
         <td>${escapeHtml(row.binLocation || '')}</td>
+        <td class="number-cell">${escapeHtml(groupSummaryValue(row.dlc || 0))}</td>
+        <td class="number-cell">${escapeHtml(groupSummaryValue(row.dlcTotal || 0))}</td>
         <td class="number-cell">${escapeHtml(groupSummaryValue(row.mrp || 0))}</td>
         <td class="number-cell">${escapeHtml(groupSummaryValue(row.mrpTotal || 0))}</td>
       </tr>
@@ -2499,9 +2541,11 @@
         <td class="number-cell">${escapeHtml(groupSummaryNumber(totals.totalQty || 0))}</td>
         <td>${escapeHtml(groupSummaryNumber(totals.partCount || rows.length))} parts</td>
         <td></td>
+        <td class="number-cell">${escapeHtml(groupSummaryValue(totals.totalDlcValue || 0))}</td>
+        <td></td>
         <td class="number-cell">${escapeHtml(groupSummaryValue(totals.totalMrpValue || 0))}</td>
       </tr>
-    ` : '<tr><td colspan="6" class="muted">No parts found for this group</td></tr>';
+    ` : '<tr><td colspan="8" class="muted">No parts found for this group</td></tr>';
   }
 
   async function loadProductGroupDetails(productGroup, partSubGroup) {
@@ -2576,19 +2620,41 @@
     setDashboardKpiValue('dashRealtimeActivity', compactDateTime(scan.timestamp || new Date()), { time: true });
   }
 
-  async function loadDashboard() {
-    await loadActiveAudit({ silent: true, allowMissing: true }).catch(() => null);
-    const query = dashboardQueryString();
-    const data = await api(`/api/scans/dashboard${query ? `?${query}` : ''}`);
-    if (data.activeAudit && data.activeAudit.dealerCode) {
-      state.activeAudit = data.activeAudit;
-      updateActiveAuditUi();
+  function setDashboardLoading(loading) {
+    const dashboard = $('#dashboard');
+    if (dashboard) dashboard.setAttribute('aria-busy', loading ? 'true' : 'false');
+    document.body.classList.toggle('app-booting', Boolean(loading));
+  }
+
+  async function loadDashboard(options = {}) {
+    const force = options.force === true;
+    if (state.dashboardLoadPromise) return state.dashboardLoadPromise;
+    if (!force && state.dashboardLoaded && Date.now() - state.dashboardLastLoadedAt < 1500) return null;
+    if (!state.dashboardLoaded) setDashboardLoading(true);
+    state.dashboardLoadPromise = (async () => {
+      const query = dashboardQueryString();
+      const data = await api(`/api/scans/dashboard${query ? `?${query}` : ''}`);
+      if (data.activeAudit && data.activeAudit.dealerCode) {
+        state.activeAudit = data.activeAudit;
+        updateActiveAuditUi();
+      }
+      const stats = data.stats || {};
+      updateDashboardCards(stats);
+      renderScanStream(filterActiveAuditScans(data.recent || []));
+      state.dashboardLoaded = true;
+      state.dashboardLastLoadedAt = Date.now();
+      loadDashboardProductGroupSummary({ force }).catch((error) => {
+        const body = $('#productGroupSummaryRows');
+        if (body) body.innerHTML = `<tr><td colspan="7" class="muted">${escapeHtml(error.message)}</td></tr>`;
+      });
+      return data;
+    })();
+    try {
+      return await state.dashboardLoadPromise;
+    } finally {
+      state.dashboardLoadPromise = null;
+      setDashboardLoading(false);
     }
-    const stats = data.stats || {};
-    updateDashboardCards(stats);
-    renderScanStream(filterActiveAuditScans(data.recent || []));
-    state.dashboardProductGroupRows = data.productGroupSummary || [];
-    renderProductGroupSummary();
   }
 
   function syncScanDealerScope(dealerCode, sourceSelect = null) {
@@ -2934,7 +3000,11 @@
     state.scanRefreshInFlight = true;
     state.scanRefreshQueued = false;
     try {
-      return await Promise.all([loadDashboard(), loadScanHistory(), loadSyncStatus()])
+      const jobs = [];
+      if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
+      if ($('#scan')?.classList.contains('active')) jobs.push(loadScanHistory());
+      if ($('#syncCenter')?.classList.contains('active')) jobs.push(loadSyncStatus());
+      return await Promise.all(jobs)
         .catch((error) => console.warn('[SCAN] refresh failed', error));
     } finally {
       state.scanRefreshInFlight = false;
@@ -3713,6 +3783,14 @@
       box.textContent = 'Please select filters and click Submit.';
     }
     return true;
+  }
+
+  function queueDashboardRefresh(delay = 1200) {
+    clearTimeout(state.dashboardRefreshTimer);
+    state.dashboardRefreshTimer = setTimeout(() => {
+      if (document.hidden || !document.body.classList.contains('dashboard-view-active')) return;
+      loadDashboard({ force: true }).catch((error) => console.warn('[DASHBOARD] queued refresh failed', error.message));
+    }, delay);
   }
 
   function setScanFormSubmitting(form, submitting) {
@@ -4876,7 +4954,8 @@
         <td>${escapeHtml(row.safetyStock || 0)}</td>
         <td>${escapeHtml(row.rop || 0)}</td>
         <td>${escapeHtml(row.pendingOrder || 0)}</td>
-        <td>${escapeHtml(money2(row.stockValue || 0))}</td>
+        <td>${escapeHtml(money2(row.dmsStockValue ?? row.stockValue ?? 0))}</td>
+        <td>${escapeHtml(money2(row.actualStockValue || 0))}</td>
       </tr>
     `).join('') || '<tr><td colspan="18" class="muted">No dealer stock uploaded yet</td></tr>';
     const message = $('#dealerStockUploadMessage');
@@ -4980,7 +5059,7 @@
         <td>${escapeHtml(row.movementType || '')}</td>
         <td>${escapeHtml(row.movementStatus || row.fastSlowDeadStatus || '')}</td>
       </tr>
-    `).join('') || '<tr><td colspan="13" class="muted">No reconciliation data found for selected dealer/filter</td></tr>';
+    `).join('') || '<tr><td colspan="14" class="muted">No reconciliation data found for selected dealer/filter</td></tr>';
     if (message && !silent) {
       message.className = (data.rows || []).length ? 'form-message success' : 'form-message error';
       message.textContent = (data.rows || []).length ? `${data.rows.length} reconciliation row(s) loaded.` : (data.message || 'No reconciliation data found for selected filter');
@@ -7557,11 +7636,9 @@
   }
 
   async function refreshAll() {
-    await loadActiveAudit({ silent: true, allowMissing: true }).catch(() => null);
     await loadDealers();
     const viewJobs = [
       loadDashboard(),
-      loadDevices(),
       loadSyncStatus()
     ];
     if ($('#reports')?.classList.contains('active')) viewJobs.push(loadCategories());
@@ -7569,6 +7646,7 @@
     if ($('#binTransfer')?.classList.contains('active')) viewJobs.push(loadBinTransferHistory());
     if ($('#master')?.classList.contains('active')) viewJobs.push(loadPartSearchFilters());
     if ($('#validator')?.classList.contains('active')) viewJobs.push(loadMasterScanValidator());
+    if ($('#devices')?.classList.contains('active')) viewJobs.push(loadDevices(), loadPairingQr());
     if ($('#admin')?.classList.contains('active')) viewJobs.push(loadAuthSettings(), loadUsers());
     await Promise.all(viewJobs);
     renderSyncQueue();
@@ -7582,16 +7660,16 @@
       if (document.hidden || state.dashboardFallbackBusy) return;
       if (!document.body.classList.contains('dashboard-view-active')) return;
       const realtimeQuietMs = Date.now() - Number(state.lastRealtimeAt || 0);
-      if (realtimeQuietMs < 30000) return;
+      if (realtimeQuietMs < 120000) return;
       state.dashboardFallbackBusy = true;
       try {
-        await Promise.all([loadDashboard(), loadSyncStatus(), loadDevices()]);
+        await loadDashboard({ force: true });
       } catch (error) {
         console.warn('[DASHBOARD] fallback refresh failed', error.message);
       } finally {
         state.dashboardFallbackBusy = false;
       }
-    }, 60000);
+    }, 120000);
   }
 
   function expandCodeRange(startValue, endValue) {
@@ -8034,6 +8112,11 @@
     const target = $(`#${viewId}`);
     if (target) target.classList.add('active');
     $('#viewTitle').textContent = VIEW_TITLES[viewId] || title || viewId;
+    if (viewId === 'dashboard' && state.dashboardLoaded) {
+      loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
+    } else if (viewId !== 'dashboard') {
+      document.body.classList.remove('app-booting');
+    }
     if (viewId === 'binTransfer') {
       const dealerCode = binTransferCriteria().dealerCode;
       if (dealerCode) loadBinTransferBins(dealerCode).then(() => loadBinTransferHistory()).catch((error) => toast(error.message, 'error'));
@@ -8392,13 +8475,8 @@
           state.productGroupDetailRows = [];
           state.productGroupDetailTotals = null;
           renderProductGroupDetails({ rows: [], totals: {} });
-          Promise.all([
-            loadDashboard(),
-            loadScanHistory(),
-            state.reportHasRun
-              ? loadReport({ forceRefresh: true, showLoading: $('#reports')?.classList.contains('active') })
-              : Promise.resolve()
-          ]).catch((error) => toast(error.message, 'error'));
+          state.reportCache.clear();
+          loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
           return;
         }
         if (select.closest('#binLabelForm')) {
@@ -9158,7 +9236,9 @@
     socket.on('scan:saved', () => {
       state.lastRealtimeAt = Date.now();
       queueRealtimeReportRefresh('scan saved');
-      Promise.all([loadBinTransferParts(activeBinTransferForm()), loadBinTransferHistory()]).catch(console.warn);
+      if ($('#binTransfer')?.classList.contains('active')) {
+        Promise.all([loadBinTransferParts(activeBinTransferForm()), loadBinTransferHistory()]).catch(console.warn);
+      }
     });
     socket.on('scan:duplicate', (scan = {}) => {
       state.lastRealtimeAt = Date.now();
@@ -9166,7 +9246,9 @@
     });
     socket.on('scan:deleted', () => {
       queueReconciliationRefresh('scan deleted');
-      Promise.all([loadDashboard(), loadScanHistory(), loadBinTransferParts(activeBinTransferForm())]).catch(console.warn);
+      queueDashboardRefresh(500);
+      if ($('#scan')?.classList.contains('active')) queueScanRefresh(500);
+      if ($('#binTransfer')?.classList.contains('active')) loadBinTransferParts(activeBinTransferForm()).catch(console.warn);
     });
     socket.on('scan:count:update', (stats) => {
       if (stats && dashboardStatsMatchesActiveAudit(stats)) {
@@ -9219,7 +9301,7 @@
     });
     socket.on('stats:update', (stats) => {
       if (stats && dashboardStatsMatchesActiveAudit(stats)) updateDashboardCards(stats);
-      else queueScanRefresh(1200);
+      else queueDashboardRefresh(1200);
     });
     socket.on('devices:update', () => queueDeviceRefresh(1200));
     socket.on('device:connected', () => {
@@ -9229,28 +9311,28 @@
     socket.on('device:heartbeat', () => queueDeviceRefresh());
     socket.on('device:disconnected', () => {
       addConnectionLog('Device disconnected', 'warning');
-      loadDevices().catch(console.warn);
+      queueDeviceRefresh(500);
     });
     socket.on('audit:active', (audit) => {
       state.activeAudit = audit;
       updateActiveAuditUi();
       loadBins().catch(console.warn);
-      loadDashboard().catch(console.warn);
+      loadDashboard({ force: true }).catch(console.warn);
     });
     function handleInactiveAuditEvent() {
       state.activeAudit = null;
       updateActiveAuditUi();
       loadBins().catch(console.warn);
-      loadDashboard().catch(console.warn);
+      loadDashboard({ force: true }).catch(console.warn);
       loadDevices().catch(console.warn);
-      loadDealers().catch(console.warn);
+      loadDealers({ force: true }).catch(console.warn);
     }
     socket.on('audit:completed', handleInactiveAuditEvent);
     socket.on('audit:closed', handleInactiveAuditEvent);
     socket.on('audit:reopened', () => {
       loadActiveAudit({ silent: true, allowMissing: true }).catch(console.warn);
-      loadDealers().catch(console.warn);
-      loadDashboard().catch(console.warn);
+      loadDealers({ force: true }).catch(console.warn);
+      loadDashboard({ force: true }).catch(console.warn);
     });
     socket.on('sync:started', () => {
       setHeaderSyncStatus('Syncing', true);
@@ -9278,12 +9360,15 @@
       updateScannerStatusBar({ pendingSyncCount: payload.queuedCount || syncCounts().total, at: new Date() });
       renderSyncQueue();
     });
-    socket.on('dealers:update', () => loadDealers().catch(console.warn));
+    socket.on('dealers:update', () => loadDealers({ force: true }).catch(console.warn));
     socket.on('master:update', () => {
       state.reportFilterDropdownsLoadedAt = 0;
-      const jobs = [loadBins(), loadCategories(), loadPartSearchFilters()];
+      const jobs = [];
+      if ($('#scan')?.classList.contains('active')) jobs.push(loadBins());
+      if ($('#reports')?.classList.contains('active')) jobs.push(loadCategories());
+      if ($('#master')?.classList.contains('active')) jobs.push(loadPartSearchFilters());
       if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) jobs.push(loadParts(state.masterSearch.page || 1));
-      Promise.all(jobs).catch(console.warn);
+      if (jobs.length) Promise.all(jobs).catch(console.warn);
     });
   }
 
@@ -9353,7 +9438,9 @@
       if (state.headerHeartbeatTimer) clearInterval(state.headerHeartbeatTimer);
       state.headerHeartbeatTimer = setInterval(sendHeartbeat, 30000);
       if (state.healthRefreshTimer) clearInterval(state.healthRefreshTimer);
-      state.healthRefreshTimer = setInterval(() => loadHealth().catch(console.warn), 30000);
+      state.healthRefreshTimer = setInterval(() => {
+        if (!document.hidden) loadHealth().catch(console.warn);
+      }, 60000);
     } catch (error) {
       bootError('fatal startup failure before network refresh', errorDetails(error));
       toast(`Startup failed: ${error.message}`, 'error');

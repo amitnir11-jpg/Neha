@@ -14,6 +14,7 @@ const { validScanClause } = require('../utils/masterValidation');
 const { normalizePartNumber } = require('../utils/normalize');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, signedScanQuantity } = require('../utils/reportTotals');
+const { calculateStockValuation } = require('../utils/stockValuation');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
@@ -695,6 +696,7 @@ function reportRowFromStock(stock, physical) {
   const dmsStock = Number(publicRow.dmsStock || 0);
   const variance = actualStock - dmsStock;
   const dlp = Number(publicRow.dlp || 0);
+  const valuation = calculateStockValuation({ actualQuantity: actualStock, dmsQuantity: dmsStock, dlc: dlp, mrp: publicRow.mrp });
   const movement = classifyMovement(publicRow, actualStock);
   const binLocation = [publicRow.binLoc1, publicRow.binLoc2, publicRow.binLoc3].filter(Boolean).join(', ')
     || ((physical && physical.bins) || []).filter(Boolean).join(', ');
@@ -719,7 +721,11 @@ function reportRowFromStock(stock, physical) {
     deadStock: movement.deadStock,
     criticalShortage: movement.criticalShortage,
     excessStock: movement.excessStock,
-    stockValue: money(publicRow.stockValue || dmsStock * dlp),
+    actualStockValue: valuation.actualStockValue,
+    dmsStockValue: valuation.dmsStockValue,
+    actualMrpValue: valuation.actualMrpValue,
+    dmsMrpValue: valuation.dmsMrpValue,
+    stockValue: valuation.dmsStockValue,
     shortageQty: Math.max(variance * -1, 0),
     excessQty: Math.max(variance, 0),
     short: Math.max(variance * -1, 0),
@@ -741,6 +747,7 @@ function reportRowFromPhysical(physical) {
   const manual = [...(physical.sources || []), ...(physical.scanModes || []), ...(physical.valuationSources || [])]
     .some((value) => /manual/i.test(String(value || '')));
   const variance = actualStock;
+  const valuation = calculateStockValuation({ actualQuantity: actualStock, dmsQuantity: 0, dlc: dlp, mrp });
   const status = statusForVariance(variance, true, manual);
   const binLocation = (physical.bins || []).filter(Boolean).join(', ');
   return {
@@ -769,13 +776,17 @@ function reportRowFromPhysical(physical) {
     movementType: manual ? 'Manual Entry' : 'Extra / Not in DMS',
     movementStatus: 'Not in DMS',
     fastSlowDeadStatus: 'Not in DMS',
-    stockValue: 0,
+    actualStockValue: valuation.actualStockValue,
+    dmsStockValue: valuation.dmsStockValue,
+    actualMrpValue: valuation.actualMrpValue,
+    dmsMrpValue: valuation.dmsMrpValue,
+    stockValue: valuation.dmsStockValue,
     shortageQty: 0,
     excessQty: Math.max(actualStock, 0),
     short: 0,
     excess: Math.max(actualStock, 0),
     shortageValue: 0,
-    excessValue: money(Math.max(actualStock, 0) * (dlp || mrp)),
+    excessValue: money(Math.max(actualStock, 0) * dlp),
     varianceDlp: money(variance * dlp),
     varianceDlc: money(variance * dlp),
     varianceMrp: money(variance * mrp),
@@ -843,6 +854,11 @@ async function buildReconciliationReport(query = {}) {
     totalSlowMovingParts: stockOnlyRows.filter((row) => row.movementStatus === 'Slow Moving').length,
     totalDeadStockParts: stockOnlyRows.filter((row) => row.movementStatus === 'Dead Stock').length,
     totalInventoryValue: money(stockRows.reduce((sum, row) => sum + Number(row.stockValue || (Number(row.dmsStock || row.systemQty || 0) * Number(row.dlp || row.dlc || 0))), 0)),
+    actualStockValueDLC: money(filteredRows.reduce((sum, row) => sum + Number(row.actualStockValue || 0), 0)),
+    dmsStockValueDLC: money(filteredRows.reduce((sum, row) => sum + Number(row.dmsStockValue || 0), 0)),
+    actualStockValueMRP: money(filteredRows.reduce((sum, row) => sum + Number(row.actualMrpValue || 0), 0)),
+    dmsStockValueMRP: money(filteredRows.reduce((sum, row) => sum + Number(row.dmsMrpValue || 0), 0)),
+    valuationBasis: 'DLC',
     totalShortageValue: money(filteredRows.reduce((sum, row) => sum + Number(row.shortageValue || 0), 0)),
     totalExcessValue: money(filteredRows.reduce((sum, row) => sum + Number(row.excessValue || 0), 0)),
     totalScannedButNotInDms: filteredRows.filter((row) => row.notInDms).length,
@@ -1053,7 +1069,10 @@ function reportColumns() {
     { header: 'Status', key: 'status', width: 20 },
     { header: 'MRP', key: 'mrp', width: 12 },
     { header: 'DLP', key: 'dlp', width: 12 },
-    { header: 'Stock Value', key: 'stockValue', width: 16 },
+    { header: 'Actual Stock Value (DLC)', key: 'actualStockValue', width: 24 },
+    { header: 'DMS Stock Value (DLC)', key: 'dmsStockValue', width: 24 },
+    { header: 'Actual MRP Value (Reference)', key: 'actualMrpValue', width: 28 },
+    { header: 'DMS MRP Value (Reference)', key: 'dmsMrpValue', width: 28 },
     { header: 'Bin Location', key: 'binLocation', width: 24 },
     { header: 'Movement Type', key: 'movementType', width: 18 },
     { header: 'Fast/Slow/Dead Status', key: 'movementStatus', width: 22 },
@@ -1281,7 +1300,7 @@ async function uploadDealerStockHandler(req, res) {
       message: `Saved ${records.length} row(s) for ${scope.dealerCode} / ${scope.auditId}. Skipped ${parsed.skippedCount || parsed.errorRows.length} row(s).`
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 }
 
@@ -1335,10 +1354,11 @@ async function reportHandler(req, res) {
   try {
     const scope = await resolveScope(req);
     const report = await buildReconciliationReport({ ...req.query, dealerCode: scope.dealerCode, auditId: scope.auditId });
+    const reconciliation = await require('./report').validateValuationReports(scope);
     if (req.query.format) return sendReportExport(res, report, req.query.format, req.query.report || (req.query.full ? 'full' : 'dealer'));
-    return res.json({ success: true, ...report, dealerCode: scope.dealerCode, auditId: scope.auditId });
+    return res.json({ success: true, ...report, reconciliation, dealerCode: scope.dealerCode, auditId: scope.auditId });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 }
 
@@ -1346,7 +1366,8 @@ async function summaryHandler(req, res) {
   try {
     const scope = await resolveScope(req);
     const report = await buildReconciliationReport({ ...req.query, dealerCode: scope.dealerCode, auditId: scope.auditId });
-    return res.json({ success: true, dealerCode: scope.dealerCode, auditId: scope.auditId, summary: report.summary });
+    const reconciliation = await require('./report').validateValuationReports(scope);
+    return res.json({ success: true, dealerCode: scope.dealerCode, auditId: scope.auditId, summary: report.summary, reconciliation });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -1356,10 +1377,11 @@ async function movementAnalysisHandler(req, res) {
   try {
     const scope = await resolveScope(req);
     const analysis = await buildMovementAnalysisReport({ ...req.query, dealerCode: scope.dealerCode, auditId: scope.auditId });
+    const reconciliation = await require('./report').validateValuationReports(scope);
     if (req.query.format) return sendMovementAnalysisExport(res, analysis, req.query.format);
-    return res.json({ success: true, ...analysis, dealerCode: scope.dealerCode, auditId: scope.auditId });
+    return res.json({ success: true, ...analysis, reconciliation, dealerCode: scope.dealerCode, auditId: scope.auditId });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 }
 
@@ -1368,9 +1390,10 @@ function exportHandler(format) {
     try {
       const scope = await resolveScope(req);
       const report = await buildReconciliationReport({ ...req.query, dealerCode: scope.dealerCode, auditId: scope.auditId });
+      await require('./report').validateValuationReports(scope);
       return sendReportExport(res, report, format, req.query.report || (req.query.full ? 'full' : 'dealer'));
     } catch (error) {
-      return res.status(500).json({ success: false, message: error.message });
+      return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
     }
   };
 }

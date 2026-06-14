@@ -203,7 +203,6 @@ mongoose.connection.on('reconnected', () => {
       status: 'connected'
     });
   }
-  console.log('✓ MongoDB reconnected - clients notified');
 });
 
 app.use(cors({ origin: '*' }));
@@ -1032,7 +1031,6 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/bin', require('./routes/bin'));
 app.use('/api/bin-master', require('./routes/binMaster'));
 app.use('/api/bin-transfer', require('./routes/binTransfer'));
-app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/scans', require('./routes/inventory'));
 function legacyScanReportAlias(scanStatus = '') {

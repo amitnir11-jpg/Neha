@@ -183,7 +183,7 @@ const AUDIT_COLUMNS = [
   { header: 'AVERAGE SCANNED MRP', key: 'averageScannedMRP', width: 22 },
   { header: 'PRICE PERIOD', key: 'pricePeriod', width: 30 },
   { header: 'PRICE AGEING DAYS', key: 'priceAgeingDays', width: 18 },
-  { header: 'FINAL INVENTORY VALUE', key: 'finalInventoryValue', width: 22 },
+  { header: 'ACTUAL STOCK VALUE (DLC)', key: 'finalInventoryValue', width: 24 },
   { header: 'DLC', key: 'dlc', width: 12 },
   { header: 'PRODUCT GROUP', key: 'productGroup', width: 18 },
   { header: 'PRODUCT SUBGROUP', key: 'partSubGroup', width: 18 },
@@ -266,7 +266,9 @@ const SCAN_REGISTER_COLUMNS = [
   { header: 'MRP', key: 'mrp', width: 12 },
   { header: 'SCAN UPI MRP', key: 'scanUPIMRP', width: 18 },
   { header: 'MANUAL MRP', key: 'manualMRP', width: 14 },
-  { header: 'FINAL INVENTORY VALUE', key: 'finalInventoryValue', width: 22 },
+  { header: 'DLC', key: 'dlc', width: 12 },
+  { header: 'ACTUAL STOCK VALUE (DLC)', key: 'finalInventoryValue', width: 24 },
+  { header: 'MRP VALUE (REFERENCE)', key: 'mrpValueReference', width: 22 },
   { header: 'BIN LOCATION', key: 'binLocation', width: 16 },
   { header: 'REGD NO', key: 'regdNo', width: 16 },
   { header: 'JOB CARD NO', key: 'jobCardNo', width: 18 },
@@ -299,8 +301,8 @@ const USER_DEALER_COLUMNS = [
   { header: 'DAMAGE QTY', key: 'damageQty', width: 14 },
   { header: 'UNIQUE PARTS', key: 'uniqueParts', width: 14 },
   { header: 'DEVICES', key: 'devices', width: 34 },
-  { header: 'TOTAL MRP VALUE', key: 'totalMrpValue', width: 18 },
-  { header: 'TOTAL DLC VALUE', key: 'totalDlcValue', width: 18 },
+  { header: 'ACTUAL STOCK VALUE (DLC)', key: 'totalDlcValue', width: 24 },
+  { header: 'MRP VALUE (REFERENCE)', key: 'totalMrpValue', width: 22 },
   { header: 'LAST SCAN TIME', key: 'lastScanTime', width: 22 }
 ];
 
@@ -350,7 +352,7 @@ function auditRow(row) {
     pricePeriod: row.pricePeriod || '',
     priceAgeingDays: row.priceAgeingDays || 0,
     partMovement: row.partMovement || '',
-    finalInventoryValue: row.finalInventoryValue || row.physicalMrpValue || 0,
+    finalInventoryValue: row.actualStockValue ?? row.physicalValueOnDlc ?? row.finalInventoryValue ?? 0,
     dlc: row.dlc,
     productGroup: row.productGroup,
     partSubGroup: row.partSubGroup,
@@ -499,7 +501,9 @@ function scanRegisterInventoryRow(scan) {
     mrp: Number(valueRow.valuationMRP || 0),
     scanUPIMRP: valueRow.valuationSource === 'UPI_SCANNED_MRP' ? Number(valueRow.valuationMRP || 0) : '',
     manualMRP: valueRow.valuationSource === 'MANUAL_ENTERED_MRP' ? Number(valueRow.valuationMRP || 0) : '',
-    finalInventoryValue: Number(valueRow.finalInventoryValue || 0),
+    dlc: Number(scan.dlc || 0),
+    finalInventoryValue: money(scanQuantity(scan) * Number(scan.dlc || 0)),
+    mrpValueReference: Number(valueRow.finalInventoryValue || 0),
     binLocation: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin || ''),
     regdNo: scan.regdNo || '',
     jobCardNo: scan.jobCardNo || '',
@@ -902,6 +906,7 @@ async function handleReport(req, res, type, title) {
     if (type === 'scan-register' && /\/valid-scans$/i.test(req.path)) query.scanStatus = 'Accepted';
     if (type === 'scan-register' && /\/duplicate-scans$/i.test(req.path)) query.scanStatus = 'Duplicate';
     if (!selectedDealerCode(query)) return requireDealerSelection(res);
+    const reconciliation = await reportModule.validateValuationReports(query);
     if (type === 'scan-register') {
       const rows = await scanRegisterRows(query);
       const statuses = rows.map((row) => normalizeRegisterStatus(row.scanStatus || row.syncStatus || row.reason));
@@ -923,6 +928,7 @@ async function handleReport(req, res, type, title) {
         type,
         title,
         summary: { ...totals, totalRows: rows.length, visibleRows: rows.length, pageRows: paged.rows.length },
+        reconciliation,
         columns: columnsForReport(type, paged.rows.length ? paged.rows : rows).map(({ header, key }) => ({ header, key })),
         rows: paged.rows,
         totalRows: rows.length,
@@ -941,6 +947,7 @@ async function handleReport(req, res, type, title) {
       type,
       title,
       summary: { ...(data.summary[0] || {}), ...totals, visibleRows: rows.length, pageRows: paged.rows.length },
+      reconciliation,
       columns: columnsForReport(type, paged.rows.length ? paged.rows : rows).map(({ header, key }) => ({ header, key })),
       rows: paged.rows,
       totalRows: rows.length,
@@ -948,13 +955,14 @@ async function handleReport(req, res, type, title) {
       message: rows.length ? '' : 'No report data found for selected filter'
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 }
 
 async function emailReport(req, res, type, title) {
   try {
     if (!selectedDealerCode(req.body.filters || {})) return requireDealerSelection(res);
+    await reportModule.validateValuationReports(req.body.filters || {});
     const to = String(req.body.to || req.body.email || '').trim();
     const cc = String(req.body.cc || '').trim();
     const subject = String(req.body.subject || `Daksh Inventory - ${title}`).trim();
@@ -997,7 +1005,7 @@ async function emailReport(req, res, type, title) {
 
     return res.json({ success: true, message: 'Report email sent' });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
 }
 
