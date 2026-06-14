@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const { randomUUID } = require('crypto');
 const { normalizePartNumber } = require('../utils/normalize');
-const { rawUpiHash } = require('../utils/scanDuplicatePolicy');
+const { globalUpiKey, rawUpiHash } = require('../utils/scanDuplicatePolicy');
 
 const inventorySchema = new mongoose.Schema(
   {
@@ -323,6 +323,11 @@ const inventorySchema = new mongoose.Schema(
       default: '',
       index: true
     },
+    globalUpiKey: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     qrFingerprint: {
       type: String,
       trim: true,
@@ -524,6 +529,14 @@ inventorySchema.index({ createdAt: -1 });
 inventorySchema.index({ bin: 1 });
 inventorySchema.index({ binLocation: 1 });
 inventorySchema.index({ rawUpi: 1 });
+inventorySchema.index(
+  { globalUpiKey: 1 },
+  {
+    name: 'global_upi_key_unique',
+    unique: true,
+    partialFilterExpression: { globalUpiKey: { $type: 'string', $gt: '' } }
+  }
+);
 inventorySchema.index({ clientScanId: 1 });
 inventorySchema.index({ clientSyncKey: 1 });
 inventorySchema.index({ dealerCode: 1, auditId: 1, scanType: 1, normalizedPartNumber: 1, createdAt: -1 }, { name: 'business_duplicate_lookup' });
@@ -628,6 +641,7 @@ inventorySchema.pre('save', function syncInventoryAliases(next) {
   if (!this.rawUpiHash) this.rawUpiHash = rawUpiHash(this);
   if (!this.upiNo && this.upiId) this.upiNo = this.upiId;
   if (!this.upiId && this.upiNo) this.upiId = this.upiNo;
+  if (!this.globalUpiKey) this.globalUpiKey = globalUpiKey(this);
   next();
 });
 

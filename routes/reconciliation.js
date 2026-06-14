@@ -131,7 +131,7 @@ function testScanClause() {
 
 function acceptedPhysicalScanClause() {
   return {
-    syncStatus: { $nin: EXCLUDED_SYNC_STATUSES },
+    syncStatus: 'synced',
     isDuplicate: { $ne: true },
     $and: [
       nonVerificationScanClause(),

@@ -1486,6 +1486,7 @@
       const slashQty = optionalScanNumber(parts[4]);
       const slashMrp = optionalScanNumber(parts[5]);
       return {
+        upiId: normalizePartText(parts[1]),
         partNumber: normalizePartText(parts[3]),
         qty: slashQty !== undefined ? slashQty : 1,
         qtyProvided: slashQty !== undefined,
@@ -1636,7 +1637,7 @@
     const normalized = normalizeScanPayload(payload);
     if (String(normalized.scanType || normalized.type || '').toUpperCase() === 'VERIFICATION') return normalized;
     const queue = getSyncQueue();
-    const exists = queue.some((item) => item.syncKey === normalized.syncKey || (normalized.upiId && item.upiId === normalized.upiId && item.dealerCode === normalized.dealerCode));
+    const exists = queue.find((item) => item.syncKey === normalized.syncKey || (normalized.upiId && normalizePartText(item.upiId) === normalizePartText(normalized.upiId)));
     if (!exists) {
       queue.push({
         ...normalized,
@@ -1646,6 +1647,8 @@
         syncError: errorMessage
       });
       saveSyncQueue(queue);
+    } else {
+      return { ...normalized, queueAdded: false, queueDuplicate: true, existingLocalScan: exists };
     }
     addSyncLog({
       partNumber: normalized.partNumber,
@@ -1654,13 +1657,13 @@
       status: 'queued',
       errorMessage
     });
-    return normalized;
+    return { ...normalized, queueAdded: true, queueDuplicate: false };
   }
 
   function syncCounts() {
     const queue = getSyncQueue().filter((item) => String(item.scanType || item.type || '').toUpperCase() !== 'VERIFICATION');
     return {
-      pending: queue.filter((item) => item.localStatus !== 'failed').length,
+      pending: queue.filter((item) => item.localStatus === 'pending' || !item.localStatus).length,
       failed: queue.filter((item) => item.localStatus === 'failed').length,
       total: queue.length
     };
@@ -1775,7 +1778,7 @@
           <td>${escapeHtml(item.dealerCode)}</td>
           <td>${escapeHtml(item.scanType || item.type)}</td>
           <td class="raw-cell" title="${escapeHtml(item.syncKey)}">${escapeHtml(item.syncKey)}</td>
-          <td>${escapeHtml(item.localStatus || 'pending')}</td>
+          <td>${escapeHtml(item.localStatus === 'failed' ? 'Failed' : 'Pending')}</td>
         </tr>
       `).join('');
     }
@@ -3145,9 +3148,9 @@
       normalized.rawBarcode = '';
       normalized.rawScanValue = '';
     }
-    normalized.synced = true;
-    normalized.isSynced = true;
-    normalized.syncStatus = 'synced';
+    normalized.synced = !isBarcodeForm;
+    normalized.isSynced = !isBarcodeForm;
+    normalized.syncStatus = isBarcodeForm ? 'pending' : 'synced';
     const needsManualBin = ['INWARD', 'DAMAGE'].includes(normalized.scanType);
     if (needsManualBin && !normalized.binLocation) {
       playScanTone('error');
@@ -3185,6 +3188,37 @@
       normalized.scanId = normalized.scanId || requestId;
     }
 
+    if (isBarcodeForm) {
+      const queued = enqueueScan(normalized, 'Saved locally; waiting for background sync');
+      if (queued.queueDuplicate) {
+        const existing = queued.existingLocalScan || {};
+        const message = `This UPI is already pending in Bin Location: ${existing.binLocation || existing.bin || '-'}, Part No: ${existing.partNumber || existing.part || '-'}, Scanned Date/Time: ${dateTime(existing.timestamp) || '-'}`;
+        addSyncLog({
+          partNumber: normalized.partNumber,
+          upiId: normalized.upiId,
+          dealer: normalized.dealerCode,
+          status: 'duplicate',
+          errorMessage: message
+        });
+        playScanTone('duplicate');
+        toast(message, 'error');
+        setLivePill('barcodeReadyStatus', 'Duplicate - Not Added', false);
+        resetBarcodeScanFields(form, normalized, options.expectedRaw);
+        setTimeout(() => $('#barcodeRaw')?.focus(), 700);
+        return;
+      }
+      localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
+      playScanTone('success');
+      toast('Scan saved locally. Pending sync.');
+      setLivePill('barcodeReadyStatus', 'Pending Sync - Ready Next', true);
+      resetBarcodeScanFields(form, normalized, options.expectedRaw);
+      setTimeout(() => {
+        $('#barcodeRaw')?.focus();
+        syncPendingQueue({ checkHealth: false, silent: true, includeFailed: true }).catch(() => undefined);
+      }, 100);
+      return;
+    }
+
     try {
       const data = await api('/api/scans/manual', { method: 'POST', body: normalized });
       if (data && data.scan) {
@@ -3212,6 +3246,18 @@
       }
       queueRealtimeReportRefresh(isBarcodeForm ? 'barcode scan' : 'manual scan');
     } catch (error) {
+      if (error.status === 409 && error.data?.upiDuplicate) {
+        playScanTone('duplicate');
+        addSyncLog({
+          partNumber: normalized.partNumber,
+          upiId: normalized.upiId,
+          dealer: normalized.dealerCode,
+          status: 'duplicate',
+          errorMessage: error.message
+        });
+        toast(error.message, 'error');
+        return;
+      }
       if (!isBarcodeForm && error.status === 409 && error.data?.manualDuplicate) {
         playScanTone('duplicate');
         const duplicate = error.data;
@@ -3366,10 +3412,12 @@
 
       const completedKeys = new Set();
       const failedByKey = new Map();
+      const duplicateLogs = [];
       (data.logs || []).forEach((log) => {
         addSyncLog(log);
         if (log.syncKey && ['inserted', 'synced', 'duplicate'].includes(log.status)) completedKeys.add(log.syncKey);
         if (log.syncKey && log.status === 'failed') failedByKey.set(log.syncKey, log.errorMessage || 'Sync failed');
+        if (log.status === 'duplicate') duplicateLogs.push(log);
       });
 
       const nextQueue = getSyncQueue()
@@ -3380,6 +3428,12 @@
             ? { ...item, localStatus: 'failed', retryCount: Number(item.retryCount || 0) + 1, syncError: failedByKey.get(outboundKeyByLocalKey.get(item.syncKey)) }
           : item);
       saveSyncQueue(nextQueue);
+      if (duplicateLogs.length) {
+        const message = duplicateLogs[0].errorMessage || 'Duplicate UPI rejected by server';
+        playScanTone('duplicate');
+        toast(message, 'error');
+        setLivePill('barcodeReadyStatus', 'Duplicate - Not Added', false);
+      }
 
       const syncTime = rememberLastSyncTime(data.completedAt || data.lastSync || data.lastSyncTime || data.lastSuccessfulSyncAt || new Date().toISOString());
       setText('deviceLastSync', dateTime(syncTime));

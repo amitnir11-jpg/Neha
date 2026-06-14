@@ -66,6 +66,7 @@ const User = require('./models/User');
 const Device = require('./models/Device');
 const Inventory = require('./models/Inventory');
 const SyncLog = require('./models/SyncLog');
+const duplicatePolicy = require('./utils/scanDuplicatePolicy');
 const { serverInfo } = require('./utils/network');
 const { getActiveAudit, publicAudit } = require('./utils/audit');
 const authRoutes = require('./routes/auth');
@@ -1389,10 +1390,65 @@ async function fixInventoryIndexes() {
           || index.key.syncBatchId
         );
       const isNonUniqueScanId = index.name === 'scanId_1' && !index.unique;
-      if (isOldSyncUnique || isOldUpiUnique || isOldRawUpiUnique || isOldRawUpiLookup || isNonUniqueScanId) {
+      const isInvalidGlobalUpiIndex = index.name === 'global_upi_key_unique'
+        && (!index.unique || !index.key || index.key.globalUpiKey !== 1);
+      if (isOldSyncUnique || isOldUpiUnique || isOldRawUpiUnique || isOldRawUpiLookup || isNonUniqueScanId || isInvalidGlobalUpiIndex) {
         await collection.dropIndex(index.name);
       }
     }
+
+    const firstByGlobalUpi = new Map();
+    const migrationOps = [];
+    let migratedDuplicates = 0;
+    const cursor = collection.find({
+      scanStatus: { $in: duplicatePolicy.COUNTED_SCAN_STATUSES },
+      syncStatus: 'synced',
+      isDuplicate: { $ne: true },
+      $or: [
+        { globalUpiKey: { $type: 'string', $gt: '' } },
+        { upiNo: { $type: 'string', $gt: '' } },
+        { upiId: { $type: 'string', $gt: '' } },
+        { rawScan: { $type: 'string', $regex: '/' } },
+        { rawScanString: { $type: 'string', $regex: '/' } },
+        { rawUpi: { $type: 'string', $regex: '/' } }
+      ]
+    }).sort({ timestamp: 1, createdAt: 1, _id: 1 });
+    for await (const scan of cursor) {
+      const key = duplicatePolicy.globalUpiKey(scan);
+      if (!key) continue;
+      const first = firstByGlobalUpi.get(key);
+      if (!first) {
+        firstByGlobalUpi.set(key, scan);
+        if (scan.globalUpiKey !== key) migrationOps.push({
+          updateOne: { filter: { _id: scan._id }, update: { $set: { globalUpiKey: key } } }
+        });
+      } else {
+        migratedDuplicates += 1;
+        migrationOps.push({
+          updateOne: {
+            filter: { _id: scan._id },
+            update: {
+              $set: {
+                syncStatus: 'duplicate',
+                scanStatus: 'DUPLICATE_BLOCKED',
+                isDuplicate: true,
+                syncError: duplicatePolicy.duplicateUpiMessage(first)
+              },
+              $unset: { globalUpiKey: '' }
+            }
+          }
+        });
+      }
+      if (migrationOps.length >= 500) {
+        await collection.bulkWrite(migrationOps.splice(0), { ordered: false });
+      }
+    }
+    if (migrationOps.length) await collection.bulkWrite(migrationOps, { ordered: false });
+    if (migratedDuplicates) console.warn(`Marked ${migratedDuplicates} existing global UPI collision(s) as duplicate.`);
+
+    const refreshedIndexes = await collection.indexes();
+    const staleGlobalIndex = refreshedIndexes.find((index) => index.name === 'global_upi_key_unique');
+    if (staleGlobalIndex) await collection.dropIndex(staleGlobalIndex.name);
     await collection.createIndex(
       { scanId: 1 },
       {
@@ -1419,6 +1475,14 @@ async function fixInventoryIndexes() {
           scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] },
           scanType: { $in: ['AUDIT', 'INWARD', 'OUTWARD', 'DAMAGE'] }
         }
+      }
+    );
+    await collection.createIndex(
+      { globalUpiKey: 1 },
+      {
+        name: 'global_upi_key_unique',
+        unique: true,
+        partialFilterExpression: { globalUpiKey: { $type: 'string', $gt: '' } }
       }
     );
   } catch (error) {

@@ -189,7 +189,7 @@ function duplicateScanFilter(uniqueScanId, qrFingerprint, dealerCode = '', rawSc
   if (!terms.length) return null;
   const filter = {
     scanStatus: { $in: acceptedStatuses() },
-    syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] },
+    syncStatus: 'synced',
     isDuplicate: { $ne: true },
     $or: terms
   };
@@ -213,6 +213,10 @@ function duplicateLookupPayload(input = {}) {
     scanType,
     rawScanString: rawScan
   });
+  const globalUpiKey = duplicatePolicy.globalUpiKey({
+    ...input,
+    rawScanString: rawScan
+  });
   return {
     ...input,
     partNumber,
@@ -224,13 +228,24 @@ function duplicateLookupPayload(input = {}) {
     type: scanType,
     rawScan,
     rawScanString: rawScan,
-    rawUpiHash
+    rawUpiHash,
+    globalUpiKey
   };
 }
 
 async function findBackendDuplicate(input = {}, options = {}) {
   const payload = duplicateLookupPayload(input);
   if (payload.scanType === 'VERIFICATION') return null;
+  const globalFilter = duplicatePolicy.globalUpiDuplicateFilter(payload);
+  const globalDuplicate = globalFilter ? await Inventory.findOne(globalFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  if (globalDuplicate) {
+    return {
+      existing: globalDuplicate,
+      upiDuplicate: true,
+      reason: 'Global duplicate UPI',
+      message: duplicatePolicy.duplicateUpiMessage(globalDuplicate)
+    };
+  }
   const identityFilter = duplicatePolicy.identityDuplicateFilter(payload);
   const businessFilter = options.skipBusinessRule ? null : duplicatePolicy.businessDuplicateFilter(payload);
   const existing = identityFilter ? await Inventory.findOne(identityFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
@@ -264,7 +279,7 @@ function fittedIdentityFilter({ dealerCode, partNumber, regdNo, jobCardNo } = {}
     regdNo: regd,
     jobCardNo: job,
     scanStatus: { $in: acceptedStatuses() },
-    syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] },
+    syncStatus: 'synced',
     isDuplicate: { $ne: true },
     $or: [{ normalizedPartNumber: part }, { partNumber: part }, { part }]
   };
@@ -606,8 +621,11 @@ function applyTestScanMode(filter = {}, mode = 'real') {
   const clauses = [nonVerificationScanClause()];
   if (selected !== 'all') clauses.push(selected === 'test' ? testScanClause() : { $nor: testScanClause().$or });
   clauses.push(
-    masterValidation.validScanClause()
+    masterValidation.validScanClause(),
+    { scanStatus: { $in: acceptedStatuses() } }
   );
+  filter.syncStatus = 'synced';
+  filter.isDuplicate = { $ne: true };
   filter.$and = (filter.$and || []).concat(clauses);
   return filter;
 }
@@ -1318,7 +1336,7 @@ function partStockMatch({ dealerCode = '', auditId = '', partNumber = '', rawSca
   }
   const match = {
     scanStatus: { $in: acceptedStatuses() },
-    syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] },
+    syncStatus: 'synced',
     isDuplicate: { $ne: true },
     $and: [nonVerificationScanClause()]
   };
@@ -1396,7 +1414,7 @@ async function autoDetectOutwardBin({ dealerCode, auditId, partNumber }) {
   const match = {
     dealerCode: dealer,
     scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] },
-    syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] },
+    syncStatus: 'synced',
     isDuplicate: { $ne: true },
     $or: [{ normalizedPartNumber: part }, { partNumber: part }, { part }],
     $and: [{
@@ -2022,6 +2040,7 @@ async function saveScanRequest(req, res) {
       upiId,
       upiNo
     });
+    const globalUpiKey = duplicatePolicy.globalUpiKey({ ...req.body, rawScanString: rawScanText, upiId, upiNo });
     const qrFingerprint = duplicateIdentityRaw ? makeQrFingerprint({
       ...req.body,
       dealerCode,
@@ -2040,6 +2059,7 @@ async function saveScanRequest(req, res) {
     let existing = null;
     let duplicateReason = '';
     let duplicateMessage = '';
+    let upiDuplicate = false;
     let manualBinDuplicate = false;
     if (manualEntryMode && ['INWARD', 'DAMAGE'].includes(type) && binLocation) {
       const manualDuplicateFilter = duplicatePolicy.manualBinDuplicateFilter({
@@ -2087,7 +2107,13 @@ async function saveScanRequest(req, res) {
         existing = backendDuplicate.existing;
         duplicateReason = backendDuplicate.reason;
         duplicateMessage = backendDuplicate.message;
+        upiDuplicate = Boolean(backendDuplicate.upiDuplicate);
       }
+    }
+    if (existing && globalUpiKey && duplicatePolicy.globalUpiKey(existing) === globalUpiKey) {
+      upiDuplicate = true;
+      duplicateReason = 'Global duplicate UPI';
+      duplicateMessage = duplicatePolicy.duplicateUpiMessage(existing);
     }
     if (existing) {
       if (manualBinDuplicate) {
@@ -2194,6 +2220,7 @@ async function saveScanRequest(req, res) {
         success: false,
         skipped: true,
         duplicate: true,
+        upiDuplicate,
         message: duplicateMessage || `${duplicatePolicy.DUPLICATE_PART_MESSAGE} First scanned by ${existing.userName || existing.staffName || existing.loginId || 'Unknown'}, at ${formatIstDateTime(existing.timestamp) || '-'}, Bin ${existing.binLocation || existing.bin || '-'}.`,
         reason: duplicateReason || duplicatePolicy.DUPLICATE_PART_MESSAGE,
         scan: existing
@@ -2291,6 +2318,7 @@ async function saveScanRequest(req, res) {
       scanId: uniqueScanId,
       qrFingerprint: finalQrFingerprint,
       rawUpiHash,
+      globalUpiKey,
       part,
       partNumber: part,
       normalizedPartNumber,
@@ -2383,6 +2411,7 @@ async function saveScanRequest(req, res) {
           scanId: uniqueScanId,
           syncKey,
           rawUpiHash,
+          globalUpiKey,
           qrFingerprint: finalQrFingerprint,
           partNumber: part,
           dealerCode,
@@ -2394,7 +2423,8 @@ async function saveScanRequest(req, res) {
           upiNo,
           upiId
         });
-        duplicate = backendDuplicate && backendDuplicate.existing;
+          duplicate = backendDuplicate && backendDuplicate.existing;
+          upiDuplicate = Boolean(backendDuplicate && backendDuplicate.upiDuplicate);
       }
       if (duplicate) {
         duplicate = await backfillDuplicateMrp(duplicate, {
@@ -2427,8 +2457,9 @@ async function saveScanRequest(req, res) {
           success: false,
           skipped: true,
           duplicate: true,
-          message: duplicatePolicy.DUPLICATE_PART_MESSAGE,
-          reason: duplicatePolicy.DUPLICATE_PART_MESSAGE,
+          upiDuplicate,
+          message: upiDuplicate ? duplicatePolicy.duplicateUpiMessage(duplicate) : duplicatePolicy.DUPLICATE_PART_MESSAGE,
+          reason: upiDuplicate ? 'Global duplicate UPI' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
           scan: duplicate
         });
       }
@@ -2807,6 +2838,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           upiId,
           upiNo
         });
+        const globalUpiKey = duplicatePolicy.globalUpiKey({ ...item, rawScanString: rawScanText, upiId, upiNo });
         const itemMrpCandidate = optionalNumber(firstValue(item, ['mrp', 'manualMRP', 'manualMrp', 'manualEnteredMRP', 'valuationMRP', 'finalMRP']));
         const itemDlcCandidate = optionalNumber(firstValue(item, ['dlc', 'manualDLC', 'manualDlc', 'manualEnteredDLC', 'manualEnteredDlc']));
         const itemMrpProvided = booleanFlag(item.mrpProvided) || (manualEntryMode && itemMrpCandidate !== undefined);
@@ -2853,6 +2885,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           scanId: uniqueScanId,
           syncKey,
           rawUpiHash,
+          globalUpiKey,
           qrFingerprint,
           partNumber: part,
           dealerCode,
@@ -2880,7 +2913,12 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
             upiNo
           }, duplicateRecord, backendDuplicate?.reason || duplicatePolicy.DUPLICATE_PART_MESSAGE);
           skipped += 1;
-          failed.push({ uniqueScanId, message: backendDuplicate?.message || duplicatePolicy.DUPLICATE_PART_MESSAGE, duplicate: true });
+          failed.push({
+            uniqueScanId,
+            message: backendDuplicate?.message || duplicatePolicy.DUPLICATE_PART_MESSAGE,
+            duplicate: true,
+            upiDuplicate: Boolean(backendDuplicate?.upiDuplicate)
+          });
           continue;
         }
         const warnings = [];
@@ -2907,6 +2945,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           scanId: uniqueScanId,
           qrFingerprint,
           rawUpiHash,
+          globalUpiKey,
           part,
           partNumber: part,
           normalizedPartNumber,
@@ -2977,6 +3016,14 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
       } catch (error) {
         if (isDuplicateKeyError(error)) {
           skipped += 1;
+          const globalFilter = duplicatePolicy.globalUpiDuplicateFilter(item);
+          const existing = globalFilter ? await Inventory.findOne(globalFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+          failed.push({
+            message: existing ? duplicatePolicy.duplicateUpiMessage(existing) : 'Duplicate scan skipped',
+            duplicate: true,
+            upiDuplicate: Boolean(existing),
+            item
+          });
         } else {
           failed.push({ message: error.message, item });
         }

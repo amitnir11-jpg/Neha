@@ -57,6 +57,49 @@ function rawUpiHash(input = {}) {
   return createHash('sha256').update(scope).digest('hex');
 }
 
+function canonicalUpiValue(input = {}) {
+  const direct = clean(input.upiNo || input.upiId || input.upiID || input.upiScanId || input.uniqueUpiId || input.transactionId || input.txnId);
+  if (direct) return upper(direct);
+
+  const raw = rawScanText(input);
+  if (!raw) return '';
+  const slashParts = raw.split('/');
+  if (slashParts.length >= 6 && clean(slashParts[1])) return upper(slashParts[1]);
+
+  const keyed = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
+  return keyed ? upper(keyed[1]) : '';
+}
+
+function globalUpiKey(input = {}) {
+  const upi = canonicalUpiValue(input);
+  return upi ? createHash('sha256').update(upi).digest('hex') : '';
+}
+
+function globalUpiDuplicateFilter(input = {}) {
+  if (scanType(input) === 'VERIFICATION') return null;
+  const key = clean(input.globalUpiKey || globalUpiKey(input));
+  const upi = canonicalUpiValue(input);
+  if (!key && !upi) return null;
+  const terms = [];
+  if (key) terms.push({ globalUpiKey: key });
+  if (upi) terms.push({ upiNo: upi }, { upiId: upi });
+  return {
+    ...countedScanClause(),
+    $or: terms
+  };
+}
+
+function duplicateUpiMessage(existing = {}) {
+  const bin = upper(existing.binLocation || existing.bin) || '-';
+  const part = scanPartNumber(existing) || '-';
+  const rawTime = existing.timestamp || existing.scanTime || existing.createdAt;
+  const parsedTime = rawTime ? new Date(rawTime) : null;
+  const scannedAt = parsedTime && !Number.isNaN(parsedTime.getTime())
+    ? parsedTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
+    : '-';
+  return `This UPI is already scanned in Bin Location: ${bin}, Part No: ${part}, Scanned Date/Time: ${scannedAt}`;
+}
+
 function businessDuplicateKey(input = {}) {
   const dealerCode = scanDealerCode(input);
   const auditId = scanAuditId(input);
@@ -69,7 +112,7 @@ function businessDuplicateKey(input = {}) {
 function countedScanClause() {
   return {
     scanStatus: { $in: COUNTED_SCAN_STATUSES },
-    syncStatus: { $nin: EXCLUDED_SYNC_STATUSES },
+    syncStatus: 'synced',
     isDuplicate: { $ne: true }
   };
 }
@@ -149,6 +192,10 @@ module.exports = {
   DUPLICATE_PART_MESSAGE,
   businessDuplicateFilter,
   businessDuplicateKey,
+  canonicalUpiValue,
+  duplicateUpiMessage,
+  globalUpiDuplicateFilter,
+  globalUpiKey,
   identityDuplicateFilter,
   manualBinDuplicateFilter,
   rawUpiHash,

@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "build": "node scripts/build-check.js",
-    "test": "node scripts/stock-valuation-check.js",
+    "test": "node scripts/stock-valuation-check.js && node scripts/duplicate-upi-check.js",
     "test:catalogue-upload": "node scripts/catalogue-upload-check.js",
     "start": "node server.js"
   },

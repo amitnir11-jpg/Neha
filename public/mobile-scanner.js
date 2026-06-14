@@ -325,7 +325,7 @@
     return {
       rows: scopedRows,
       pending: scopedRows.filter((row) => rowStatus(row) === 'pending').length,
-      failed: scopedRows.filter((row) => rowStatus(row) === 'failed').length,
+      failed: scopedRows.filter((row) => rowStatus(row) === 'failed' || rowStatus(row) === 'failed-duplicate').length,
       synced: scopedRows.filter((row) => rowStatus(row) === 'synced').length
     };
   }
@@ -745,16 +745,22 @@
         }
       });
       const inserted = new Map((data.insertedRecords || []).map((row) => [clean(row.clientScanId || row.scanId || row.uniqueScanId), row]));
-      const duplicateIds = new Set((data.logs || []).filter((log) => log.status === 'duplicate').map((log) => clean(log.clientScanId || log.localId || log.scanId)));
+      const duplicateLogs = new Map((data.logs || [])
+        .filter((log) => log.status === 'duplicate')
+        .map((log) => [clean(log.clientScanId || log.localId || log.scanId), clean(log.errorMessage || 'Duplicate UPI rejected by server')]));
       const failedLogs = new Map((data.logs || [])
         .filter((log) => log.status === 'failed' || log.status === 'invalid')
         .map((log) => [clean(log.clientScanId || log.localId || log.scanId), clean(log.errorMessage || log.reason || 'Server failed this record')]));
       for (const row of batch) {
         const saved = inserted.get(row.scanId) || inserted.get(row.clientScanId);
-        if (saved || duplicateIds.has(row.scanId)) {
+        if (saved) {
           const syncedRow = { ...row, ...serverPriceFields(saved || {}), auditId: saved?.auditId || row.auditId || sessionAuditId(), status: 'synced', syncStatus: 'synced', timestamp: saved?.timestamp || saved?.serverReceivedAt || nowIso(), serverAck: saved || null };
           await putScan(syncedRow);
           if ($('#lastPart').textContent === syncedRow.partNumber) updateLastScanCard(syncedRow);
+        } else if (duplicateLogs.has(row.scanId) || duplicateLogs.has(row.clientScanId)) {
+          const message = duplicateLogs.get(row.scanId) || duplicateLogs.get(row.clientScanId);
+          await putScan({ ...row, status: 'failed-duplicate', syncStatus: 'duplicate', syncError: message });
+          toast(message, 'error');
         } else if (failedLogs.has(row.scanId)) {
           await putScan({ ...row, status: 'failed', syncStatus: 'failed', syncError: failedLogs.get(row.scanId) });
         } else if (data.success) {
@@ -777,12 +783,14 @@
         const failedLogs = new Map(logs
           .filter((log) => log.status === 'failed' || log.status === 'invalid')
           .map((log) => [clean(log.clientScanId || log.localId || log.scanId), clean(log.errorMessage || log.reason || error.message)]));
-        const duplicateIds = new Set(logs
+        const duplicateLogs = new Map(logs
           .filter((log) => log.status === 'duplicate')
-          .map((log) => clean(log.clientScanId || log.localId || log.scanId)));
+          .map((log) => [clean(log.clientScanId || log.localId || log.scanId), clean(log.errorMessage || log.reason || error.message)]));
         for (const row of batch) {
-          if (duplicateIds.has(row.scanId)) {
-            await putScan({ ...row, status: 'synced', syncStatus: 'synced', syncError: '', timestamp: nowIso() });
+          if (duplicateLogs.has(row.scanId)) {
+            const message = duplicateLogs.get(row.scanId);
+            await putScan({ ...row, status: 'failed-duplicate', syncStatus: 'duplicate', syncError: message });
+            toast(message, 'error');
           } else if (failedLogs.has(row.scanId)) {
             await putScan({ ...row, status: 'failed', syncStatus: 'failed', syncError: failedLogs.get(row.scanId) });
           }

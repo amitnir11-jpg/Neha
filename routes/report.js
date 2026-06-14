@@ -418,6 +418,8 @@ function reportFilter(query = {}) {
   if (partNumber) filter.part = { $regex: String(partNumber).trim(), $options: 'i' };
   if (query.dealerName) filter.dealerName = { $regex: escapeRegExp(query.dealerName), $options: 'i' };
   applyReportMetadataFilters(filter, query);
+  if (!query.syncStatus) filter.syncStatus = 'synced';
+  filter.isDuplicate = { $ne: true };
   return filter;
 }
 
@@ -1559,7 +1561,7 @@ function scanBasedFilter(query = {}) {
   if (query.partSubGroup || query.productSubGroup) filter.partSubGroup = { $regex: escapeRegExp(query.partSubGroup || query.productSubGroup), $options: 'i' };
   if (query.dealerName) filter.dealerName = { $regex: escapeRegExp(query.dealerName), $options: 'i' };
   applyReportMetadataFilters(filter, query);
-  if (!query.syncStatus) filter.syncStatus = { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] };
+  if (!query.syncStatus) filter.syncStatus = 'synced';
   filter.isDuplicate = { $ne: true };
   return filter;
 }
@@ -1618,7 +1620,7 @@ function partsRefreshPhysicalBinExpression() {
 async function buildPartsInventoryRefreshRows(query = {}) {
   const filter = scanBasedFilter(query);
   filter.$and = (filter.$and || []).concat([
-    { syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] } },
+    { syncStatus: 'synced' },
     { isDuplicate: { $ne: true } }
   ]);
 
