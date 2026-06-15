@@ -138,12 +138,6 @@ function inferRequestProtocol(requestProtocol = '', requestHost = '') {
 }
 
 function publicBaseUrl(port, remoteIp = '', requestProtocol = '', requestHost = '') {
-  const requestHostInfo = parseRequestHost(requestHost);
-  if (requestHostInfo.host && !isLoopbackHost(requestHostInfo.host) && !isPlaceholderPublicUrl(requestHostInfo.host)) {
-    const protocol = inferRequestProtocol(requestProtocol, requestHostInfo.host);
-    return `${protocol}://${requestHostInfo.host}`;
-  }
-
   const explicit = String(process.env.PUBLIC_BASE_URL || process.env.SERVER_URL || '').trim().replace(/\/+$/, '');
   if (explicit && !isPlaceholderPublicUrl(explicit)) return /^https?:\/\//i.test(explicit) ? explicit : `https://${explicit}`;
 
@@ -155,6 +149,12 @@ function publicBaseUrl(port, remoteIp = '', requestProtocol = '', requestHost = 
 
   const railwayDomain = String(process.env.RAILWAY_PUBLIC_DOMAIN || '').trim().replace(/\/+$/, '');
   if (railwayDomain) return /^https?:\/\//i.test(railwayDomain) ? railwayDomain : `https://${railwayDomain}`;
+
+  const requestHostInfo = parseRequestHost(requestHost);
+  if (requestHostInfo.host && !isLoopbackHost(requestHostInfo.host) && !isPlaceholderPublicUrl(requestHostInfo.host)) {
+    const protocol = inferRequestProtocol(requestProtocol, requestHostInfo.host);
+    return `${protocol}://${requestHostInfo.host}`;
+  }
 
   const activePort = Number(port || process.env.PORT || 3001);
   return `http://${detectLanIpForRemote(remoteIp)}:${activePort}`;
@@ -186,6 +186,7 @@ module.exports = {
   detectLanIp,
   detectLanIpForRemote,
   isLocalhostUrl,
+  isPlaceholderPublicUrl,
   parseRequestHost,
   publicBaseUrl,
   serverInfo

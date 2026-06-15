@@ -67,7 +67,7 @@ const Device = require('./models/Device');
 const Inventory = require('./models/Inventory');
 const SyncLog = require('./models/SyncLog');
 const duplicatePolicy = require('./utils/scanDuplicatePolicy');
-const { serverInfo } = require('./utils/network');
+const { isPlaceholderPublicUrl, parseRequestHost, serverInfo } = require('./utils/network');
 const { getActiveAudit, publicAudit } = require('./utils/audit');
 const authRoutes = require('./routes/auth');
 const reportsRouter = require('./routes/reports');
@@ -852,6 +852,29 @@ app.use((req, res, next) => {
     res.setHeader('Expires', '0');
   }
   next();
+});
+
+app.use((req, res, next) => {
+  const explicitPublicBaseUrl = String(
+    process.env.PUBLIC_BASE_URL ||
+    process.env.SERVER_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    process.env.RENDER_EXTERNAL_HOSTNAME ||
+    process.env.RAILWAY_STATIC_URL ||
+    process.env.RAILWAY_PUBLIC_DOMAIN ||
+    ''
+  ).trim().replace(/\/+$/, '');
+  if (!explicitPublicBaseUrl || isPlaceholderPublicUrl(explicitPublicBaseUrl) || !/^(GET|HEAD)$/i.test(req.method)) return next();
+  if (req.path.startsWith('/api/') || req.path.startsWith('/socket.io/')) return next();
+  if (/\.(?:css|js|mjs|map|png|jpe?g|gif|svg|webp|ico|txt|json|woff2?|ttf|eot)$/i.test(req.path)) return next();
+
+  const requestHost = req.get('x-forwarded-host') || req.get('host') || '';
+  const currentHost = parseRequestHost(requestHost).host;
+  const targetHost = parseRequestHost(explicitPublicBaseUrl).host || requestHost;
+  if (!currentHost || currentHost === targetHost) return next();
+
+  const targetUrl = new URL(req.originalUrl, /^https?:\/\//i.test(explicitPublicBaseUrl) ? explicitPublicBaseUrl : `https://${explicitPublicBaseUrl}`);
+  return res.redirect(302, targetUrl.toString());
 });
 
 app.use('/api/reports', (req, res, next) => {
