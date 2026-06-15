@@ -1339,20 +1339,33 @@
     }
   }
 
+  function resolveMobileScannerUrl(info = {}) {
+    const serverUrl = info.serverUrl || (info.ip && info.port ? `http://${info.ip}:${info.port}` : '');
+    if (info.mobileScannerUrl) return info.mobileScannerUrl;
+    if (serverUrl) return `${String(serverUrl).replace(/\/+$/, '')}/mobile-scanner`;
+    return `${window.location.origin.replace(/\/+$/, '')}/mobile-scanner`;
+  }
+
   function applyServerInfo(info = {}) {
     const serverUrl = info.serverUrl || (info.ip && info.port ? `http://${info.ip}:${info.port}` : '');
+    const mobileScannerUrl = resolveMobileScannerUrl({ ...state.serverInfo, ...info, serverUrl });
     state.serverInfo = {
       ...state.serverInfo,
       ...info,
-      serverUrl
+      serverUrl,
+      mobileScannerUrl
     };
     setText('pairingServerIp', state.serverInfo.ip || 'Unavailable');
     setText('pairingServerPort', state.serverInfo.port || '3001');
     setText('pairingServerUrl', serverUrl || 'Unavailable');
+    setText('pairingMobileScannerUrl', mobileScannerUrl || 'Unavailable');
     setText('pairingHealthUrl', state.serverInfo.healthUrl || (serverUrl ? `${serverUrl}/api/health` : 'Unavailable'));
     setText('syncServerIp', state.serverInfo.ip || 'Unavailable');
     setText('syncServerPort', state.serverInfo.port || '3001');
     setText('syncServerUrlText', serverUrl || 'Unavailable');
+    setText('syncMobileScannerUrlText', mobileScannerUrl || 'Unavailable');
+    setText('systemSubline', `Mobile scanner: ${mobileScannerUrl || 'Unavailable'}`);
+    setText('mobileUrl', `Mobile scanner: ${mobileScannerUrl || 'Unavailable'}`);
   }
 
   async function loadHealth() {
@@ -2117,7 +2130,9 @@
     setText('userDropdownLogin', loginName);
     setText('userDropdownRole', roleName);
     $$('.admin-only').forEach((node) => node.classList.toggle('hidden', !state.user || state.user.role !== 'admin'));
-    $('#systemSubline').textContent = `${window.location.origin}/dashboard`;
+    const mobileScannerUrl = resolveMobileScannerUrl(state.serverInfo || {});
+    setText('systemSubline', `Mobile scanner: ${mobileScannerUrl}`);
+    setText('mobileUrl', `Mobile scanner: ${mobileScannerUrl}`);
     $('#manualStaff').value = state.user ? state.user.name || state.user.username || '' : '';
     $('#barcodeDeviceId').value = ensureDeviceId();
     $('#allowUnknownToggle').checked = storageGet('dakshAllowUnknown') === 'true';
@@ -7664,6 +7679,16 @@
     await copyTextValue(state.serverInfo.healthUrl, 'Health URL');
   }
 
+  async function copyMobileScannerUrl() {
+    if (!state.serverInfo || !state.serverInfo.mobileScannerUrl) await loadPairingQr();
+    const url = resolveMobileScannerUrl(state.serverInfo || {});
+    if (!url || isLocalhostUrl(url)) {
+      toast('Do not use localhost on mobile. Use the cloud server URL from pairing QR.', 'error');
+      return;
+    }
+    await copyTextValue(url, 'Mobile scanner URL');
+  }
+
   async function testConnection() {
     try {
       const data = await loadHealth();
@@ -8327,6 +8352,7 @@
     window.addEventListener('resize', () => fitDashboardDealerSelect());
     $('#copyServerUrlBtn').addEventListener('click', () => copyServerUrl().catch((error) => toast(error.message, 'error')));
     $('#copyHealthUrlBtn')?.addEventListener('click', () => copyHealthUrl().catch((error) => toast(error.message, 'error')));
+    $('#copyMobileScannerUrlBtn')?.addEventListener('click', () => copyMobileScannerUrl().catch((error) => toast(error.message, 'error')));
     $('#testConnectionBtn')?.addEventListener('click', () => testConnection().catch((error) => toast(error.message, 'error')));
     $('#refreshPairingQrBtn')?.addEventListener('click', () => loadPairingQr().then(() => toast('QR refreshed')).catch((error) => toast(error.message, 'error')));
     $('#openPairingQrBtn')?.addEventListener('click', () => loadPairingQr().then(() => toast('Pairing QR ready')).catch((error) => toast(error.message, 'error')));
@@ -8343,6 +8369,7 @@
     $('#productGroupDetailExportBtn')?.addEventListener('click', () => exportProductGroupDetails().catch((error) => toast(error.message, 'error')));
     $('#clearConnectionLogsBtn')?.addEventListener('click', () => clearConnectionLogs().catch((error) => toast(error.message, 'error')));
     $('#syncCopyServerUrlBtn').addEventListener('click', () => copyServerUrl().catch((error) => toast(error.message, 'error')));
+    $('#syncCopyMobileScannerUrlBtn')?.addEventListener('click', () => copyMobileScannerUrl().catch((error) => toast(error.message, 'error')));
     $('#loadLabelBinsBtn')?.addEventListener('click', () => loadLabelBins().catch((error) => toast(error.message, 'error')));
     $('#labelDealerSelect')?.addEventListener('change', () => loadLabelBins().catch((error) => toast(error.message, 'error')));
     $('#barcodeBinLocation')?.addEventListener('input', (event) => {

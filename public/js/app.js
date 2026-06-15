@@ -1356,7 +1356,16 @@
     if (!requireSession()) return;
     setUserChrome();
     $('#staffNameInput').value = state.user ? state.user.name || state.user.username || '' : '';
-    $('#mobileUrl').textContent = `Mobile scanner: ${window.location.origin}/mobile-scanner`;
+    const mobileUrlNode = $('#mobileUrl');
+    if (mobileUrlNode) mobileUrlNode.textContent = 'Mobile scanner: checking...';
+    api('/api/health')
+      .then((health) => {
+        const mobileScannerUrl = health.mobileScannerUrl || (health.serverUrl ? `${String(health.serverUrl).replace(/\/+$/, '')}/mobile-scanner` : `${window.location.origin.replace(/\/+$/, '')}/mobile-scanner`);
+        if (mobileUrlNode) mobileUrlNode.textContent = `Mobile scanner: ${mobileScannerUrl}`;
+      })
+      .catch(() => {
+        if (mobileUrlNode) mobileUrlNode.textContent = `Mobile scanner: ${window.location.origin.replace(/\/+$/, '')}/mobile-scanner`;
+      });
     initDashboardEvents();
     await connectThisDevice();
     await Promise.all([loadDealers(), loadInventory(), loadDevices(), loadMasterSearch()]);

@@ -854,6 +854,7 @@
               <div><span>Server IP</span><strong id="pairingServerIp">Detecting...</strong></div>
               <div><span>Port</span><strong id="pairingServerPort">3001</strong></div>
               <div class="span-all"><span>Full URL</span><strong id="pairingServerUrl">Detecting...</strong></div>
+              <div class="span-all"><span>Mobile Scanner URL</span><strong id="pairingMobileScannerUrl">Detecting...</strong></div>
               <div class="span-all"><span>Health API</span><strong id="pairingHealthUrl">Detecting...</strong></div>
               <div class="span-all"><span>Active Audit</span><strong id="pairingActiveAudit">Checking...</strong></div>
               <div class="span-all"><span>Connection Status</span><strong id="pairingStatusText">Checking...</strong></div>
@@ -864,6 +865,7 @@
               <button id="refreshPairingQrBtn" class="btn light" type="button">Refresh QR</button>
               <button id="copyServerUrlBtn" class="btn light" type="button">Copy Server URL</button>
               <button id="copyHealthUrlBtn" class="btn light" type="button">Copy Health URL</button>
+              <button id="copyMobileScannerUrlBtn" class="btn light" type="button">Copy Mobile Scanner URL</button>
               <button id="networkTestBtn" class="btn light" type="button">Network Test</button>
             </div>
             <div id="networkDebugText" class="sync-note">Cloud sync works across WiFi, mobile data, hotspot, and different networks</div>
@@ -909,7 +911,10 @@
         <section class="card">
           <div class="card-head">
             <h2>Device Sync Center</h2>
-            <div class="actions"><button id="syncCopyServerUrlBtn" class="btn light" type="button">Copy Server URL</button></div>
+            <div class="actions">
+              <button id="syncCopyServerUrlBtn" class="btn light" type="button">Copy Server URL</button>
+              <button id="syncCopyMobileScannerUrlBtn" class="btn light" type="button">Copy Mobile Scanner URL</button>
+            </div>
           </div>
           <div class="pairing-layout">
             <img id="syncPairingQrImage" class="qr-preview large" alt="">
@@ -917,6 +922,7 @@
               <div><span>Server IP</span><strong id="syncServerIp">Detecting...</strong></div>
               <div><span>Port</span><strong id="syncServerPort">3001</strong></div>
               <div class="span-all"><span>Full URL</span><strong id="syncServerUrlText">Detecting...</strong></div>
+              <div class="span-all"><span>Mobile Scanner URL</span><strong id="syncMobileScannerUrlText">Detecting...</strong></div>
               <div class="span-all"><span>QR Payload</span><code id="syncQrPayload">Waiting for pairing data...</code></div>
             </div>
           </div>

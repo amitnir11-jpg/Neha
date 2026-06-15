@@ -796,6 +796,7 @@ function mobileDiscoveryPayload(activePort, remoteAddress = '') {
     lanIp: info.ip,
     port: info.port,
     serverUrl: info.serverUrl,
+    mobileScannerUrl: info.mobileScannerUrl,
     healthUrl: info.healthUrl,
     connectUrl: info.connectUrl,
     syncUrl: info.syncUrl
@@ -936,6 +937,7 @@ app.get('/api/health', async (req, res) => {
     currentLanIp: info.ip,
     port: info.port,
     serverUrl: info.serverUrl,
+    mobileScannerUrl: info.mobileScannerUrl,
     healthUrl: info.healthUrl,
     connectUrl: info.connectUrl,
     syncUrl: info.syncUrl
@@ -955,7 +957,8 @@ app.get('/api/ping', (req, res) => {
     render: IS_RENDER,
     railway: IS_RAILWAY,
     db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    serverUrl: info.serverUrl
+    serverUrl: info.serverUrl,
+    mobileScannerUrl: info.mobileScannerUrl
   });
 });
 
@@ -996,6 +999,7 @@ app.get('/api/discovery', (req, res) => {
     currentLanIp: info.ip,
     port: info.port,
     serverUrl: info.serverUrl,
+    mobileScannerUrl: info.mobileScannerUrl,
     healthUrl: info.healthUrl,
     connectUrl: info.connectUrl,
     syncUrl: info.syncUrl

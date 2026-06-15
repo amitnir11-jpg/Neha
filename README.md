@@ -121,6 +121,12 @@ Use the local network URL shown in the server console or batch window:
 http://YOUR_LOCAL_IP:PORT/mobile-scanner
 ```
 
+If the app is deployed on Railway or another public host, use:
+
+```text
+https://YOUR_PUBLIC_DOMAIN/mobile-scanner
+```
+
 Mobile devices can also auto-connect with:
 
 ```http

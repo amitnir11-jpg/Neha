@@ -33,6 +33,7 @@ class QRPairService {
       serverIp: info.ip,
       port: info.port,
       serverUrl: info.serverUrl,
+      mobileScannerUrl: info.mobileScannerUrl,
       healthUrl: info.healthUrl,
       connectUrl: info.connectUrl,
       syncUrl: info.syncUrl,
