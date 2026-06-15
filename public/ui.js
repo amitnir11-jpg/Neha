@@ -1341,9 +1341,10 @@
 
   function resolveMobileScannerUrl(info = {}) {
     const serverUrl = info.serverUrl || (info.ip && info.port ? `http://${info.ip}:${info.port}` : '');
+    if (info.scanUrl) return info.scanUrl;
     if (info.mobileScannerUrl) return info.mobileScannerUrl;
-    if (serverUrl) return `${String(serverUrl).replace(/\/+$/, '')}/mobile-scanner`;
-    return `${window.location.origin.replace(/\/+$/, '')}/mobile-scanner`;
+    if (serverUrl) return `${String(serverUrl).replace(/\/+$/, '')}/scan`;
+    return `${window.location.origin.replace(/\/+$/, '')}/scan`;
   }
 
   function applyServerInfo(info = {}) {

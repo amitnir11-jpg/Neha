@@ -391,13 +391,14 @@ router.get('/config', auth.optionalAuth, async (req, res) => {
       mobileAppVersion: MOBILE_APP_VERSION,
       serverTime: new Date(),
       serverUrl: info.serverUrl,
+      scanUrl: info.scanUrl,
       mobileScannerUrl: info.mobileScannerUrl,
       healthUrl: info.healthUrl,
       connectUrl: info.connectUrl,
       syncUrl: `${info.serverUrl}/api/mobile/sync-bulk`,
       loginUrl: `${info.serverUrl}/api/mobile/login`,
       cooldownMs: 4000,
-      supportedScanTypes: ['INWARD', 'OUTWARD', 'VERIFICATION'],
+      supportedScanTypes: ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE', 'VERIFICATION'],
       activeAudit: activeAudit ? publicAudit(activeAudit) : null,
       loginVerified: Boolean(req.user)
     });
@@ -480,6 +481,7 @@ router.get('/status', auth.optionalAuth, async (req, res) => {
       approved: status.approved,
       loginVerified: Boolean(req.user),
       serverUrl: info.serverUrl,
+      scanUrl: info.scanUrl,
       mobileScannerUrl: info.mobileScannerUrl,
       healthUrl: info.healthUrl,
       syncUrl: `${info.serverUrl}/api/mobile/sync-bulk`,

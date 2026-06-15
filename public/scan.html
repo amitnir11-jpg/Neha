@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Daksh Scan</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/scan.css?v=20260615-fresh-scan">
+</head>
+<body class="scan-page">
+  <div class="page-orb orb-a" aria-hidden="true"></div>
+  <div class="page-orb orb-b" aria-hidden="true"></div>
+
+  <main class="app-shell">
+    <section class="hero-card glass-card">
+      <div class="hero-copy">
+        <span class="eyebrow">Mobile Part Scanning</span>
+        <div class="brand-row">
+          <div class="brand-mark">DS</div>
+          <div>
+            <h1>Daksh Scan</h1>
+            <p class="hero-text">
+              Fresh mobile scanner for quick login, camera capture, offline queueing, and automatic sync back to the inventory app.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-actions">
+        <button id="copyUrlBtn" class="btn btn-secondary" type="button" data-testid="copy-url">Copy Scan URL</button>
+        <a id="openScanUrl" class="btn btn-ghost" href="/scan" target="_blank" rel="noopener noreferrer">Open URL</a>
+      </div>
+
+      <div id="contextNotice" class="notice" role="status" hidden></div>
+    </section>
+
+    <section id="loginPanel" class="panel grid-login">
+      <div class="panel-title">
+        <div>
+          <span class="panel-tag">Secure Login</span>
+          <h2>Sign in to scan parts</h2>
+        </div>
+        <span id="secureBadge" class="status-pill neutral">Checking...</span>
+      </div>
+
+      <form id="loginForm" class="login-form" autocomplete="on" novalidate>
+        <div class="field-grid">
+          <label class="field">
+            <span>Username or Email</span>
+            <input name="username" autocomplete="username" required placeholder="Enter user name">
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input name="password" type="password" autocomplete="current-password" placeholder="Enter password">
+          </label>
+          <label class="field">
+            <span>PIN</span>
+            <input name="pin" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="Optional PIN">
+          </label>
+          <label id="dealerCodeInputLabel" class="field">
+            <span>Dealer Code</span>
+            <input name="dealerCode" autocapitalize="characters" placeholder="Dealer code">
+          </label>
+          <label id="dealerSelectLabel" class="field hidden">
+            <span>Select Dealer</span>
+            <select id="loginDealerSelect" name="selectedDealerCode"></select>
+          </label>
+          <label class="field">
+            <span>Device Name</span>
+            <input name="deviceName" placeholder="Android Chrome">
+          </label>
+        </div>
+        <button class="btn btn-primary login-btn" type="submit" data-testid="login-submit">Login &amp; Open Scanner</button>
+        <p id="loginMessage" class="field-message" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section id="scannerPanel" class="panel scanner-panel hidden" aria-live="polite">
+      <div class="scanner-header">
+        <div>
+          <span class="panel-tag">Live Session</span>
+          <h2 id="sessionDealerLabel">Dealer not loaded</h2>
+          <p id="sessionUserLabel">Login to start scanning</p>
+        </div>
+        <div class="header-stats">
+          <span id="networkBadge" class="status-pill neutral">Offline</span>
+          <span id="pendingBadge" class="status-pill neutral">Pending 0</span>
+          <span id="failedBadge" class="status-pill neutral">Failed 0</span>
+          <span id="lastSyncBadge" class="status-pill neutral">Never synced</span>
+          <button id="logoutBtn" class="btn btn-secondary btn-small" type="button">Logout</button>
+        </div>
+      </div>
+
+      <div class="url-strip">
+        <div>
+          <span class="mini-label">Scanner URL</span>
+          <strong id="scannerUrlText">/scan</strong>
+        </div>
+        <button id="copyScannerUrlBtn" class="btn btn-secondary btn-small" type="button">Copy</button>
+      </div>
+
+      <div class="mode-row" role="group" aria-label="Scan mode">
+        <button class="mode-btn active" type="button" data-mode="INWARD">Inward</button>
+        <button class="mode-btn" type="button" data-mode="OUTWARD">Outward</button>
+        <button class="mode-btn" type="button" data-mode="FITTED">Fitted</button>
+        <button class="mode-btn" type="button" data-mode="DAMAGE">Damage</button>
+        <button class="mode-btn" type="button" data-mode="VERIFICATION">Verification</button>
+      </div>
+
+      <section id="binPanel" class="bin-panel">
+        <label class="field">
+          <span>Bin Location</span>
+          <input id="activeBinLocation" autocapitalize="characters" autocomplete="off" placeholder="Enter bin before inward or damage scans">
+        </label>
+        <div class="bin-actions">
+          <button id="saveBinBtn" class="btn btn-primary" type="button">Set Bin</button>
+          <button id="clearBinBtn" class="btn btn-secondary" type="button">Clear</button>
+        </div>
+        <p id="binPanelMessage" class="field-message">Enter a bin location before starting inward or damage scanning.</p>
+      </section>
+
+      <section class="scanner-grid">
+        <article class="camera-card">
+          <div class="camera-head">
+            <div>
+              <span class="panel-tag">Camera Scanner</span>
+              <h3>Point the camera at a part QR or barcode</h3>
+            </div>
+            <div class="camera-tools">
+              <select id="cameraSelect" class="camera-select" aria-label="Camera device"></select>
+              <button id="refreshCamerasBtn" class="btn btn-secondary btn-small" type="button">Refresh</button>
+            </div>
+          </div>
+
+          <div class="camera-frame">
+            <video id="cameraPreview" playsinline muted autoplay></video>
+            <div class="scan-frame" aria-hidden="true"></div>
+            <div class="camera-overlay">
+              <span id="cameraState">Tap Start Camera to begin scanning</span>
+              <small id="cameraHint">HTTPS is required on mobile devices for camera access.</small>
+            </div>
+          </div>
+
+          <div class="control-row">
+            <button id="startScanBtn" class="btn btn-primary" type="button">Start Camera</button>
+            <button id="pauseScanBtn" class="btn btn-secondary" type="button">Pause</button>
+            <button id="resumeScanBtn" class="btn btn-secondary" type="button">Resume</button>
+            <button id="manualBtn" class="btn btn-secondary" type="button">Manual Entry</button>
+            <button id="syncNowBtn" class="btn btn-primary" type="button">Sync Now</button>
+          </div>
+        </article>
+
+        <aside class="side-stack">
+          <article class="summary-card">
+            <span class="panel-tag">Last Scan</span>
+            <strong id="lastScanTitle">Ready</strong>
+            <p id="lastScanMeta">Login and start the camera to scan parts.</p>
+          </article>
+
+          <article class="summary-card">
+            <span class="panel-tag">Queue</span>
+            <div class="queue-grid">
+              <div><strong id="queueTotal">0</strong><span>Total</span></div>
+              <div><strong id="queueSynced">0</strong><span>Synced</span></div>
+              <div><strong id="queuePending">0</strong><span>Pending</span></div>
+              <div><strong id="queueFailed">0</strong><span>Failed</span></div>
+            </div>
+            <button id="clearSyncedBtn" class="btn btn-danger btn-wide" type="button">Clear Synced</button>
+          </article>
+
+          <article class="summary-card">
+            <span class="panel-tag">Session</span>
+            <p id="activeAuditLabel" class="summary-line">Audit will appear after login</p>
+            <p id="serverStateLabel" class="summary-line">Server status will appear here</p>
+          </article>
+        </aside>
+      </section>
+
+      <section class="history-card">
+        <div class="panel-title compact">
+          <div>
+            <span class="panel-tag">Recent Activity</span>
+            <h3>Last 10 scans</h3>
+          </div>
+          <p class="history-note">Local queue only. Sync pushes these records to the server.</p>
+        </div>
+        <div class="table-wrap">
+          <table class="scan-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Part</th>
+                <th>Qty</th>
+                <th>Type</th>
+                <th>Bin</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="scanRows">
+              <tr><td colspan="6">No scans yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="manualDialog" class="manual-dialog">
+    <form id="manualForm" class="dialog-card" method="dialog" novalidate>
+      <div class="dialog-head">
+        <div>
+          <span class="panel-tag">Manual Entry</span>
+          <h3 id="manualTitle">Add scan manually</h3>
+        </div>
+        <button id="manualCloseBtn" class="icon-btn" type="button" aria-label="Close manual dialog">×</button>
+      </div>
+
+      <p id="manualNote" class="field-message">Manual entry uses the same sync pipeline as camera scans.</p>
+
+      <label class="field">
+        <span>Part Number</span>
+        <input id="manualPartNumber" name="partNumber" autocapitalize="characters" required placeholder="Enter part number">
+      </label>
+      <div id="partSuggestions" class="suggestions"></div>
+
+      <div class="field-grid narrow">
+        <label id="manualQtyWrap" class="field">
+          <span>Quantity</span>
+          <input id="manualQty" name="qty" inputmode="numeric" type="number" min="1" value="1">
+        </label>
+        <label id="manualMrpWrap" class="field">
+          <span>MRP</span>
+          <input id="manualMrp" name="mrp" inputmode="decimal" type="number" min="0" step="0.01" placeholder="0.00">
+        </label>
+      </div>
+
+      <div class="field-grid narrow">
+        <label id="manualBinWrap" class="field">
+          <span>Bin Location</span>
+          <input id="manualBinLocation" name="binLocation" autocapitalize="characters" placeholder="BIN-01">
+        </label>
+        <label id="manualRegWrap" class="field">
+          <span>Registration No</span>
+          <input id="manualRegdNo" name="regdNo" autocapitalize="characters" placeholder="Vehicle reg no">
+        </label>
+      </div>
+
+      <label id="manualJobWrap" class="field">
+        <span>Job Card No</span>
+        <input id="manualJobCardNo" name="jobCardNo" autocapitalize="characters" placeholder="Job card no">
+      </label>
+
+      <div id="manualRawPreview" class="raw-preview" hidden></div>
+
+      <div class="dialog-actions">
+        <button id="manualCancelBtn" class="btn btn-secondary" type="button">Cancel</button>
+        <button class="btn btn-primary" type="submit">Save Scan</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/vendor/zxing/index.min.js?v=20260615-fresh-scan"></script>
+  <script src="/scan.js?v=20260615-fresh-scan"></script>
+</body>
+</html>

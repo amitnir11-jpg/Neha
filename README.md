@@ -115,16 +115,16 @@ If SMTP credentials are not configured, reset OTPs are written to the server con
 
 ## Mobile Scanner URL
 
-Use the local network URL shown in the server console or batch window:
+Use the secure Railway scanner URL:
 
 ```text
-http://YOUR_LOCAL_IP:PORT/mobile-scanner
+https://daksh-inventory-v2-production.up.railway.app/scan
 ```
 
-If the app is deployed on Railway or another public host, use:
+If you are testing on a local network, use the LAN URL printed by the server console or batch window. The scanner page loads from the same host as the dashboard, but camera access still needs HTTPS on most mobile browsers:
 
 ```text
-https://YOUR_PUBLIC_DOMAIN/mobile-scanner
+http://YOUR_LOCAL_IP:PORT/scan
 ```
 
 Mobile devices can also auto-connect with:

@@ -166,7 +166,8 @@ function serverInfo(port, remoteIp = '', requestProtocol = '', requestHost = '')
   const parsed = new URL(serverUrl);
   const ip = parsed.hostname;
   const hostPort = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
-  const mobileScannerUrl = `${serverUrl.replace(/\/+$/, '')}/mobile-scanner`;
+  const scanUrl = `${serverUrl.replace(/\/+$/, '')}/scan`;
+  const mobileScannerUrl = scanUrl;
   const connectUrl = `${serverUrl}/api/mobile/connect`;
   const syncUrl = `${serverUrl}/api/mobile/sync`;
   return {
@@ -174,6 +175,7 @@ function serverInfo(port, remoteIp = '', requestProtocol = '', requestHost = '')
     port: activePort,
     hostPort,
     serverUrl,
+    scanUrl,
     mobileScannerUrl,
     healthUrl: `${serverUrl}/api/health`,
     connectUrl,

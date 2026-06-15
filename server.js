@@ -888,11 +888,20 @@ app.use('/api/reports', (req, res, next) => {
   return authRoutes.requireAuth(req, res, () => reportsRouter.handleReport(req, res, 'scan-register', 'Scan Register Report'));
 });
 
+app.use('/vendor/zxing', express.static(path.join(__dirname, 'node_modules', '@zxing', 'library', 'umd')));
 app.use(express.static(PUBLIC_DIR));
 
 app.get(['/apk', '/download-apk', '/api/apk/download'], (req, res) => {
   const apkPath = path.join(PUBLIC_DIR, 'downloads', 'daksh-mobile-scanner.apk');
   res.download(apkPath, 'daksh-mobile-scanner.apk');
+});
+
+app.get(['/scan', '/scan/'], (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
+});
+
+app.get(['/mobile', '/mobile-scanner'], (req, res) => {
+  res.redirect(302, '/scan');
 });
 
 app.get('/force-login', (req, res) => {
@@ -960,6 +969,7 @@ app.get('/api/health', async (req, res) => {
     currentLanIp: info.ip,
     port: info.port,
     serverUrl: info.serverUrl,
+    scanUrl: info.scanUrl,
     mobileScannerUrl: info.mobileScannerUrl,
     healthUrl: info.healthUrl,
     connectUrl: info.connectUrl,
@@ -1109,10 +1119,6 @@ app.get(['/', '/login'], (req, res) => {
 
 app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'Daksh.html'));
-});
-
-app.get(['/mobile', '/mobile-scanner'], (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'mobile-scanner.html'));
 });
 
 app.get('/report', (req, res) => {
