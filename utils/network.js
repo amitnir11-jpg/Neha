@@ -22,37 +22,72 @@ function isPreferredLanIp(ip) {
   return Boolean(match && Number(match[1]) >= 16 && Number(match[1]) <= 31);
 }
 
-function detectLanIp() {
+function interfaceNameScore(name = '') {
+  const text = String(name || '').toLowerCase();
+  if (/(wi[- ]?fi|wlan|wireless)/.test(text)) return 40;
+  if (/(ethernet|lan|local area connection)/.test(text)) return 30;
+  if (/(bluetooth)/.test(text)) return -20;
+  if (/(vpn|virtual|tunnel|hyper-v|veth|loopback|pseudo)/.test(text)) return -50;
+  return 0;
+}
+
+function ipRangeScore(ip) {
+  if (/^192\.168\./.test(ip)) return 300;
+  if (/^10\./.test(ip)) return 200;
+  const match = ip.match(/^172\.(\d+)\./);
+  if (match && Number(match[1]) >= 16 && Number(match[1]) <= 31) return 100;
+  return -100;
+}
+
+function lanCandidates() {
   const interfaces = os.networkInterfaces();
   const candidates = [];
 
-  Object.values(interfaces).forEach((items = []) => {
+  Object.entries(interfaces).forEach(([interfaceName, items = []]) => {
     items.forEach((item) => {
       if (item.family !== 'IPv4' || item.internal) return;
-      if (!item.address || item.address === '127.0.0.1') return;
-      candidates.push(item.address);
+      const address = cleanIpv4(item.address);
+      if (!address || address === '127.0.0.1' || address.startsWith('169.254.')) return;
+      candidates.push({
+        address,
+        interfaceName,
+        netmask: cleanIpv4(item.netmask),
+        score: ipRangeScore(address) + interfaceNameScore(interfaceName)
+      });
     });
   });
 
-  return candidates.find(isPreferredLanIp) || candidates[0] || '127.0.0.1';
+  return candidates;
+}
+
+function bestLanCandidate(candidates = []) {
+  return candidates
+    .slice()
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      return left.address.localeCompare(right.address);
+    })[0] || null;
+}
+
+function detectLanIp() {
+  const best = bestLanCandidate(lanCandidates());
+  return best ? best.address : '127.0.0.1';
 }
 
 function detectLanIpForRemote(remoteIp) {
   const remote = ipv4ToNumber(remoteIp);
   if (remote === null || Number.isNaN(remote)) return detectLanIp();
 
-  const interfaces = os.networkInterfaces();
-  for (const items of Object.values(interfaces)) {
-    for (const item of items || []) {
-      if (item.family !== 'IPv4' || item.internal) continue;
-      const local = ipv4ToNumber(item.address);
-      const mask = ipv4ToNumber(item.netmask);
-      if (local === null || mask === null || Number.isNaN(local) || Number.isNaN(mask)) continue;
-      if ((local & mask) === (remote & mask)) return item.address;
-    }
+  const matches = [];
+  for (const candidate of lanCandidates()) {
+    const local = ipv4ToNumber(candidate.address);
+    const mask = ipv4ToNumber(candidate.netmask);
+    if (local === null || mask === null || Number.isNaN(local) || Number.isNaN(mask)) continue;
+    if ((local & mask) === (remote & mask)) matches.push(candidate);
   }
 
-  return detectLanIp();
+  const bestMatch = bestLanCandidate(matches);
+  return bestMatch ? bestMatch.address : detectLanIp();
 }
 
 function isLocalhostUrl(value) {

@@ -118,7 +118,7 @@ If SMTP credentials are not configured, reset OTPs are written to the server con
 Use the local network URL shown in the server console or batch window:
 
 ```text
-http://YOUR_LOCAL_IP:PORT/dashboard
+http://YOUR_LOCAL_IP:PORT/mobile-scanner
 ```
 
 Mobile devices can also auto-connect with:

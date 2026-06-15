@@ -1356,7 +1356,7 @@
     if (!requireSession()) return;
     setUserChrome();
     $('#staffNameInput').value = state.user ? state.user.name || state.user.username || '' : '';
-    $('#mobileUrl').textContent = `Mobile scanner: ${window.location.origin}/dashboard`;
+    $('#mobileUrl').textContent = `Mobile scanner: ${window.location.origin}/mobile-scanner`;
     initDashboardEvents();
     await connectThisDevice();
     await Promise.all([loadDealers(), loadInventory(), loadDevices(), loadMasterSearch()]);
