@@ -200,7 +200,7 @@
 
   function scanUrl() {
     const origin = window.location.origin.replace(/\/+$/, '');
-    return `${origin}/scan`;
+    return `${origin}/mobile-scanner`;
   }
 
   function canonicalScanUrl() {

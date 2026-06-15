@@ -166,7 +166,7 @@ function serverInfo(port, remoteIp = '', requestProtocol = '', requestHost = '')
   const parsed = new URL(serverUrl);
   const ip = parsed.hostname;
   const hostPort = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
-  const scanUrl = `${serverUrl.replace(/\/+$/, '')}/scan`;
+  const scanUrl = `${serverUrl.replace(/\/+$/, '')}/mobile-scanner`;
   const mobileScannerUrl = scanUrl;
   const connectUrl = `${serverUrl}/api/mobile/connect`;
   const syncUrl = `${serverUrl}/api/mobile/sync`;

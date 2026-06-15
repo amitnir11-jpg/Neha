@@ -1360,11 +1360,11 @@
     if (mobileUrlNode) mobileUrlNode.textContent = 'Mobile scanner: checking...';
     api('/api/health')
       .then((health) => {
-        const mobileScannerUrl = health.scanUrl || health.mobileScannerUrl || (health.serverUrl ? `${String(health.serverUrl).replace(/\/+$/, '')}/scan` : `${window.location.origin.replace(/\/+$/, '')}/scan`);
+        const mobileScannerUrl = health.scanUrl || health.mobileScannerUrl || (health.serverUrl ? `${String(health.serverUrl).replace(/\/+$/, '')}/mobile-scanner` : `${window.location.origin.replace(/\/+$/, '')}/mobile-scanner`);
         if (mobileUrlNode) mobileUrlNode.textContent = `Mobile scanner: ${mobileScannerUrl}`;
       })
       .catch(() => {
-        if (mobileUrlNode) mobileUrlNode.textContent = `Mobile scanner: ${window.location.origin.replace(/\/+$/, '')}/scan`;
+        if (mobileUrlNode) mobileUrlNode.textContent = `Mobile scanner: ${window.location.origin.replace(/\/+$/, '')}/mobile-scanner`;
       });
     initDashboardEvents();
     await connectThisDevice();

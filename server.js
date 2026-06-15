@@ -846,7 +846,17 @@ app.use((req, res, next) => {
   next();
 });
 app.use((req, res, next) => {
-  if (/\.(html|js|css)$/i.test(req.path) || req.path === '/' || req.path === '/dashboard' || req.path === '/report') {
+  const normalizedPath = String(req.path || '').replace(/\/+$/, '') || '/';
+  if (
+    /\.(html|js|css)$/i.test(req.path) ||
+    normalizedPath === '/' ||
+    normalizedPath === '/login' ||
+    normalizedPath === '/dashboard' ||
+    normalizedPath === '/report' ||
+    normalizedPath === '/scan' ||
+    normalizedPath === '/mobile' ||
+    normalizedPath === '/mobile-scanner'
+  ) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -903,11 +913,11 @@ app.get(['/scan', '/scan/'], (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
 });
 
-app.get(['/mobile', '/mobile-scanner'], (req, res) => {
+app.get(['/mobile', '/mobile-scanner', '/mobile-scanner/'], (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
-  res.redirect(302, '/scan');
+  res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
 });
 
 app.get('/force-login', (req, res) => {
