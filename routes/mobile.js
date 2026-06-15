@@ -72,7 +72,15 @@ async function findUserByLogin(value) {
     error.status = 400;
     throw error;
   }
-  return matches[0] || null;
+  if (matches[0]) return matches[0];
+
+  const fallbackFields = ['loginId', 'userId'];
+  for (const field of fallbackFields) {
+    const match = await User.findOne({ [field]: login });
+    if (match) return match;
+  }
+
+  return null;
 }
 
 async function compareSecret(user, input, fields) {

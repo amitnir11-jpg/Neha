@@ -140,7 +140,15 @@ async function findUserByLogin(value) {
 
   const emailMatches = await User.find({ email: login }).limit(2);
   if (emailMatches.length > 1) throw duplicateEmailLoginError();
-  return emailMatches[0] || null;
+  if (emailMatches[0]) return emailMatches[0];
+
+  const fallbackFields = ['loginId', 'userId'];
+  for (const field of fallbackFields) {
+    const match = await User.findOne({ [field]: login });
+    if (match) return match;
+  }
+
+  return null;
 }
 
 function normalizeAccessCode(value) {
