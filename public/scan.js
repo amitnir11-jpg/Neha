@@ -16,10 +16,7 @@
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-  const ZX = window.ZXing || {};
-  const BrowserMultiFormatReader = ZX.BrowserMultiFormatReader;
-  const DecodeHintType = ZX.DecodeHintType;
-  const BarcodeFormat = ZX.BarcodeFormat;
+  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260615-fresh-scan';
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -50,7 +47,8 @@
     cameraDevices: [],
     selectedCameraId: storageGet(CAMERA_KEY, ''),
     health: null,
-    authReady: false
+    authReady: false,
+    zxingPromise: null
   };
 
   const MODE_INFO = {
@@ -716,7 +714,48 @@
     cameraState(state.paused ? 'Paused' : preserveRequest ? 'Camera stopped' : 'Camera stopped');
   }
 
-  function ensureReader() {
+  async function loadZxingLibrary() {
+    if (window.ZXing?.BrowserMultiFormatReader && window.ZXing?.DecodeHintType && window.ZXing?.BarcodeFormat) {
+      return window.ZXing;
+    }
+    if (state.zxingPromise) return state.zxingPromise;
+    state.zxingPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[data-zxing-loader="true"]');
+      if (existing) {
+        if (window.ZXing?.BrowserMultiFormatReader && window.ZXing?.DecodeHintType && window.ZXing?.BarcodeFormat) {
+          resolve(window.ZXing);
+          return;
+        }
+        existing.addEventListener('load', () => resolve(window.ZXing), { once: true });
+        existing.addEventListener('error', () => reject(new Error('ZXing scanner library failed to load')), { once: true });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = ZXING_SCRIPT_SRC;
+      script.async = true;
+      script.dataset.zxingLoader = 'true';
+      script.onload = () => {
+        if (window.ZXing?.BrowserMultiFormatReader && window.ZXing?.DecodeHintType && window.ZXing?.BarcodeFormat) {
+          resolve(window.ZXing);
+          return;
+        }
+        reject(new Error('ZXing scanner library failed to load'));
+      };
+      script.onerror = () => reject(new Error('ZXing scanner library failed to load'));
+      document.head.appendChild(script);
+    }).catch((error) => {
+      state.zxingPromise = null;
+      throw error;
+    });
+    return state.zxingPromise;
+  }
+
+  async function ensureReader() {
+    const ZX = await loadZxingLibrary();
+    const BrowserMultiFormatReader = ZX?.BrowserMultiFormatReader;
+    const DecodeHintType = ZX?.DecodeHintType;
+    const BarcodeFormat = ZX?.BarcodeFormat;
     if (!BrowserMultiFormatReader || !DecodeHintType || !BarcodeFormat) {
       throw new Error('ZXing scanner library failed to load');
     }
@@ -760,7 +799,7 @@
   async function refreshCameraList() {
     let devices = [];
     try {
-      const reader = ensureReader();
+      const reader = await ensureReader();
       devices = await reader.listVideoInputDevices();
     } catch (error) {
       try {
@@ -1039,15 +1078,16 @@
       cameraState('Camera API unavailable. Use manual entry.');
       return;
     }
-    const reader = ensureReader();
     stopCamera({ preserveRequest: true });
     state.cameraRequested = true;
     state.paused = false;
     state.scanning = true;
     const video = byId('cameraPreview');
     const selected = state.selectedCameraId || preferredCameraId(state.cameraDevices || []);
-    cameraState('Starting camera...');
+    cameraState('Loading scanner library...');
     try {
+      const reader = await ensureReader();
+      cameraState('Starting camera...');
       const promise = reader.decodeFromVideoDevice(selected || null, video, (result) => {
         if (result) handleDecodeResult(result);
       });

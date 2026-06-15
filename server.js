@@ -897,10 +897,16 @@ app.get(['/apk', '/download-apk', '/api/apk/download'], (req, res) => {
 });
 
 app.get(['/scan', '/scan/'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
 });
 
 app.get(['/mobile', '/mobile-scanner'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.redirect(302, '/scan');
 });
 
