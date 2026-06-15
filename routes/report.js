@@ -136,6 +136,30 @@ function money(value) {
   return Math.round(Number(value || 0) * 100) / 100;
 }
 
+function stockSummaryAmountText(value = 0) {
+  const amount = Math.round(Math.abs(Number(value || 0)));
+  return `₹ ${amount.toLocaleString('en-IN')}`;
+}
+
+function stockSummaryAmountTextSigned(value = 0) {
+  const amount = Math.round(Math.abs(Number(value || 0)));
+  return Number(value || 0) < 0 ? `₹ (${amount.toLocaleString('en-IN')})` : `₹ ${amount.toLocaleString('en-IN')}`;
+}
+
+function stockSummaryStatus(value = 0) {
+  const amount = Number(value || 0);
+  if (amount < 0) return 'NET SHORTAGE';
+  if (amount > 0) return 'NET EXCESS';
+  return 'BALANCED';
+}
+
+function stockSummaryRemarks(value = 0) {
+  const amount = Math.round(Math.abs(Number(value || 0))).toLocaleString('en-IN');
+  if (Number(value || 0) < 0) return `Physical inventory is lower than DMS inventory by ₹ ${amount} after adjusting excess stock.`;
+  if (Number(value || 0) > 0) return `Physical inventory is higher than DMS inventory by ₹ ${amount} after adjusting shortage stock.`;
+  return 'Physical inventory matches DMS inventory after adjustments.';
+}
+
 function rowValueSummary(scans = [], catalogue = {}, priceHistories = []) {
   const summary = calculateInventoryValue(scans);
   return {
@@ -3299,6 +3323,52 @@ function stockSummaryFooterTotals(rows = []) {
   };
 }
 
+function stockSummaryUndefinedDeadLineValue(rows = []) {
+  return money(rows.reduce((sum, row) => {
+    const systemQty = stockSummarySystemQty(row);
+    const physicalQty = stockSummaryPhysicalQty(row);
+    if (!(systemQty > 0 && physicalQty === 0)) return sum;
+    return sum + stockSummaryDmsValue(row);
+  }, 0));
+}
+
+function stockSummaryReconciliationSummary(rows = [], grandTotal = {}, footer = {}) {
+  const dmsStockValue = money(grandTotal.dmsValue || 0);
+  const actualPhysicalStockValue = money(grandTotal.physicalValue || 0);
+  const varianceValue = money(actualPhysicalStockValue - dmsStockValue);
+  const finalNetDifference = money(footer.netDiff ?? varianceValue);
+  const undefinedDeadLineItems = money(footer.undefinedItemsDeadlineValue ?? stockSummaryUndefinedDeadLineValue(rows));
+  const summary = {
+    dmsStockValue,
+    actualPhysicalStockValue,
+    varianceValue,
+    shortagesIdentified: money(footer.totalShortValue || 0),
+    excessStockIdentified: money(footer.totalExcessValue || 0),
+    damagedItemsConsidered: money(footer.damagedItemsValue || 0),
+    manualContributionAdjustment: money(footer.manualContribution || 0),
+    undefinedDeadLineItems,
+    finalNetDifference,
+    status: stockSummaryStatus(finalNetDifference),
+    remarks: stockSummaryRemarks(finalNetDifference)
+  };
+  return {
+    ...summary,
+    rows: [
+      { label: 'DMS Stock Value', value: summary.dmsStockValue, displayValue: stockSummaryAmountText(summary.dmsStockValue), kind: 'currency' },
+      { label: 'Actual Physical Stock Value', value: summary.actualPhysicalStockValue, displayValue: stockSummaryAmountText(summary.actualPhysicalStockValue), kind: 'currency' },
+      { label: 'Variance Value', value: summary.varianceValue, displayValue: stockSummaryAmountTextSigned(summary.varianceValue), kind: 'variance' },
+      { label: 'Shortages Identified', value: summary.shortagesIdentified, displayValue: stockSummaryAmountText(summary.shortagesIdentified), kind: 'short' },
+      { label: 'Excess Stock Identified', value: summary.excessStockIdentified, displayValue: stockSummaryAmountText(summary.excessStockIdentified), kind: 'excess' },
+      { label: 'Damaged Items Considered', value: summary.damagedItemsConsidered, displayValue: stockSummaryAmountText(summary.damagedItemsConsidered), kind: 'damage' },
+      { label: 'Manual Contribution / Adjustment', value: summary.manualContributionAdjustment, displayValue: stockSummaryAmountText(summary.manualContributionAdjustment), kind: 'manual' },
+      { label: 'Undefined / Dead Line Items', value: summary.undefinedDeadLineItems, displayValue: stockSummaryAmountText(summary.undefinedDeadLineItems), kind: 'undefined' },
+      { label: 'FINAL NET DIFFERENCE', value: summary.finalNetDifference, displayValue: stockSummaryAmountTextSigned(summary.finalNetDifference), kind: 'net' },
+      { label: 'Status', value: summary.status, displayValue: summary.status, kind: 'status' },
+      { label: 'Remarks', value: summary.remarks, displayValue: summary.remarks, kind: 'remarks' }
+    ]
+  };
+}
+
 function stockSummaryDate(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -3348,20 +3418,25 @@ async function buildStockSummaryReport(query = {}) {
     totalExcessValue: footerTotals.totalExcessValue,
     netDiff: footerTotals.netDiff,
     undefinedItemsDeadline: '',
+    undefinedItemsDeadlineValue: stockSummaryUndefinedDeadLineValue(rows),
     damagedItemsDeadline: ''
   };
+  const reconciliationSummary = stockSummaryReconciliationSummary(rows, grandTotal, footer);
+  footer.undefinedItemsDeadline = reconciliationSummary.undefinedDeadLineItems;
   const metadata = stockSummaryMetadata(selectedDealer, selectedAudit, query);
   const sections = {
     title: STOCK_SUMMARY_TITLE,
     metadata,
     rows: matrixRows,
     grandTotal,
-    footer
+    footer,
+    reconciliationSummary
   };
   const summary = {
     title: STOCK_SUMMARY_TITLE,
     metadata,
     footer,
+    reconciliationSummary,
     generatedAt: formatIstDateTime(new Date()),
     dealerName: query.dealerName || (selectedDealer ? selectedDealer.dealerName : ''),
     dealerCode,
@@ -3373,6 +3448,9 @@ async function buildStockSummaryReport(query = {}) {
     totalSkuCount: rows.length,
     totalStockRows: rows.filter((row) => stockSummarySystemQty(row) !== 0).length,
     totalPhysicalParts: rows.filter((row) => stockSummaryPhysicalQty(row) !== 0).length,
+    dmsStockValue: grandTotal.dmsValue,
+    actualPhysicalStockValue: grandTotal.physicalValue,
+    varianceValue: reconciliationSummary.varianceValue,
     actualStockValueDLC: grandTotal.physicalValue,
     dmsStockValueDLC: grandTotal.dmsValue,
     damagedItemsValue: footer.damagedItemsValue,
@@ -3380,6 +3458,8 @@ async function buildStockSummaryReport(query = {}) {
     totalShortValue: footer.totalShortValue,
     totalExcessValue: footer.totalExcessValue,
     netDiff: footer.netDiff,
+    status: reconciliationSummary.status,
+    remarks: reconciliationSummary.remarks,
     pricingCoverage: partwise.pricingCoverage || null,
     pricingIssues: partwise.pricingIssues || [],
     valuationBasis: 'DLC'
@@ -3477,13 +3557,33 @@ function addStockSummarySheet(workbook, data) {
     sheet.getCell(rowNumber, 4).font = { name: 'Arial', size: 10, bold: /Dealership Name/i.test(item.label || '') };
   });
 
+  const reconciliation = data.sections.reconciliationSummary || {};
+  const reconciliationRows = Array.isArray(reconciliation.rows) ? reconciliation.rows : [];
   const serviceRow = metadata.length + 3;
   sheet.mergeCells(serviceRow, 1, serviceRow, 12);
-  sheet.getCell(serviceRow, 1).value = data.sections.title || STOCK_SUMMARY_TITLE;
+  sheet.getCell(serviceRow, 1).value = 'Inventory Reconciliation Summary';
   setFill(serviceRow, 1, 12, fills.green, { bold: true });
 
-  const groupRow = serviceRow + 1;
-  const subHeadRow = serviceRow + 2;
+  const reconciliationStart = serviceRow + 1;
+  reconciliationRows.forEach((item, index) => {
+    const rowNumber = reconciliationStart + index;
+    sheet.mergeCells(rowNumber, 1, rowNumber, 4);
+    sheet.mergeCells(rowNumber, 5, rowNumber, 12);
+    sheet.getCell(rowNumber, 1).value = `${item.label || ''} :`;
+    sheet.getCell(rowNumber, 5).value = item.value === undefined || item.value === null || item.value === '' ? '' : item.value;
+    sheet.getCell(rowNumber, 1).alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
+    sheet.getCell(rowNumber, 5).alignment = { vertical: 'middle', horizontal: /remarks/i.test(item.label || '') ? 'left' : 'center', wrapText: true };
+    setFill(rowNumber, 1, 4, fills.green, { bold: true });
+    setFill(rowNumber, 5, 12, item.kind === 'status' ? fills.total : item.kind === 'net' ? fills.black : item.kind === 'damage' ? fills.excess : item.kind === 'remarks' ? fills.meta : fills.meta, { bold: true });
+    if (item.kind === 'variance' || item.kind === 'net') sheet.getCell(rowNumber, 5).numFmt = '0';
+    if (item.kind === 'remarks') sheet.getRow(rowNumber).height = 30;
+    if (item.kind === 'damage') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    if (item.kind === 'status') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    if (item.kind === 'net') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+  });
+
+  const groupRow = reconciliationStart + reconciliationRows.length;
+  const subHeadRow = groupRow + 1;
   sheet.mergeCells(groupRow, 1, subHeadRow, 1);
   sheet.getCell(groupRow, 1).value = 'Category';
   sheet.mergeCells(groupRow, 2, groupRow, 4);

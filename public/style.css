@@ -5480,6 +5480,50 @@ tr:hover td,
   font-weight: 700 !important;
 }
 
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-service-cell {
+  font-size: 15px !important;
+  letter-spacing: 0.02em !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-summary-label,
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-summary-value {
+  background: #c9c9c9 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-summary-label {
+  font-weight: 800 !important;
+  text-align: right !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-summary-value {
+  text-align: left !important;
+  font-weight: 700 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-summary-damage .stock-summary-summary-value {
+  background: #7188ad !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-summary-variance .stock-summary-summary-value,
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-summary-net .stock-summary-summary-value {
+  background: #1f2937 !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-summary-status .stock-summary-summary-value {
+  background: #70a83a !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+}
+
+.report-table-wrap[data-report-type="stock-summary"] .stock-summary-summary-remarks .stock-summary-summary-value {
+  text-align: left !important;
+  line-height: 1.3 !important;
+}
+
 .report-table-wrap[data-report-type="stock-summary"] .stock-summary-dms-head,
 .report-table-wrap[data-report-type="stock-summary"] .stock-summary-dms-cell {
   background: #c6a58e !important;

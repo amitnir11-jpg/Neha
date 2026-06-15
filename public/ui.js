@@ -4399,6 +4399,49 @@
     return Number.isFinite(num) ? String(Math.round(num)) : String(value);
   }
 
+  function stockSummaryMoney(value, signed = false) {
+    if (value === undefined || value === null || value === '') return '';
+    const num = Number(value);
+    if (!Number.isFinite(num)) return String(value);
+    const amount = Math.round(Math.abs(num)).toLocaleString('en-IN');
+    if (!signed) return `₹ ${amount}`;
+    return num < 0 ? `₹ (${amount})` : `₹ ${amount}`;
+  }
+
+  function stockSummaryReconciliationRows(summary = {}, sections = {}) {
+    const reconciliation = summary.reconciliationSummary || sections.reconciliationSummary || {};
+    const rows = Array.isArray(reconciliation.rows) ? reconciliation.rows : [];
+    if (rows.length) return rows;
+    const dmsStockValue = Number(reconciliation.dmsStockValue ?? summary.dmsStockValueDLC ?? summary.dmsStockValue ?? 0);
+    const actualPhysicalStockValue = Number(reconciliation.actualPhysicalStockValue ?? summary.actualStockValueDLC ?? summary.actualPhysicalStockValue ?? 0);
+    const varianceValue = Number(reconciliation.varianceValue ?? actualPhysicalStockValue - dmsStockValue);
+    const shortagesIdentified = Number(reconciliation.shortagesIdentified ?? summary.totalShortValue ?? 0);
+    const excessStockIdentified = Number(reconciliation.excessStockIdentified ?? summary.totalExcessValue ?? 0);
+    const damagedItemsConsidered = Number(reconciliation.damagedItemsConsidered ?? summary.damagedItemsValue ?? 0);
+    const manualContributionAdjustment = Number(reconciliation.manualContributionAdjustment ?? summary.manualContribution ?? 0);
+    const undefinedDeadLineItems = Number(reconciliation.undefinedDeadLineItems ?? summary.undefinedDeadLineItems ?? 0);
+    const finalNetDifference = Number(reconciliation.finalNetDifference ?? summary.netDiff ?? varianceValue);
+    const status = reconciliation.status || (finalNetDifference < 0 ? 'NET SHORTAGE' : finalNetDifference > 0 ? 'NET EXCESS' : 'BALANCED');
+    const remarks = reconciliation.remarks || (finalNetDifference < 0
+      ? `Physical inventory is lower than DMS inventory by ₹ ${Math.abs(Math.round(finalNetDifference)).toLocaleString('en-IN')} after adjusting excess stock.`
+      : finalNetDifference > 0
+        ? `Physical inventory is higher than DMS inventory by ₹ ${Math.abs(Math.round(finalNetDifference)).toLocaleString('en-IN')} after adjusting shortage stock.`
+        : 'Physical inventory matches DMS inventory after adjustments.');
+    return [
+      { label: 'DMS Stock Value', value: dmsStockValue, displayValue: stockSummaryMoney(dmsStockValue), kind: 'currency' },
+      { label: 'Actual Physical Stock Value', value: actualPhysicalStockValue, displayValue: stockSummaryMoney(actualPhysicalStockValue), kind: 'currency' },
+      { label: 'Variance Value', value: varianceValue, displayValue: stockSummaryMoney(varianceValue, true), kind: 'variance' },
+      { label: 'Shortages Identified', value: shortagesIdentified, displayValue: stockSummaryMoney(shortagesIdentified), kind: 'short' },
+      { label: 'Excess Stock Identified', value: excessStockIdentified, displayValue: stockSummaryMoney(excessStockIdentified), kind: 'excess' },
+      { label: 'Damaged Items Considered', value: damagedItemsConsidered, displayValue: stockSummaryMoney(damagedItemsConsidered), kind: 'damage' },
+      { label: 'Manual Contribution / Adjustment', value: manualContributionAdjustment, displayValue: stockSummaryMoney(manualContributionAdjustment), kind: 'manual' },
+      { label: 'Undefined / Dead Line Items', value: undefinedDeadLineItems, displayValue: stockSummaryMoney(undefinedDeadLineItems), kind: 'undefined' },
+      { label: 'FINAL NET DIFFERENCE', value: finalNetDifference, displayValue: stockSummaryMoney(finalNetDifference, true), kind: 'net' },
+      { label: 'Status', value: status, displayValue: status, kind: 'status' },
+      { label: 'Remarks', value: remarks, displayValue: remarks, kind: 'remarks' }
+    ];
+  }
+
   function stockSummaryCellClass(key) {
     if (/^dms/i.test(key)) return 'stock-summary-dms-cell';
     if (/^physical/i.test(key)) return 'stock-summary-physical-cell';
@@ -4448,10 +4491,18 @@
       : Array.isArray(sections.metadata) ? sections.metadata : [];
     const footer = summary.footer || sections.footer || {};
     const title = summary.title || sections.title || 'Stock Summary Report';
+    const reconciliationRows = stockSummaryReconciliationRows(summary, sections);
+    const reconciliationTitle = reconciliationRows.length ? 'Inventory Reconciliation Summary' : title;
     const metaMarkup = metaRows.map((item) => `
       <tr class="stock-summary-meta-row">
         <th colspan="3" class="stock-summary-meta-label">${escapeHtml(item.label || '')} :</th>
         <td colspan="9" class="stock-summary-meta-value">${escapeHtml(item.value || '')}</td>
+      </tr>
+    `).join('');
+    const reconciliationMarkup = reconciliationRows.map((item) => `
+      <tr class="stock-summary-summary-row stock-summary-summary-${escapeHtml(item.kind || 'normal')}">
+        <th colspan="4" class="stock-summary-summary-label">${escapeHtml(item.label || '')} :</th>
+        <td colspan="8" class="stock-summary-summary-value">${escapeHtml(item.displayValue !== undefined && item.displayValue !== null ? item.displayValue : (item.value === undefined || item.value === null ? '' : item.value))}</td>
       </tr>
     `).join('');
     $('#reportHead').innerHTML = `
@@ -4463,8 +4514,9 @@
       </tr>
       ${metaMarkup}
       <tr class="stock-summary-service-row">
-        <th colspan="${keys.length}" class="stock-summary-service-cell">${escapeHtml(title)}</th>
+        <th colspan="${keys.length}" class="stock-summary-service-cell">${escapeHtml(reconciliationTitle)}</th>
       </tr>
+      ${reconciliationMarkup}
       <tr class="stock-summary-group-row">
         <th rowspan="2" data-col-key="category" class="stock-summary-category-head">Category</th>
         <th colspan="3" class="stock-summary-dms-head">DMS Stock</th>
@@ -4520,7 +4572,7 @@
       </tr>
       <tr class="stock-summary-footer-row">
         <td colspan="4" class="stock-summary-footer-label">Undefined Items Dead Line</td>
-        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(footer.undefinedItemsDeadline || '')}</td>
+        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(stockSummaryMoney(footer.undefinedItemsDeadline ?? 0))}</td>
         <td colspan="5" class="stock-summary-footer-blank"></td>
       </tr>
       <tr class="stock-summary-footer-row">
