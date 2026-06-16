@@ -195,7 +195,10 @@
     binMasterRows: [],
     barcodeAutoSaving: false,
     barcodeLastRaw: '',
-    barcodeLastAt: 0
+    barcodeLastAt: 0,
+    barcodeScanLocks: new Map(),
+    barcodeDuplicateLocks: new Map(),
+    scanStreamRecords: []
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -1489,6 +1492,127 @@
     return String(value || '').trim().toUpperCase();
   }
 
+  function barcodeScanKey(scan = {}) {
+    const dealerCode = cleanDealerCode(scan.dealerCode || currentDealerCode() || '');
+    const auditId = String(scan.auditId || activeAuditIdForScope() || '').trim();
+    const upiId = normalizePartText(extractUpiIdFromText(scan) || scan.upiId || scan.upiNo || '');
+    if (dealerCode && auditId && upiId) return [dealerCode, auditId, upiId].join('|');
+    const raw = normalizePartText(scan.rawScan || scan.rawScanString || scan.rawBarcode || scan.rawScanValue || scan.barcodeValue || scan.scanText || '');
+    if (raw) return [dealerCode || 'NO-DEALER', auditId || 'NO-AUDIT', 'RAW', raw].join('|');
+    const id = clean(scan.uniqueScanId || scan.scanId || scan.syncKey || scan.localId || '');
+    return id ? [dealerCode || 'NO-DEALER', auditId || 'NO-AUDIT', 'ID', id].join('|') : '';
+  }
+
+  function suppressTimedKey(map, key, ttlMs = 3000) {
+    if (!key) return false;
+    const now = Date.now();
+    const until = Number(map.get(key) || 0);
+    if (until > now) return true;
+    const nextUntil = now + ttlMs;
+    map.set(key, nextUntil);
+    setTimeout(() => {
+      if (map.get(key) === nextUntil) map.delete(key);
+    }, ttlMs + 50);
+    return false;
+  }
+
+  function lockBarcodeScan(scan = {}, ttlMs = 3000) {
+    return suppressTimedKey(state.barcodeScanLocks, barcodeScanKey(scan), ttlMs);
+  }
+
+  function lockBarcodeDuplicateNotice(scan = {}, ttlMs = 3000) {
+    return suppressTimedKey(state.barcodeDuplicateLocks, barcodeScanKey(scan), ttlMs);
+  }
+
+  function barcodeDuplicateMessage(existing = {}) {
+    const bin = clean(existing.binLocation || existing.bin || '-');
+    const part = clean(existing.partNumber || existing.part || '-');
+    return `This UPI is already scanned in Bin ${bin}, Part No ${part}`;
+  }
+
+  function normalizeQueuedHistoryScan(scan = {}) {
+    const syncStatus = String(scan.localStatus || scan.syncStatus || '').trim().toLowerCase();
+    const timestamp = scan.timestamp || scan.createdAt || scan.scanTime || new Date().toISOString();
+    return {
+      ...scan,
+      timestamp,
+      createdAt: scan.createdAt || timestamp,
+      scanTime: scan.scanTime || timestamp,
+      syncStatus: syncStatus === 'failed' ? 'failed' : 'pending',
+      synced: syncStatus === 'failed' ? false : false,
+      isSynced: false,
+      scanStatus: syncStatus === 'failed' ? 'FAILED' : (scan.scanStatus || 'ACCEPTED'),
+      localQueued: true
+    };
+  }
+
+  function scanHistoryRecordKey(scan = {}) {
+    const upiKey = barcodeScanKey(scan);
+    if (upiKey) return upiKey;
+    const explicit = clean(scan.scanId || scan.uniqueScanId || scan.syncKey || scan.localId || '');
+    if (explicit) return explicit;
+    return normalizePartText(scan.rawScan || scan.rawScanString || scan.rawBarcode || scan.rawScanValue || '');
+  }
+
+  function scanHistoryRecordAlreadyVisible(scan = {}) {
+    const key = scanHistoryRecordKey(scan);
+    if (!key) return false;
+    return (state.scanHistoryRecords || []).some((item) => scanHistoryRecordKey(item) === key);
+  }
+
+  function localQueuedScanHistoryRecords() {
+    return getSyncQueue()
+      .filter((item) => String(item.scanType || item.type || '').toUpperCase() !== 'VERIFICATION')
+      .map((item) => normalizeQueuedHistoryScan(item))
+      .filter((scan) => activeAuditMatchesScan(scan) && scanMatchesScanHistoryFilters(scan));
+  }
+
+  function localQueuedStreamRecords() {
+    return getSyncQueue()
+      .filter((item) => String(item.scanType || item.type || '').toUpperCase() !== 'VERIFICATION')
+      .map((item) => normalizeQueuedHistoryScan(item))
+      .filter((scan) => activeAuditMatchesScan(scan));
+  }
+
+  function mergeScanHistoryRecords(serverRecords = []) {
+    const merged = [...localQueuedScanHistoryRecords(), ...(Array.isArray(serverRecords) ? serverRecords : [])];
+    const seen = new Set();
+    return merged.filter((scan) => {
+      const key = scanHistoryRecordKey(scan);
+      if (!key) return true;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).sort((left, right) => new Date(right.timestamp || right.createdAt || 0) - new Date(left.timestamp || left.createdAt || 0));
+  }
+
+  function mergeScanStreamRecords(scans = []) {
+    const merged = [...localQueuedStreamRecords(), ...(Array.isArray(scans) ? scans : [])];
+    const seen = new Set();
+    return merged.filter((scan) => {
+      const key = scanHistoryRecordKey(scan);
+      if (!key) return true;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).sort((left, right) => new Date(right.timestamp || right.createdAt || 0) - new Date(left.timestamp || left.createdAt || 0)).slice(0, 12);
+  }
+
+  function barcodeDuplicateRecord(scan = {}) {
+    const key = barcodeScanKey(scan);
+    if (!key) return null;
+    const queue = getSyncQueue().filter((item) => String(item.scanType || item.type || '').toUpperCase() !== 'VERIFICATION');
+    const visibleHistory = state.scanHistoryRecords || [];
+    const allRecords = queue.concat(visibleHistory);
+    return allRecords.find((item) => barcodeScanKey(item) === key) || null;
+  }
+
+  function isBarcodeScanRecentlyLocked(scan = {}, ttlMs = 3000) {
+    const key = barcodeScanKey(scan);
+    if (!key) return false;
+    return suppressTimedKey(state.barcodeScanLocks, key, ttlMs);
+  }
+
   function validPartText(value) {
     return /^[A-Z0-9][A-Z0-9._/-]{2,39}$/.test(normalizePartText(value));
   }
@@ -1651,7 +1775,11 @@
     const normalized = normalizeScanPayload(payload);
     if (String(normalized.scanType || normalized.type || '').toUpperCase() === 'VERIFICATION') return normalized;
     const queue = getSyncQueue();
-    const exists = queue.find((item) => item.syncKey === normalized.syncKey || (normalized.upiId && normalizePartText(item.upiId) === normalizePartText(normalized.upiId)));
+    const existingHistory = barcodeDuplicateRecord(normalized);
+    if (existingHistory) {
+      return { ...normalized, queueAdded: false, queueDuplicate: true, existingLocalScan: existingHistory };
+    }
+    const exists = queue.find((item) => item.syncKey === normalized.syncKey || barcodeScanKey(item) === barcodeScanKey(normalized) || (normalized.upiId && normalizePartText(item.upiId) === normalizePartText(normalized.upiId)));
     if (!exists) {
       queue.push({
         ...normalized,
@@ -2447,7 +2575,8 @@
   }
 
   function renderScanStream(scans = []) {
-    const rows = filterActiveAuditScans(scans).slice(0, 12);
+    const rows = filterActiveAuditScans(mergeScanStreamRecords(scans));
+    state.scanStreamRecords = rows;
     $('#streamRows').innerHTML = rows.length ? rows.map(scanStreamRow).join('') : '<tr><td colspan="10" class="muted">No scans yet</td></tr>';
     enhanceCoreTables();
   }
@@ -2605,12 +2734,8 @@
   }
 
   function addScanToStream(scan = {}) {
-    const body = $('#streamRows');
-    if (!body) return;
-    if (body.querySelector('.muted')) body.innerHTML = '';
-    body.insertAdjacentHTML('afterbegin', scanStreamRow(scan));
-    Array.from(body.querySelectorAll('tr')).slice(12).forEach((row) => row.remove());
-    enhanceCoreTables();
+    state.scanStreamRecords = mergeScanStreamRecords([scan].concat(state.scanStreamRecords || []));
+    renderScanStream(state.scanStreamRecords);
   }
 
   async function handleNewScan(scan = {}, options = {}) {
@@ -2703,10 +2828,11 @@
     state.scanHistoryLoadRequestId = requestId;
     const data = await api(`/api/scans/history?${query}`);
     if (state.scanHistoryLoadRequestId !== requestId) return;
-    const records = data.records || [];
+    const records = mergeScanHistoryRecords(data.records || []);
     state.scanHistoryRecords = records;
-    state.scanHistorySummary = data.summary || {};
-    updateScanHistorySummary(records, data.summary || {});
+    const summary = scanHistorySummary(records, {});
+    state.scanHistorySummary = { ...(data.summary || {}), ...summary };
+    updateScanHistorySummary(records, state.scanHistorySummary);
     $('#scanHistoryRows').innerHTML = records.map(scanHistoryRow).join('') || '<tr><td colspan="18" class="muted">No scan history found</td></tr>';
     enhanceCoreTables();
     bindScanHistoryActions();
@@ -2826,40 +2952,14 @@
     if (!body || !activeAuditMatchesScan(scan)) return;
     if (!scanMatchesScanHistoryFilters(scan)) return;
     if (body.querySelector('.muted')) body.innerHTML = '';
-    const id = scan.scanId || scan.uniqueScanId || scan._id || '';
-    const existingBox = id ? Array.from(body.querySelectorAll('.scan-history-checkbox')).find((box) => box.value === id) : null;
-    if (existingBox) {
-      const row = existingBox.closest('tr');
-      if (row) row.outerHTML = scanHistoryRow(scan);
-      state.scanHistoryRecords = (state.scanHistoryRecords || []).map((item) => {
-        const itemId = item.scanId || item.uniqueScanId || item._id || '';
-        return itemId === id ? scan : item;
-      });
-      updateScanHistorySummary(state.scanHistoryRecords || [], {
-        ...(state.scanHistorySummary || {}),
-        scanRows: Number(state.scanHistorySummary?.scanRows || state.scanHistorySummary?.totalRecords || state.scanHistoryRecords.length || 0)
-      });
-      bindScanHistoryActions();
-      enhanceCoreTables();
-      return;
-    }
-    body.insertAdjacentHTML('afterbegin', scanHistoryRow(scan));
-    Array.from(body.querySelectorAll('tr')).slice(500).forEach((row) => row.remove());
-    state.scanHistoryRecords = [scan].concat(state.scanHistoryRecords || []).slice(0, 500);
-    const previousRows = Number(state.scanHistorySummary?.scanRows ?? state.scanHistorySummary?.totalRecords ?? Math.max(0, state.scanHistoryRecords.length - 1));
-    const previousQty = Number(state.scanHistorySummary?.partsScanned ?? state.scanHistorySummary?.totalQuantity ?? Math.max(0, state.scanHistoryRecords.slice(1).reduce((sum, item) => sum + scanHistoryQuantity(item, 1), 0)));
-    const visibleParts = new Set(state.scanHistoryRecords.map(scanHistoryPartNumber).filter(Boolean));
-    const previousUnique = Number(state.scanHistorySummary?.uniqueParts ?? state.scanHistorySummary?.uniquePartCount ?? 0);
-    state.scanHistorySummary = {
-      ...(state.scanHistorySummary || {}),
-      scanRows: previousRows + 1,
-      totalRecords: previousRows + 1,
-      totalRows: previousRows + 1,
-      partsScanned: previousQty + scanHistoryQuantity(scan, 1),
-      totalQuantity: previousQty + scanHistoryQuantity(scan, 1),
-      uniqueParts: Math.max(previousUnique, visibleParts.size),
-      visibleRows: state.scanHistoryRecords.length
-    };
+    const recordKey = scanHistoryRecordKey(scan);
+    const nextRecords = recordKey
+      ? (state.scanHistoryRecords || []).map((item) => scanHistoryRecordKey(item) === recordKey ? scan : item)
+      : [scan].concat(state.scanHistoryRecords || []);
+    state.scanHistoryRecords = mergeScanHistoryRecords(nextRecords).slice(0, 500);
+    body.innerHTML = state.scanHistoryRecords.length ? state.scanHistoryRecords.map(scanHistoryRow).join('') : '<tr><td colspan="18" class="muted">No scan history found</td></tr>';
+    const summary = scanHistorySummary(state.scanHistoryRecords, {});
+    state.scanHistorySummary = summary;
     updateScanHistorySummary(state.scanHistoryRecords, state.scanHistorySummary);
     bindScanHistoryActions();
     enhanceCoreTables();
@@ -3205,10 +3305,17 @@
     }
 
     if (isBarcodeForm) {
+      if (isBarcodeScanRecentlyLocked(normalized, 3000)) {
+        setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
+        resetBarcodeScanFields(form, normalized, options.expectedRaw);
+        setTimeout(() => $('#barcodeRaw')?.focus(), 700);
+        return;
+      }
+      const scanRawLock = normalizePartText(normalized.rawScan || normalized.rawScanString || normalized.rawBarcode || '');
       const queued = enqueueScan(normalized, 'Saved locally; waiting for background sync');
       if (queued.queueDuplicate) {
         const existing = queued.existingLocalScan || {};
-        const message = `This UPI is already pending in Bin Location: ${existing.binLocation || existing.bin || '-'}, Part No: ${existing.partNumber || existing.part || '-'}, Scanned Date/Time: ${dateTime(existing.timestamp) || '-'}`;
+        const message = barcodeDuplicateMessage(existing);
         addSyncLog({
           partNumber: normalized.partNumber,
           upiId: normalized.upiId,
@@ -3216,14 +3323,31 @@
           status: 'duplicate',
           errorMessage: message
         });
-        playScanTone('duplicate');
-        toast(message, 'error');
+        if (!lockBarcodeDuplicateNotice(existing || normalized)) {
+          playScanTone('duplicate');
+          toast(message, 'error');
+        }
+        state.barcodeLastRaw = scanRawLock || state.barcodeLastRaw;
+        state.barcodeLastAt = Date.now();
         setLivePill('barcodeReadyStatus', 'Duplicate - Not Added', false);
         resetBarcodeScanFields(form, normalized, options.expectedRaw);
         setTimeout(() => $('#barcodeRaw')?.focus(), 700);
         return;
       }
       localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
+      const pendingScan = normalizeQueuedHistoryScan({
+        ...normalized,
+        localStatus: 'pending',
+        syncStatus: 'pending',
+        synced: false,
+        isSynced: false,
+        scanStatus: 'ACCEPTED'
+      });
+      lockBarcodeScan(pendingScan, 3000);
+      state.barcodeLastRaw = scanRawLock || state.barcodeLastRaw;
+      state.barcodeLastAt = Date.now();
+      prependScanHistory(pendingScan);
+      addScanToStream(pendingScan);
       playScanTone('success');
       toast('Scan saved locally. Pending sync.');
       setLivePill('barcodeReadyStatus', 'Pending Sync - Ready Next', true);
@@ -8154,7 +8278,7 @@
     if (!form || !raw || state.barcodeAutoSaving) return;
     const normalizedRaw = normalizePartText(raw);
     const now = Date.now();
-    if (state.barcodeLastRaw === normalizedRaw && now - state.barcodeLastAt < 2000) {
+    if (state.barcodeLastRaw === normalizedRaw && now - state.barcodeLastAt < 3000) {
       setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
       playScanTone('duplicate');
       setTimeout(() => {

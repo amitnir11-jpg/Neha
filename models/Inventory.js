@@ -549,6 +549,18 @@ inventorySchema.index({ rawScan: 1, dealerCode: 1, auditId: 1 });
 inventorySchema.index({ syncKey: 1 });
 inventorySchema.index({ upiId: 1, dealerCode: 1 });
 inventorySchema.index({ upiNo: 1, dealerCode: 1 });
+inventorySchema.index(
+  { dealerCode: 1, auditId: 1, upiNo: 1 },
+  {
+    name: 'dealer_audit_upi_unique',
+    unique: true,
+    partialFilterExpression: {
+      dealerCode: { $type: 'string', $gt: '' },
+      auditId: { $type: 'string', $gt: '' },
+      upiNo: { $type: 'string', $gt: '' }
+    }
+  }
+);
 inventorySchema.index({ rawScan: 1, dealerCode: 1 });
 inventorySchema.index({ dealerCode: 1, auditId: 1, userId: 1, scanType: 1, rawUpi: 1 });
 inventorySchema.index({ dealerCode: 1, auditId: 1, loginId: 1, scanType: 1, rawUpi: 1 });
