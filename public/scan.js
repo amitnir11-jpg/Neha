@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.1';
-  const CACHE_VERSION = '20260616-mobile-login-resilience';
+  const CACHE_VERSION = '20260616-mobile-login-runtime-fix';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -24,6 +24,34 @@
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const byId = (id) => document.getElementById(id);
+
+  const MODE_INFO = {
+    INWARD: {
+      label: 'Inward',
+      requiresBin: true,
+      note: 'Use for parts coming into stock.'
+    },
+    OUTWARD: {
+      label: 'Outward',
+      requiresBin: false,
+      note: 'Bin is auto-detected by the backend.'
+    },
+    FITTED: {
+      label: 'Fitted',
+      requiresBin: false,
+      note: 'Fill vehicle and job card details after the camera scan.'
+    },
+    DAMAGE: {
+      label: 'Damage',
+      requiresBin: true,
+      note: 'Damaged stock needs a bin location.'
+    },
+    VERIFICATION: {
+      label: 'Verification',
+      requiresBin: false,
+      note: 'Quick verification scan. Part number is enough.'
+    }
+  };
 
   const state = {
     db: null,
@@ -57,34 +85,6 @@
     recommendedDealerCode: '',
     loginUrl: '/api/auth/mobile-login',
     zxingPromise: null
-  };
-
-  const MODE_INFO = {
-    INWARD: {
-      label: 'Inward',
-      requiresBin: true,
-      note: 'Use for parts coming into stock.'
-    },
-    OUTWARD: {
-      label: 'Outward',
-      requiresBin: false,
-      note: 'Bin is auto-detected by the backend.'
-    },
-    FITTED: {
-      label: 'Fitted',
-      requiresBin: false,
-      note: 'Fill vehicle and job card details after the camera scan.'
-    },
-    DAMAGE: {
-      label: 'Damage',
-      requiresBin: true,
-      note: 'Damaged stock needs a bin location.'
-    },
-    VERIFICATION: {
-      label: 'Verification',
-      requiresBin: false,
-      note: 'Quick verification scan. Part number is enough.'
-    }
   };
 
   const CLEARABLE_STATUSES = new Set(['synced', 'duplicate', 'failed-duplicate', 'invalid', 'rejected']);
