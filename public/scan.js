@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.1';
-  const CACHE_VERSION = '20260616-mobile-auth-hardening';
+  const CACHE_VERSION = '20260616-mobile-auth-cleanup';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -16,7 +16,7 @@
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-auth-hardening';
+  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-auth-cleanup';
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -1751,13 +1751,6 @@
       model: navigator.userAgent.slice(0, 120)
     };
 
-    console.log('Submitting mobile login:', {
-      dealerCode: payload.dealerCode,
-      login: payload.login,
-      hasPasswordOrPin: Boolean(payload.passwordOrPin),
-      deviceId: payload.deviceId,
-      deviceName: payload.deviceName
-    });
     byId('loginMessage').textContent = 'Signing in...';
     try {
       const response = await api(state.loginUrl || '/api/auth/mobile-login', {
@@ -1765,7 +1758,6 @@
         auth: false,
         body: payload
       });
-      console.log('Mobile login response:', response);
 
       if (!response.dealerCode && response.needsDealerSelection && showDealerSelection(response, payload)) {
         return;
