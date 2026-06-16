@@ -910,14 +910,14 @@ app.get(['/scan', '/scan/'], (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
-  res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
+  res.redirect(302, '/mobile-scanner');
 });
 
 app.get(['/mobile', '/mobile-scanner', '/mobile-scanner/'], (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
-  res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
+  res.sendFile(path.join(PUBLIC_DIR, 'mobile-scanner.html'));
 });
 
 app.get('/force-login', (req, res) => {
