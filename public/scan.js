@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.1';
-  const CACHE_VERSION = '20260616-mobile-login-dealer-dropdown';
+  const CACHE_VERSION = '20260616-mobile-auth-hardening';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -16,7 +16,7 @@
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-login-dealer-dropdown';
+  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-auth-hardening';
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -52,6 +52,7 @@
     loginConfigError: '',
     loginDealers: [],
     recommendedDealerCode: '',
+    loginUrl: '/api/auth/mobile-login',
     zxingPromise: null
   };
 
@@ -370,6 +371,7 @@
       const data = await api('/api/mobile/config', { auth: false });
       state.authReady = true;
       state.canonicalUrl = data.mobileScannerUrl || data.scanUrl || state.canonicalUrl;
+      state.loginUrl = data.loginUrl || state.loginUrl;
       state.recommendedDealerCode = upper(data.recommendedDealerCode || data.activeAudit?.dealerCode || '');
       state.loginDealers = normalizeLoginDealers(data.loginDealers || []);
       if (!state.loginDealers.length && state.recommendedDealerCode) {
@@ -1722,17 +1724,15 @@
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const selectedDealer = upper(form.get('dealerCode') || state.pendingLogin?.dealerCode || '');
-    const username = clean(form.get('username') || state.pendingLogin?.username || '');
-    const secret = clean(form.get('secret') || state.pendingLogin?.secret || '');
-    const password = secret;
-    const pin = secret;
+    const login = clean(form.get('login') || state.pendingLogin?.login || '');
+    const passwordOrPin = clean(form.get('passwordOrPin') || state.pendingLogin?.passwordOrPin || '');
     const deviceName = clean(form.get('deviceName')) || DEFAULT_DEVICE_NAME;
 
-    if (!username) {
+    if (!login) {
       byId('loginMessage').textContent = 'Enter your user ID.';
       return;
     }
-    if (!secret) {
+    if (!passwordOrPin) {
       byId('loginMessage').textContent = 'Enter your password or PIN.';
       return;
     }
@@ -1742,25 +1742,30 @@
     }
 
     const payload = {
-      ...(state.pendingLogin || {}),
-      username,
-      secret,
-      password,
-      pin,
       dealerCode: selectedDealer,
+      login,
+      passwordOrPin,
       deviceId: deviceId(),
       deviceName,
       appVersion: APP_VERSION,
       model: navigator.userAgent.slice(0, 120)
     };
 
+    console.log('Submitting mobile login:', {
+      dealerCode: payload.dealerCode,
+      login: payload.login,
+      hasPasswordOrPin: Boolean(payload.passwordOrPin),
+      deviceId: payload.deviceId,
+      deviceName: payload.deviceName
+    });
     byId('loginMessage').textContent = 'Signing in...';
     try {
-      const response = await api('/api/auth/mobile-login', {
+      const response = await api(state.loginUrl || '/api/auth/mobile-login', {
         method: 'POST',
         auth: false,
         body: payload
       });
+      console.log('Mobile login response:', response);
 
       if (!response.dealerCode && response.needsDealerSelection && showDealerSelection(response, payload)) {
         return;
@@ -1779,10 +1784,10 @@
         auditId: response.auditId || response.activeAudit?.auditId || state.session?.auditId || '',
         assignedDealers: response.assignedDealers || response.activeDealers || state.session?.assignedDealers || [],
         activeDealers: response.activeDealers || response.assignedDealers || state.session?.activeDealers || [],
-        loginId: response.user?.username || username,
+        loginId: response.user?.username || login,
         userId: response.user?.id || response.user?.userId || '',
-        userName: response.user?.name || response.user?.username || username,
-        staffName: response.user?.name || response.user?.username || username,
+        userName: response.user?.name || response.user?.username || login,
+        staffName: response.user?.name || response.user?.username || login,
         role: response.user?.role || ''
       };
 
@@ -1821,8 +1826,8 @@
     renderLoginDealers(state.recommendedDealerCode || payload.dealerCode || '');
     byId('loginMessage').textContent = 'Select a dealer code, then tap Sign In again.';
     state.pendingLogin = {
-      username: payload.username,
-      secret: payload.secret || payload.password || payload.pin || '',
+      login: payload.login || payload.username || '',
+      passwordOrPin: payload.passwordOrPin || payload.password || payload.pin || '',
       deviceName: payload.deviceName,
       dealerCode: upper(payload.dealerCode || response.requestedDealer || '')
     };

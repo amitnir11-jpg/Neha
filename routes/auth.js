@@ -7,6 +7,7 @@ const Dealer = require('../models/Dealer');
 const UserDealerMapping = require('../models/UserDealerMapping');
 const Setting = require('../models/Setting');
 const smtpConfig = require('../utils/smtpConfig');
+const { getActiveAudit, publicAudit } = require('../utils/audit');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
@@ -129,6 +130,20 @@ function duplicateEmailLoginError() {
   const error = new Error('This email ID is linked to multiple users. Please use the username.');
   error.status = 400;
   return error;
+}
+
+function redactMobileLoginBody(body = {}) {
+  const redacted = { ...body };
+  ['password', 'pin', 'secret', 'passwordOrPin'].forEach((field) => {
+    if (redacted[field] !== undefined && redacted[field] !== '') redacted[field] = '[redacted]';
+  });
+  return redacted;
+}
+
+const MOBILE_LOGIN_DEBUG = process.env.MOBILE_LOGIN_DEBUG === 'true';
+
+function debugMobileLogin(...args) {
+  if (MOBILE_LOGIN_DEBUG) console.log(...args);
 }
 
 async function findUserByLogin(value) {
@@ -508,8 +523,8 @@ function normalizePermissions(payload = {}) {
 router.post('/login', async (req, res) => {
   try {
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
-    const password = String(req.body.password || '');
-    const pin = String(req.body.pin || '').trim();
+    const password = String(req.body.password || req.body.passwordOrPin || '');
+    const pin = String(req.body.pin || req.body.passwordOrPin || '').trim();
     const user = await findUserByLogin(username);
 
     const ruleError = loginRuleError(user, ['admin', 'staff']);
@@ -551,50 +566,67 @@ router.post('/login', async (req, res) => {
 
 async function mobileLoginHandler(req, res) {
   try {
-    const dealerCode = normalizeAccessCode(req.body.dealerCode || req.body.activeDealerId);
-    const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
-    const password = String(req.body.password || '');
-    const pin = String(req.body.pin || '').trim();
-    if (!username) return res.status(400).json({ success: false, message: 'User ID is required' });
-    const user = await findUserByLogin(username);
-    const ruleError = loginRuleError(user);
-    if (ruleError) return res.status(401).json({ success: false, message: ruleError });
-    let valid = false;
-    if (password) valid = await compareAndUpgradeSecret(user, password, ['passwordHash', 'password']);
-    if (!valid && pin) valid = await compareAndUpgradeSecret(user, pin, ['pinHash', 'pin']);
-    if (!valid) return res.status(401).json({ success: false, message: 'Invalid password or PIN' });
+    debugMobileLogin('MOBILE_LOGIN_PAYLOAD', redactMobileLoginBody(req.body));
+    const dealerCode = normalizeAccessCode(req.body.dealerCode || req.body.activeDealerId || req.body.dealer || req.body.selectedDealerCode);
+    const login = cleanUsername(req.body.login || req.body.username || req.body.userId || req.body.email || req.body.loginId);
+    const secret = String(req.body.passwordOrPin || req.body.secret || req.body.password || req.body.pin || '').trim();
+    debugMobileLogin('LOGIN_VALUE', login);
+    debugMobileLogin('DEALER_CODE', dealerCode);
+    if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer code required' });
+    if (!login) return res.status(404).json({ success: false, message: 'User not found' });
+    if (!secret) return res.status(401).json({ success: false, message: 'Password/PIN incorrect' });
+
+    const user = await findUserByLogin(login);
+    debugMobileLogin('USER_FOUND', user ? user.username : null);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    debugMobileLogin('APPROVED', user?.approved);
+    if (!isUserApproved(user)) return res.status(403).json({ success: false, message: 'User not approved' });
+    debugMobileLogin('ACTIVE', user?.active);
+    if (!isUserActive(user)) return res.status(403).json({ success: false, message: 'User inactive' });
+
     const dealerAccess = await userDealerAccessCodes(user);
-    const assignedDealers = await activeDealersForUser(user);
-    const selectedDealer = dealerCode || (assignedDealers.length === 1 ? assignedDealers[0].dealerCode : '');
-    if (selectedDealer) {
-      const accessCheck = await validateUserDealerAccess(user, selectedDealer);
-      if (!accessCheck.userDealerAccess.length || !accessCheck.allowed) {
-        return res.status(403).json({
-          success: false,
-          error: 'Dealer access not assigned',
-          message: 'Dealer access not assigned',
-          requestedDealer: accessCheck.requestedDealer,
-          userDealerAccess: accessCheck.userDealerAccess
-        });
-      }
-      return res.json({
-        success: true,
-        token: signToken(user),
-        user: { ...publicUser(user), dealerAccess },
-        dealerCode: accessCheck.requestedDealer,
-        activeDealerId: accessCheck.requestedDealer,
-        assignedDealers,
-        activeDealers: assignedDealers
+    debugMobileLogin('DEALER_ACCESS', dealerAccess);
+    const accessCheck = await validateUserDealerAccess(user, dealerCode);
+    if (!accessCheck.allowed) {
+      return res.status(403).json({
+        success: false,
+        message: 'User does not have access to this dealer',
+        requestedDealer: accessCheck.requestedDealer,
+        userDealerAccess: accessCheck.userDealerAccess
       });
     }
+
+    let passwordMatch = await compareAndUpgradeSecret(user, secret, ['passwordHash', 'password']);
+    let pinMatch = false;
+    if (!passwordMatch) pinMatch = await compareAndUpgradeSecret(user, secret, ['pinHash', 'pin']);
+    debugMobileLogin('PASSWORD_MATCH', passwordMatch);
+    debugMobileLogin('PIN_MATCH', pinMatch);
+    if (!passwordMatch && !pinMatch) return res.status(401).json({ success: false, message: 'Password/PIN incorrect' });
+
+    const [assignedDealers, activeAudit, dealer] = await Promise.all([
+      activeDealersForUser(user),
+      getActiveAudit({ dealerCode: accessCheck.requestedDealer }).catch(() => null),
+      Dealer.findOne({ dealerCode: accessCheck.requestedDealer }).lean()
+    ]);
+
+    debugMobileLogin('LOGIN_SUCCESS', {
+      username: user.username,
+      dealerCode: accessCheck.requestedDealer,
+      auditId: activeAudit ? activeAudit.auditId : ''
+    });
+
     return res.json({
       success: true,
+      message: 'Login successful',
       token: signToken(user),
       user: { ...publicUser(user), dealerAccess },
+      dealerCode: accessCheck.requestedDealer,
+      activeDealerId: accessCheck.requestedDealer,
+      dealerName: dealer?.dealerName || '',
+      auditId: activeAudit ? activeAudit.auditId : '',
+      activeAudit: activeAudit ? publicAudit(activeAudit) : null,
       assignedDealers,
-      activeDealers: assignedDealers,
-      needsDealerSelection: true,
-      message: 'Select dealer first'
+      activeDealers: assignedDealers
     });
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });
