@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260616-master-user-actions-delete-fix';
+  const UI_BOOT_VERSION = '20260616-scan-local-first-sync';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
