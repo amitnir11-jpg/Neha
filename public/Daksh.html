@@ -14,7 +14,7 @@
       if (width >= 132) document.documentElement.classList.add('sidebar-wide-initial');
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260613-dashboard-performance">
+  <link rel="stylesheet" href="/style.css?v=20260616-user-create-hardening">
 </head>
 <body class="app-booting dashboard-view-active">
   <script>
@@ -1025,9 +1025,15 @@
             <label class="toggle"><input name="approved" type="checkbox" checked>Approve login now</label>
             <label class="toggle"><input name="active" type="checkbox" checked>Active</label>
             <div class="actions span-3">
-              <button class="btn primary" type="submit">Create User</button>
+              <button id="createUserSubmitButton" class="btn primary" type="submit">Create User</button>
+              <span id="createUserMessage" class="form-message create-user-message" aria-live="polite"></span>
             </div>
           </form>
+          <div class="metric-grid user-summary-grid">
+            <div class="metric mini"><span>Total Users</span><strong id="userSummaryTotal">0</strong></div>
+            <div class="metric mini"><span>Approved</span><strong id="userSummaryApproved">0</strong></div>
+            <div class="metric mini"><span>Active</span><strong id="userSummaryActive">0</strong></div>
+          </div>
           <div class="table-wrap user-management-table-wrap">
             <table class="user-management-table">
               <thead>
@@ -1337,8 +1343,8 @@
   </div>
   <div id="toast" class="toast"></div>
 
-  <script src="/js/cache-reset.js?v=20260616-report-dealer-fix"></script>
+  <script src="/js/cache-reset.js?v=20260616-user-create-hardening"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.legacy.js?v=20260616-report-dealer-fix"></script>
+  <script src="/ui.legacy.js?v=20260616-user-create-hardening"></script>
 </body>
 </html>

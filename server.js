@@ -1580,14 +1580,56 @@ async function fixUserIndexes() {
     const collection = mongoose.connection.db.collection('users');
     const indexes = await collection.indexes();
     for (const index of indexes) {
-      const isEmailOnlyIndex = index.key && Object.keys(index.key).length === 1 && index.key.email === 1;
-      const isOldEmailIndex = isEmailOnlyIndex && (index.unique || index.name !== 'email_1' || index.sparse !== true);
-      if (isOldEmailIndex) {
-        await collection.dropIndex(index.name);
+      const keyNames = index.key ? Object.keys(index.key) : [];
+      const isUsernameOnlyIndex = keyNames.length === 1 && index.key.username === 1;
+      const isEmailOnlyIndex = keyNames.length === 1 && index.key.email === 1;
+      const shouldDropUsernameIndex = isUsernameOnlyIndex && (index.unique !== true || index.name !== 'username_1' || index.sparse !== true);
+      const shouldDropEmailIndex = isEmailOnlyIndex && (index.unique !== true || index.name !== 'email_1' || index.sparse !== true);
+      if (shouldDropUsernameIndex || shouldDropEmailIndex) {
+        try {
+          await collection.dropIndex(index.name);
+        } catch (dropError) {
+          console.warn(`User index drop skipped for ${index.name}:`, dropError.message);
+        }
       }
     }
+    const duplicateEmailGroups = await collection.aggregate([
+      { $match: { email: { $type: 'string', $ne: '' } } },
+      { $group: { _id: '$email', ids: { $push: '$_id' } } },
+      { $match: { 'ids.1': { $exists: true } } }
+    ]).toArray();
+    for (const group of duplicateEmailGroups) {
+      const users = await collection.find({ email: group._id }).toArray();
+      if (users.length <= 1) continue;
+      users.sort((left, right) => {
+        const score = (user) => {
+          const role = String(user.role || '').toLowerCase();
+          return [
+            role === 'admin' ? 3 : 0,
+            user.approved === false ? 0 : 2,
+            user.active === false && user.isActive === false ? 0 : 1
+          ];
+        };
+        const leftScore = score(left);
+        const rightScore = score(right);
+        for (let i = 0; i < leftScore.length; i += 1) {
+          if (rightScore[i] !== leftScore[i]) return rightScore[i] - leftScore[i];
+        }
+        const leftCreatedAt = left.createdAt ? new Date(left.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+        const rightCreatedAt = right.createdAt ? new Date(right.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
+        if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt;
+        return String(left._id).localeCompare(String(right._id));
+      });
+      const [winner, ...losers] = users;
+      if (!losers.length) continue;
+      await Promise.all(losers.map((user) => collection.updateOne({ _id: user._id }, { $unset: { email: '' } })));
+      console.warn(`Cleared duplicate email from ${losers.length} user record(s) for ${group._id}; kept ${winner.username || winner._id}.`);
+    }
+    if (duplicateEmailGroups.length) {
+      console.warn(`User email cleanup processed ${duplicateEmailGroups.length} duplicate email group(s).`);
+    }
     await collection.createIndex({ username: 1 }, { name: 'username_1', unique: true, sparse: true });
-    await collection.createIndex({ email: 1 }, { name: 'email_1', sparse: true });
+    await collection.createIndex({ email: 1 }, { name: 'email_1', unique: true, sparse: true });
   } catch (error) {
     console.warn('User index cleanup skipped:', error.message);
   }

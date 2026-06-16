@@ -180,6 +180,31 @@ function dealerAccessIncludes(dealerAccess, dealerCode) {
   };
 }
 
+async function findUserCreationConflict({ username, email, excludeId = '' }) {
+  const criteria = [];
+  if (username) criteria.push({ username });
+  if (email) criteria.push({ email });
+  if (!criteria.length) return null;
+
+  const query = criteria.length === 1
+    ? criteria[0]
+    : { $or: criteria };
+  if (excludeId) query._id = { $ne: excludeId };
+
+  const matches = await User.find(query).select('username email').lean();
+  const usernameMatch = matches.find((user) => cleanUsername(user.username) === username);
+  if (usernameMatch) {
+    return new Error('Username already exists.');
+  }
+  if (email) {
+    const emailMatch = matches.find((user) => cleanEmail(user.email) === email);
+    if (emailMatch) {
+      return new Error('Email already registered.');
+    }
+  }
+  return null;
+}
+
 async function syncUserDealerMappings(userId, dealerAccess = []) {
   const normalized = normalizeDealerAccess(dealerAccess);
   if (!userId) return normalized;
@@ -449,8 +474,8 @@ async function createUserFromPayload(payload, defaults = {}) {
   if (role === 'admin' && !password) throw new Error('Admin users require a password');
   if (['staff', 'mobile_user'].includes(role) && !pin && !password) throw new Error('Staff and Mobile users require a password or 4-digit PIN');
 
-  const duplicate = await User.findOne({ username }).lean();
-  if (duplicate) throw new Error('Username already exists');
+  const duplicate = await findUserCreationConflict({ username, email });
+  if (duplicate) throw duplicate;
 
   const userPayload = {
     username,
@@ -482,7 +507,19 @@ async function createUserFromPayload(payload, defaults = {}) {
   }
   if (!user.passwordHash && !user.pinHash && !user.password && !user.pin) throw new Error('Password or 4-digit PIN is required');
 
-  await user.save();
+  try {
+    await user.save();
+  } catch (error) {
+    if (error && Number(error.code) === 11000) {
+      const duplicateField = error.keyPattern && Object.keys(error.keyPattern)[0]
+        ? Object.keys(error.keyPattern)[0]
+        : Object.keys(error.keyValue || {})[0];
+      if (duplicateField === 'email') throw new Error('Email already registered.');
+      if (duplicateField === 'username') throw new Error('Username already exists.');
+      throw new Error('User already exists.');
+    }
+    throw error;
+  }
   await syncUserDealerMappings(user._id, user.dealerAccess);
   return user;
 }
@@ -675,7 +712,8 @@ router.post('/register', async (req, res) => {
       user: cleanPublicUser(user)
     });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    const duplicate = /already exists|already registered/i.test(error.message || '') || Number(error.code) === 11000;
+    res.status(duplicate ? 409 : 400).json({ success: false, message: error.message });
   }
 });
 
@@ -789,7 +827,8 @@ router.post(['/users', '/users/create'], requireAuth, requireAdmin, async (req, 
     const dealerAccess = await userDealerAccessCodes(user);
     res.status(201).json({ success: true, user: { ...cleanPublicUser(user), dealerAccess } });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    const duplicate = /already exists|already registered/i.test(error.message || '') || Number(error.code) === 11000;
+    res.status(duplicate ? 409 : 400).json({ success: false, message: error.message });
   }
 });
 
@@ -879,11 +918,14 @@ router.post('/users/:id/email', requireAuth, requireAdmin, async (req, res) => {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ success: false, message: 'Valid email ID is required' });
     }
+    const duplicate = await findUserCreationConflict({ email, excludeId: req.params.id });
+    if (duplicate) throw duplicate;
     const user = await User.findByIdAndUpdate(req.params.id, { email }, { new: true, runValidators: true });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
     res.json({ success: true, user: cleanPublicUser(user) });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    const duplicate = /already exists|already registered/i.test(error.message || '') || Number(error.code) === 11000;
+    res.status(duplicate ? 409 : 500).json({ success: false, message: error.message });
   }
 });
 
