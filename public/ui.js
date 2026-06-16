@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260616-master-user-refresh-fix';
+  const UI_BOOT_VERSION = '20260616-mobile-autocamera-compact-fix';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),

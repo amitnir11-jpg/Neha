@@ -1,6 +1,6 @@
 (function () {
-  const APP_VERSION = 'Daksh Fresh Web Scanner v1.1.0';
-  const CACHE_VERSION = '20260616-mobile-login-dealer-fix';
+  const APP_VERSION = 'Daksh Fresh Web Scanner v1.2.0';
+  const CACHE_VERSION = '20260616-mobile-autocamera-compact-fix';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -16,7 +16,8 @@
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-login-dealer-fix';
+  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-autocamera-compact-fix';
+  const CAMERA_RETRY_MS = 1400;
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -66,6 +67,10 @@
     syncTimer: null,
     heartbeatTimer: null,
     cameraTimer: null,
+    cameraRetryTimer: null,
+    cameraStream: null,
+    nativeDetector: null,
+    nativeScanTimer: null,
     lastDecodeAtByKey: new Map(),
     recentCleanupTimer: null,
     manualRaw: '',
@@ -293,8 +298,121 @@
     const compact = text.replace(/[^A-Z0-9._\/-]+/g, ' ').trim();
     const collapsed = compact.replace(/\s+/g, '');
     if (/^[A-Z0-9][A-Z0-9._\/-]{2,39}$/.test(collapsed)) return collapsed;
-    if (compact && compact.length <= 60) return compact;
-    return text.slice(0, 60);
+    if (compact) {
+      const words = compact.split(/\s+/).filter(Boolean);
+      if (words.length <= 2 && collapsed.length >= 3 && collapsed.length <= 40) return collapsed;
+    }
+    return '';
+  }
+
+  function normalizeScanKey(raw = '') {
+    return clean(raw).replace(/\s+/g, ' ').toUpperCase();
+  }
+
+  function findDuplicateScan(raw = '') {
+    const normalized = normalizeScanKey(raw);
+    if (!normalized) return null;
+    return sessionRows().find((row) => {
+      const candidates = [
+        row.rawScanString,
+        row.rawScan,
+        row.rawBarcode,
+        row.rawQR,
+        row.rawUpi
+      ].map((value) => normalizeScanKey(value));
+      return candidates.includes(normalized);
+    }) || null;
+  }
+
+  function cameraConstraints(deviceIdValue = '') {
+    const selected = clean(deviceIdValue || '').trim();
+    const video = selected
+      ? {
+          deviceId: { exact: selected },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 15, max: 30 }
+        }
+      : {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 15, max: 30 }
+        };
+    return { audio: false, video };
+  }
+
+  function clearCameraTimers() {
+    clearTimeout(state.cameraTimer);
+    clearTimeout(state.cameraRetryTimer);
+    clearInterval(state.nativeScanTimer);
+    state.cameraTimer = null;
+    state.cameraRetryTimer = null;
+    state.nativeScanTimer = null;
+  }
+
+  function releaseCameraStream() {
+    if (state.cameraStream) {
+      try {
+        state.cameraStream.getTracks().forEach((track) => track.stop());
+      } catch (_) {}
+      state.cameraStream = null;
+    }
+    state.nativeDetector = null;
+  }
+
+  function stopCameraResources() {
+    if (state.scanReader) {
+      try {
+        state.scanReader.stopContinuousDecode();
+      } catch (_) {}
+      try {
+        state.scanReader.reset();
+      } catch (_) {}
+    }
+    const video = byId('cameraPreview');
+    if (video) {
+      try {
+        video.pause();
+      } catch (_) {}
+      video.srcObject = null;
+    }
+    clearCameraTimers();
+    releaseCameraStream();
+  }
+
+  function cameraFailureMessage(error) {
+    const name = clean(error?.name || '');
+    const message = clean(error?.message || '');
+    const joined = `${name} ${message}`.trim().toLowerCase();
+    if (/notallowed|permission|denied/.test(joined)) {
+      return 'Camera permission was denied. Allow camera access to continue.';
+    }
+    if (/notfound|devicesnotfound|overconstrained|notreadable|abort/.test(joined)) {
+      return 'Unable to open the back camera. Try another camera or restart scanning.';
+    }
+    if (!isSecureScannerContext()) {
+      return 'Open the secure Railway URL to use the camera.';
+    }
+    return message || 'Camera failed to start';
+  }
+
+  function shouldRetryCamera(error) {
+    const text = `${clean(error?.name || '')} ${clean(error?.message || '')}`.toLowerCase();
+    if (!state.session?.token || state.paused || !state.cameraRequested) return false;
+    if (/notallowed|permission|denied|secure|https/.test(text)) return false;
+    return true;
+  }
+
+  function scheduleCameraRestart(delay = CAMERA_RETRY_MS) {
+    if (!shouldRetryCamera()) return;
+    clearTimeout(state.cameraRetryTimer);
+    state.cameraRetryTimer = setTimeout(() => {
+      state.cameraRetryTimer = null;
+      if (state.session?.token && state.cameraRequested && !state.paused) {
+        startCamera().catch(() => undefined);
+      }
+    }, delay);
   }
 
   function parseRawPreview(raw = '') {
@@ -596,6 +714,8 @@
     const userLabel = clean(user.name || user.username || state.session?.userName || 'User');
     const sessionLabel = dealerCode ? `${dealerCode}${dealerName ? ` - ${dealerName}` : ''}` : 'Dealer not loaded';
     byId('sessionDealerLabel').textContent = sessionLabel;
+    const compactDealer = byId('sessionDealerLabelCompact');
+    if (compactDealer) compactDealer.textContent = sessionLabel;
     byId('sessionUserLabel').textContent = state.session?.token
       ? `${userLabel} · ${deviceId()}`
       : 'Login to start scanning';
@@ -606,13 +726,15 @@
 
   function renderServerSummary() {
     const health = state.health || {};
-    const parts = [];
-    if (health.status || health.serverStatus) parts.push(`Server ${health.status || health.serverStatus}`);
-    if (health.mongoStatus || health.mongodb) parts.push(`DB ${health.mongoStatus || health.mongodb}`);
+    const serverOnline = health.server === 'online' || health.serverStatus === 'online' || /^(ok|online|healthy)$/i.test(String(health.status || ''));
+    const dbOnline = health.mongoStatus === 'online' || health.mongodb === 'online' || health.db === 'connected';
+    const serverLabel = serverOnline ? 'Server OK' : clean(health.serverStatus || health.server || health.status || 'Server offline');
+    const dbLabel = dbOnline ? 'DB Online' : clean(health.mongoStatus || health.mongodb || health.db || 'DB Offline');
+    const parts = [`${serverLabel}`, `${dbLabel}`];
     if (Number.isFinite(Number(health.connectedDevices))) parts.push(`Devices ${Number(health.connectedDevices)}`);
-    if (health.lastSyncTime) parts.push(`Last sync ${fmtTime(health.lastSyncTime)}`);
-    if (!parts.length) parts.push('Server status unavailable');
-    byId('serverStateLabel').textContent = parts.join(' · ');
+    byId('serverStateLabel').textContent = parts.join(' | ');
+    const compactState = byId('serverStateLabelCompact');
+    if (compactState) compactState.textContent = parts.join(' | ');
   }
 
   function renderModeButtons() {
@@ -625,7 +747,7 @@
     const info = currentModeInfo();
     const cameraHint = byId('cameraHint');
     cameraHint.textContent = isSecureScannerContext()
-      ? info.note
+      ? `${info.note} Camera starts automatically after login.`
       : 'Camera access is blocked on non-HTTPS pages. Use the secure Railway scanner URL.';
     const manualNote = byId('manualNote');
     manualNote.textContent = info.note;
@@ -668,12 +790,14 @@
     const panel = byId('binPanel');
     const input = byId('activeBinLocation');
     const message = byId('binPanelMessage');
+    const summary = byId('sessionBinLabel');
     const info = currentModeInfo();
     const current = loadActiveBin();
     if (!panel || !input || !message) return;
 
     panel.classList.toggle('hidden', !info.requiresBin && state.mode !== 'OUTWARD');
     input.value = current;
+    if (summary) summary.textContent = current || (info.requiresBin ? 'Bin needed' : 'No bin needed');
     input.required = info.requiresBin;
     if (info.requiresBin) {
       const ready = Boolean(current);
@@ -742,7 +866,7 @@
     }
     body.innerHTML = rows.map((row) => {
       const status = rowStatus(row);
-      const statusLabel = status === 'failed-duplicate' ? 'Duplicate' : status || 'pending';
+      const statusLabel = status === 'synced' ? 'Synced' : status === 'failed-duplicate' || status === 'duplicate' ? 'Duplicate already scanned' : status === 'failed' ? 'Sync failed' : 'Saved';
       const time = fmtTime(row.mobileCreatedAt || row.timestamp || row.createdAt);
       const title = escapeHtml(row.syncError || '');
       return `
@@ -784,26 +908,53 @@
   }
 
   function stopCamera({ preserveRequest = false } = {}) {
-    if (state.scanReader) {
-      try {
-        state.scanReader.stopContinuousDecode();
-      } catch (_) {}
-      try {
-        state.scanReader.reset();
-      } catch (_) {}
-    }
-    const video = byId('cameraPreview');
-    if (video) {
-      try {
-        video.pause();
-      } catch (_) {}
-      video.srcObject = null;
-    }
-    clearTimeout(state.cameraTimer);
-    state.cameraTimer = null;
+    stopCameraResources();
     state.scanning = false;
     if (!preserveRequest) state.cameraRequested = false;
     cameraState(state.paused ? 'Paused' : preserveRequest ? 'Camera stopped' : 'Camera stopped');
+  }
+
+  async function nativeBarcodeFormats() {
+    if (!window.BarcodeDetector) return [];
+    if (typeof window.BarcodeDetector.getSupportedFormats !== 'function') {
+      return ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf', 'codabar', 'pdf417', 'aztec', 'data_matrix'];
+    }
+    const supported = await window.BarcodeDetector.getSupportedFormats().catch(() => []);
+    const desired = new Set(['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf', 'codabar', 'pdf417', 'aztec', 'data_matrix']);
+    return supported.filter((format) => desired.has(format));
+  }
+
+  async function startNativeDetector(video, constraints) {
+    const formats = await nativeBarcodeFormats();
+    if (!formats.length) return false;
+    const detector = new BarcodeDetector({ formats });
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    state.cameraStream = stream;
+    state.nativeDetector = detector;
+    video.srcObject = stream;
+    try {
+      await video.play();
+    } catch (_) {}
+    const tick = async () => {
+      if (!state.scanning || state.paused || !state.cameraRequested || !state.nativeDetector) return;
+      const results = await state.nativeDetector.detect(video);
+      if (Array.isArray(results) && results.length) {
+        const code = clean(results[0].rawValue || '');
+        if (code) handleDecodeResult({ rawValue: code });
+      }
+    };
+    state.nativeScanTimer = setInterval(() => {
+      tick().catch((error) => {
+        if (!state.scanning) return;
+        stopCameraResources();
+        state.scanning = false;
+        const message = cameraFailureMessage(error);
+        cameraState(message);
+        toast(message, 'error');
+        if (shouldRetryCamera(error)) scheduleCameraRestart();
+      });
+    }, 80);
+    return true;
   }
 
   async function loadZxingLibrary() {
@@ -869,7 +1020,7 @@
     ].filter(Boolean);
     hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
     hints.set(DecodeHintType.TRY_HARDER, true);
-    state.scanReader = new BrowserMultiFormatReader(hints, 120);
+    state.scanReader = new BrowserMultiFormatReader(hints, 80);
     return state.scanReader;
   }
 
@@ -1000,7 +1151,7 @@
       `Qty ${fmtNumber(qty)}`,
       bin ? `Bin ${bin}` : '',
       mrp > 0 ? `MRP ${fmtNumber(mrp)}` : '',
-      status === 'synced' ? 'Synced to server' : status === 'duplicate' || status === 'failed-duplicate' ? 'Duplicate rejected' : status === 'failed' ? 'Sync failed' : 'Queued for sync'
+      status === 'synced' ? 'Synced' : status === 'duplicate' || status === 'failed-duplicate' ? 'Duplicate already scanned' : status === 'failed' ? 'Sync failed' : 'Saved'
     ].filter(Boolean).join(' · ');
   }
 
@@ -1014,7 +1165,7 @@
     state.allRows = await getAllRecords();
     applyRecordToUi(record);
     if (!silent) {
-      toast(state.paused ? 'Saved locally' : navigator.onLine ? 'Saved locally. Sync starting...' : 'Saved locally. Will sync when online.', 'success');
+      toast('Saved', 'success');
       beep('ok');
       vibrate(40);
     }
@@ -1210,35 +1361,57 @@
       cameraState('Camera API unavailable. Use manual entry.');
       return;
     }
-    stopCamera({ preserveRequest: true });
+    stopCameraResources();
+    clearTimeout(state.cameraRetryTimer);
+    state.cameraRetryTimer = null;
     state.cameraRequested = true;
     state.paused = false;
     state.scanning = true;
     const video = byId('cameraPreview');
     const selected = state.selectedCameraId || preferredCameraId(state.cameraDevices || []);
-    cameraState('Loading scanner library...');
+    const constraints = cameraConstraints(selected);
+    cameraState('Opening back camera...');
     try {
-      const reader = await ensureReader();
-      cameraState('Starting camera...');
-      const promise = reader.decodeFromVideoDevice(selected || null, video, (result) => {
-        if (result) handleDecodeResult(result);
-      });
-      promise.catch((error) => {
-        if (state.scanning) {
+      const usedNativeDetector = window.BarcodeDetector && await startNativeDetector(video, constraints).catch(() => false);
+      if (!usedNativeDetector) {
+        const reader = await ensureReader();
+        cameraState('Opening back camera...');
+        const promise = reader.decodeFromConstraints(constraints, video, (result) => {
+          if (result) handleDecodeResult(result);
+        });
+        promise.catch((error) => {
+          if (!state.scanning) return;
+          stopCameraResources();
           state.scanning = false;
-          const message = error?.message || 'Camera failed to start';
+          const message = cameraFailureMessage(error);
           cameraState(message);
           toast(message, 'error');
-        }
-      });
+          if (shouldRetryCamera(error)) {
+            if (/notfound|devicesnotfound|overconstrained/i.test(`${clean(error?.name || '')} ${clean(error?.message || '')}`)) {
+              setSelectedCamera('');
+            }
+            scheduleCameraRestart();
+          }
+        });
+      }
       state.cameraTimer = setTimeout(() => {
         if (state.scanning) cameraState('Scanning');
       }, 400);
       renderCameraListSoon();
+      return true;
     } catch (error) {
+      stopCameraResources();
       state.scanning = false;
-      cameraState(error.message || 'Camera failed to start');
-      toast(error.message || 'Camera failed to start', 'error');
+      const message = cameraFailureMessage(error);
+      cameraState(message);
+      toast(message, 'error');
+      if (shouldRetryCamera(error)) {
+        if (/notfound|devicesnotfound|overconstrained/i.test(`${clean(error?.name || '')} ${clean(error?.message || '')}`)) {
+          setSelectedCamera('');
+        }
+        scheduleCameraRestart();
+      }
+      return false;
     }
   }
 
@@ -1278,6 +1451,22 @@
       return;
     }
     const partCandidate = parsePartCandidate(raw);
+    if (!partCandidate) {
+      cameraState('Invalid QR');
+      toast('Invalid QR', 'error');
+      beep('error');
+      vibrate(60);
+      return;
+    }
+    const duplicateRow = findDuplicateScan(raw);
+    if (duplicateRow) {
+      cameraState('Duplicate already scanned');
+      toast('Duplicate already scanned', 'warning');
+      beep('duplicate');
+      vibrate([20, 40, 20]);
+      updateLastScan(duplicateRow);
+      return;
+    }
     if (requiresBin() && !ensureActiveBinReady()) {
       return;
     }
@@ -1290,7 +1479,7 @@
     state.saveInFlight = true;
     try {
       await saveRecord(record);
-      cameraState('Scan captured');
+      cameraState('Saved');
       byId('manualRawPreview').hidden = true;
     } catch (error) {
       toast(error.message || 'Unable to save scan', 'error');
@@ -1365,7 +1554,7 @@
             syncError: message,
             retryCount: Number(row.retryCount || 0)
           });
-          if (!silent) toast(message, 'warning');
+          if (!silent) toast('Duplicate already scanned', 'warning');
           continue;
         }
         if (failedLogs.has(key) || failedLogs.has(clean(row.clientScanId || ''))) {
@@ -1391,10 +1580,10 @@
       }
 
       storageSet(LAST_SYNC_KEY, nowIso());
-      if (!silent) toast(response.message || 'Sync complete', 'success');
+      if (!silent) toast('Synced', 'success');
       sendHeartbeat().catch(() => undefined);
       if (response.duplicateCount && !silent) {
-        toast(`${response.duplicateCount} duplicate scan(s) skipped`, 'warning');
+        toast('Duplicate already scanned', 'warning');
       }
     } catch (error) {
       if (authExpired(error)) {
@@ -1409,6 +1598,7 @@
       const duplicateMap = new Map(logs
         .filter((log) => log.status === 'duplicate')
         .map((log) => [clean(log.clientScanId || log.localId || log.mobileScanId || log.scanId), clean(log.errorMessage || log.reason || error.message)]));
+      const duplicateDetected = duplicateMap.size > 0;
 
       for (const row of batch) {
         const key = clean(row.scanId);
@@ -1438,7 +1628,10 @@
           });
         }
       }
-      if (!silent) toast(retryable ? 'Network/server issue. Scans remain queued.' : error.message, retryable ? 'warning' : 'error');
+      if (!silent) {
+        if (duplicateDetected) toast('Duplicate already scanned', 'warning');
+        else toast(retryable ? 'Server not reachable. Please check internet or try again.' : error.message, retryable ? 'warning' : 'error');
+      }
     } finally {
       state.syncRunning = false;
       state.allRows = await getAllRecords().catch(() => []);
@@ -1842,16 +2035,14 @@
       setLoginMessage(response.message || 'Login successful.', 'success');
       const dealerSelect = byId('loginDealerSelect');
       if (dealerSelect && session.dealerCode) dealerSelect.value = upper(session.dealerCode);
-      state.cameraRequested = false;
+      state.cameraRequested = true;
       state.paused = false;
       updateScannerPanel();
       await refreshSessionContext();
       await refreshHealth();
       state.allRows = await getAllRecords().catch(() => []);
       renderAll();
-      byId('cameraState').textContent = isSecureScannerContext()
-        ? 'Tap Start Camera to begin scanning'
-        : 'Camera is blocked on this HTTP page. Use the secure scanner URL.';
+      await startCamera();
       startTimers();
       toast('Login successful', 'success');
       sendHeartbeat().catch(() => undefined);
@@ -1950,15 +2141,14 @@
     if (state.session?.token) {
       byId('loginPanel').classList.add('hidden');
       byId('scannerPanel').classList.remove('hidden');
-      state.cameraRequested = false;
+      state.cameraRequested = true;
+      state.paused = false;
       await refreshSessionContext();
       await refreshHealth();
       state.allRows = await getAllRecords().catch(() => []);
       renderAll();
+      await startCamera();
       startTimers();
-      byId('cameraState').textContent = isSecureScannerContext()
-        ? 'Tap Start Camera to begin scanning'
-        : 'Camera is blocked on this HTTP page. Use the secure scanner URL.';
     } else {
       byId('scannerPanel').classList.add('hidden');
       byId('loginPanel').classList.remove('hidden');

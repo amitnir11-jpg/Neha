@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>Daksh Scan</title>
-  <link rel="stylesheet" href="/scan.css?v=20260616-mobile-login-dealer-fix">
+  <link rel="stylesheet" href="/scan.css?v=20260616-mobile-autocamera-compact-fix">
 </head>
 <body class="scan-page">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -97,6 +97,21 @@
         </div>
       </div>
 
+      <div class="scanner-context-strip" aria-label="Current scanner context">
+        <div class="context-chip">
+          <span>Dealer</span>
+          <strong id="sessionDealerLabelCompact">Dealer not loaded</strong>
+        </div>
+        <div class="context-chip">
+          <span>Bin</span>
+          <strong id="sessionBinLabel">Not set</strong>
+        </div>
+        <div class="context-chip">
+          <span>Status</span>
+          <strong id="serverStateLabelCompact">Server status will appear here</strong>
+        </div>
+      </div>
+
       <div class="url-strip">
         <div>
           <span class="mini-label">Scanner URL</span>
@@ -142,13 +157,13 @@
             <video id="cameraPreview" playsinline muted autoplay></video>
             <div class="scan-frame" aria-hidden="true"></div>
             <div class="camera-overlay">
-              <span id="cameraState">Tap Start Camera to begin scanning</span>
-              <small id="cameraHint">HTTPS is required on mobile devices for camera access.</small>
+              <span id="cameraState">Camera starts automatically after login</span>
+              <small id="cameraHint">Allow camera access when prompted.</small>
             </div>
           </div>
 
           <div class="control-row">
-            <button id="startScanBtn" class="btn btn-primary" type="button">Start Camera</button>
+            <button id="startScanBtn" class="btn btn-primary" type="button">Restart Camera</button>
             <button id="pauseScanBtn" class="btn btn-secondary" type="button">Pause</button>
             <button id="resumeScanBtn" class="btn btn-secondary" type="button">Resume</button>
             <button id="manualBtn" class="btn btn-secondary" type="button">Manual Entry</button>
@@ -267,7 +282,7 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="/js/cache-reset.js?v=20260616-master-user-refresh-fix"></script>
-  <script src="/scan.legacy.js?v=20260616-master-user-refresh-fix"></script>
+  <script src="/js/cache-reset.js?v=20260616-mobile-autocamera-compact-fix"></script>
+  <script src="/scan.legacy.js?v=20260616-mobile-autocamera-compact-fix"></script>
 </body>
 </html>
