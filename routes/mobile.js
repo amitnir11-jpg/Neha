@@ -266,116 +266,7 @@ function mobileItem(scan) {
 router.post('/connect', auth.optionalAuth, devices.connectHandler);
 router.post('/heartbeat', auth.optionalAuth, devices.heartbeatHandler);
 
-router.post('/login', async (req, res) => {
-  try {
-    const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
-    const password = String(req.body.password || '');
-    const pin = String(req.body.pin || '').trim();
-    const dealerCode = auth.normalizeAccessCode(req.body.dealerCode || req.body.activeDealerId);
-    const deviceId = clean(req.body.deviceId);
-
-    if (!username) return res.status(400).json({ success: false, message: 'User ID is required' });
-    if (!password && !pin) return res.status(400).json({ success: false, message: 'Password or PIN is required' });
-
-    const user = await findUserByLogin(username);
-    if (!user) return res.status(401).json({ success: false, message: 'Invalid username, password, or PIN' });
-    if (!userIsApproved(user)) return res.status(403).json({ success: false, message: 'Login not approved. Please contact administrator.' });
-    if (!userIsActive(user)) return res.status(403).json({ success: false, message: 'User is blocked/inactive. Please contact administrator.' });
-
-    let valid = false;
-    if (password) valid = await compareSecret(user, password, ['passwordHash', 'password']);
-    if (!valid && pin) valid = await compareSecret(user, pin, ['pinHash', 'pin']);
-    if (!valid) return res.status(401).json({ success: false, message: 'Invalid username, password, or PIN' });
-
-    const assignedDealers = await auth.activeDealersForUser(user);
-    const selectedDealer = dealerCode || (assignedDealers.length === 1 ? assignedDealers[0].dealerCode : '');
-    const dealerAccess = await auth.userDealerAccessCodes(user);
-    const publicUser = { ...auth.publicUser(user), dealerAccess };
-    const token = signMobileToken(user);
-    if (!selectedDealer) {
-      return res.json({
-        success: true,
-        token,
-        expiresIn: '12h',
-        user: publicUser,
-        assignedDealers,
-        activeDealers: assignedDealers,
-        needsDealerSelection: true,
-        appVersion: MOBILE_APP_VERSION,
-        message: 'Select dealer first'
-      });
-    }
-
-    const access = await dealerAccessForUser(user, selectedDealer);
-    if (!access.allowed) {
-      return res.status(403).json({
-        success: false,
-        message: 'Dealer access not assigned',
-        requestedDealer: access.requestedDealer,
-        userDealerAccess: access.userDealerAccess
-      });
-    }
-
-    const existingDevice = deviceId ? await Device.findOne({ deviceId }).lean() : null;
-    if (existingDevice && existingDevice.approved === false) {
-      return res.status(403).json({ success: false, message: 'This mobile device is blocked by admin.' });
-    }
-
-    const [dealer, activeAudit] = await Promise.all([
-      Dealer.findOne({ dealerCode: access.requestedDealer }).lean(),
-      getActiveAudit({ dealerCode: access.requestedDealer }).catch(() => null)
-    ]);
-    if (deviceId) {
-      await Device.findOneAndUpdate(
-        { deviceId },
-        {
-          deviceId,
-          deviceName: clean(req.body.deviceName || 'Daksh Android Scanner'),
-          model: clean(req.body.model || 'Android'),
-          deviceType: 'mobile',
-          connectionMethod: 'mobile_camera',
-          approved: true,
-          dealerCode: access.requestedDealer,
-          dealerName: dealer?.dealerName || '',
-          auditId: activeAudit ? activeAudit.auditId : '',
-          userId: String(publicUser.id || ''),
-          loginId: publicUser.username || '',
-          userName: publicUser.name || publicUser.username || '',
-          staffName: publicUser.name || publicUser.username || '',
-          role: publicUser.role || '',
-          appVersion: clean(req.body.appVersion || MOBILE_APP_VERSION),
-          status: 'online',
-          scannerStatus: 'ready',
-          healthStatus: 'healthy',
-          lastSeen: new Date(),
-          connectedAt: new Date(),
-          pendingCount: 0,
-          failedCount: 0
-        },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
-      req.app.get('io')?.emit('devices:update', { deviceId, at: new Date() });
-    }
-
-    return res.json({
-      success: true,
-      token,
-      expiresIn: '12h',
-      user: publicUser,
-      dealerCode: access.requestedDealer,
-      activeDealerId: access.requestedDealer,
-      dealerName: dealer?.dealerName || '',
-      assignedDealers,
-      activeDealers: assignedDealers,
-      activeAudit: activeAudit ? publicAudit(activeAudit) : null,
-      auditId: activeAudit ? clean(activeAudit.auditId) : '',
-      appVersion: MOBILE_APP_VERSION,
-      message: 'Login verified'
-    });
-  } catch (error) {
-    return res.status(error.status || 500).json({ success: false, message: error.message });
-  }
-});
+router.post('/login', auth.mobileLoginHandler);
 
 router.get('/dealers', auth.requireAuth, async (req, res) => {
   try {
@@ -404,7 +295,7 @@ router.get('/config', auth.optionalAuth, async (req, res) => {
       healthUrl: info.healthUrl,
       connectUrl: info.connectUrl,
       syncUrl: `${info.serverUrl}/api/mobile/sync-bulk`,
-      loginUrl: `${info.serverUrl}/api/mobile/login`,
+      loginUrl: `${info.serverUrl}/api/auth/mobile-login`,
       cooldownMs: 4000,
       supportedScanTypes: ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE', 'VERIFICATION'],
       activeAudit: activeAudit ? publicAudit(activeAudit) : null,

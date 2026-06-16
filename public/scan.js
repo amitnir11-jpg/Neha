@@ -1644,7 +1644,7 @@
 
     byId('loginMessage').textContent = 'Signing in...';
     try {
-      const response = await api('/api/mobile/login', {
+      const response = await api('/api/auth/mobile-login', {
         method: 'POST',
         auth: false,
         body: payload

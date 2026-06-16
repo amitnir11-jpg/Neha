@@ -549,7 +549,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
-router.post('/mobile-login', async (req, res) => {
+async function mobileLoginHandler(req, res) {
   try {
     const dealerCode = normalizeAccessCode(req.body.dealerCode || req.body.activeDealerId);
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
@@ -599,7 +599,9 @@ router.post('/mobile-login', async (req, res) => {
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });
   }
-});
+}
+
+router.post('/mobile-login', mobileLoginHandler);
 
 router.post('/pin-login', async (req, res) => {
   try {
@@ -1055,5 +1057,6 @@ module.exports.syncUserDealerMappings = syncUserDealerMappings;
 module.exports.userDealerAccessCodes = userDealerAccessCodes;
 module.exports.activeDealersForUser = activeDealersForUser;
 module.exports.validateUserDealerAccess = validateUserDealerAccess;
+module.exports.mobileLoginHandler = mobileLoginHandler;
 module.exports.publicUser = publicUser;
 module.exports.ROLES = ROLES;
