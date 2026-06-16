@@ -339,24 +339,32 @@ function safeLogUser(user) {
 
 async function compareAndUpgradeSecret(user, input, hashFields) {
   const value = String(input || '');
-  const stored = hashFields.map((field) => user[field]).find(Boolean) || '';
-  let matched = false;
+  if (!value) return false;
 
-  if (stored && isBcryptHash(stored)) {
-    matched = await bcrypt.compare(value, stored);
-  } else if (stored) {
-    matched = stored === value;
+  const fields = hashFields.filter(Boolean);
+  let matchedStored = '';
+
+  for (const field of fields) {
+    const stored = user[field];
+    if (!stored) continue;
+    const matched = isBcryptHash(stored) ? await bcrypt.compare(value, stored) : stored === value;
+    if (matched) {
+      matchedStored = stored;
+      break;
+    }
   }
 
-  if (matched && (!isBcryptHash(stored) || hashFields.some((field) => !user[field] || user[field] !== stored))) {
-    const hash = await bcrypt.hash(value, 10);
-    hashFields.forEach((field) => {
+  if (!matchedStored) return false;
+
+  if (!isBcryptHash(matchedStored) || fields.some((field) => !user[field] || user[field] !== matchedStored)) {
+    const hash = isBcryptHash(matchedStored) ? matchedStored : await bcrypt.hash(value, 10);
+    fields.forEach((field) => {
       user[field] = hash;
     });
     await user.save();
   }
 
-  return matched;
+  return true;
 }
 
 function cleanPublicUser(user) {

@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.1';
-  const CACHE_VERSION = '20260616-mobile-auth-cleanup';
+  const CACHE_VERSION = '20260616-mobile-login-resilience';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -11,12 +11,15 @@
   const LAST_SYNC_KEY = 'dakshFreshLastSync';
   const SYNC_INTERVAL_MS = 45000;
   const HEARTBEAT_INTERVAL_MS = 90000;
+  const API_TIMEOUT_MS = 45000;
+  const LOGIN_CONFIG_TIMEOUT_MS = 15000;
+  const STORAGE_OPEN_TIMEOUT_MS = 7000;
   const BATCH_SIZE = 50;
   const DEDUPE_MS = 1200;
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-auth-cleanup';
+  const ZXING_SCRIPT_SRC = `/vendor/zxing/index.min.js?v=${CACHE_VERSION}`;
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -368,7 +371,7 @@
     state.loginConfigError = '';
     renderLoginDealers();
     try {
-      const data = await api('/api/mobile/config', { auth: false });
+      const data = await api('/api/mobile/config', { auth: false, timeoutMs: LOGIN_CONFIG_TIMEOUT_MS });
       state.authReady = true;
       state.canonicalUrl = data.mobileScannerUrl || data.scanUrl || state.canonicalUrl;
       state.loginUrl = data.loginUrl || state.loginUrl;
@@ -395,14 +398,25 @@
   }
 
   function api(path, options = {}) {
-    const headers = { ...(options.headers || {}) };
-    const body = options.body && typeof options.body === 'object' && !(options.body instanceof FormData)
-      ? JSON.stringify(options.body)
-      : options.body;
+    const { auth, timeoutMs = API_TIMEOUT_MS, ...fetchOptions } = options;
+    const headers = { ...(fetchOptions.headers || {}) };
+    const body = fetchOptions.body && typeof fetchOptions.body === 'object' && !(fetchOptions.body instanceof FormData)
+      ? JSON.stringify(fetchOptions.body)
+      : fetchOptions.body;
     if (!(body instanceof FormData)) headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-    if (state.session?.token && options.auth !== false) headers.Authorization = `Bearer ${state.session.token}`;
+    if (state.session?.token && auth !== false) headers.Authorization = `Bearer ${state.session.token}`;
 
-    return fetch(path, { ...options, headers, body }).then(async (response) => {
+    fetchOptions.headers = headers;
+    fetchOptions.body = body;
+
+    let timeout = null;
+    if (Number(timeoutMs) > 0 && typeof AbortController !== 'undefined' && !fetchOptions.signal) {
+      const controller = new AbortController();
+      fetchOptions.signal = controller.signal;
+      timeout = setTimeout(() => controller.abort(), Number(timeoutMs));
+    }
+
+    return fetch(path, fetchOptions).then(async (response) => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.success === false) {
         const error = new Error(data.message || response.statusText || 'Request failed');
@@ -411,6 +425,13 @@
         throw error;
       }
       return data;
+    }).catch((error) => {
+      if (error && error.name === 'AbortError') {
+        throw new Error('Request timed out. Check network and retry.');
+      }
+      throw error;
+    }).finally(() => {
+      if (timeout) clearTimeout(timeout);
     });
   }
 
@@ -451,9 +472,27 @@
     } catch (_) {}
   }
 
-  function openDb() {
+  function openDb(timeoutMs = STORAGE_OPEN_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, 1);
+      if (!window.indexedDB) {
+        reject(new Error('Local browser storage is unavailable'));
+        return;
+      }
+      let settled = false;
+      const timer = setTimeout(() => finish(reject, new Error('Local browser storage timed out')), timeoutMs);
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        callback(value);
+      };
+      let request = null;
+      try {
+        request = indexedDB.open(DB_NAME, 1);
+      } catch (error) {
+        finish(reject, error);
+        return;
+      }
       request.onupgradeneeded = () => {
         const db = request.result;
         const store = db.createObjectStore(STORE, { keyPath: 'scanId' });
@@ -462,8 +501,9 @@
         store.createIndex('timestamp', 'timestamp');
         store.createIndex('dealerCode', 'dealerCode');
       };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      request.onsuccess = () => finish(resolve, request.result);
+      request.onerror = () => finish(reject, request.error);
+      request.onblocked = () => finish(reject, new Error('Local browser storage is blocked by another tab'));
     });
   }
 
@@ -1100,7 +1140,7 @@
 
   async function refreshHealth() {
     try {
-      const health = await api('/api/health', { auth: false });
+      const health = await api('/api/health', { auth: false, timeoutMs: LOGIN_CONFIG_TIMEOUT_MS });
       state.health = health;
       if (health.mobileScannerUrl) {
         state.canonicalUrl = health.mobileScannerUrl;
@@ -1902,17 +1942,29 @@
   }
 
   async function init() {
-    try {
-      state.db = await openDb();
-    } catch (error) {
-      toast('Local browser storage is unavailable. Scans may not persist offline.', 'warning');
-      console.warn(error);
-    }
-
-    state.allRows = await getAllRecords().catch(() => []);
     bindEvents();
     bindManualSearch();
+    renderUrlState();
+    renderConnectionBadge();
+    renderSessionHeader();
+    renderServerSummary();
+
+    const dbReady = openDb()
+      .then(async (db) => {
+        state.db = db;
+        state.allRows = await getAllRecords().catch(() => []);
+        return true;
+      })
+      .catch((error) => {
+        state.db = null;
+        state.allRows = [];
+        toast('Local browser storage is unavailable. Scans may not persist offline.', 'warning');
+        console.warn(error);
+        return false;
+      });
+
     await refreshMobileConfig();
+    await dbReady;
     setMode(state.mode, { silent: true });
     renderUrlState();
     renderConnectionBadge();
