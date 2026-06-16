@@ -22,6 +22,34 @@
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const byId = (id) => document.getElementById(id);
 
+  const MODE_INFO = {
+    INWARD: {
+      label: 'Inward',
+      requiresBin: true,
+      note: 'Use for parts coming into stock.'
+    },
+    OUTWARD: {
+      label: 'Outward',
+      requiresBin: false,
+      note: 'Bin is auto-detected by the backend.'
+    },
+    FITTED: {
+      label: 'Fitted',
+      requiresBin: false,
+      note: 'Fill vehicle and job card details after the camera scan.'
+    },
+    DAMAGE: {
+      label: 'Damage',
+      requiresBin: true,
+      note: 'Damaged stock needs a bin location.'
+    },
+    VERIFICATION: {
+      label: 'Verification',
+      requiresBin: false,
+      note: 'Quick verification scan. Part number is enough.'
+    }
+  };
+
   const state = {
     db: null,
     session: loadSession(),
@@ -52,34 +80,6 @@
     zxingPromise: null,
     loginDealers: [],
     loginBusy: false
-  };
-
-  const MODE_INFO = {
-    INWARD: {
-      label: 'Inward',
-      requiresBin: true,
-      note: 'Use for parts coming into stock.'
-    },
-    OUTWARD: {
-      label: 'Outward',
-      requiresBin: false,
-      note: 'Bin is auto-detected by the backend.'
-    },
-    FITTED: {
-      label: 'Fitted',
-      requiresBin: false,
-      note: 'Fill vehicle and job card details after the camera scan.'
-    },
-    DAMAGE: {
-      label: 'Damage',
-      requiresBin: true,
-      note: 'Damaged stock needs a bin location.'
-    },
-    VERIFICATION: {
-      label: 'Verification',
-      requiresBin: false,
-      note: 'Quick verification scan. Part number is enough.'
-    }
   };
 
   const CLEARABLE_STATUSES = new Set(['synced', 'duplicate', 'failed-duplicate', 'invalid', 'rejected']);
