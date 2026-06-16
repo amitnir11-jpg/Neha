@@ -7,78 +7,74 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>Daksh Scan</title>
-  <link rel="stylesheet" href="/scan.css?v=20260616-mobile-autocamera-compact-fix">
+  <link rel="stylesheet" href="/scan.css?v=20260615-fresh-scan">
 </head>
 <body class="scan-page">
   <div class="page-orb orb-a" aria-hidden="true"></div>
   <div class="page-orb orb-b" aria-hidden="true"></div>
 
   <main class="app-shell">
-    <section id="loginPanel" class="panel login-panel">
-      <div class="login-intro">
+    <section class="hero-card glass-card">
+      <div class="hero-copy">
         <span class="eyebrow">Mobile Part Scanning</span>
         <div class="brand-row">
           <div class="brand-mark">DS</div>
           <div>
             <h1>Daksh Scan</h1>
             <p class="hero-text">
-              Secure mobile login for fast part capture, offline queueing, and automatic sync back to the inventory app.
+              Fresh mobile scanner for quick login, camera capture, offline queueing, and automatic sync back to the inventory app.
             </p>
           </div>
         </div>
-
-        <div class="login-badges">
-          <span id="secureBadge" class="status-pill neutral">Checking...</span>
-          <span id="dbBadge" class="status-pill neutral">Database checking...</span>
-        </div>
-
-        <div id="contextNotice" class="notice login-notice" role="status" hidden></div>
-
-        <ul class="login-points" aria-label="Login benefits">
-          <li>Password or PIN sign-in</li>
-          <li>Dealer code is selected before login</li>
-          <li>Scans queue locally when the network drops</li>
-        </ul>
       </div>
 
-      <div class="login-form-card">
-        <div class="panel-title compact">
-          <div>
-            <span class="panel-tag">Secure Login</span>
-            <h2>Sign in to continue</h2>
-          </div>
-          <span class="status-pill neutral">Mobile ready</span>
-        </div>
-
-        <form id="loginForm" class="login-form" autocomplete="on" novalidate>
-          <div class="field-grid login-fields">
-            <label class="field">
-              <span>User ID / Username / Email</span>
-              <input name="username" autocomplete="username" required placeholder="Enter user ID">
-            </label>
-            <label class="field">
-              <span>Password or PIN</span>
-              <input name="secret" type="password" autocomplete="current-password" required placeholder="Enter password or 4-digit PIN">
-            </label>
-            <label id="dealerSelectLabel" class="field">
-              <span>Dealer Code</span>
-              <select id="loginDealerSelect" name="dealerCode" required>
-                <option value="">Loading dealer codes...</option>
-              </select>
-            </label>
-            <label id="dealerCodeInputLabel" class="field hidden">
-              <span>Manual Dealer Code</span>
-              <input name="dealerCodeManual" autocapitalize="characters" placeholder="Enter dealer code">
-            </label>
-            <label class="field hidden">
-              <span>Device Name</span>
-              <input name="deviceName" value="Daksh Web Scanner" placeholder="Daksh Web Scanner">
-            </label>
-          </div>
-          <button class="btn btn-primary login-btn" type="submit" data-testid="login-submit">Sign In</button>
-          <p id="loginMessage" class="field-message" aria-live="polite">Select a dealer code, then sign in.</p>
-        </form>
+      <div class="hero-actions">
+        <button id="copyUrlBtn" class="btn btn-secondary" type="button" data-testid="copy-url">Copy Scan URL</button>
+        <a id="openScanUrl" class="btn btn-ghost" href="/mobile-scanner" target="_blank" rel="noopener noreferrer">Open URL</a>
       </div>
+
+      <div id="contextNotice" class="notice" role="status" hidden></div>
+    </section>
+
+    <section id="loginPanel" class="panel grid-login">
+      <div class="panel-title">
+        <div>
+          <span class="panel-tag">Secure Login</span>
+          <h2>Sign in to scan parts</h2>
+        </div>
+        <span id="secureBadge" class="status-pill neutral">Checking...</span>
+      </div>
+
+      <form id="loginForm" class="login-form" autocomplete="on" novalidate>
+        <div class="field-grid">
+          <label class="field">
+            <span>User ID / Username / Email</span>
+            <input name="username" autocomplete="username" required placeholder="Enter user ID">
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input name="password" type="password" autocomplete="current-password" placeholder="Enter password">
+          </label>
+          <label class="field">
+            <span>PIN</span>
+            <input name="pin" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="Optional PIN">
+          </label>
+          <label id="dealerCodeInputLabel" class="field">
+            <span>Dealer Code</span>
+            <input name="dealerCode" autocapitalize="characters" placeholder="Dealer code">
+          </label>
+          <label id="dealerSelectLabel" class="field hidden">
+            <span>Select Dealer</span>
+            <select id="loginDealerSelect" name="selectedDealerCode"></select>
+          </label>
+          <label class="field">
+            <span>Device Name</span>
+            <input name="deviceName" placeholder="Android Chrome">
+          </label>
+        </div>
+        <button class="btn btn-primary login-btn" type="submit" data-testid="login-submit">Login &amp; Open Scanner</button>
+        <p id="loginMessage" class="field-message" aria-live="polite"></p>
+      </form>
     </section>
 
     <section id="scannerPanel" class="panel scanner-panel hidden" aria-live="polite">
@@ -94,21 +90,6 @@
           <span id="failedBadge" class="status-pill neutral">Failed 0</span>
           <span id="lastSyncBadge" class="status-pill neutral">Never synced</span>
           <button id="logoutBtn" class="btn btn-secondary btn-small" type="button">Logout</button>
-        </div>
-      </div>
-
-      <div class="scanner-context-strip" aria-label="Current scanner context">
-        <div class="context-chip">
-          <span>Dealer</span>
-          <strong id="sessionDealerLabelCompact">Dealer not loaded</strong>
-        </div>
-        <div class="context-chip">
-          <span>Bin</span>
-          <strong id="sessionBinLabel">Not set</strong>
-        </div>
-        <div class="context-chip">
-          <span>Status</span>
-          <strong id="serverStateLabelCompact">Server status will appear here</strong>
         </div>
       </div>
 
@@ -157,13 +138,13 @@
             <video id="cameraPreview" playsinline muted autoplay></video>
             <div class="scan-frame" aria-hidden="true"></div>
             <div class="camera-overlay">
-              <span id="cameraState">Camera starts automatically after login</span>
-              <small id="cameraHint">Allow camera access when prompted.</small>
+              <span id="cameraState">Tap Start Camera to begin scanning</span>
+              <small id="cameraHint">HTTPS is required on mobile devices for camera access.</small>
             </div>
           </div>
 
           <div class="control-row">
-            <button id="startScanBtn" class="btn btn-primary" type="button">Restart Camera</button>
+            <button id="startScanBtn" class="btn btn-primary" type="button">Start Camera</button>
             <button id="pauseScanBtn" class="btn btn-secondary" type="button">Pause</button>
             <button id="resumeScanBtn" class="btn btn-secondary" type="button">Resume</button>
             <button id="manualBtn" class="btn btn-secondary" type="button">Manual Entry</button>
@@ -282,7 +263,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="/js/cache-reset.js?v=20260616-mobile-autocamera-compact-fix"></script>
-  <script src="/scan.legacy.js?v=20260616-mobile-autocamera-compact-fix"></script>
+  <script src="/scan.js?v=20260615-fresh-scan"></script>
 </body>
 </html>

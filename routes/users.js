@@ -7,10 +7,6 @@ const router = express.Router();
 
 router.use(auth.requireAuth, auth.requireAdmin);
 
-function cleanEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
 router.get('/', async (req, res) => {
   try {
     const users = await User.find({}).sort({ approved: 1, createdAt: -1 }).lean();
@@ -35,21 +31,18 @@ router.post(['/', '/create'], async (req, res) => {
       approvedBy: req.user.username || req.user.name || 'admin'
     });
     const dealerAccess = await auth.userDealerAccessCodes(user);
-    res.status(201).json({ success: true, message: 'User created successfully.', user: { ...auth.cleanPublicUser(user), dealerAccess } });
+    res.status(201).json({ success: true, user: { ...auth.cleanPublicUser(user), dealerAccess } });
   } catch (error) {
-    const duplicate = /already exists|already registered/i.test(error.message || '');
-    res.status(duplicate ? 409 : 400).json({ success: false, message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 });
 
 router.put('/:id', async (req, res) => {
   try {
-    const username = auth.cleanUsername(req.body.username || req.body.userId || req.body.email);
-    const email = cleanEmail(req.body.email || req.body.userId || '');
     const update = {
       name: String(req.body.name || req.body.userName || '').trim(),
-      username,
-      email,
+      username: auth.cleanUsername(req.body.username || req.body.userId || req.body.email),
+      email: String(req.body.email || req.body.userId || '').trim().toLowerCase(),
       mobileNumber: String(req.body.mobileNumber || req.body.mobile || '').trim(),
       role: auth.ROLES.includes(req.body.role) ? req.body.role : 'staff',
       responsibility: String(req.body.responsibility || '').trim(),
@@ -63,34 +56,13 @@ router.put('/:id', async (req, res) => {
     if (!update.name) delete update.name;
     if (!update.username) delete update.username;
     if (!update.email) delete update.email;
-
-    const duplicateQuery = {
-      _id: { $ne: req.params.id },
-      $or: []
-    };
-    if (update.username) duplicateQuery.$or.push({ username: update.username });
-    if (update.email) duplicateQuery.$or.push({ email: update.email });
-    if (duplicateQuery.$or.length) {
-      const duplicate = await User.findOne(duplicateQuery).select('username email').lean();
-      if (duplicate) {
-        if (update.username && auth.cleanUsername(duplicate.username) === update.username) {
-          return res.status(409).json({ success: false, message: 'Username already exists.' });
-        }
-        if (update.email && cleanEmail(duplicate.email) === update.email) {
-          return res.status(409).json({ success: false, message: 'Email already exists.' });
-        }
-        return res.status(409).json({ success: false, message: 'User already exists.' });
-      }
-    }
-
     const user = await User.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
     await auth.syncUserDealerMappings(user._id, update.dealerAccess);
     const dealerAccess = await auth.userDealerAccessCodes(user);
     return res.json({ success: true, user: { ...auth.cleanPublicUser(user), dealerAccess } });
   } catch (error) {
-    const duplicate = /already exists|already registered/i.test(error.message || '') || Number(error.code) === 11000;
-    return res.status(duplicate ? 409 : 400).json({ success: false, message: error.message });
+    return res.status(400).json({ success: false, message: error.message });
   }
 });
 

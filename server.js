@@ -79,7 +79,7 @@ const QRPairService = require('./services/QRPairService');
 const OfflineSyncService = require('./services/OfflineSyncService');
 
 const app = express();
-app.locals.reportRoutesVersion = 'dealer-report-dlc-20260616';
+app.locals.reportRoutesVersion = 'dealer-report-dlc-20260602';
 app.locals.deployConfigVersion = 'railway-mongo-env-20260614';
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -126,15 +126,6 @@ const MONGO_DB_NAME = String(process.env.MONGO_DB_NAME || 'daksh_inventory_v2').
 const MOBILE_DISCOVERY_PORT = Number(process.env.MOBILE_DISCOVERY_PORT || PORT);
 const MOBILE_DISCOVERY_REQUEST = 'DAKSH_DISCOVER_V1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
-function setNoStoreHeaders(res) {
-  res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-}
-function sendNoStoreFile(res, fileName) {
-  setNoStoreHeaders(res);
-  return res.sendFile(path.join(PUBLIC_DIR, fileName));
-}
 const activePort = () => app.locals.activePort || PORT;
 const scannerManager = new ScannerManager({ io, activeAuditProvider: getActiveAudit });
 const deviceDiscoveryService = new DeviceDiscoveryService({ portProvider: activePort });
@@ -220,26 +211,6 @@ mongoose.connection.on('reconnected', () => {
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use((req, res, next) => {
-  if (req.method === 'GET') {
-    const requestPath = String(req.path || '');
-    if (
-      requestPath === '/' ||
-      requestPath === '/login' ||
-      requestPath === '/dashboard' ||
-      requestPath === '/report' ||
-      requestPath === '/scan' ||
-      requestPath === '/scan/' ||
-      requestPath === '/mobile' ||
-      requestPath === '/mobile-scanner' ||
-      requestPath === '/mobile-scanner/' ||
-      /\.html$/i.test(requestPath)
-    ) {
-      setNoStoreHeaders(res);
-    }
-  }
-  next();
-});
 
 function envNumber(name, fallback) {
   const value = Number(process.env[name]);
@@ -936,15 +907,20 @@ app.get(['/apk', '/download-apk', '/api/apk/download'], (req, res) => {
 });
 
 app.get(['/scan', '/scan/'], (req, res) => {
-  sendNoStoreFile(res, 'scan.html');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
 });
 
 app.get(['/mobile', '/mobile-scanner', '/mobile-scanner/'], (req, res) => {
-  sendNoStoreFile(res, 'scan.html');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
 });
 
 app.get('/force-login', (req, res) => {
-  setNoStoreHeaders(res);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Daksh Logout</title></head>
@@ -1154,15 +1130,15 @@ app.use('/api/sync', syncRoutes);
 app.use('/api/mobile', require('./routes/mobile'));
 
 app.get(['/', '/login'], (req, res) => {
-  sendNoStoreFile(res, 'index.html');
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
 app.get('/dashboard', (req, res) => {
-  sendNoStoreFile(res, 'Daksh.html');
+  res.sendFile(path.join(PUBLIC_DIR, 'Daksh.html'));
 });
 
 app.get('/report', (req, res) => {
-  sendNoStoreFile(res, 'report.html');
+  res.sendFile(path.join(PUBLIC_DIR, 'report.html'));
 });
 
 app.use('/api', (req, res) => {
@@ -1192,12 +1168,12 @@ app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/socket.io') || path.extname(req.path)) {
     return next();
   }
-  return sendNoStoreFile(res, 'index.html');
+  return res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
 app.use((req, res) => {
   if (path.extname(req.path)) return res.status(404).send('Not found');
-  return sendNoStoreFile(res, 'index.html');
+  return res.status(404).sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
 io.on('connection', (socket) => {
@@ -1580,56 +1556,14 @@ async function fixUserIndexes() {
     const collection = mongoose.connection.db.collection('users');
     const indexes = await collection.indexes();
     for (const index of indexes) {
-      const keyNames = index.key ? Object.keys(index.key) : [];
-      const isUsernameOnlyIndex = keyNames.length === 1 && index.key.username === 1;
-      const isEmailOnlyIndex = keyNames.length === 1 && index.key.email === 1;
-      const shouldDropUsernameIndex = isUsernameOnlyIndex && (index.unique !== true || index.name !== 'username_1' || index.sparse !== true);
-      const shouldDropEmailIndex = isEmailOnlyIndex && (index.unique !== true || index.name !== 'email_1' || index.sparse !== true);
-      if (shouldDropUsernameIndex || shouldDropEmailIndex) {
-        try {
-          await collection.dropIndex(index.name);
-        } catch (dropError) {
-          console.warn(`User index drop skipped for ${index.name}:`, dropError.message);
-        }
+      const isEmailOnlyIndex = index.key && Object.keys(index.key).length === 1 && index.key.email === 1;
+      const isOldEmailIndex = isEmailOnlyIndex && (index.unique || index.name !== 'email_1' || index.sparse !== true);
+      if (isOldEmailIndex) {
+        await collection.dropIndex(index.name);
       }
     }
-    const duplicateEmailGroups = await collection.aggregate([
-      { $match: { email: { $type: 'string', $ne: '' } } },
-      { $group: { _id: '$email', ids: { $push: '$_id' } } },
-      { $match: { 'ids.1': { $exists: true } } }
-    ]).toArray();
-    for (const group of duplicateEmailGroups) {
-      const users = await collection.find({ email: group._id }).toArray();
-      if (users.length <= 1) continue;
-      users.sort((left, right) => {
-        const score = (user) => {
-          const role = String(user.role || '').toLowerCase();
-          return [
-            role === 'admin' ? 3 : 0,
-            user.approved === false ? 0 : 2,
-            user.active === false && user.isActive === false ? 0 : 1
-          ];
-        };
-        const leftScore = score(left);
-        const rightScore = score(right);
-        for (let i = 0; i < leftScore.length; i += 1) {
-          if (rightScore[i] !== leftScore[i]) return rightScore[i] - leftScore[i];
-        }
-        const leftCreatedAt = left.createdAt ? new Date(left.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
-        const rightCreatedAt = right.createdAt ? new Date(right.createdAt).getTime() : Number.MAX_SAFE_INTEGER;
-        if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt;
-        return String(left._id).localeCompare(String(right._id));
-      });
-      const [winner, ...losers] = users;
-      if (!losers.length) continue;
-      await Promise.all(losers.map((user) => collection.updateOne({ _id: user._id }, { $unset: { email: '' } })));
-      console.warn(`Cleared duplicate email from ${losers.length} user record(s) for ${group._id}; kept ${winner.username || winner._id}.`);
-    }
-    if (duplicateEmailGroups.length) {
-      console.warn(`User email cleanup processed ${duplicateEmailGroups.length} duplicate email group(s).`);
-    }
     await collection.createIndex({ username: 1 }, { name: 'username_1', unique: true, sparse: true });
-    await collection.createIndex({ email: 1 }, { name: 'email_1', unique: true, sparse: true });
+    await collection.createIndex({ email: 1 }, { name: 'email_1', sparse: true });
   } catch (error) {
     console.warn('User index cleanup skipped:', error.message);
   }

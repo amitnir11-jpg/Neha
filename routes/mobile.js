@@ -125,15 +125,6 @@ function compactDealer(row) {
   };
 }
 
-async function publicDealerList() {
-  const dealers = await Dealer.find({
-    dealerCode: { $not: /^SYNC/i },
-    dealerName: { $not: /Sync Test/i },
-    active: { $ne: false }
-  }).sort({ dealerName: 1, dealerCode: 1 }).limit(1000).lean();
-  return dealers.map(compactDealer);
-}
-
 async function mobileDeviceStatus(deviceId) {
   await devices.markExpiredDevicesOffline();
   const device = deviceId ? await Device.findOne({ deviceId }).lean() : null;
@@ -275,25 +266,16 @@ function mobileItem(scan) {
 router.post('/connect', auth.optionalAuth, devices.connectHandler);
 router.post('/heartbeat', auth.optionalAuth, devices.heartbeatHandler);
 
-router.get('/public-dealers', async (req, res) => {
-  try {
-    const dealers = await publicDealerList();
-    return res.json({ success: true, count: dealers.length, dealers });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
-
 router.post('/login', async (req, res) => {
   try {
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
+    const password = String(req.body.password || '');
+    const pin = String(req.body.pin || '').trim();
     const dealerCode = auth.normalizeAccessCode(req.body.dealerCode || req.body.activeDealerId);
-    const secret = String(req.body.passwordOrPin || req.body.secret || req.body.password || req.body.pin || '').trim();
     const deviceId = clean(req.body.deviceId);
 
     if (!username) return res.status(400).json({ success: false, message: 'User ID is required' });
-    if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer code is required' });
-    if (!secret) return res.status(400).json({ success: false, message: 'Password or PIN is required' });
+    if (!password && !pin) return res.status(400).json({ success: false, message: 'Password or PIN is required' });
 
     const user = await findUserByLogin(username);
     if (!user) return res.status(401).json({ success: false, message: 'Invalid username, password, or PIN' });
@@ -301,16 +283,30 @@ router.post('/login', async (req, res) => {
     if (!userIsActive(user)) return res.status(403).json({ success: false, message: 'User is blocked/inactive. Please contact administrator.' });
 
     let valid = false;
-    if (secret) valid = await compareSecret(user, secret, ['passwordHash', 'password']);
-    if (!valid) valid = await compareSecret(user, secret, ['pinHash', 'pin']);
+    if (password) valid = await compareSecret(user, password, ['passwordHash', 'password']);
+    if (!valid && pin) valid = await compareSecret(user, pin, ['pinHash', 'pin']);
     if (!valid) return res.status(401).json({ success: false, message: 'Invalid username, password, or PIN' });
 
     const assignedDealers = await auth.activeDealersForUser(user);
+    const selectedDealer = dealerCode || (assignedDealers.length === 1 ? assignedDealers[0].dealerCode : '');
     const dealerAccess = await auth.userDealerAccessCodes(user);
     const publicUser = { ...auth.publicUser(user), dealerAccess };
     const token = signMobileToken(user);
+    if (!selectedDealer) {
+      return res.json({
+        success: true,
+        token,
+        expiresIn: '12h',
+        user: publicUser,
+        assignedDealers,
+        activeDealers: assignedDealers,
+        needsDealerSelection: true,
+        appVersion: MOBILE_APP_VERSION,
+        message: 'Select dealer first'
+      });
+    }
 
-    const access = await dealerAccessForUser(user, dealerCode);
+    const access = await dealerAccessForUser(user, selectedDealer);
     if (!access.allowed) {
       return res.status(403).json({
         success: false,

@@ -390,32 +390,9 @@
 
   function cleanDealerCode(value) {
     const text = String(value || '').trim();
-    if (!text) return '';
-    if (/^all(\s|$)/i.test(text)) return 'ALL';
+    if (text.toLowerCase() === 'all') return 'ALL';
     const match = text.match(/\(([^()]+)\)\s*$/);
-    if (match) return match[1].trim().toUpperCase();
-    const dashMatch = text.match(/^([A-Za-z0-9_-]{2,})\s*-\s+.+$/);
-    return (dashMatch ? dashMatch[1] : text).trim().toUpperCase();
-  }
-
-  function selectedOptionText(select) {
-    if (!select) return '';
-    const option = select.options && select.options[select.selectedIndex];
-    return option ? String(option.textContent || option.label || option.value || '').trim() : '';
-  }
-
-  function resolveDealerCodeFromSelect(select) {
-    const normalizeCandidate = (candidate) => {
-      const code = cleanDealerCode(candidate);
-      if (!code || /^(all|select)\b/i.test(code)) return '';
-      return code;
-    };
-    return normalizeCandidate(select?.value) || normalizeCandidate(selectedOptionText(select));
-  }
-
-  function dealerByCode(dealerCode) {
-    const code = cleanDealerCode(dealerCode || '');
-    return (state.dealers || []).find((dealer) => cleanDealerCode(dealer.dealerCode || dealer.code || dealer.id || '') === code) || null;
+    return (match ? match[1] : text).trim().toUpperCase();
   }
 
   function dealerLabel(dealer = {}) {
@@ -1524,8 +1501,8 @@
   }
 
   async function loadReportPreview() {
-    const selectedDealerCode = resolveDealerCodeFromSelect($('#reportDealerFilter'));
-    const selectedDealer = dealerByCode(selectedDealerCode);
+    const selectedDealerCode = cleanDealerCode($('#reportDealerFilter')?.value || '');
+    const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === selectedDealerCode);
     const dealerCode = selectedDealer?.dealerCode || selectedDealerCode || '';
     if (!dealerCode) {
       renderReport({ summary: {}, finalRows: [] });
@@ -1567,10 +1544,9 @@
   }
 
   async function loadReportDealers() {
-    const current = $('#reportDealerFilter')?.value || '';
     const data = await api('/api/dealers');
     state.dealers = data.dealers || [];
-    $('#reportDealerFilter').innerHTML = selectOptions(state.dealers, current);
+    $('#reportDealerFilter').innerHTML = selectOptions(state.dealers);
   }
 
   function initReportEvents() {

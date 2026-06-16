@@ -432,10 +432,6 @@ body:not(.dashboard-view-active) .topbar {
   color: var(--green);
 }
 
-.create-user-message {
-  flex-basis: 100%;
-}
-
 .pill {
   display: inline-flex;
   align-items: center;
@@ -663,10 +659,6 @@ body:not(.dashboard-view-active) .topbar {
   grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 10px;
   min-width: 0;
-}
-
-.user-summary-grid {
-  margin: 12px 0 14px;
 }
 
 .metric-grid.four {

@@ -1,6 +1,6 @@
 (function () {
-  const APP_VERSION = 'Daksh Fresh Web Scanner v1.2.0';
-  const CACHE_VERSION = '20260616-mobile-autocamera-compact-fix';
+  const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.0';
+  const CACHE_VERSION = '20260615-fresh-scan';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -16,12 +16,40 @@
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-autocamera-compact-fix';
-  const CAMERA_RETRY_MS = 1400;
+  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260615-fresh-scan';
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const byId = (id) => document.getElementById(id);
+
+  const state = {
+    db: null,
+    session: loadSession(),
+    pendingLogin: null,
+    canonicalUrl: '',
+    mode: loadMode(),
+    allRows: [],
+    scanReader: null,
+    cameraRequested: false,
+    scanning: false,
+    paused: false,
+    saveInFlight: false,
+    syncRunning: false,
+    syncAgain: false,
+    syncTimer: null,
+    heartbeatTimer: null,
+    cameraTimer: null,
+    lastDecodeAtByKey: new Map(),
+    recentCleanupTimer: null,
+    manualRaw: '',
+    manualResumeAfterClose: false,
+    manualMode: loadMode(),
+    cameraDevices: [],
+    selectedCameraId: storageGet(CAMERA_KEY, ''),
+    health: null,
+    authReady: false,
+    zxingPromise: null
+  };
 
   const MODE_INFO = {
     INWARD: {
@@ -49,42 +77,6 @@
       requiresBin: false,
       note: 'Quick verification scan. Part number is enough.'
     }
-  };
-
-  const state = {
-    db: null,
-    session: loadSession(),
-    canonicalUrl: '',
-    mode: loadMode(),
-    allRows: [],
-    scanReader: null,
-    cameraRequested: false,
-    scanning: false,
-    paused: false,
-    saveInFlight: false,
-    syncRunning: false,
-    syncAgain: false,
-    syncTimer: null,
-    heartbeatTimer: null,
-    cameraTimer: null,
-    cameraRetryTimer: null,
-    cameraStream: null,
-    nativeDetector: null,
-    nativeScanTimer: null,
-    lastDecodeAtByKey: new Map(),
-    recentCleanupTimer: null,
-    manualRaw: '',
-    manualResumeAfterClose: false,
-    manualMode: loadMode(),
-    cameraDevices: [],
-    selectedCameraId: storageGet(CAMERA_KEY, ''),
-    health: null,
-    healthStatus: 'checking',
-    healthMessage: '',
-    authReady: false,
-    zxingPromise: null,
-    loginDealers: [],
-    loginBusy: false
   };
 
   const CLEARABLE_STATUSES = new Set(['synced', 'duplicate', 'failed-duplicate', 'invalid', 'rejected']);
@@ -298,121 +290,8 @@
     const compact = text.replace(/[^A-Z0-9._\/-]+/g, ' ').trim();
     const collapsed = compact.replace(/\s+/g, '');
     if (/^[A-Z0-9][A-Z0-9._\/-]{2,39}$/.test(collapsed)) return collapsed;
-    if (compact) {
-      const words = compact.split(/\s+/).filter(Boolean);
-      if (words.length <= 2 && collapsed.length >= 3 && collapsed.length <= 40) return collapsed;
-    }
-    return '';
-  }
-
-  function normalizeScanKey(raw = '') {
-    return clean(raw).replace(/\s+/g, ' ').toUpperCase();
-  }
-
-  function findDuplicateScan(raw = '') {
-    const normalized = normalizeScanKey(raw);
-    if (!normalized) return null;
-    return sessionRows().find((row) => {
-      const candidates = [
-        row.rawScanString,
-        row.rawScan,
-        row.rawBarcode,
-        row.rawQR,
-        row.rawUpi
-      ].map((value) => normalizeScanKey(value));
-      return candidates.includes(normalized);
-    }) || null;
-  }
-
-  function cameraConstraints(deviceIdValue = '') {
-    const selected = clean(deviceIdValue || '').trim();
-    const video = selected
-      ? {
-          deviceId: { exact: selected },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 15, max: 30 }
-        }
-      : {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 15, max: 30 }
-        };
-    return { audio: false, video };
-  }
-
-  function clearCameraTimers() {
-    clearTimeout(state.cameraTimer);
-    clearTimeout(state.cameraRetryTimer);
-    clearInterval(state.nativeScanTimer);
-    state.cameraTimer = null;
-    state.cameraRetryTimer = null;
-    state.nativeScanTimer = null;
-  }
-
-  function releaseCameraStream() {
-    if (state.cameraStream) {
-      try {
-        state.cameraStream.getTracks().forEach((track) => track.stop());
-      } catch (_) {}
-      state.cameraStream = null;
-    }
-    state.nativeDetector = null;
-  }
-
-  function stopCameraResources() {
-    if (state.scanReader) {
-      try {
-        state.scanReader.stopContinuousDecode();
-      } catch (_) {}
-      try {
-        state.scanReader.reset();
-      } catch (_) {}
-    }
-    const video = byId('cameraPreview');
-    if (video) {
-      try {
-        video.pause();
-      } catch (_) {}
-      video.srcObject = null;
-    }
-    clearCameraTimers();
-    releaseCameraStream();
-  }
-
-  function cameraFailureMessage(error) {
-    const name = clean(error?.name || '');
-    const message = clean(error?.message || '');
-    const joined = `${name} ${message}`.trim().toLowerCase();
-    if (/notallowed|permission|denied/.test(joined)) {
-      return 'Camera permission was denied. Allow camera access to continue.';
-    }
-    if (/notfound|devicesnotfound|overconstrained|notreadable|abort/.test(joined)) {
-      return 'Unable to open the back camera. Try another camera or restart scanning.';
-    }
-    if (!isSecureScannerContext()) {
-      return 'Open the secure Railway URL to use the camera.';
-    }
-    return message || 'Camera failed to start';
-  }
-
-  function shouldRetryCamera(error) {
-    const text = `${clean(error?.name || '')} ${clean(error?.message || '')}`.toLowerCase();
-    if (!state.session?.token || state.paused || !state.cameraRequested) return false;
-    if (/notallowed|permission|denied|secure|https/.test(text)) return false;
-    return true;
-  }
-
-  function scheduleCameraRestart(delay = CAMERA_RETRY_MS) {
-    if (!shouldRetryCamera()) return;
-    clearTimeout(state.cameraRetryTimer);
-    state.cameraRetryTimer = setTimeout(() => {
-      state.cameraRetryTimer = null;
-      if (state.session?.token && state.cameraRequested && !state.paused) {
-        startCamera().catch(() => undefined);
-      }
-    }, delay);
+    if (compact && compact.length <= 60) return compact;
+    return text.slice(0, 60);
   }
 
   function parseRawPreview(raw = '') {
@@ -451,70 +330,6 @@
     node._hideTimer = setTimeout(() => {
       node.hidden = true;
     }, 3200);
-  }
-
-  function setLoginMessage(message = '', kind = '') {
-    const node = byId('loginMessage');
-    if (!node) return;
-    node.textContent = message;
-    node.className = kind ? `field-message ${kind}` : 'field-message';
-  }
-
-  function setLoginBusy(isBusy) {
-    state.loginBusy = Boolean(isBusy);
-    const button = byId('loginForm')?.querySelector('.login-btn');
-    if (!button) return;
-    button.disabled = state.loginBusy;
-    button.textContent = state.loginBusy ? 'Signing In...' : 'Sign In';
-  }
-
-  function renderLoginDealerOptions(dealers = []) {
-    const select = byId('loginDealerSelect');
-    if (!select) return;
-    const current = upper(select.value || '');
-    const options = ['<option value="">Select dealer code</option>'];
-    dealers.forEach((dealer) => {
-      const code = upper(dealer.dealerCode || dealer.code || dealer.id || '');
-      if (!code) return;
-      const name = clean(dealer.dealerName || dealer.name || '');
-      options.push(`<option value="${escapeHtml(code)}">${escapeHtml(code)}${name ? ` - ${escapeHtml(name)}` : ''}</option>`);
-    });
-    select.innerHTML = options.join('');
-    if (current && Array.from(select.options).some((option) => upper(option.value) === current)) {
-      select.value = current;
-    } else if (state.session?.dealerCode) {
-      select.value = upper(state.session.dealerCode);
-    }
-  }
-
-  function updateLoginDealerMode(useManualFallback = false) {
-    const selectLabel = byId('dealerSelectLabel');
-    const manualLabel = byId('dealerCodeInputLabel');
-    if (selectLabel) selectLabel.classList.remove('hidden');
-    if (manualLabel) manualLabel.classList.toggle('hidden', !useManualFallback);
-    const select = byId('loginDealerSelect');
-    if (select) select.disabled = Boolean(useManualFallback);
-  }
-
-  async function loadLoginDealers() {
-    try {
-      const data = await api('/api/mobile/public-dealers', { auth: false });
-      state.loginDealers = Array.isArray(data.dealers) ? data.dealers : [];
-      renderLoginDealerOptions(state.loginDealers);
-      updateLoginDealerMode(state.loginDealers.length === 0);
-      if (state.loginDealers.length) {
-        setLoginMessage('Select your dealer code, then sign in.');
-      } else {
-        setLoginMessage('Dealer list unavailable. Enter dealer code manually.', 'warning');
-      }
-      return state.loginDealers;
-    } catch (error) {
-      state.loginDealers = [];
-      renderLoginDealerOptions([]);
-      updateLoginDealerMode(true);
-      setLoginMessage(error.message || 'Dealer list unavailable. Enter dealer code manually.', 'warning');
-      return [];
-    }
   }
 
   function beep(type = 'ok') {
@@ -654,49 +469,22 @@
   function renderUrlState() {
     const url = canonicalScanUrl();
     state.canonicalUrl = url;
-    const scannerUrlText = byId('scannerUrlText');
-    if (scannerUrlText) scannerUrlText.textContent = url;
-    const openScanUrl = byId('openScanUrl');
-    if (openScanUrl) openScanUrl.href = url;
-    const copyUrlBtn = byId('copyUrlBtn');
-    if (copyUrlBtn) copyUrlBtn.dataset.url = url;
-    const copyScannerUrlBtn = byId('copyScannerUrlBtn');
-    if (copyScannerUrlBtn) copyScannerUrlBtn.dataset.url = url;
+    byId('scannerUrlText').textContent = url;
+    byId('openScanUrl').href = url;
+    byId('copyUrlBtn').dataset.url = url;
+    byId('copyScannerUrlBtn').dataset.url = url;
     const notice = byId('contextNotice');
     const secure = isSecureScannerContext();
     const secureBadge = byId('secureBadge');
-    if (secureBadge) {
-      secureBadge.textContent = secure ? 'Secure' : 'Insecure';
-      secureBadge.className = `status-pill ${secure ? 'online' : 'warning'}`;
-    }
+    secureBadge.textContent = secure ? 'Secure' : 'Insecure';
+    secureBadge.className = `status-pill ${secure ? 'online' : 'warning'}`;
 
-    const health = state.health || {};
-    const dbOnline = health.mongoStatus === 'online' || health.mongodb === 'online' || health.db === 'connected';
-    const dbBadge = byId('dbBadge');
-    if (dbBadge) {
-      if (state.healthStatus === 'checking') {
-        dbBadge.textContent = 'Checking...';
-        dbBadge.className = 'status-pill neutral';
-      } else if (dbOnline || state.healthStatus === 'online') {
-        dbBadge.textContent = 'Database connected';
-        dbBadge.className = 'status-pill online';
-      } else {
-        dbBadge.textContent = 'Database offline';
-        dbBadge.className = 'status-pill warning';
-      }
-    }
-
-    if (notice) {
+    if (secure) {
       notice.hidden = false;
-      if (state.healthStatus === 'checking') {
-        notice.textContent = 'Checking database connection...';
-      } else if (state.healthStatus === 'offline' || (state.health && !dbOnline)) {
-        notice.textContent = state.healthMessage || 'Server not reachable. Please check internet or try again.';
-      } else if (secure) {
-        notice.textContent = 'Sign in with your inventory credentials to open the live scanner.';
-      } else {
-        notice.textContent = 'Open the secure scanner URL to enable camera access on this phone.';
-      }
+      notice.textContent = `Use this URL on any browser: ${url}`;
+    } else {
+      notice.hidden = false;
+      notice.textContent = `Camera access is blocked on this HTTP page. Open the secure Railway URL instead: ${url}`;
     }
   }
 
@@ -714,8 +502,6 @@
     const userLabel = clean(user.name || user.username || state.session?.userName || 'User');
     const sessionLabel = dealerCode ? `${dealerCode}${dealerName ? ` - ${dealerName}` : ''}` : 'Dealer not loaded';
     byId('sessionDealerLabel').textContent = sessionLabel;
-    const compactDealer = byId('sessionDealerLabelCompact');
-    if (compactDealer) compactDealer.textContent = sessionLabel;
     byId('sessionUserLabel').textContent = state.session?.token
       ? `${userLabel} · ${deviceId()}`
       : 'Login to start scanning';
@@ -726,15 +512,13 @@
 
   function renderServerSummary() {
     const health = state.health || {};
-    const serverOnline = health.server === 'online' || health.serverStatus === 'online' || /^(ok|online|healthy)$/i.test(String(health.status || ''));
-    const dbOnline = health.mongoStatus === 'online' || health.mongodb === 'online' || health.db === 'connected';
-    const serverLabel = serverOnline ? 'Server OK' : clean(health.serverStatus || health.server || health.status || 'Server offline');
-    const dbLabel = dbOnline ? 'DB Online' : clean(health.mongoStatus || health.mongodb || health.db || 'DB Offline');
-    const parts = [`${serverLabel}`, `${dbLabel}`];
+    const parts = [];
+    if (health.status || health.serverStatus) parts.push(`Server ${health.status || health.serverStatus}`);
+    if (health.mongoStatus || health.mongodb) parts.push(`DB ${health.mongoStatus || health.mongodb}`);
     if (Number.isFinite(Number(health.connectedDevices))) parts.push(`Devices ${Number(health.connectedDevices)}`);
-    byId('serverStateLabel').textContent = parts.join(' | ');
-    const compactState = byId('serverStateLabelCompact');
-    if (compactState) compactState.textContent = parts.join(' | ');
+    if (health.lastSyncTime) parts.push(`Last sync ${fmtTime(health.lastSyncTime)}`);
+    if (!parts.length) parts.push('Server status unavailable');
+    byId('serverStateLabel').textContent = parts.join(' · ');
   }
 
   function renderModeButtons() {
@@ -747,7 +531,7 @@
     const info = currentModeInfo();
     const cameraHint = byId('cameraHint');
     cameraHint.textContent = isSecureScannerContext()
-      ? `${info.note} Camera starts automatically after login.`
+      ? info.note
       : 'Camera access is blocked on non-HTTPS pages. Use the secure Railway scanner URL.';
     const manualNote = byId('manualNote');
     manualNote.textContent = info.note;
@@ -790,14 +574,12 @@
     const panel = byId('binPanel');
     const input = byId('activeBinLocation');
     const message = byId('binPanelMessage');
-    const summary = byId('sessionBinLabel');
     const info = currentModeInfo();
     const current = loadActiveBin();
     if (!panel || !input || !message) return;
 
     panel.classList.toggle('hidden', !info.requiresBin && state.mode !== 'OUTWARD');
     input.value = current;
-    if (summary) summary.textContent = current || (info.requiresBin ? 'Bin needed' : 'No bin needed');
     input.required = info.requiresBin;
     if (info.requiresBin) {
       const ready = Boolean(current);
@@ -866,7 +648,7 @@
     }
     body.innerHTML = rows.map((row) => {
       const status = rowStatus(row);
-      const statusLabel = status === 'synced' ? 'Synced' : status === 'failed-duplicate' || status === 'duplicate' ? 'Duplicate already scanned' : status === 'failed' ? 'Sync failed' : 'Saved';
+      const statusLabel = status === 'failed-duplicate' ? 'Duplicate' : status || 'pending';
       const time = fmtTime(row.mobileCreatedAt || row.timestamp || row.createdAt);
       const title = escapeHtml(row.syncError || '');
       return `
@@ -900,6 +682,8 @@
     byId('loginPanel').classList.toggle('hidden', loggedIn);
     byId('scannerPanel').classList.toggle('hidden', !loggedIn);
     if (!loggedIn) return;
+    byId('dealerCodeInputLabel').classList.remove('hidden');
+    byId('dealerSelectLabel').classList.add('hidden');
     renderAll();
   }
 
@@ -908,53 +692,26 @@
   }
 
   function stopCamera({ preserveRequest = false } = {}) {
-    stopCameraResources();
+    if (state.scanReader) {
+      try {
+        state.scanReader.stopContinuousDecode();
+      } catch (_) {}
+      try {
+        state.scanReader.reset();
+      } catch (_) {}
+    }
+    const video = byId('cameraPreview');
+    if (video) {
+      try {
+        video.pause();
+      } catch (_) {}
+      video.srcObject = null;
+    }
+    clearTimeout(state.cameraTimer);
+    state.cameraTimer = null;
     state.scanning = false;
     if (!preserveRequest) state.cameraRequested = false;
     cameraState(state.paused ? 'Paused' : preserveRequest ? 'Camera stopped' : 'Camera stopped');
-  }
-
-  async function nativeBarcodeFormats() {
-    if (!window.BarcodeDetector) return [];
-    if (typeof window.BarcodeDetector.getSupportedFormats !== 'function') {
-      return ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf', 'codabar', 'pdf417', 'aztec', 'data_matrix'];
-    }
-    const supported = await window.BarcodeDetector.getSupportedFormats().catch(() => []);
-    const desired = new Set(['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf', 'codabar', 'pdf417', 'aztec', 'data_matrix']);
-    return supported.filter((format) => desired.has(format));
-  }
-
-  async function startNativeDetector(video, constraints) {
-    const formats = await nativeBarcodeFormats();
-    if (!formats.length) return false;
-    const detector = new BarcodeDetector({ formats });
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    state.cameraStream = stream;
-    state.nativeDetector = detector;
-    video.srcObject = stream;
-    try {
-      await video.play();
-    } catch (_) {}
-    const tick = async () => {
-      if (!state.scanning || state.paused || !state.cameraRequested || !state.nativeDetector) return;
-      const results = await state.nativeDetector.detect(video);
-      if (Array.isArray(results) && results.length) {
-        const code = clean(results[0].rawValue || '');
-        if (code) handleDecodeResult({ rawValue: code });
-      }
-    };
-    state.nativeScanTimer = setInterval(() => {
-      tick().catch((error) => {
-        if (!state.scanning) return;
-        stopCameraResources();
-        state.scanning = false;
-        const message = cameraFailureMessage(error);
-        cameraState(message);
-        toast(message, 'error');
-        if (shouldRetryCamera(error)) scheduleCameraRestart();
-      });
-    }, 80);
-    return true;
   }
 
   async function loadZxingLibrary() {
@@ -1020,7 +777,7 @@
     ].filter(Boolean);
     hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
     hints.set(DecodeHintType.TRY_HARDER, true);
-    state.scanReader = new BrowserMultiFormatReader(hints, 80);
+    state.scanReader = new BrowserMultiFormatReader(hints, 120);
     return state.scanReader;
   }
 
@@ -1151,7 +908,7 @@
       `Qty ${fmtNumber(qty)}`,
       bin ? `Bin ${bin}` : '',
       mrp > 0 ? `MRP ${fmtNumber(mrp)}` : '',
-      status === 'synced' ? 'Synced' : status === 'duplicate' || status === 'failed-duplicate' ? 'Duplicate already scanned' : status === 'failed' ? 'Sync failed' : 'Saved'
+      status === 'synced' ? 'Synced to server' : status === 'duplicate' || status === 'failed-duplicate' ? 'Duplicate rejected' : status === 'failed' ? 'Sync failed' : 'Queued for sync'
     ].filter(Boolean).join(' · ');
   }
 
@@ -1165,7 +922,7 @@
     state.allRows = await getAllRecords();
     applyRecordToUi(record);
     if (!silent) {
-      toast('Saved', 'success');
+      toast(state.paused ? 'Saved locally' : navigator.onLine ? 'Saved locally. Sync starting...' : 'Saved locally. Will sync when online.', 'success');
       beep('ok');
       vibrate(40);
     }
@@ -1242,18 +999,10 @@
     };
   }
 
-  async function refreshHealth(timeoutMs = 2000) {
-    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
-    state.healthStatus = 'checking';
-    state.healthMessage = '';
-    renderAll();
+  async function refreshHealth() {
     try {
-      const health = await api('/api/health', { auth: false, signal: controller ? controller.signal : undefined });
+      const health = await api('/api/health', { auth: false });
       state.health = health;
-      const dbOnline = health.mongoStatus === 'online' || health.mongodb === 'online' || health.db === 'connected';
-      state.healthStatus = dbOnline ? 'online' : 'offline';
-      state.healthMessage = dbOnline ? '' : 'Server not reachable. Please check internet or try again.';
       if (health.mobileScannerUrl) {
         state.canonicalUrl = health.mobileScannerUrl;
       }
@@ -1261,14 +1010,8 @@
       return health;
     } catch (error) {
       state.health = null;
-      state.healthStatus = 'offline';
-      state.healthMessage = error && error.name === 'AbortError'
-        ? 'Server not reachable. Please check internet or try again.'
-        : (error.message || 'Server not reachable. Please check internet or try again.');
       renderAll();
       return null;
-    } finally {
-      if (timer) clearTimeout(timer);
     }
   }
 
@@ -1301,45 +1044,19 @@
     }
   }
 
-  function resetScannerSession() {
+  function handleAuthExpired(error) {
     stopCamera({ preserveRequest: false });
     clearInterval(state.syncTimer);
     clearInterval(state.heartbeatTimer);
-    setLoginBusy(false);
     state.syncTimer = null;
     state.heartbeatTimer = null;
     clearSession();
     state.allRows = [];
+    state.pendingLogin = null;
     state.manualRaw = '';
     state.manualResumeAfterClose = false;
-
-    const loginForm = byId('loginForm');
-    if (loginForm) {
-      loginForm.reset();
-      if (loginForm.elements.deviceName) loginForm.elements.deviceName.value = DEFAULT_DEVICE_NAME;
-      if (loginForm.elements.secret) loginForm.elements.secret.value = '';
-      if (loginForm.elements.dealerCode) loginForm.elements.dealerCode.value = '';
-      if (loginForm.elements.dealerCodeManual) loginForm.elements.dealerCodeManual.value = '';
-    }
-
-    const dealerSelect = byId('loginDealerSelect');
-    if (dealerSelect) dealerSelect.value = '';
-    updateLoginDealerMode(state.loginDealers.length === 0);
-
     updateScannerPanel();
-    renderAll();
-
-    setLoginMessage('Select a dealer code, then sign in.');
-  }
-
-  function handleAuthExpired(error) {
-    resetScannerSession();
     toast(error?.message || 'Login expired. Please sign in again.', 'error');
-  }
-
-  function logout() {
-    resetScannerSession();
-    toast('Signed out', 'info');
   }
 
   function ensureScanSession() {
@@ -1361,57 +1078,35 @@
       cameraState('Camera API unavailable. Use manual entry.');
       return;
     }
-    stopCameraResources();
-    clearTimeout(state.cameraRetryTimer);
-    state.cameraRetryTimer = null;
+    stopCamera({ preserveRequest: true });
     state.cameraRequested = true;
     state.paused = false;
     state.scanning = true;
     const video = byId('cameraPreview');
     const selected = state.selectedCameraId || preferredCameraId(state.cameraDevices || []);
-    const constraints = cameraConstraints(selected);
-    cameraState('Opening back camera...');
+    cameraState('Loading scanner library...');
     try {
-      const usedNativeDetector = window.BarcodeDetector && await startNativeDetector(video, constraints).catch(() => false);
-      if (!usedNativeDetector) {
-        const reader = await ensureReader();
-        cameraState('Opening back camera...');
-        const promise = reader.decodeFromConstraints(constraints, video, (result) => {
-          if (result) handleDecodeResult(result);
-        });
-        promise.catch((error) => {
-          if (!state.scanning) return;
-          stopCameraResources();
+      const reader = await ensureReader();
+      cameraState('Starting camera...');
+      const promise = reader.decodeFromVideoDevice(selected || null, video, (result) => {
+        if (result) handleDecodeResult(result);
+      });
+      promise.catch((error) => {
+        if (state.scanning) {
           state.scanning = false;
-          const message = cameraFailureMessage(error);
+          const message = error?.message || 'Camera failed to start';
           cameraState(message);
           toast(message, 'error');
-          if (shouldRetryCamera(error)) {
-            if (/notfound|devicesnotfound|overconstrained/i.test(`${clean(error?.name || '')} ${clean(error?.message || '')}`)) {
-              setSelectedCamera('');
-            }
-            scheduleCameraRestart();
-          }
-        });
-      }
+        }
+      });
       state.cameraTimer = setTimeout(() => {
         if (state.scanning) cameraState('Scanning');
       }, 400);
       renderCameraListSoon();
-      return true;
     } catch (error) {
-      stopCameraResources();
       state.scanning = false;
-      const message = cameraFailureMessage(error);
-      cameraState(message);
-      toast(message, 'error');
-      if (shouldRetryCamera(error)) {
-        if (/notfound|devicesnotfound|overconstrained/i.test(`${clean(error?.name || '')} ${clean(error?.message || '')}`)) {
-          setSelectedCamera('');
-        }
-        scheduleCameraRestart();
-      }
-      return false;
+      cameraState(error.message || 'Camera failed to start');
+      toast(error.message || 'Camera failed to start', 'error');
     }
   }
 
@@ -1451,22 +1146,6 @@
       return;
     }
     const partCandidate = parsePartCandidate(raw);
-    if (!partCandidate) {
-      cameraState('Invalid QR');
-      toast('Invalid QR', 'error');
-      beep('error');
-      vibrate(60);
-      return;
-    }
-    const duplicateRow = findDuplicateScan(raw);
-    if (duplicateRow) {
-      cameraState('Duplicate already scanned');
-      toast('Duplicate already scanned', 'warning');
-      beep('duplicate');
-      vibrate([20, 40, 20]);
-      updateLastScan(duplicateRow);
-      return;
-    }
     if (requiresBin() && !ensureActiveBinReady()) {
       return;
     }
@@ -1479,7 +1158,7 @@
     state.saveInFlight = true;
     try {
       await saveRecord(record);
-      cameraState('Saved');
+      cameraState('Scan captured');
       byId('manualRawPreview').hidden = true;
     } catch (error) {
       toast(error.message || 'Unable to save scan', 'error');
@@ -1554,7 +1233,7 @@
             syncError: message,
             retryCount: Number(row.retryCount || 0)
           });
-          if (!silent) toast('Duplicate already scanned', 'warning');
+          if (!silent) toast(message, 'warning');
           continue;
         }
         if (failedLogs.has(key) || failedLogs.has(clean(row.clientScanId || ''))) {
@@ -1580,10 +1259,10 @@
       }
 
       storageSet(LAST_SYNC_KEY, nowIso());
-      if (!silent) toast('Synced', 'success');
+      if (!silent) toast(response.message || 'Sync complete', 'success');
       sendHeartbeat().catch(() => undefined);
       if (response.duplicateCount && !silent) {
-        toast('Duplicate already scanned', 'warning');
+        toast(`${response.duplicateCount} duplicate scan(s) skipped`, 'warning');
       }
     } catch (error) {
       if (authExpired(error)) {
@@ -1598,7 +1277,6 @@
       const duplicateMap = new Map(logs
         .filter((log) => log.status === 'duplicate')
         .map((log) => [clean(log.clientScanId || log.localId || log.mobileScanId || log.scanId), clean(log.errorMessage || log.reason || error.message)]));
-      const duplicateDetected = duplicateMap.size > 0;
 
       for (const row of batch) {
         const key = clean(row.scanId);
@@ -1628,10 +1306,7 @@
           });
         }
       }
-      if (!silent) {
-        if (duplicateDetected) toast('Duplicate already scanned', 'warning');
-        else toast(retryable ? 'Server not reachable. Please check internet or try again.' : error.message, retryable ? 'warning' : 'error');
-      }
+      if (!silent) toast(retryable ? 'Network/server issue. Scans remain queued.' : error.message, retryable ? 'warning' : 'error');
     } finally {
       state.syncRunning = false;
       state.allRows = await getAllRecords().catch(() => []);
@@ -1853,8 +1528,8 @@
   }
 
   function bindEvents() {
-    byId('copyUrlBtn')?.addEventListener('click', () => copyScanUrl());
-    byId('copyScannerUrlBtn')?.addEventListener('click', () => copyScanUrl());
+    byId('copyUrlBtn').addEventListener('click', () => copyScanUrl());
+    byId('copyScannerUrlBtn').addEventListener('click', () => copyScanUrl());
     byId('loginForm').addEventListener('submit', (event) => {
       void submitLogin(event);
     });
@@ -1943,47 +1618,23 @@
 
   async function submitLogin(event) {
     event.preventDefault();
-    if (state.loginBusy) return;
     const form = new FormData(event.currentTarget);
-    const selectedDealer = upper(form.get('dealerCode') || form.get('dealerCodeManual') || form.get('selectedDealerCode'));
-    const username = clean(form.get('username'));
-    const secret = String(form.get('secret') || form.get('password') || form.get('pin') || '');
+    const selectedDealer = upper(form.get('selectedDealerCode') || form.get('dealerCode'));
+    const username = clean(form.get('username') || state.pendingLogin?.username || '');
+    const password = String(form.get('password') || state.pendingLogin?.password || '');
+    const pin = String(form.get('pin') || state.pendingLogin?.pin || '');
     const deviceName = clean(form.get('deviceName')) || DEFAULT_DEVICE_NAME;
 
-    console.log('Selected dealer:', selectedDealer);
-    console.log('Mobile login payload:', {
-      username,
-      dealerCode: selectedDealer,
-      passwordOrPin: secret ? '[masked]' : '',
-      deviceId: deviceId(),
-      deviceName,
-      appVersion: APP_VERSION
-    });
-
-    if (!selectedDealer) {
-      setLoginMessage('Please select dealer code before login.', 'error');
-      toast('Please select dealer code before login.', 'error');
-      return;
-    }
-
-    if (!username) {
-      setLoginMessage('User ID is required.', 'error');
-      toast('User ID is required', 'error');
-      return;
-    }
-
-    if (!secret) {
-      setLoginMessage('Password or PIN is required.', 'error');
-      toast('Password or PIN is required', 'error');
+    if (state.pendingLogin && !selectedDealer) {
+      byId('loginMessage').textContent = 'Select a dealer to continue.';
       return;
     }
 
     const payload = {
+      ...(state.pendingLogin || {}),
       username,
-      passwordOrPin: secret,
-      secret,
-      password: secret,
-      pin: secret,
+      password,
+      pin,
       dealerCode: selectedDealer,
       deviceId: deviceId(),
       deviceName,
@@ -1991,24 +1642,17 @@
       model: navigator.userAgent.slice(0, 120)
     };
 
-    setLoginBusy(true);
-    setLoginMessage('Signing in...', 'loading');
+    byId('loginMessage').textContent = 'Signing in...';
     try {
       const response = await api('/api/mobile/login', {
         method: 'POST',
         auth: false,
         body: payload
       });
-      console.log('Login response:', {
-        success: response.success,
-        dealerCode: response.dealerCode || selectedDealer,
-        activeDealerId: response.activeDealerId || '',
-        message: response.message || '',
-        assignedDealers: Array.isArray(response.assignedDealers) ? response.assignedDealers.map((dealer) => ({
-          dealerCode: dealer.dealerCode || dealer.code || dealer.id || '',
-          dealerName: dealer.dealerName || dealer.name || ''
-        })) : []
-      });
+
+      if (!response.dealerCode && response.needsDealerSelection && showDealerSelection(response, payload)) {
+        return;
+      }
 
       const session = {
         ...state.session,
@@ -2030,29 +1674,60 @@
         role: response.user?.role || ''
       };
 
+      state.pendingLogin = null;
       saveSession(session);
       state.allRows = await getAllRecords().catch(() => []);
-      setLoginMessage(response.message || 'Login successful.', 'success');
-      const dealerSelect = byId('loginDealerSelect');
-      if (dealerSelect && session.dealerCode) dealerSelect.value = upper(session.dealerCode);
-      state.cameraRequested = true;
+      byId('loginMessage').textContent = '';
+      byId('dealerSelectLabel').classList.add('hidden');
+      byId('dealerCodeInputLabel').classList.remove('hidden');
+      byId('loginDealerSelect').innerHTML = '';
+      state.cameraRequested = false;
       state.paused = false;
       updateScannerPanel();
       await refreshSessionContext();
       await refreshHealth();
       state.allRows = await getAllRecords().catch(() => []);
       renderAll();
-      await startCamera();
+      byId('cameraState').textContent = isSecureScannerContext()
+        ? 'Tap Start Camera to begin scanning'
+        : 'Camera is blocked on this HTTP page. Use the secure scanner URL.';
       startTimers();
       toast('Login successful', 'success');
       sendHeartbeat().catch(() => undefined);
     } catch (error) {
-      const message = error?.data?.message || error.message || 'Login failed';
-      setLoginMessage(message, 'error');
-      toast(message, 'error');
-    } finally {
-      setLoginBusy(false);
+      if (showDealerSelectionError(error)) return;
+      byId('loginMessage').textContent = error.message;
+      toast(error.message, 'error');
     }
+  }
+
+  function showDealerSelection(response, payload) {
+    const dealers = response.assignedDealers || response.activeDealers || [];
+    if (!dealers.length) return false;
+    const select = byId('loginDealerSelect');
+    select.innerHTML = '<option value="">Select dealer</option>' + dealers.map((dealer) => {
+      const code = upper(dealer.dealerCode || dealer.code || dealer.id || '');
+      const name = clean(dealer.dealerName || dealer.name || '');
+      return `<option value="${escapeHtml(code)}">${escapeHtml(code)}${name ? ` - ${escapeHtml(name)}` : ''}</option>`;
+    }).join('');
+    byId('dealerSelectLabel').classList.remove('hidden');
+    byId('dealerCodeInputLabel').classList.add('hidden');
+    byId('loginMessage').textContent = 'Select a dealer, then tap Login again.';
+    state.pendingLogin = {
+      username: payload.username,
+      password: payload.password,
+      pin: payload.pin,
+      deviceName: payload.deviceName
+    };
+    return true;
+  }
+
+  function showDealerSelectionError(error) {
+    if (!error || !error.data || !error.data.needsDealerSelection) return false;
+    const dealers = error.data.assignedDealers || error.data.activeDealers || [];
+    if (!dealers.length) return false;
+    showDealerSelection(error.data, state.pendingLogin || {});
+    return true;
   }
 
   function startTimers() {
@@ -2141,14 +1816,15 @@
     if (state.session?.token) {
       byId('loginPanel').classList.add('hidden');
       byId('scannerPanel').classList.remove('hidden');
-      state.cameraRequested = true;
-      state.paused = false;
+      state.cameraRequested = false;
       await refreshSessionContext();
       await refreshHealth();
       state.allRows = await getAllRecords().catch(() => []);
       renderAll();
-      await startCamera();
       startTimers();
+      byId('cameraState').textContent = isSecureScannerContext()
+        ? 'Tap Start Camera to begin scanning'
+        : 'Camera is blocked on this HTTP page. Use the secure scanner URL.';
     } else {
       byId('scannerPanel').classList.add('hidden');
       byId('loginPanel').classList.remove('hidden');
@@ -2156,7 +1832,7 @@
     }
 
     if (!state.session?.token) {
-      await Promise.allSettled([loadLoginDealers(), refreshHealth()]);
+      await refreshHealth();
     }
 
     if (state.session?.token) {
@@ -2165,7 +1841,8 @@
     }
 
     if (!state.session?.token) {
-      updateLoginDealerMode(state.loginDealers.length === 0);
+      byId('dealerSelectLabel').classList.add('hidden');
+      byId('dealerCodeInputLabel').classList.remove('hidden');
     }
   }
 

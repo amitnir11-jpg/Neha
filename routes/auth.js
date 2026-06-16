@@ -180,31 +180,6 @@ function dealerAccessIncludes(dealerAccess, dealerCode) {
   };
 }
 
-async function findUserCreationConflict({ username, email, excludeId = '' }) {
-  const criteria = [];
-  if (username) criteria.push({ username });
-  if (email) criteria.push({ email });
-  if (!criteria.length) return null;
-
-  const query = criteria.length === 1
-    ? criteria[0]
-    : { $or: criteria };
-  if (excludeId) query._id = { $ne: excludeId };
-
-  const matches = await User.find(query).select('username email').lean();
-  const usernameMatch = matches.find((user) => cleanUsername(user.username) === username);
-  if (usernameMatch) {
-    return new Error('Username already exists.');
-  }
-  if (email) {
-    const emailMatch = matches.find((user) => cleanEmail(user.email) === email);
-    if (emailMatch) {
-      return new Error('Email already exists.');
-    }
-  }
-  return null;
-}
-
 async function syncUserDealerMappings(userId, dealerAccess = []) {
   const normalized = normalizeDealerAccess(dealerAccess);
   if (!userId) return normalized;
@@ -474,8 +449,8 @@ async function createUserFromPayload(payload, defaults = {}) {
   if (role === 'admin' && !password) throw new Error('Admin users require a password');
   if (['staff', 'mobile_user'].includes(role) && !pin && !password) throw new Error('Staff and Mobile users require a password or 4-digit PIN');
 
-  const duplicate = await findUserCreationConflict({ username, email });
-  if (duplicate) throw duplicate;
+  const duplicate = await User.findOne({ username }).lean();
+  if (duplicate) throw new Error('Username already exists');
 
   const userPayload = {
     username,
@@ -507,19 +482,7 @@ async function createUserFromPayload(payload, defaults = {}) {
   }
   if (!user.passwordHash && !user.pinHash && !user.password && !user.pin) throw new Error('Password or 4-digit PIN is required');
 
-  try {
-    await user.save();
-  } catch (error) {
-    if (error && Number(error.code) === 11000) {
-      const duplicateField = error.keyPattern && Object.keys(error.keyPattern)[0]
-        ? Object.keys(error.keyPattern)[0]
-        : Object.keys(error.keyValue || {})[0];
-      if (duplicateField === 'email') throw new Error('Email already exists.');
-      if (duplicateField === 'username') throw new Error('Username already exists.');
-      throw new Error('User already exists.');
-    }
-    throw error;
-  }
+  await user.save();
   await syncUserDealerMappings(user._id, user.dealerAccess);
   return user;
 }
@@ -590,37 +553,48 @@ router.post('/mobile-login', async (req, res) => {
   try {
     const dealerCode = normalizeAccessCode(req.body.dealerCode || req.body.activeDealerId);
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
-    const secret = String(req.body.passwordOrPin || req.body.secret || req.body.password || req.body.pin || '').trim();
+    const password = String(req.body.password || '');
+    const pin = String(req.body.pin || '').trim();
     if (!username) return res.status(400).json({ success: false, message: 'User ID is required' });
-    if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer code is required' });
     const user = await findUserByLogin(username);
     const ruleError = loginRuleError(user, ['staff', 'mobile_user']);
     if (ruleError) return res.status(401).json({ success: false, message: ruleError });
     let valid = false;
-    if (secret) valid = await compareAndUpgradeSecret(user, secret, ['passwordHash', 'password']);
-    if (!valid) valid = await compareAndUpgradeSecret(user, secret, ['pinHash', 'pin']);
+    if (password) valid = await compareAndUpgradeSecret(user, password, ['passwordHash', 'password']);
+    if (!valid && pin) valid = await compareAndUpgradeSecret(user, pin, ['pinHash', 'pin']);
     if (!valid) return res.status(401).json({ success: false, message: 'Invalid password or PIN' });
     const dealerAccess = await userDealerAccessCodes(user);
     const assignedDealers = await activeDealersForUser(user);
-    const accessCheck = await validateUserDealerAccess(user, dealerCode);
-    if (!accessCheck.userDealerAccess.length || !accessCheck.allowed) {
-      return res.status(403).json({
-        success: false,
-        error: 'Dealer access not assigned',
-        message: 'Dealer access not assigned',
-        requestedDealer: accessCheck.requestedDealer,
-        userDealerAccess: accessCheck.userDealerAccess
+    const selectedDealer = dealerCode || (assignedDealers.length === 1 ? assignedDealers[0].dealerCode : '');
+    if (selectedDealer) {
+      const accessCheck = await validateUserDealerAccess(user, selectedDealer);
+      if (!accessCheck.userDealerAccess.length || !accessCheck.allowed) {
+        return res.status(403).json({
+          success: false,
+          error: 'Dealer access not assigned',
+          message: 'Dealer access not assigned',
+          requestedDealer: accessCheck.requestedDealer,
+          userDealerAccess: accessCheck.userDealerAccess
+        });
+      }
+      return res.json({
+        success: true,
+        token: signToken(user),
+        user: { ...publicUser(user), dealerAccess },
+        dealerCode: accessCheck.requestedDealer,
+        activeDealerId: accessCheck.requestedDealer,
+        assignedDealers,
+        activeDealers: assignedDealers
       });
     }
     return res.json({
       success: true,
       token: signToken(user),
       user: { ...publicUser(user), dealerAccess },
-      dealerCode: accessCheck.requestedDealer,
-      activeDealerId: accessCheck.requestedDealer,
       assignedDealers,
       activeDealers: assignedDealers,
-      message: 'Login verified'
+      needsDealerSelection: true,
+      message: 'Select dealer first'
     });
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });
@@ -701,8 +675,7 @@ router.post('/register', async (req, res) => {
       user: cleanPublicUser(user)
     });
   } catch (error) {
-    const duplicate = /already exists|already registered/i.test(error.message || '') || Number(error.code) === 11000;
-    res.status(duplicate ? 409 : 400).json({ success: false, message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 });
 
@@ -816,8 +789,7 @@ router.post(['/users', '/users/create'], requireAuth, requireAdmin, async (req, 
     const dealerAccess = await userDealerAccessCodes(user);
     res.status(201).json({ success: true, user: { ...cleanPublicUser(user), dealerAccess } });
   } catch (error) {
-    const duplicate = /already exists|already registered/i.test(error.message || '') || Number(error.code) === 11000;
-    res.status(duplicate ? 409 : 400).json({ success: false, message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 });
 
@@ -907,14 +879,11 @@ router.post('/users/:id/email', requireAuth, requireAdmin, async (req, res) => {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ success: false, message: 'Valid email ID is required' });
     }
-    const duplicate = await findUserCreationConflict({ email, excludeId: req.params.id });
-    if (duplicate) throw duplicate;
     const user = await User.findByIdAndUpdate(req.params.id, { email }, { new: true, runValidators: true });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
     res.json({ success: true, user: cleanPublicUser(user) });
   } catch (error) {
-    const duplicate = /already exists|already registered/i.test(error.message || '') || Number(error.code) === 11000;
-    res.status(duplicate ? 409 : 500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 

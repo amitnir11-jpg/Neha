@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260616-mobile-autocamera-compact-fix';
+  const UI_BOOT_VERSION = '20260605-master-user-admin-tools';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -195,8 +195,7 @@
     binMasterRows: [],
     barcodeAutoSaving: false,
     barcodeLastRaw: '',
-    barcodeLastAt: 0,
-    creatingUser: false
+    barcodeLastAt: 0
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -362,10 +361,6 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
-  }
-
-  function formatCount(value) {
-    return Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
   }
 
   function formatDealerDisplay(dealer = {}) {
@@ -883,11 +878,10 @@
 
   function cleanDealerCode(value) {
     const text = String(value || '').trim();
-    if (!text) return '';
-    if (/^all(\s|$)/i.test(text)) return 'ALL';
+    if (text.toLowerCase() === 'all') return 'ALL';
     const match = text.match(/\(([^()]+)\)\s*$/);
     if (match) return match[1].trim().toUpperCase();
-    const dashMatch = text.match(/^([A-Za-z0-9_-]{2,})\s*-\s+.+$/);
+    const dashMatch = text.match(/^([A-Za-z0-9_]{3,})\s+-\s+.+$/);
     return (dashMatch ? dashMatch[1] : text).trim().toUpperCase();
   }
 
@@ -3680,22 +3674,14 @@
     return /^all(\s|$)/i.test(text) ? '' : text;
   }
 
-  function reportDealerCodeFromSelect(select) {
-    const normalizeCandidate = (candidate) => {
-      const code = cleanDealerCode(candidate);
-      if (!code || /^(all|select)\b/i.test(code)) return '';
-      return code;
-    };
-    return normalizeCandidate(select?.value) || normalizeCandidate(selectedOptionText(select));
-  }
-
   function reportParams() {
     const form = $('#reportFilters');
     const formData = formObject(form);
     const reportType = activeReportType();
     const dealerSelect = $('[name="dealerCode"]', form);
-    const selectedDealerCode = reportFilterValue(reportDealerCodeFromSelect(dealerSelect));
-    const selectedDealer = dealerByCode(selectedDealerCode);
+    const selectedDealerCode = reportFilterValue(cleanDealerCode(dealerSelect?.value || ''))
+      || reportFilterValue(cleanDealerCode(selectedOptionText(dealerSelect)));
+    const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === selectedDealerCode);
     const dealerCode = selectedDealer?.dealerCode || selectedDealerCode || '';
     const params = compactParams({
       reportType,
@@ -7516,64 +7502,17 @@
     return dealer.auditorName || dealer.auditorUsername || dealer.auditUserName || '';
   }
 
-  function normalizeUserLookup(value) {
-    return String(value || '').trim().toLowerCase();
-  }
-
-  function findLocalUserCreationConflict(payload = {}) {
-    const username = normalizeUserLookup(payload.username || payload.userId);
-    const email = normalizeUserLookup(payload.email);
-    if (username) {
-      const usernameMatch = (state.users || []).find((user) => normalizeUserLookup(user.username) === username);
-      if (usernameMatch) return 'Username already exists.';
-    }
-    if (email) {
-      const emailMatch = (state.users || []).find((user) => normalizeUserLookup(user.email) === email);
-      if (emailMatch) return 'Email already exists.';
-    }
-    return '';
-  }
-
-  function renderUserSummary() {
-    setText('userSummaryTotal', formatCount(state.users.length));
-    setText('userSummaryApproved', formatCount(state.users.filter((user) => user.approved !== false).length));
-    setText('userSummaryActive', formatCount(state.users.filter((user) => user.active !== false).length));
-  }
-
-  function setCreateUserBusy(isBusy) {
-    state.creatingUser = Boolean(isBusy);
-    const button = $('#createUserSubmitButton');
-    if (button) {
-      button.disabled = state.creatingUser;
-      button.textContent = state.creatingUser ? 'Creating User...' : 'Create User';
-    }
-  }
-
-  function setCreateUserMessage(message = '', type = '') {
-    const node = $('#createUserMessage');
-    if (!node) return;
-    node.className = type ? `form-message create-user-message ${type}` : 'form-message create-user-message';
-    node.textContent = message;
-  }
-
-  async function fetchUsers() {
+  async function loadUsers() {
     if (!state.user || state.user.role !== 'admin') return;
     const data = await api('/api/users');
     state.users = data.users || [];
     renderUsers();
     renderAuditUserOptions();
-    return state.users;
-  }
-
-  async function loadUsers() {
-    return fetchUsers();
   }
 
   function renderUsers() {
-    const rowsNode = $('#userRows');
-    if (!rowsNode) return;
     renderResetUserOptions();
-    rowsNode.innerHTML = state.users.map((user) => `
+    $('#userRows').innerHTML = state.users.map((user) => `
       <tr>
         <td>${escapeHtml(user.name)}</td>
         <td>${escapeHtml(user.username)}</td>
@@ -7596,7 +7535,6 @@
         </td>
       </tr>
     `).join('');
-    renderUserSummary();
 
     $$('.user-action-dropdown').forEach((select) => {
       select.addEventListener('change', () => {
@@ -7672,7 +7610,6 @@
     if (existingIndex >= 0) state.users.splice(existingIndex, 1, user);
     else state.users.unshift(user);
     renderUsers();
-    renderAuditUserOptions();
   }
 
   function openEditUserModal(id) {
@@ -9278,44 +9215,24 @@
     $('#dealerAuditUserSelect')?.addEventListener('change', applySelectedAuditUserToForm);
     $('#createUserForm').addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (state.creatingUser) return;
-      const form = event.currentTarget;
-      const payload = formObject(form);
-      if (payload.role !== 'admin' && !cleanDealerAccessInput(payload.dealerAccess).length) {
-        payload.dealerAccess = selectedScanDealerCode() || selectedDashboardDealerCode() || (state.activeAudit && state.activeAudit.dealerCode) || '';
-      }
-      payload.dealerAccess = cleanDealerAccessInput(payload.dealerAccess);
-      payload.approved = $('[name="approved"]', form).checked;
-      payload.active = $('[name="active"]', form).checked;
-      const conflict = findLocalUserCreationConflict(payload);
-      if (conflict) {
-        setCreateUserMessage(conflict, 'error');
-        toast(conflict, 'error');
-        return;
-      }
-      setCreateUserBusy(true);
-      setCreateUserMessage('Creating user...', 'loading');
       try {
-        const data = await api('/api/users/create', { method: 'POST', body: payload });
-        const successMessage = data.message || 'User created successfully.';
-        setCreateUserMessage(successMessage, 'success');
-        toast(successMessage);
-        form.reset();
-        renderDealerAccessOptions();
-        $('[name="approved"]', form).checked = true;
-        $('[name="active"]', form).checked = true;
-        showCreatedUser(data.user);
-        try {
-          await fetchUsers();
-        } catch (refreshError) {
-          console.warn('User list refresh after create failed:', refreshError.message);
+        const payload = formObject(event.currentTarget);
+        if (payload.role !== 'admin' && !cleanDealerAccessInput(payload.dealerAccess).length) {
+          payload.dealerAccess = selectedScanDealerCode() || selectedDashboardDealerCode() || (state.activeAudit && state.activeAudit.dealerCode) || '';
         }
+        payload.dealerAccess = cleanDealerAccessInput(payload.dealerAccess);
+        payload.approved = $('[name="approved"]', event.currentTarget).checked;
+        payload.active = $('[name="active"]', event.currentTarget).checked;
+        const data = await api('/api/users/create', { method: 'POST', body: payload });
+        toast('User created');
+        event.currentTarget.reset();
+        renderDealerAccessOptions();
+        $('[name="approved"]', event.currentTarget).checked = true;
+        $('[name="active"]', event.currentTarget).checked = true;
+        showCreatedUser(data.user);
+        renderAuditUserOptions();
       } catch (error) {
-        const message = error.message || 'User creation failed';
-        setCreateUserMessage(message, 'error');
-        toast(message, 'error');
-      } finally {
-        setCreateUserBusy(false);
+        toast(error.message, 'error');
       }
     });
     $('#resetUserForm').addEventListener('submit', async (event) => {

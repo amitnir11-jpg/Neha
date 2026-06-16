@@ -21,7 +21,7 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
       lowercase: true,
-      unique: true,
+      index: true,
       sparse: true
     },
     pinHash: {

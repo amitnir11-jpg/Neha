@@ -4,9 +4,7 @@
   "description": "Advanced part inventory audit software with MongoDB, Socket.IO, Excel, PDF, email, backup, and device sync.",
   "main": "server.js",
   "scripts": {
-    "build:client": "node scripts/build-client.js",
-    "build": "npm run build:client && node scripts/build-check.js",
-    "postinstall": "npm run build:client",
+    "build": "node scripts/build-check.js",
     "test": "node scripts/stock-valuation-check.js && node scripts/duplicate-upi-check.js",
     "test:catalogue-upload": "node scripts/catalogue-upload-check.js",
     "start": "node server.js"
@@ -31,7 +29,6 @@
     "jsonwebtoken": "^9.0.2",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
-    "esbuild": "^0.28.1",
     "mongoose": "^8.9.5",
     "multer": "^2.1.1",
     "nodemailer": "^8.0.7",

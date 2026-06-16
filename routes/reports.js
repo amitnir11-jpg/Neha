@@ -26,16 +26,6 @@ function upper(value) {
   return clean(value).toUpperCase();
 }
 
-function normalizeDealerCode(value) {
-  const text = clean(value);
-  if (!text) return '';
-  if (/^all(\s|$)/i.test(text)) return 'ALL';
-  const paren = text.match(/\(([^()]+)\)\s*$/);
-  if (paren) return upper(paren[1]);
-  const dash = text.match(/^([A-Za-z0-9_-]{2,})\s*-\s+.+$/);
-  return upper(dash ? dash[1] : text);
-}
-
 function regex(value) {
   return { $regex: clean(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
 }
@@ -64,8 +54,7 @@ function parseFilterDate(value, endOfDay = false) {
 
 function duplicateReportFilter(query = {}) {
   const filter = {};
-  const dealerCode = normalizeDealerCode(query.dealerCode || query.dealer || query.dealerName || '');
-  if (dealerCode && !/^(ALL|SELECT)\b/.test(dealerCode)) filter.dealerCode = dealerCode;
+  if (query.dealerCode) filter.dealerCode = upper(query.dealerCode);
   if (query.auditId) filter.auditId = clean(query.auditId);
   if (query.partNumber) filter.partNumber = { $regex: clean(query.partNumber), $options: 'i' };
   if (query.scanType) filter.scanType = upper(query.scanType) === 'VERIFICATION' ? '__NO_VERIFICATION_TRANSACTIONS__' : upper(query.scanType);
@@ -83,8 +72,8 @@ function duplicateReportFilter(query = {}) {
 }
 
 function selectedDealerCode(payload = {}) {
-  const dealerCode = normalizeDealerCode(payload.dealerCode || payload.dealer || payload.dealerName || '');
-  return dealerCode && !/^(ALL|SELECT)\b/.test(dealerCode) ? dealerCode : '';
+  const dealerCode = String(payload.dealerCode || '').trim();
+  return dealerCode && dealerCode.toLowerCase() !== 'all' ? dealerCode : '';
 }
 
 function requireDealerSelection(res) {
@@ -123,8 +112,7 @@ async function duplicateReportRows(query = {}) {
 
 function rejectedReportFilter(query = {}) {
   const filter = {};
-  const dealerCode = normalizeDealerCode(query.dealerCode || query.dealer || query.dealerName || '');
-  if (dealerCode && !/^(ALL|SELECT)\b/.test(dealerCode)) filter.dealerCode = dealerCode;
+  if (query.dealerCode) filter.dealerCode = upper(query.dealerCode);
   if (query.partNumber) filter.extractedPartNumber = { $regex: clean(query.partNumber), $options: 'i' };
   if (query.scanType) filter.scanType = upper(query.scanType);
   if (query.bin) filter.binLocation = { $regex: clean(query.bin), $options: 'i' };
