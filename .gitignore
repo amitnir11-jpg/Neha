@@ -11,6 +11,9 @@ Audit Data/
 *.zip
 *.apk
 DEPLOYMENT_NOTES_*.md
+public/js/app.legacy.js
+public/ui.legacy.js
+public/scan.legacy.js
 
 # Runtime markers and local caches
 server_process.pid

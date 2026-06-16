@@ -65,7 +65,7 @@
       window.addEventListener('load', function () {
         mark('window load fired', {
           styleSheets: document.styleSheets ? document.styleSheets.length : 0,
-          appScriptPresent: Boolean(document.querySelector('script[src*="/js/app.js"]'))
+          appScriptPresent: Boolean(document.querySelector('script[src*="/js/app.js"], script[src*="/js/app.legacy.js"]'))
         });
       });
     })();
@@ -346,6 +346,7 @@
     </div>
   </footer>
 
-  <script src="/js/app.js?v=20260612-login-professional" onerror="console.error('[DAKSH_LOGIN_ASSET] app.js failed', this.src)"></script>
+  <script src="/js/cache-reset.js?v=20260616-browser-compat"></script>
+  <script src="/js/app.legacy.js?v=20260616-browser-compat" onerror="console.error('[DAKSH_LOGIN_ASSET] app bundle failed', this.src)"></script>
 </body>
 </html>

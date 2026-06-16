@@ -201,9 +201,76 @@ a {
   padding: 22px;
 }
 
-.grid-login {
+.grid-login,
+.login-panel {
   display: grid;
   gap: 18px;
+}
+
+.login-panel {
+  grid-template-columns: minmax(0, 0.95fr) minmax(320px, 1.05fr);
+  align-items: stretch;
+}
+
+.login-intro {
+  display: grid;
+  gap: 18px;
+  align-content: center;
+  padding: 4px 4px 4px 2px;
+}
+
+.login-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.login-points {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.login-points li {
+  display: flex;
+  gap: 10px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.login-points li::before {
+  content: "";
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  margin-top: 0.56rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 0 4px rgba(67, 199, 255, 0.08);
+}
+
+.login-form-card {
+  display: grid;
+  gap: 18px;
+  border-radius: 24px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(11, 19, 33, 0.84), rgba(7, 12, 22, 0.92));
+}
+
+.login-fields #dealerSelectLabel,
+.login-fields #dealerCodeInputLabel {
+  grid-column: 1 / -1;
+}
+
+.login-form-card .panel-title.compact {
+  align-items: center;
+}
+
+.login-notice {
+  margin: 0;
 }
 
 .panel-title {
@@ -766,6 +833,7 @@ a {
 }
 
 @media (max-width: 980px) {
+  .login-panel,
   .scanner-grid {
     grid-template-columns: 1fr;
   }
@@ -805,10 +873,19 @@ a {
   }
 
   .hero-card,
+  .login-form-card,
   .panel,
   .history-card {
     padding: 18px;
     border-radius: 22px;
+  }
+
+  .login-intro {
+    gap: 16px;
+  }
+
+  .login-points li {
+    font-size: 0.95rem;
   }
 
   .brand-row {

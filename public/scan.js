@@ -469,22 +469,47 @@
   function renderUrlState() {
     const url = canonicalScanUrl();
     state.canonicalUrl = url;
-    byId('scannerUrlText').textContent = url;
-    byId('openScanUrl').href = url;
-    byId('copyUrlBtn').dataset.url = url;
-    byId('copyScannerUrlBtn').dataset.url = url;
+    const scannerUrlText = byId('scannerUrlText');
+    if (scannerUrlText) scannerUrlText.textContent = url;
+    const openScanUrl = byId('openScanUrl');
+    if (openScanUrl) openScanUrl.href = url;
+    const copyUrlBtn = byId('copyUrlBtn');
+    if (copyUrlBtn) copyUrlBtn.dataset.url = url;
+    const copyScannerUrlBtn = byId('copyScannerUrlBtn');
+    if (copyScannerUrlBtn) copyScannerUrlBtn.dataset.url = url;
     const notice = byId('contextNotice');
     const secure = isSecureScannerContext();
     const secureBadge = byId('secureBadge');
-    secureBadge.textContent = secure ? 'Secure' : 'Insecure';
-    secureBadge.className = `status-pill ${secure ? 'online' : 'warning'}`;
+    if (secureBadge) {
+      secureBadge.textContent = secure ? 'Secure' : 'Insecure';
+      secureBadge.className = `status-pill ${secure ? 'online' : 'warning'}`;
+    }
 
-    if (secure) {
+    const health = state.health || {};
+    const dbOnline = health.mongoStatus === 'online' || health.mongodb === 'online' || health.db === 'connected';
+    const dbBadge = byId('dbBadge');
+    if (dbBadge) {
+      if (!state.health) {
+        dbBadge.textContent = 'Database checking...';
+        dbBadge.className = 'status-pill neutral';
+      } else if (dbOnline) {
+        dbBadge.textContent = 'Database Online';
+        dbBadge.className = 'status-pill online';
+      } else {
+        dbBadge.textContent = 'Database Offline';
+        dbBadge.className = 'status-pill warning';
+      }
+    }
+
+    if (notice) {
       notice.hidden = false;
-      notice.textContent = `Use this URL on any browser: ${url}`;
-    } else {
-      notice.hidden = false;
-      notice.textContent = `Camera access is blocked on this HTTP page. Open the secure Railway URL instead: ${url}`;
+      if (state.health && !dbOnline) {
+        notice.textContent = 'Database connection is offline right now, so sign-in cannot complete. Please retry after MongoDB reconnects.';
+      } else if (secure) {
+        notice.textContent = 'Sign in with your inventory credentials to open the live scanner.';
+      } else {
+        notice.textContent = 'Open the secure scanner URL to enable camera access on this phone.';
+      }
     }
   }
 
@@ -1044,7 +1069,7 @@
     }
   }
 
-  function handleAuthExpired(error) {
+  function resetScannerSession() {
     stopCamera({ preserveRequest: false });
     clearInterval(state.syncTimer);
     clearInterval(state.heartbeatTimer);
@@ -1055,8 +1080,37 @@
     state.pendingLogin = null;
     state.manualRaw = '';
     state.manualResumeAfterClose = false;
+
+    const loginForm = byId('loginForm');
+    if (loginForm) {
+      loginForm.reset();
+      if (loginForm.elements.deviceName) loginForm.elements.deviceName.value = DEFAULT_DEVICE_NAME;
+      if (loginForm.elements.secret) loginForm.elements.secret.value = '';
+      if (loginForm.elements.dealerCode) loginForm.elements.dealerCode.value = '';
+    }
+
+    const dealerSelect = byId('loginDealerSelect');
+    if (dealerSelect) dealerSelect.innerHTML = '';
+    const dealerSelectLabel = byId('dealerSelectLabel');
+    if (dealerSelectLabel) dealerSelectLabel.classList.add('hidden');
+    const dealerCodeLabel = byId('dealerCodeInputLabel');
+    if (dealerCodeLabel) dealerCodeLabel.classList.add('hidden');
+
     updateScannerPanel();
+    renderAll();
+
+    const loginMessage = byId('loginMessage');
+    if (loginMessage) loginMessage.textContent = 'Your scanner session opens right after authentication.';
+  }
+
+  function handleAuthExpired(error) {
+    resetScannerSession();
     toast(error?.message || 'Login expired. Please sign in again.', 'error');
+  }
+
+  function logout() {
+    resetScannerSession();
+    toast('Signed out', 'info');
   }
 
   function ensureScanSession() {
@@ -1528,8 +1582,8 @@
   }
 
   function bindEvents() {
-    byId('copyUrlBtn').addEventListener('click', () => copyScanUrl());
-    byId('copyScannerUrlBtn').addEventListener('click', () => copyScanUrl());
+    byId('copyUrlBtn')?.addEventListener('click', () => copyScanUrl());
+    byId('copyScannerUrlBtn')?.addEventListener('click', () => copyScanUrl());
     byId('loginForm').addEventListener('submit', (event) => {
       void submitLogin(event);
     });
@@ -1621,8 +1675,15 @@
     const form = new FormData(event.currentTarget);
     const selectedDealer = upper(form.get('selectedDealerCode') || form.get('dealerCode'));
     const username = clean(form.get('username') || state.pendingLogin?.username || '');
-    const password = String(form.get('password') || state.pendingLogin?.password || '');
-    const pin = String(form.get('pin') || state.pendingLogin?.pin || '');
+    const secret = String(
+      form.get('secret') ||
+      form.get('password') ||
+      form.get('pin') ||
+      state.pendingLogin?.secret ||
+      state.pendingLogin?.password ||
+      state.pendingLogin?.pin ||
+      ''
+    );
     const deviceName = clean(form.get('deviceName')) || DEFAULT_DEVICE_NAME;
 
     if (state.pendingLogin && !selectedDealer) {
@@ -1633,8 +1694,9 @@
     const payload = {
       ...(state.pendingLogin || {}),
       username,
-      password,
-      pin,
+      secret,
+      password: secret,
+      pin: secret,
       dealerCode: selectedDealer,
       deviceId: deviceId(),
       deviceName,
@@ -1678,9 +1740,10 @@
       saveSession(session);
       state.allRows = await getAllRecords().catch(() => []);
       byId('loginMessage').textContent = '';
-      byId('dealerSelectLabel').classList.add('hidden');
-      byId('dealerCodeInputLabel').classList.remove('hidden');
-      byId('loginDealerSelect').innerHTML = '';
+      byId('dealerSelectLabel')?.classList.add('hidden');
+      byId('dealerCodeInputLabel')?.classList.remove('hidden');
+      const dealerSelect = byId('loginDealerSelect');
+      if (dealerSelect) dealerSelect.innerHTML = '';
       state.cameraRequested = false;
       state.paused = false;
       updateScannerPanel();
@@ -1712,11 +1775,13 @@
     }).join('');
     byId('dealerSelectLabel').classList.remove('hidden');
     byId('dealerCodeInputLabel').classList.add('hidden');
+    const dealerCodeInput = byId('loginForm')?.elements?.dealerCode;
+    if (dealerCodeInput) dealerCodeInput.value = '';
+    select.value = '';
     byId('loginMessage').textContent = 'Select a dealer, then tap Login again.';
     state.pendingLogin = {
       username: payload.username,
-      password: payload.password,
-      pin: payload.pin,
+      secret: payload.secret || payload.password || payload.pin || '',
       deviceName: payload.deviceName
     };
     return true;

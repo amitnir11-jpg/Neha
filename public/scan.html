@@ -14,67 +14,69 @@
   <div class="page-orb orb-b" aria-hidden="true"></div>
 
   <main class="app-shell">
-    <section class="hero-card glass-card">
-      <div class="hero-copy">
+    <section id="loginPanel" class="panel login-panel">
+      <div class="login-intro">
         <span class="eyebrow">Mobile Part Scanning</span>
         <div class="brand-row">
           <div class="brand-mark">DS</div>
           <div>
             <h1>Daksh Scan</h1>
             <p class="hero-text">
-              Fresh mobile scanner for quick login, camera capture, offline queueing, and automatic sync back to the inventory app.
+              Secure mobile login for fast part capture, offline queueing, and automatic sync back to the inventory app.
             </p>
           </div>
         </div>
-      </div>
 
-      <div class="hero-actions">
-        <button id="copyUrlBtn" class="btn btn-secondary" type="button" data-testid="copy-url">Copy Scan URL</button>
-        <a id="openScanUrl" class="btn btn-ghost" href="/mobile-scanner" target="_blank" rel="noopener noreferrer">Open URL</a>
-      </div>
-
-      <div id="contextNotice" class="notice" role="status" hidden></div>
-    </section>
-
-    <section id="loginPanel" class="panel grid-login">
-      <div class="panel-title">
-        <div>
-          <span class="panel-tag">Secure Login</span>
-          <h2>Sign in to scan parts</h2>
+        <div class="login-badges">
+          <span id="secureBadge" class="status-pill neutral">Checking...</span>
+          <span id="dbBadge" class="status-pill neutral">Database checking...</span>
         </div>
-        <span id="secureBadge" class="status-pill neutral">Checking...</span>
+
+        <div id="contextNotice" class="notice login-notice" role="status" hidden></div>
+
+        <ul class="login-points" aria-label="Login benefits">
+          <li>Password or PIN sign-in</li>
+          <li>Dealer selection appears automatically when needed</li>
+          <li>Scans queue locally when the network drops</li>
+        </ul>
       </div>
 
-      <form id="loginForm" class="login-form" autocomplete="on" novalidate>
-        <div class="field-grid">
-          <label class="field">
-            <span>User ID / Username / Email</span>
-            <input name="username" autocomplete="username" required placeholder="Enter user ID">
-          </label>
-          <label class="field">
-            <span>Password</span>
-            <input name="password" type="password" autocomplete="current-password" placeholder="Enter password">
-          </label>
-          <label class="field">
-            <span>PIN</span>
-            <input name="pin" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="Optional PIN">
-          </label>
-          <label id="dealerCodeInputLabel" class="field">
-            <span>Dealer Code</span>
-            <input name="dealerCode" autocapitalize="characters" placeholder="Dealer code">
-          </label>
-          <label id="dealerSelectLabel" class="field hidden">
-            <span>Select Dealer</span>
-            <select id="loginDealerSelect" name="selectedDealerCode"></select>
-          </label>
-          <label class="field">
-            <span>Device Name</span>
-            <input name="deviceName" placeholder="Android Chrome">
-          </label>
+      <div class="login-form-card">
+        <div class="panel-title compact">
+          <div>
+            <span class="panel-tag">Secure Login</span>
+            <h2>Sign in to continue</h2>
+          </div>
+          <span class="status-pill neutral">Mobile ready</span>
         </div>
-        <button class="btn btn-primary login-btn" type="submit" data-testid="login-submit">Login &amp; Open Scanner</button>
-        <p id="loginMessage" class="field-message" aria-live="polite"></p>
-      </form>
+
+        <form id="loginForm" class="login-form" autocomplete="on" novalidate>
+          <div class="field-grid login-fields">
+            <label class="field">
+              <span>User ID / Username / Email</span>
+              <input name="username" autocomplete="username" required placeholder="Enter user ID">
+            </label>
+            <label class="field">
+              <span>Password or PIN</span>
+              <input name="secret" type="password" autocomplete="current-password" required placeholder="Enter password or 4-digit PIN">
+            </label>
+            <label id="dealerCodeInputLabel" class="field hidden">
+              <span>Dealer Code</span>
+              <input name="dealerCode" autocapitalize="characters" placeholder="Dealer code">
+            </label>
+            <label id="dealerSelectLabel" class="field hidden">
+              <span>Select Dealer</span>
+              <select id="loginDealerSelect" name="selectedDealerCode"></select>
+            </label>
+            <label class="field hidden">
+              <span>Device Name</span>
+              <input name="deviceName" value="Daksh Web Scanner" placeholder="Daksh Web Scanner">
+            </label>
+          </div>
+          <button class="btn btn-primary login-btn" type="submit" data-testid="login-submit">Sign In</button>
+          <p id="loginMessage" class="field-message" aria-live="polite">Your scanner session opens right after authentication.</p>
+        </form>
+      </div>
     </section>
 
     <section id="scannerPanel" class="panel scanner-panel hidden" aria-live="polite">
@@ -263,6 +265,7 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="/scan.js?v=20260615-fresh-scan"></script>
+  <script src="/js/cache-reset.js?v=20260616-browser-compat"></script>
+  <script src="/scan.legacy.js?v=20260616-browser-compat"></script>
 </body>
 </html>

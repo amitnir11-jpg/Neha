@@ -126,6 +126,15 @@ const MONGO_DB_NAME = String(process.env.MONGO_DB_NAME || 'daksh_inventory_v2').
 const MOBILE_DISCOVERY_PORT = Number(process.env.MOBILE_DISCOVERY_PORT || PORT);
 const MOBILE_DISCOVERY_REQUEST = 'DAKSH_DISCOVER_V1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
+function setNoStoreHeaders(res) {
+  res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+}
+function sendNoStoreFile(res, fileName) {
+  setNoStoreHeaders(res);
+  return res.sendFile(path.join(PUBLIC_DIR, fileName));
+}
 const activePort = () => app.locals.activePort || PORT;
 const scannerManager = new ScannerManager({ io, activeAuditProvider: getActiveAudit });
 const deviceDiscoveryService = new DeviceDiscoveryService({ portProvider: activePort });
@@ -211,6 +220,26 @@ mongoose.connection.on('reconnected', () => {
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use((req, res, next) => {
+  if (req.method === 'GET') {
+    const requestPath = String(req.path || '');
+    if (
+      requestPath === '/' ||
+      requestPath === '/login' ||
+      requestPath === '/dashboard' ||
+      requestPath === '/report' ||
+      requestPath === '/scan' ||
+      requestPath === '/scan/' ||
+      requestPath === '/mobile' ||
+      requestPath === '/mobile-scanner' ||
+      requestPath === '/mobile-scanner/' ||
+      /\.html$/i.test(requestPath)
+    ) {
+      setNoStoreHeaders(res);
+    }
+  }
+  next();
+});
 
 function envNumber(name, fallback) {
   const value = Number(process.env[name]);
@@ -907,20 +936,15 @@ app.get(['/apk', '/download-apk', '/api/apk/download'], (req, res) => {
 });
 
 app.get(['/scan', '/scan/'], (req, res) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
+  sendNoStoreFile(res, 'scan.html');
 });
 
 app.get(['/mobile', '/mobile-scanner', '/mobile-scanner/'], (req, res) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
+  sendNoStoreFile(res, 'scan.html');
 });
 
 app.get('/force-login', (req, res) => {
+  setNoStoreHeaders(res);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Daksh Logout</title></head>
@@ -1130,15 +1154,15 @@ app.use('/api/sync', syncRoutes);
 app.use('/api/mobile', require('./routes/mobile'));
 
 app.get(['/', '/login'], (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+  sendNoStoreFile(res, 'index.html');
 });
 
 app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'Daksh.html'));
+  sendNoStoreFile(res, 'Daksh.html');
 });
 
 app.get('/report', (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'report.html'));
+  sendNoStoreFile(res, 'report.html');
 });
 
 app.use('/api', (req, res) => {
@@ -1168,12 +1192,12 @@ app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/socket.io') || path.extname(req.path)) {
     return next();
   }
-  return res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+  return sendNoStoreFile(res, 'index.html');
 });
 
 app.use((req, res) => {
   if (path.extname(req.path)) return res.status(404).send('Not found');
-  return res.status(404).sendFile(path.join(PUBLIC_DIR, 'index.html'));
+  return sendNoStoreFile(res, 'index.html');
 });
 
 io.on('connection', (socket) => {
