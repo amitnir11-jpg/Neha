@@ -199,7 +199,7 @@ async function findUserCreationConflict({ username, email, excludeId = '' }) {
   if (email) {
     const emailMatch = matches.find((user) => cleanEmail(user.email) === email);
     if (emailMatch) {
-      return new Error('Email already registered.');
+      return new Error('Email already exists.');
     }
   }
   return null;
@@ -514,7 +514,7 @@ async function createUserFromPayload(payload, defaults = {}) {
       const duplicateField = error.keyPattern && Object.keys(error.keyPattern)[0]
         ? Object.keys(error.keyPattern)[0]
         : Object.keys(error.keyValue || {})[0];
-      if (duplicateField === 'email') throw new Error('Email already registered.');
+      if (duplicateField === 'email') throw new Error('Email already exists.');
       if (duplicateField === 'username') throw new Error('Username already exists.');
       throw new Error('User already exists.');
     }

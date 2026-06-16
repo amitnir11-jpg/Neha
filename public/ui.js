@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260616-user-create-hardening';
+  const UI_BOOT_VERSION = '20260616-master-user-refresh-fix';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -362,6 +362,10 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  function formatCount(value) {
+    return Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
   }
 
   function formatDealerDisplay(dealer = {}) {
@@ -7525,15 +7529,15 @@
     }
     if (email) {
       const emailMatch = (state.users || []).find((user) => normalizeUserLookup(user.email) === email);
-      if (emailMatch) return 'Email already registered.';
+      if (emailMatch) return 'Email already exists.';
     }
     return '';
   }
 
   function renderUserSummary() {
-    setText('userSummaryTotal', H(state.users.length));
-    setText('userSummaryApproved', H(state.users.filter((user) => user.approved !== false).length));
-    setText('userSummaryActive', H(state.users.filter((user) => user.active !== false).length));
+    setText('userSummaryTotal', formatCount(state.users.length));
+    setText('userSummaryApproved', formatCount(state.users.filter((user) => user.approved !== false).length));
+    setText('userSummaryActive', formatCount(state.users.filter((user) => user.active !== false).length));
   }
 
   function setCreateUserBusy(isBusy) {

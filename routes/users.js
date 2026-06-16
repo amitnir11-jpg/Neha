@@ -77,7 +77,7 @@ router.put('/:id', async (req, res) => {
           return res.status(409).json({ success: false, message: 'Username already exists.' });
         }
         if (update.email && cleanEmail(duplicate.email) === update.email) {
-          return res.status(409).json({ success: false, message: 'Email already registered.' });
+          return res.status(409).json({ success: false, message: 'Email already exists.' });
         }
         return res.status(409).json({ success: false, message: 'User already exists.' });
       }
