@@ -79,7 +79,7 @@ const QRPairService = require('./services/QRPairService');
 const OfflineSyncService = require('./services/OfflineSyncService');
 
 const app = express();
-app.locals.reportRoutesVersion = 'dealer-report-dlc-20260602';
+app.locals.reportRoutesVersion = 'dealer-report-dlc-20260616';
 app.locals.deployConfigVersion = 'railway-mongo-env-20260614';
 const server = http.createServer(app);
 const io = new Server(server, {

@@ -878,10 +878,11 @@
 
   function cleanDealerCode(value) {
     const text = String(value || '').trim();
-    if (text.toLowerCase() === 'all') return 'ALL';
+    if (!text) return '';
+    if (/^all(\s|$)/i.test(text)) return 'ALL';
     const match = text.match(/\(([^()]+)\)\s*$/);
     if (match) return match[1].trim().toUpperCase();
-    const dashMatch = text.match(/^([A-Za-z0-9_]{3,})\s+-\s+.+$/);
+    const dashMatch = text.match(/^([A-Za-z0-9_-]{2,})\s*-\s+.+$/);
     return (dashMatch ? dashMatch[1] : text).trim().toUpperCase();
   }
 
@@ -3674,14 +3675,22 @@
     return /^all(\s|$)/i.test(text) ? '' : text;
   }
 
+  function reportDealerCodeFromSelect(select) {
+    const normalizeCandidate = (candidate) => {
+      const code = cleanDealerCode(candidate);
+      if (!code || /^(all|select)\b/i.test(code)) return '';
+      return code;
+    };
+    return normalizeCandidate(select?.value) || normalizeCandidate(selectedOptionText(select));
+  }
+
   function reportParams() {
     const form = $('#reportFilters');
     const formData = formObject(form);
     const reportType = activeReportType();
     const dealerSelect = $('[name="dealerCode"]', form);
-    const selectedDealerCode = reportFilterValue(cleanDealerCode(dealerSelect?.value || ''))
-      || reportFilterValue(cleanDealerCode(selectedOptionText(dealerSelect)));
-    const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === selectedDealerCode);
+    const selectedDealerCode = reportFilterValue(reportDealerCodeFromSelect(dealerSelect));
+    const selectedDealer = dealerByCode(selectedDealerCode);
     const dealerCode = selectedDealer?.dealerCode || selectedDealerCode || '';
     const params = compactParams({
       reportType,
