@@ -1,5 +1,5 @@
 (function () {
-  var CACHE_RESET_VERSION = '20260616-report-dealer-fix';
+  var CACHE_RESET_VERSION = '20260616-mobile-login-dealer-fix';
   var CACHE_RESET_KEY = 'dakshCacheResetVersion';
 
   function readStoredVersion() {

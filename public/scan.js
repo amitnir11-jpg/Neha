@@ -1,6 +1,6 @@
 (function () {
-  const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.0';
-  const CACHE_VERSION = '20260615-fresh-scan';
+  const APP_VERSION = 'Daksh Fresh Web Scanner v1.1.0';
+  const CACHE_VERSION = '20260616-mobile-login-dealer-fix';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -16,7 +16,7 @@
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260615-fresh-scan';
+  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-login-dealer-fix';
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -25,7 +25,6 @@
   const state = {
     db: null,
     session: loadSession(),
-    pendingLogin: null,
     canonicalUrl: '',
     mode: loadMode(),
     allRows: [],
@@ -47,8 +46,12 @@
     cameraDevices: [],
     selectedCameraId: storageGet(CAMERA_KEY, ''),
     health: null,
+    healthStatus: 'checking',
+    healthMessage: '',
     authReady: false,
-    zxingPromise: null
+    zxingPromise: null,
+    loginDealers: [],
+    loginBusy: false
   };
 
   const MODE_INFO = {
@@ -332,6 +335,70 @@
     }, 3200);
   }
 
+  function setLoginMessage(message = '', kind = '') {
+    const node = byId('loginMessage');
+    if (!node) return;
+    node.textContent = message;
+    node.className = kind ? `field-message ${kind}` : 'field-message';
+  }
+
+  function setLoginBusy(isBusy) {
+    state.loginBusy = Boolean(isBusy);
+    const button = byId('loginForm')?.querySelector('.login-btn');
+    if (!button) return;
+    button.disabled = state.loginBusy;
+    button.textContent = state.loginBusy ? 'Signing In...' : 'Sign In';
+  }
+
+  function renderLoginDealerOptions(dealers = []) {
+    const select = byId('loginDealerSelect');
+    if (!select) return;
+    const current = upper(select.value || '');
+    const options = ['<option value="">Select dealer code</option>'];
+    dealers.forEach((dealer) => {
+      const code = upper(dealer.dealerCode || dealer.code || dealer.id || '');
+      if (!code) return;
+      const name = clean(dealer.dealerName || dealer.name || '');
+      options.push(`<option value="${escapeHtml(code)}">${escapeHtml(code)}${name ? ` - ${escapeHtml(name)}` : ''}</option>`);
+    });
+    select.innerHTML = options.join('');
+    if (current && Array.from(select.options).some((option) => upper(option.value) === current)) {
+      select.value = current;
+    } else if (state.session?.dealerCode) {
+      select.value = upper(state.session.dealerCode);
+    }
+  }
+
+  function updateLoginDealerMode(useManualFallback = false) {
+    const selectLabel = byId('dealerSelectLabel');
+    const manualLabel = byId('dealerCodeInputLabel');
+    if (selectLabel) selectLabel.classList.remove('hidden');
+    if (manualLabel) manualLabel.classList.toggle('hidden', !useManualFallback);
+    const select = byId('loginDealerSelect');
+    if (select) select.disabled = Boolean(useManualFallback);
+  }
+
+  async function loadLoginDealers() {
+    try {
+      const data = await api('/api/mobile/public-dealers', { auth: false });
+      state.loginDealers = Array.isArray(data.dealers) ? data.dealers : [];
+      renderLoginDealerOptions(state.loginDealers);
+      updateLoginDealerMode(state.loginDealers.length === 0);
+      if (state.loginDealers.length) {
+        setLoginMessage('Select your dealer code, then sign in.');
+      } else {
+        setLoginMessage('Dealer list unavailable. Enter dealer code manually.', 'warning');
+      }
+      return state.loginDealers;
+    } catch (error) {
+      state.loginDealers = [];
+      renderLoginDealerOptions([]);
+      updateLoginDealerMode(true);
+      setLoginMessage(error.message || 'Dealer list unavailable. Enter dealer code manually.', 'warning');
+      return [];
+    }
+  }
+
   function beep(type = 'ok') {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -489,22 +556,24 @@
     const dbOnline = health.mongoStatus === 'online' || health.mongodb === 'online' || health.db === 'connected';
     const dbBadge = byId('dbBadge');
     if (dbBadge) {
-      if (!state.health) {
-        dbBadge.textContent = 'Database checking...';
+      if (state.healthStatus === 'checking') {
+        dbBadge.textContent = 'Checking...';
         dbBadge.className = 'status-pill neutral';
-      } else if (dbOnline) {
-        dbBadge.textContent = 'Database Online';
+      } else if (dbOnline || state.healthStatus === 'online') {
+        dbBadge.textContent = 'Database connected';
         dbBadge.className = 'status-pill online';
       } else {
-        dbBadge.textContent = 'Database Offline';
+        dbBadge.textContent = 'Database offline';
         dbBadge.className = 'status-pill warning';
       }
     }
 
     if (notice) {
       notice.hidden = false;
-      if (state.health && !dbOnline) {
-        notice.textContent = 'Database connection is offline right now, so sign-in cannot complete. Please retry after MongoDB reconnects.';
+      if (state.healthStatus === 'checking') {
+        notice.textContent = 'Checking database connection...';
+      } else if (state.healthStatus === 'offline' || (state.health && !dbOnline)) {
+        notice.textContent = state.healthMessage || 'Server not reachable. Please check internet or try again.';
       } else if (secure) {
         notice.textContent = 'Sign in with your inventory credentials to open the live scanner.';
       } else {
@@ -707,8 +776,6 @@
     byId('loginPanel').classList.toggle('hidden', loggedIn);
     byId('scannerPanel').classList.toggle('hidden', !loggedIn);
     if (!loggedIn) return;
-    byId('dealerCodeInputLabel').classList.remove('hidden');
-    byId('dealerSelectLabel').classList.add('hidden');
     renderAll();
   }
 
@@ -1024,10 +1091,18 @@
     };
   }
 
-  async function refreshHealth() {
+  async function refreshHealth(timeoutMs = 2000) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    state.healthStatus = 'checking';
+    state.healthMessage = '';
+    renderAll();
     try {
-      const health = await api('/api/health', { auth: false });
+      const health = await api('/api/health', { auth: false, signal: controller ? controller.signal : undefined });
       state.health = health;
+      const dbOnline = health.mongoStatus === 'online' || health.mongodb === 'online' || health.db === 'connected';
+      state.healthStatus = dbOnline ? 'online' : 'offline';
+      state.healthMessage = dbOnline ? '' : 'Server not reachable. Please check internet or try again.';
       if (health.mobileScannerUrl) {
         state.canonicalUrl = health.mobileScannerUrl;
       }
@@ -1035,8 +1110,14 @@
       return health;
     } catch (error) {
       state.health = null;
+      state.healthStatus = 'offline';
+      state.healthMessage = error && error.name === 'AbortError'
+        ? 'Server not reachable. Please check internet or try again.'
+        : (error.message || 'Server not reachable. Please check internet or try again.');
       renderAll();
       return null;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -1073,11 +1154,11 @@
     stopCamera({ preserveRequest: false });
     clearInterval(state.syncTimer);
     clearInterval(state.heartbeatTimer);
+    setLoginBusy(false);
     state.syncTimer = null;
     state.heartbeatTimer = null;
     clearSession();
     state.allRows = [];
-    state.pendingLogin = null;
     state.manualRaw = '';
     state.manualResumeAfterClose = false;
 
@@ -1087,20 +1168,17 @@
       if (loginForm.elements.deviceName) loginForm.elements.deviceName.value = DEFAULT_DEVICE_NAME;
       if (loginForm.elements.secret) loginForm.elements.secret.value = '';
       if (loginForm.elements.dealerCode) loginForm.elements.dealerCode.value = '';
+      if (loginForm.elements.dealerCodeManual) loginForm.elements.dealerCodeManual.value = '';
     }
 
     const dealerSelect = byId('loginDealerSelect');
-    if (dealerSelect) dealerSelect.innerHTML = '';
-    const dealerSelectLabel = byId('dealerSelectLabel');
-    if (dealerSelectLabel) dealerSelectLabel.classList.add('hidden');
-    const dealerCodeLabel = byId('dealerCodeInputLabel');
-    if (dealerCodeLabel) dealerCodeLabel.classList.add('hidden');
+    if (dealerSelect) dealerSelect.value = '';
+    updateLoginDealerMode(state.loginDealers.length === 0);
 
     updateScannerPanel();
     renderAll();
 
-    const loginMessage = byId('loginMessage');
-    if (loginMessage) loginMessage.textContent = 'Your scanner session opens right after authentication.';
+    setLoginMessage('Select a dealer code, then sign in.');
   }
 
   function handleAuthExpired(error) {
@@ -1672,28 +1750,44 @@
 
   async function submitLogin(event) {
     event.preventDefault();
+    if (state.loginBusy) return;
     const form = new FormData(event.currentTarget);
-    const selectedDealer = upper(form.get('selectedDealerCode') || form.get('dealerCode'));
-    const username = clean(form.get('username') || state.pendingLogin?.username || '');
-    const secret = String(
-      form.get('secret') ||
-      form.get('password') ||
-      form.get('pin') ||
-      state.pendingLogin?.secret ||
-      state.pendingLogin?.password ||
-      state.pendingLogin?.pin ||
-      ''
-    );
+    const selectedDealer = upper(form.get('dealerCode') || form.get('dealerCodeManual') || form.get('selectedDealerCode'));
+    const username = clean(form.get('username'));
+    const secret = String(form.get('secret') || form.get('password') || form.get('pin') || '');
     const deviceName = clean(form.get('deviceName')) || DEFAULT_DEVICE_NAME;
 
-    if (state.pendingLogin && !selectedDealer) {
-      byId('loginMessage').textContent = 'Select a dealer to continue.';
+    console.log('Selected dealer:', selectedDealer);
+    console.log('Mobile login payload:', {
+      username,
+      dealerCode: selectedDealer,
+      passwordOrPin: secret ? '[masked]' : '',
+      deviceId: deviceId(),
+      deviceName,
+      appVersion: APP_VERSION
+    });
+
+    if (!selectedDealer) {
+      setLoginMessage('Please select dealer code before login.', 'error');
+      toast('Please select dealer code before login.', 'error');
+      return;
+    }
+
+    if (!username) {
+      setLoginMessage('User ID is required.', 'error');
+      toast('User ID is required', 'error');
+      return;
+    }
+
+    if (!secret) {
+      setLoginMessage('Password or PIN is required.', 'error');
+      toast('Password or PIN is required', 'error');
       return;
     }
 
     const payload = {
-      ...(state.pendingLogin || {}),
       username,
+      passwordOrPin: secret,
       secret,
       password: secret,
       pin: secret,
@@ -1704,17 +1798,24 @@
       model: navigator.userAgent.slice(0, 120)
     };
 
-    byId('loginMessage').textContent = 'Signing in...';
+    setLoginBusy(true);
+    setLoginMessage('Signing in...', 'loading');
     try {
       const response = await api('/api/mobile/login', {
         method: 'POST',
         auth: false,
         body: payload
       });
-
-      if (!response.dealerCode && response.needsDealerSelection && showDealerSelection(response, payload)) {
-        return;
-      }
+      console.log('Login response:', {
+        success: response.success,
+        dealerCode: response.dealerCode || selectedDealer,
+        activeDealerId: response.activeDealerId || '',
+        message: response.message || '',
+        assignedDealers: Array.isArray(response.assignedDealers) ? response.assignedDealers.map((dealer) => ({
+          dealerCode: dealer.dealerCode || dealer.code || dealer.id || '',
+          dealerName: dealer.dealerName || dealer.name || ''
+        })) : []
+      });
 
       const session = {
         ...state.session,
@@ -1736,14 +1837,11 @@
         role: response.user?.role || ''
       };
 
-      state.pendingLogin = null;
       saveSession(session);
       state.allRows = await getAllRecords().catch(() => []);
-      byId('loginMessage').textContent = '';
-      byId('dealerSelectLabel')?.classList.add('hidden');
-      byId('dealerCodeInputLabel')?.classList.remove('hidden');
+      setLoginMessage(response.message || 'Login successful.', 'success');
       const dealerSelect = byId('loginDealerSelect');
-      if (dealerSelect) dealerSelect.innerHTML = '';
+      if (dealerSelect && session.dealerCode) dealerSelect.value = upper(session.dealerCode);
       state.cameraRequested = false;
       state.paused = false;
       updateScannerPanel();
@@ -1758,41 +1856,12 @@
       toast('Login successful', 'success');
       sendHeartbeat().catch(() => undefined);
     } catch (error) {
-      if (showDealerSelectionError(error)) return;
-      byId('loginMessage').textContent = error.message;
-      toast(error.message, 'error');
+      const message = error?.data?.message || error.message || 'Login failed';
+      setLoginMessage(message, 'error');
+      toast(message, 'error');
+    } finally {
+      setLoginBusy(false);
     }
-  }
-
-  function showDealerSelection(response, payload) {
-    const dealers = response.assignedDealers || response.activeDealers || [];
-    if (!dealers.length) return false;
-    const select = byId('loginDealerSelect');
-    select.innerHTML = '<option value="">Select dealer</option>' + dealers.map((dealer) => {
-      const code = upper(dealer.dealerCode || dealer.code || dealer.id || '');
-      const name = clean(dealer.dealerName || dealer.name || '');
-      return `<option value="${escapeHtml(code)}">${escapeHtml(code)}${name ? ` - ${escapeHtml(name)}` : ''}</option>`;
-    }).join('');
-    byId('dealerSelectLabel').classList.remove('hidden');
-    byId('dealerCodeInputLabel').classList.add('hidden');
-    const dealerCodeInput = byId('loginForm')?.elements?.dealerCode;
-    if (dealerCodeInput) dealerCodeInput.value = '';
-    select.value = '';
-    byId('loginMessage').textContent = 'Select a dealer, then tap Login again.';
-    state.pendingLogin = {
-      username: payload.username,
-      secret: payload.secret || payload.password || payload.pin || '',
-      deviceName: payload.deviceName
-    };
-    return true;
-  }
-
-  function showDealerSelectionError(error) {
-    if (!error || !error.data || !error.data.needsDealerSelection) return false;
-    const dealers = error.data.assignedDealers || error.data.activeDealers || [];
-    if (!dealers.length) return false;
-    showDealerSelection(error.data, state.pendingLogin || {});
-    return true;
   }
 
   function startTimers() {
@@ -1897,7 +1966,7 @@
     }
 
     if (!state.session?.token) {
-      await refreshHealth();
+      await Promise.allSettled([loadLoginDealers(), refreshHealth()]);
     }
 
     if (state.session?.token) {
@@ -1906,8 +1975,7 @@
     }
 
     if (!state.session?.token) {
-      byId('dealerSelectLabel').classList.add('hidden');
-      byId('dealerCodeInputLabel').classList.remove('hidden');
+      updateLoginDealerMode(state.loginDealers.length === 0);
     }
   }
 

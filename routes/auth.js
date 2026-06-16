@@ -590,48 +590,37 @@ router.post('/mobile-login', async (req, res) => {
   try {
     const dealerCode = normalizeAccessCode(req.body.dealerCode || req.body.activeDealerId);
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
-    const password = String(req.body.password || '');
-    const pin = String(req.body.pin || '').trim();
+    const secret = String(req.body.passwordOrPin || req.body.secret || req.body.password || req.body.pin || '').trim();
     if (!username) return res.status(400).json({ success: false, message: 'User ID is required' });
+    if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer code is required' });
     const user = await findUserByLogin(username);
     const ruleError = loginRuleError(user, ['staff', 'mobile_user']);
     if (ruleError) return res.status(401).json({ success: false, message: ruleError });
     let valid = false;
-    if (password) valid = await compareAndUpgradeSecret(user, password, ['passwordHash', 'password']);
-    if (!valid && pin) valid = await compareAndUpgradeSecret(user, pin, ['pinHash', 'pin']);
+    if (secret) valid = await compareAndUpgradeSecret(user, secret, ['passwordHash', 'password']);
+    if (!valid) valid = await compareAndUpgradeSecret(user, secret, ['pinHash', 'pin']);
     if (!valid) return res.status(401).json({ success: false, message: 'Invalid password or PIN' });
     const dealerAccess = await userDealerAccessCodes(user);
     const assignedDealers = await activeDealersForUser(user);
-    const selectedDealer = dealerCode || (assignedDealers.length === 1 ? assignedDealers[0].dealerCode : '');
-    if (selectedDealer) {
-      const accessCheck = await validateUserDealerAccess(user, selectedDealer);
-      if (!accessCheck.userDealerAccess.length || !accessCheck.allowed) {
-        return res.status(403).json({
-          success: false,
-          error: 'Dealer access not assigned',
-          message: 'Dealer access not assigned',
-          requestedDealer: accessCheck.requestedDealer,
-          userDealerAccess: accessCheck.userDealerAccess
-        });
-      }
-      return res.json({
-        success: true,
-        token: signToken(user),
-        user: { ...publicUser(user), dealerAccess },
-        dealerCode: accessCheck.requestedDealer,
-        activeDealerId: accessCheck.requestedDealer,
-        assignedDealers,
-        activeDealers: assignedDealers
+    const accessCheck = await validateUserDealerAccess(user, dealerCode);
+    if (!accessCheck.userDealerAccess.length || !accessCheck.allowed) {
+      return res.status(403).json({
+        success: false,
+        error: 'Dealer access not assigned',
+        message: 'Dealer access not assigned',
+        requestedDealer: accessCheck.requestedDealer,
+        userDealerAccess: accessCheck.userDealerAccess
       });
     }
     return res.json({
       success: true,
       token: signToken(user),
       user: { ...publicUser(user), dealerAccess },
+      dealerCode: accessCheck.requestedDealer,
+      activeDealerId: accessCheck.requestedDealer,
       assignedDealers,
       activeDealers: assignedDealers,
-      needsDealerSelection: true,
-      message: 'Select dealer first'
+      message: 'Login verified'
     });
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });
