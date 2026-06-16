@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.1';
-  const CACHE_VERSION = '20260616-mobile-light-login';
+  const CACHE_VERSION = '20260616-mobile-login-dealer-dropdown';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -16,7 +16,7 @@
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-light-login';
+  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-login-dealer-dropdown';
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -48,6 +48,10 @@
     selectedCameraId: storageGet(CAMERA_KEY, ''),
     health: null,
     authReady: false,
+    loginConfigLoading: true,
+    loginConfigError: '',
+    loginDealers: [],
+    recommendedDealerCode: '',
     zxingPromise: null
   };
 
@@ -298,6 +302,94 @@
     const text = clean(raw);
     if (!text) return '';
     return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+  }
+
+  function normalizeLoginDealer(dealer = {}) {
+    const dealerCode = upper(dealer.dealerCode || dealer.code || dealer.id || dealer.dealerId || '');
+    if (!dealerCode) return null;
+    return {
+      dealerCode,
+      dealerName: clean(dealer.dealerName || dealer.name || ''),
+      location: clean(dealer.location || ''),
+      brand: clean(dealer.brand || ''),
+      currentAuditId: clean(dealer.currentAuditId || dealer.auditId || '')
+    };
+  }
+
+  function normalizeLoginDealers(dealers = []) {
+    const seen = new Set();
+    return (Array.isArray(dealers) ? dealers : [])
+      .map((dealer) => normalizeLoginDealer(dealer))
+      .filter(Boolean)
+      .filter((dealer) => {
+        if (seen.has(dealer.dealerCode)) return false;
+        seen.add(dealer.dealerCode);
+        return true;
+      });
+  }
+
+  function loginDealerLabel(dealer = {}) {
+    const code = upper(dealer.dealerCode);
+    const name = clean(dealer.dealerName);
+    return code ? `${code}${name ? ` - ${name}` : ''}` : name;
+  }
+
+  function renderLoginDealers(selectedDealerCode = '') {
+    const select = byId('loginDealerSelect');
+    if (!select) return;
+    const dealers = normalizeLoginDealers(state.loginDealers);
+    const chosen = upper(selectedDealerCode || state.pendingLogin?.dealerCode || state.recommendedDealerCode || select.value || '');
+    const loading = state.loginConfigLoading && !dealers.length;
+    const emptyLabel = loading
+      ? 'Loading dealers...'
+      : state.loginConfigError
+        ? 'Dealer list unavailable'
+        : 'No dealers available';
+    select.disabled = !dealers.length;
+    select.innerHTML = dealers.length
+      ? ['<option value="">Select dealer code</option>', ...dealers.map((dealer) => {
+        const label = loginDealerLabel(dealer);
+        const audit = dealer.currentAuditId ? ` · Audit ${dealer.currentAuditId}` : '';
+        return `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(`${label}${audit}`)}</option>`;
+      })].join('')
+      : `<option value="">${escapeHtml(emptyLabel)}</option>`;
+    if (chosen && dealers.some((dealer) => dealer.dealerCode === chosen)) {
+      select.value = chosen;
+    } else if (dealers.length === 1) {
+      select.value = dealers[0].dealerCode;
+    } else {
+      select.value = '';
+    }
+  }
+
+  async function refreshMobileConfig() {
+    state.loginConfigLoading = true;
+    state.loginConfigError = '';
+    renderLoginDealers();
+    try {
+      const data = await api('/api/mobile/config', { auth: false });
+      state.authReady = true;
+      state.canonicalUrl = data.mobileScannerUrl || data.scanUrl || state.canonicalUrl;
+      state.recommendedDealerCode = upper(data.recommendedDealerCode || data.activeAudit?.dealerCode || '');
+      state.loginDealers = normalizeLoginDealers(data.loginDealers || []);
+      if (!state.loginDealers.length && state.recommendedDealerCode) {
+        state.loginDealers = normalizeLoginDealers([{
+          dealerCode: state.recommendedDealerCode,
+          dealerName: data.activeAudit?.dealerName || ''
+        }]);
+      }
+      state.loginConfigLoading = false;
+      renderLoginDealers(state.pendingLogin?.dealerCode || state.recommendedDealerCode || '');
+      renderUrlState();
+      return data;
+    } catch (error) {
+      state.authReady = false;
+      state.loginConfigLoading = false;
+      state.loginConfigError = error.message || 'Dealer list unavailable';
+      state.loginDealers = [];
+      renderLoginDealers();
+      return null;
+    }
   }
 
   function api(path, options = {}) {
@@ -689,9 +781,6 @@
     const loggedIn = Boolean(state.session?.token);
     byId('loginPanel').classList.toggle('hidden', loggedIn);
     byId('scannerPanel').classList.toggle('hidden', !loggedIn);
-    if (!loggedIn) return;
-    byId('dealerCodeInputLabel').classList.remove('hidden');
-    byId('dealerSelectLabel').classList.add('hidden');
     renderAll();
   }
 
@@ -1584,6 +1673,11 @@
     });
     byId('clearSyncedBtn').addEventListener('click', () => clearSyncedRows());
     byId('refreshCamerasBtn').addEventListener('click', () => refreshCameraList().catch((error) => toast(error.message || 'Unable to refresh cameras', 'error')));
+    byId('loginDealerSelect')?.addEventListener('change', (event) => {
+      const value = upper(event.target?.value || '');
+      state.pendingLogin = state.pendingLogin ? { ...state.pendingLogin, dealerCode: value } : null;
+      if (value) byId('loginMessage').textContent = '';
+    });
     byId('cameraSelect').addEventListener('change', (event) => {
       setSelectedCamera(event.target.value);
       if (state.scanning) {
@@ -1627,7 +1721,7 @@
   async function submitLogin(event) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const selectedDealer = upper(form.get('selectedDealerCode') || form.get('dealerCode'));
+    const selectedDealer = upper(form.get('dealerCode') || state.pendingLogin?.dealerCode || '');
     const username = clean(form.get('username') || state.pendingLogin?.username || '');
     const secret = clean(form.get('secret') || state.pendingLogin?.secret || '');
     const password = secret;
@@ -1696,9 +1790,7 @@
       saveSession(session);
       state.allRows = await getAllRecords().catch(() => []);
       byId('loginMessage').textContent = '';
-      byId('dealerSelectLabel').classList.add('hidden');
-      byId('dealerCodeInputLabel').classList.remove('hidden');
-      byId('loginDealerSelect').innerHTML = '';
+      renderLoginDealers(response.dealerCode || selectedDealer || payload.dealerCode || '');
       state.cameraRequested = false;
       state.paused = false;
       updateScannerPanel();
@@ -1720,22 +1812,21 @@
   }
 
   function showDealerSelection(response, payload) {
-    const dealers = response.assignedDealers || response.activeDealers || [];
+    const dealers = normalizeLoginDealers(response.loginDealers || response.assignedDealers || response.activeDealers || []);
     if (!dealers.length) return false;
-    const select = byId('loginDealerSelect');
-    select.innerHTML = '<option value="">Select dealer</option>' + dealers.map((dealer) => {
-      const code = upper(dealer.dealerCode || dealer.code || dealer.id || '');
-      const name = clean(dealer.dealerName || dealer.name || '');
-      return `<option value="${escapeHtml(code)}">${escapeHtml(code)}${name ? ` - ${escapeHtml(name)}` : ''}</option>`;
-    }).join('');
-    byId('dealerSelectLabel').classList.remove('hidden');
-    byId('dealerCodeInputLabel').classList.add('hidden');
-    byId('loginMessage').textContent = 'Select a dealer, then tap Sign In again.';
+    state.loginDealers = dealers;
+    state.loginConfigLoading = false;
+    state.loginConfigError = '';
+    state.recommendedDealerCode = upper(payload.dealerCode || response.requestedDealer || state.recommendedDealerCode || '');
+    renderLoginDealers(state.recommendedDealerCode || payload.dealerCode || '');
+    byId('loginMessage').textContent = 'Select a dealer code, then tap Sign In again.';
     state.pendingLogin = {
       username: payload.username,
       secret: payload.secret || payload.password || payload.pin || '',
-      deviceName: payload.deviceName
+      deviceName: payload.deviceName,
+      dealerCode: upper(payload.dealerCode || response.requestedDealer || '')
     };
+    byId('loginDealerSelect')?.focus();
     return true;
   }
 
@@ -1824,6 +1915,7 @@
     state.allRows = await getAllRecords().catch(() => []);
     bindEvents();
     bindManualSearch();
+    await refreshMobileConfig();
     setMode(state.mode, { silent: true });
     renderUrlState();
     renderConnectionBadge();
@@ -1855,11 +1947,6 @@
     if (state.session?.token) {
       state.allRows = await getAllRecords().catch(() => []);
       renderAll();
-    }
-
-    if (!state.session?.token) {
-      byId('dealerSelectLabel').classList.add('hidden');
-      byId('dealerCodeInputLabel').classList.remove('hidden');
     }
   }
 

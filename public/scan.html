@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>Daksh Scan</title>
-  <link rel="stylesheet" href="/scan.css?v=20260616-mobile-light-login">
+  <link rel="stylesheet" href="/scan.css?v=20260616-mobile-login-dealer-dropdown">
 </head>
 <body class="scan-page">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -52,13 +52,11 @@
             <span>Password or PIN</span>
             <input name="secret" type="password" autocomplete="current-password" required placeholder="Enter password or 4-digit PIN">
           </label>
-          <label id="dealerCodeInputLabel" class="field">
+          <label class="field">
             <span>Dealer Code</span>
-            <input name="dealerCode" autocapitalize="characters" required placeholder="Dealer code">
-          </label>
-          <label id="dealerSelectLabel" class="field hidden">
-            <span>Select Dealer</span>
-            <select id="loginDealerSelect" name="selectedDealerCode"></select>
+            <select id="loginDealerSelect" name="dealerCode" required disabled>
+              <option value="">Loading dealers...</option>
+            </select>
           </label>
         </div>
         <button class="btn btn-primary login-btn" type="submit" data-testid="login-submit">Sign In</button>
@@ -252,6 +250,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="/scan.js?v=20260616-mobile-light-login"></script>
+  <script src="/scan.js?v=20260616-mobile-login-dealer-dropdown"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260605-master-user-admin-tools';
+  const UI_BOOT_VERSION = '20260616-master-user-actions-delete-fix';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -7510,6 +7510,15 @@
     renderAuditUserOptions();
   }
 
+  function onUserActionChange(event) {
+    const select = event.target.closest('.user-action-dropdown');
+    if (!select || !$('#userRows')?.contains(select)) return;
+    const action = select.value;
+    select.value = '';
+    if (!action) return;
+    handleUserAction(select, action).catch((error) => toast(error.message, 'error'));
+  }
+
   function renderUsers() {
     renderResetUserOptions();
     $('#userRows').innerHTML = state.users.map((user) => `
@@ -7535,15 +7544,6 @@
         </td>
       </tr>
     `).join('');
-
-    $$('.user-action-dropdown').forEach((select) => {
-      select.addEventListener('change', () => {
-        const action = select.value;
-        select.value = '';
-        if (!action) return;
-        handleUserAction(select, action).catch((error) => toast(error.message, 'error'));
-      });
-    });
   }
 
   async function handleUserAction(select, action) {
@@ -7593,9 +7593,19 @@
       }
       const username = select.dataset.username || 'this user';
       if (!window.confirm(`Delete user "${username}" permanently? This user will not be able to login.`)) return;
-      await api(`/api/users/${id}`, { method: 'DELETE', body: {} });
+      const previousUsers = state.users.slice();
+      const deletedId = String(id);
+      state.users = state.users.filter((user) => String(user.id || user._id || '') !== deletedId);
+      renderUsers();
+      try {
+        await api(`/api/users/${id}`, { method: 'DELETE', body: {} });
+      } catch (error) {
+        state.users = previousUsers;
+        renderUsers();
+        throw error;
+      }
       toast('User deleted. Login blocked for that user.');
-      await loadUsers();
+      loadUsers().catch((error) => toast(error.message, 'error'));
     }
   }
 
@@ -9269,6 +9279,7 @@
       if (event.target.id === 'editUserModal') closeEditUserModal();
     });
     $('#refreshUsersBtn').addEventListener('click', () => loadUsers().then(() => toast('Users refreshed')).catch((error) => toast(error.message, 'error')));
+    $('#userRows')?.addEventListener('change', onUserActionChange);
     $('#smtpSettingsForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       setSmtpMessage('#smtpSettingsMessage', 'Saving SMTP settings...', 'success');

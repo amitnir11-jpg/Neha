@@ -284,6 +284,28 @@ router.get('/config', auth.optionalAuth, async (req, res) => {
   try {
     const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
     const activeAudit = await getActiveAudit({ dealerCode: req.query.dealerCode }).catch(() => null);
+    const loginDealerDocs = await Dealer.find({
+      dealerCode: { $not: /^SYNC/i },
+      active: { $ne: false }
+    }).sort({ dealerName: 1, dealerCode: 1 }).limit(500).lean();
+    const loginDealers = [];
+    const seenDealerCodes = new Set();
+    const addDealer = (dealer = {}) => {
+      const compact = compactDealer(dealer);
+      if (!compact.dealerCode || seenDealerCodes.has(compact.dealerCode)) return;
+      seenDealerCodes.add(compact.dealerCode);
+      loginDealers.push(compact);
+    };
+    if (activeAudit && activeAudit.dealerCode) {
+      addDealer({
+        dealerCode: activeAudit.dealerCode,
+        dealerName: activeAudit.dealerName,
+        location: activeAudit.location,
+        brand: activeAudit.brand,
+        currentAuditId: activeAudit.auditId
+      });
+    }
+    loginDealerDocs.forEach(addDealer);
     return res.json({
       success: true,
       appName: 'Daksh Inventory',
@@ -296,6 +318,8 @@ router.get('/config', auth.optionalAuth, async (req, res) => {
       connectUrl: info.connectUrl,
       syncUrl: `${info.serverUrl}/api/mobile/sync-bulk`,
       loginUrl: `${info.serverUrl}/api/auth/mobile-login`,
+      recommendedDealerCode: activeAudit ? activeAudit.dealerCode : '',
+      loginDealers,
       cooldownMs: 4000,
       supportedScanTypes: ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE', 'VERIFICATION'],
       activeAudit: activeAudit ? publicAudit(activeAudit) : null,
