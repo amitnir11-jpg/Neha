@@ -557,7 +557,7 @@ async function mobileLoginHandler(req, res) {
     const pin = String(req.body.pin || '').trim();
     if (!username) return res.status(400).json({ success: false, message: 'User ID is required' });
     const user = await findUserByLogin(username);
-    const ruleError = loginRuleError(user, ['staff', 'mobile_user']);
+    const ruleError = loginRuleError(user);
     if (ruleError) return res.status(401).json({ success: false, message: ruleError });
     let valid = false;
     if (password) valid = await compareAndUpgradeSecret(user, password, ['passwordHash', 'password']);

@@ -3,32 +3,29 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0b1220">
+  <meta name="theme-color" content="#f5f8fc">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>Daksh Scan</title>
-  <link rel="stylesheet" href="/scan.css?v=20260615-fresh-scan">
+  <link rel="stylesheet" href="/scan.css?v=20260616-mobile-light-login">
 </head>
 <body class="scan-page">
   <div class="page-orb orb-a" aria-hidden="true"></div>
   <div class="page-orb orb-b" aria-hidden="true"></div>
 
   <main class="app-shell">
-    <section class="hero-card glass-card">
+    <section class="hero-card glass-card login-banner">
       <div class="hero-copy">
         <span class="eyebrow">Mobile Part Scanning</span>
         <div class="brand-row">
           <div class="brand-mark">DS</div>
           <div>
             <h1>Daksh Scan</h1>
-            <p class="hero-text">
-              Fresh mobile scanner for quick login, camera capture, offline queueing, and automatic sync back to the inventory app.
-            </p>
           </div>
         </div>
       </div>
 
-      <div class="hero-actions">
+      <div class="hero-actions hidden">
         <button id="copyUrlBtn" class="btn btn-secondary" type="button" data-testid="copy-url">Copy Scan URL</button>
         <a id="openScanUrl" class="btn btn-ghost" href="/mobile-scanner" target="_blank" rel="noopener noreferrer">Open URL</a>
       </div>
@@ -49,30 +46,22 @@
         <div class="field-grid">
           <label class="field">
             <span>User ID / Username / Email</span>
-            <input name="username" autocomplete="username" required placeholder="Enter user ID">
+            <input name="username" autocomplete="username" required placeholder="Enter user ID" autofocus>
           </label>
           <label class="field">
-            <span>Password</span>
-            <input name="password" type="password" autocomplete="current-password" placeholder="Enter password">
-          </label>
-          <label class="field">
-            <span>PIN</span>
-            <input name="pin" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="Optional PIN">
+            <span>Password or PIN</span>
+            <input name="secret" type="password" autocomplete="current-password" required placeholder="Enter password or 4-digit PIN">
           </label>
           <label id="dealerCodeInputLabel" class="field">
             <span>Dealer Code</span>
-            <input name="dealerCode" autocapitalize="characters" placeholder="Dealer code">
+            <input name="dealerCode" autocapitalize="characters" required placeholder="Dealer code">
           </label>
           <label id="dealerSelectLabel" class="field hidden">
             <span>Select Dealer</span>
             <select id="loginDealerSelect" name="selectedDealerCode"></select>
           </label>
-          <label class="field">
-            <span>Device Name</span>
-            <input name="deviceName" placeholder="Android Chrome">
-          </label>
         </div>
-        <button class="btn btn-primary login-btn" type="submit" data-testid="login-submit">Login &amp; Open Scanner</button>
+        <button class="btn btn-primary login-btn" type="submit" data-testid="login-submit">Sign In</button>
         <p id="loginMessage" class="field-message" aria-live="polite"></p>
       </form>
     </section>
@@ -263,6 +252,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="/scan.js?v=20260615-fresh-scan"></script>
+  <script src="/scan.js?v=20260616-mobile-light-login"></script>
 </body>
 </html>

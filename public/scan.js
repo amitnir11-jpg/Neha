@@ -1,6 +1,6 @@
 (function () {
-  const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.0';
-  const CACHE_VERSION = '20260615-fresh-scan';
+  const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.1';
+  const CACHE_VERSION = '20260616-mobile-light-login';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -16,7 +16,7 @@
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260615-fresh-scan';
+  const ZXING_SCRIPT_SRC = '/vendor/zxing/index.min.js?v=20260616-mobile-light-login';
 
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -469,22 +469,30 @@
   function renderUrlState() {
     const url = canonicalScanUrl();
     state.canonicalUrl = url;
-    byId('scannerUrlText').textContent = url;
-    byId('openScanUrl').href = url;
-    byId('copyUrlBtn').dataset.url = url;
-    byId('copyScannerUrlBtn').dataset.url = url;
+    const scannerUrlText = byId('scannerUrlText');
+    const openScanUrl = byId('openScanUrl');
+    const copyUrlBtn = byId('copyUrlBtn');
+    const copyScannerUrlBtn = byId('copyScannerUrlBtn');
+    if (scannerUrlText) scannerUrlText.textContent = url;
+    if (openScanUrl) openScanUrl.href = url;
+    if (copyUrlBtn) copyUrlBtn.dataset.url = url;
+    if (copyScannerUrlBtn) copyScannerUrlBtn.dataset.url = url;
     const notice = byId('contextNotice');
     const secure = isSecureScannerContext();
     const secureBadge = byId('secureBadge');
-    secureBadge.textContent = secure ? 'Secure' : 'Insecure';
-    secureBadge.className = `status-pill ${secure ? 'online' : 'warning'}`;
+    if (secureBadge) {
+      secureBadge.textContent = secure ? 'Secure' : 'Insecure';
+      secureBadge.className = `status-pill ${secure ? 'online' : 'warning'}`;
+    }
 
-    if (secure) {
-      notice.hidden = false;
-      notice.textContent = `Use this URL on any browser: ${url}`;
-    } else {
-      notice.hidden = false;
-      notice.textContent = `Camera access is blocked on this HTTP page. Open the secure Railway URL instead: ${url}`;
+    if (notice) {
+      if (secure) {
+        notice.hidden = true;
+        notice.textContent = '';
+      } else {
+        notice.hidden = false;
+        notice.textContent = `Camera access is blocked on this HTTP page. Open the secure Railway URL instead: ${url}`;
+      }
     }
   }
 
@@ -1528,7 +1536,7 @@
   }
 
   function bindEvents() {
-    byId('copyUrlBtn').addEventListener('click', () => copyScanUrl());
+    byId('copyUrlBtn')?.addEventListener('click', () => copyScanUrl());
     byId('copyScannerUrlBtn').addEventListener('click', () => copyScanUrl());
     byId('loginForm').addEventListener('submit', (event) => {
       void submitLogin(event);
@@ -1621,18 +1629,28 @@
     const form = new FormData(event.currentTarget);
     const selectedDealer = upper(form.get('selectedDealerCode') || form.get('dealerCode'));
     const username = clean(form.get('username') || state.pendingLogin?.username || '');
-    const password = String(form.get('password') || state.pendingLogin?.password || '');
-    const pin = String(form.get('pin') || state.pendingLogin?.pin || '');
+    const secret = clean(form.get('secret') || state.pendingLogin?.secret || '');
+    const password = secret;
+    const pin = secret;
     const deviceName = clean(form.get('deviceName')) || DEFAULT_DEVICE_NAME;
 
-    if (state.pendingLogin && !selectedDealer) {
-      byId('loginMessage').textContent = 'Select a dealer to continue.';
+    if (!username) {
+      byId('loginMessage').textContent = 'Enter your user ID.';
+      return;
+    }
+    if (!secret) {
+      byId('loginMessage').textContent = 'Enter your password or PIN.';
+      return;
+    }
+    if (!selectedDealer) {
+      byId('loginMessage').textContent = 'Please select dealer code before login.';
       return;
     }
 
     const payload = {
       ...(state.pendingLogin || {}),
       username,
+      secret,
       password,
       pin,
       dealerCode: selectedDealer,
@@ -1712,11 +1730,10 @@
     }).join('');
     byId('dealerSelectLabel').classList.remove('hidden');
     byId('dealerCodeInputLabel').classList.add('hidden');
-    byId('loginMessage').textContent = 'Select a dealer, then tap Login again.';
+    byId('loginMessage').textContent = 'Select a dealer, then tap Sign In again.';
     state.pendingLogin = {
       username: payload.username,
-      password: payload.password,
-      pin: payload.pin,
+      secret: payload.secret || payload.password || payload.pin || '',
       deviceName: payload.deviceName
     };
     return true;
