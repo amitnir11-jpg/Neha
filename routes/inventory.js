@@ -2756,6 +2756,59 @@ async function verifyPartRequest(req, res) {
 
 router.get('/verify', auth.optionalAuth, verifyPartRequest);
 router.post('/verify', auth.optionalAuth, verifyPartRequest);
+
+router.post('/duplicate-check', auth.requireAuth, async (req, res) => {
+  try {
+    const rawScanInput = firstValue(req.body, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText']);
+    const parsed = parseRawScan(rawScanInput);
+    const explicitPartInput = firstValue(req.body, ['part', 'partNumber', 'partNo', 'sku', 'itemCode']);
+    const part = upper(parsed.part || explicitPartInput);
+    const dealerCode = normalizeDealerCode(req.body.dealerCode || req.body.dealer || parsed.dealerCode || '');
+    const dealer = dealerCode ? await Dealer.findOne({ dealerCode }).lean() : null;
+    const auditId = String(req.body.auditId || parsed.auditId || (dealer ? dealer.currentAuditId : '') || '').trim();
+    const scanType = normalizeScanType(req.body.type || req.body.scanType || req.body.action || parsed.type || 'INWARD');
+    const upiId = extractUpiId(req.body, parsed);
+    const rawScanText = String(rawScanInput || parsed.rawScan || '').trim();
+    const duplicate = await findBackendDuplicate({
+      ...req.body,
+      partNumber: part,
+      part,
+      dealerCode,
+      auditId,
+      scanType,
+      type: scanType,
+      rawScan: rawScanText,
+      rawScanString: rawScanText,
+      rawBarcode: rawScanText,
+      rawUpi: rawScanText,
+      upiId,
+      upiNo: upiId
+    }, { skipBusinessRule: true });
+
+    if (!duplicate || !duplicate.existing) {
+      return res.json({ success: true, duplicate: false });
+    }
+
+    const scan = publicScan(duplicate.existing);
+    return res.json({
+      success: true,
+      duplicate: true,
+      upiDuplicate: duplicate.upiDuplicate !== false,
+      reason: duplicate.reason || 'Duplicate UPI',
+      message: duplicatePolicy.duplicateUpiMessage(duplicate.existing),
+      scan,
+      existing: scan,
+      binLocation: scan.binLocation || scan.bin || '',
+      partNumber: scan.partNumber || scan.part || '',
+      dealerCode: scan.dealerCode || dealerCode,
+      auditId: scan.auditId || auditId,
+      scannedAt: scan.timestamp || scan.scanTime || scan.createdAt || ''
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.post('/scan', auth.optionalAuth, saveScanRequest);
 router.post('/manual', auth.optionalAuth, saveScanRequest);
 router.post('/', auth.optionalAuth, saveScanRequest);

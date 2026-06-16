@@ -17,13 +17,21 @@ const second = {
   upiId: 'upi-987654',
   partNumber: 'OTHER-PART'
 };
+const sameAuditSecondScan = {
+  ...second,
+  dealerCode: first.dealerCode,
+  auditId: first.auditId
+};
 
 assert.strictEqual(duplicatePolicy.canonicalUpiValue(first), 'UPI-987654');
-assert.strictEqual(duplicatePolicy.globalUpiKey(first), duplicatePolicy.globalUpiKey(second));
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(first), duplicatePolicy.globalUpiKey(second));
+assert.strictEqual(duplicatePolicy.globalUpiKey(first), duplicatePolicy.globalUpiKey(sameAuditSecondScan));
 assert.strictEqual(duplicatePolicy.globalUpiKey({ partNumber: 'PART-100', source: 'manual' }), '');
 
-const filter = duplicatePolicy.globalUpiDuplicateFilter(second);
+const filter = duplicatePolicy.globalUpiDuplicateFilter(sameAuditSecondScan);
 assert.strictEqual(filter.syncStatus, 'synced');
+assert.strictEqual(filter.dealerCode, first.dealerCode);
+assert.strictEqual(filter.auditId, first.auditId);
 assert.deepStrictEqual(filter.scanStatus.$in, duplicatePolicy.COUNTED_SCAN_STATUSES);
 assert(filter.$or.some((term) => term.globalUpiKey === duplicatePolicy.globalUpiKey(first)));
 
@@ -37,5 +45,12 @@ assert(message.startsWith('This UPI is already scanned in Bin Location: BIN-A, P
 const uniqueIndex = Inventory.schema.indexes().find(([fields, options]) => fields.globalUpiKey === 1 && options.name === 'global_upi_key_unique');
 assert(uniqueIndex, 'global UPI index is missing');
 assert.strictEqual(uniqueIndex[1].unique, true);
+
+const dealerAuditUpiIndex = Inventory.schema.indexes().find(([fields, options]) => (
+  fields.dealerCode === 1 && fields.auditId === 1 && fields.upiNo === 1 && options.name === 'dealer_audit_upi_unique'
+));
+assert(dealerAuditUpiIndex, 'dealer/audit UPI unique index is missing');
+assert.strictEqual(dealerAuditUpiIndex[1].unique, true);
+assert.strictEqual(dealerAuditUpiIndex[1].partialFilterExpression.syncStatus, 'synced');
 
 console.log('Duplicate UPI regression checks passed.');

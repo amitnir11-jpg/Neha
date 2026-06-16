@@ -1453,7 +1453,17 @@ async function fixInventoryIndexes() {
       const isNonUniqueScanId = index.name === 'scanId_1' && !index.unique;
       const isInvalidGlobalUpiIndex = index.name === 'global_upi_key_unique'
         && (!index.unique || !index.key || index.key.globalUpiKey !== 1);
-      if (isOldSyncUnique || isOldUpiUnique || isOldRawUpiUnique || isOldRawUpiLookup || isNonUniqueScanId || isInvalidGlobalUpiIndex) {
+      const isInvalidDealerAuditUpiIndex = index.name === 'dealer_audit_upi_unique'
+        && (
+          !index.unique
+          || !index.key
+          || index.key.dealerCode !== 1
+          || index.key.auditId !== 1
+          || index.key.upiNo !== 1
+          || !index.partialFilterExpression
+          || index.partialFilterExpression.syncStatus !== 'synced'
+        );
+      if (isOldSyncUnique || isOldUpiUnique || isOldRawUpiUnique || isOldRawUpiLookup || isNonUniqueScanId || isInvalidGlobalUpiIndex || isInvalidDealerAuditUpiIndex) {
         await collection.dropIndex(index.name);
       }
     }
@@ -1535,6 +1545,20 @@ async function fixInventoryIndexes() {
           rawUpi: { $type: 'string', $gt: '' },
           scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] },
           scanType: { $in: ['AUDIT', 'INWARD', 'OUTWARD', 'DAMAGE'] }
+        }
+      }
+    );
+    await collection.createIndex(
+      { dealerCode: 1, auditId: 1, upiNo: 1 },
+      {
+        name: 'dealer_audit_upi_unique',
+        unique: true,
+        partialFilterExpression: {
+          dealerCode: { $type: 'string', $gt: '' },
+          auditId: { $type: 'string', $gt: '' },
+          upiNo: { $type: 'string', $gt: '' },
+          scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] },
+          syncStatus: 'synced'
         }
       }
     );

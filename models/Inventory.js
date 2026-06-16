@@ -557,7 +557,9 @@ inventorySchema.index(
     partialFilterExpression: {
       dealerCode: { $type: 'string', $gt: '' },
       auditId: { $type: 'string', $gt: '' },
-      upiNo: { $type: 'string', $gt: '' }
+      upiNo: { $type: 'string', $gt: '' },
+      scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] },
+      syncStatus: 'synced'
     }
   }
 );

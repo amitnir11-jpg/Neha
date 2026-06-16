@@ -72,7 +72,13 @@ function canonicalUpiValue(input = {}) {
 
 function globalUpiKey(input = {}) {
   const upi = canonicalUpiValue(input);
-  return upi ? createHash('sha256').update(upi).digest('hex') : '';
+  if (!upi) return '';
+  const scope = [
+    scanDealerCode(input),
+    scanAuditId(input),
+    upi
+  ].map((value) => upper(value)).filter(Boolean).join('|');
+  return scope ? createHash('sha256').update(scope).digest('hex') : '';
 }
 
 function globalUpiDuplicateFilter(input = {}) {
@@ -80,13 +86,18 @@ function globalUpiDuplicateFilter(input = {}) {
   const key = clean(input.globalUpiKey || globalUpiKey(input));
   const upi = canonicalUpiValue(input);
   if (!key && !upi) return null;
+  const dealerCode = scanDealerCode(input);
+  const auditId = scanAuditId(input);
   const terms = [];
   if (key) terms.push({ globalUpiKey: key });
   if (upi) terms.push({ upiNo: upi }, { upiId: upi });
-  return {
+  const filter = {
     ...countedScanClause(),
     $or: terms
   };
+  if (dealerCode) filter.dealerCode = dealerCode;
+  if (auditId) filter.auditId = auditId;
+  return filter;
 }
 
 function duplicateUpiMessage(existing = {}) {
