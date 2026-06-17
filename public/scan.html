@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>Daksh Scan</title>
-  <link rel="stylesheet" href="/scan.css?v=20260616-mobile-login-runtime-fix">
+  <link rel="stylesheet" href="/scan.css?v=20260617-mobile-compact-autoscan-sync">
 </head>
 <body class="scan-page">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -113,7 +113,7 @@
           <div class="camera-head">
             <div>
               <span class="panel-tag">Camera Scanner</span>
-              <h3>Point the camera at a part QR or barcode</h3>
+              <h3>Scan QR / barcode</h3>
             </div>
             <div class="camera-tools">
               <select id="cameraSelect" class="camera-select" aria-label="Camera device"></select>
@@ -140,13 +140,13 @@
         </article>
 
         <aside class="side-stack">
-          <article class="summary-card">
+          <article class="summary-card last-scan-card">
             <span class="panel-tag">Last Scan</span>
             <strong id="lastScanTitle">Ready</strong>
             <p id="lastScanMeta">Login and start the camera to scan parts.</p>
           </article>
 
-          <article class="summary-card">
+          <article class="summary-card secondary-summary">
             <span class="panel-tag">Queue</span>
             <div class="queue-grid">
               <div><strong id="queueTotal">0</strong><span>Total</span></div>
@@ -157,7 +157,7 @@
             <button id="clearSyncedBtn" class="btn btn-danger btn-wide" type="button">Clear Synced</button>
           </article>
 
-          <article class="summary-card">
+          <article class="summary-card secondary-summary">
             <span class="panel-tag">Session</span>
             <p id="activeAuditLabel" class="summary-line">Audit will appear after login</p>
             <p id="serverStateLabel" class="summary-line">Server status will appear here</p>
@@ -171,7 +171,7 @@
             <span class="panel-tag">Recent Activity</span>
             <h3>Last 10 scans</h3>
           </div>
-          <p class="history-note">Local queue only. Sync pushes these records to the server.</p>
+          <p class="history-note">Local queue updates first, then syncs.</p>
         </div>
         <div class="table-wrap">
           <table class="scan-table">
@@ -250,6 +250,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="/scan.js?v=20260616-mobile-login-runtime-fix"></script>
+  <script src="/scan.js?v=20260617-mobile-compact-autoscan-sync"></script>
 </body>
 </html>

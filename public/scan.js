@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.1';
-  const CACHE_VERSION = '20260616-mobile-login-runtime-fix';
+  const CACHE_VERSION = '20260617-mobile-compact-autoscan-sync';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -15,7 +15,8 @@
   const LOGIN_CONFIG_TIMEOUT_MS = 15000;
   const STORAGE_OPEN_TIMEOUT_MS = 7000;
   const BATCH_SIZE = 50;
-  const DEDUPE_MS = 1200;
+  const DEDUPE_MS = 3000;
+  const DUPLICATE_NOTICE_MS = 3000;
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
@@ -68,9 +69,12 @@
     syncRunning: false,
     syncAgain: false,
     syncTimer: null,
+    syncDelayTimer: null,
     heartbeatTimer: null,
     cameraTimer: null,
+    autoCameraTimer: null,
     lastDecodeAtByKey: new Map(),
+    duplicateNoticeLocks: new Map(),
     recentCleanupTimer: null,
     manualRaw: '',
     manualResumeAfterClose: false,
@@ -258,8 +262,44 @@
     return Boolean(currentModeInfo(mode).requiresBin);
   }
 
+  function suppressTimedKey(map, key, ttlMs = DUPLICATE_NOTICE_MS) {
+    if (!key) return false;
+    const now = Date.now();
+    const until = Number(map.get(key) || 0);
+    if (until > now) return true;
+    const nextUntil = now + ttlMs;
+    map.set(key, nextUntil);
+    setTimeout(() => {
+      if (map.get(key) === nextUntil) map.delete(key);
+    }, ttlMs + 50);
+    return false;
+  }
+
   function normalizeText(value) {
     return upper(String(value ?? '').replace(/\s+/g, ' ').trim());
+  }
+
+  function extractUpiIdFromText(payload = {}) {
+    const direct = clean(payload.upiNo || payload.upiId || payload.upiID || payload.upiScanId || payload.transactionId || payload.txnId);
+    if (direct) return upper(direct);
+    const raw = clean(payload.rawScanString || payload.rawScan || payload.rawBarcode || payload.rawQR || payload.rawUpi || payload.scanText || payload.raw);
+    if (!raw) return '';
+    const slashParts = raw.split('/');
+    if (slashParts.length >= 6 && clean(slashParts[1])) return upper(slashParts[1]);
+    const keyed = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
+    return keyed ? upper(keyed[1]) : '';
+  }
+
+  function scanIdentityKey(scan = {}) {
+    const type = upper(scan.scanType || scan.type || state.mode);
+    if (type === 'VERIFICATION') return '';
+    const dealer = upper(scan.dealerCode || scan.dealer || activeDealerCode() || 'NO-DEALER');
+    const audit = clean(scan.auditId || activeAuditId() || 'NO-AUDIT');
+    const upi = extractUpiIdFromText(scan);
+    if (upi) return [dealer, audit, 'UPI', upi].join('|');
+    const raw = normalizeText(scan.rawScanString || scan.rawScan || scan.rawBarcode || scan.rawQR || scan.rawUpi || '');
+    if (raw) return [dealer, audit, 'RAW', raw].join('|');
+    return '';
   }
 
   function parsePartCandidate(raw = '') {
@@ -600,6 +640,29 @@
     return clean(row.binLocation || row.bin || '');
   }
 
+  function duplicateScanMessage(existing = {}) {
+    const bin = rowBin(existing) || '-';
+    const part = rowPart(existing) || '-';
+    return `This UPI is already scanned in Bin ${bin}, Part No ${part}`;
+  }
+
+  function localDuplicateForRecord(record = {}) {
+    const key = scanIdentityKey(record);
+    if (!key) return null;
+    return sessionRows().find((row) => {
+      if (clean(row.scanId || row.uniqueScanId) === clean(record.scanId || record.uniqueScanId)) return false;
+      return scanIdentityKey(row) === key;
+    }) || null;
+  }
+
+  function showDuplicateOnce(scan = {}, existing = {}, message = '') {
+    const key = scanIdentityKey(scan) || scanIdentityKey(existing) || clean(scan.scanId || scan.uniqueScanId || '');
+    if (suppressTimedKey(state.duplicateNoticeLocks, key, DUPLICATE_NOTICE_MS)) return;
+    toast(message || duplicateScanMessage(existing || scan), 'duplicate');
+    beep('duplicate');
+    vibrate([30, 40, 30]);
+  }
+
   function renderUrlState() {
     const url = canonicalScanUrl();
     state.canonicalUrl = url;
@@ -790,7 +853,9 @@
     }
     body.innerHTML = rows.map((row) => {
       const status = rowStatus(row);
-      const statusLabel = status === 'failed-duplicate' ? 'Duplicate' : status || 'pending';
+      const statusLabel = status === 'failed-duplicate'
+        ? 'Duplicate'
+        : (status || 'pending').replace(/^./, (char) => char.toUpperCase());
       const time = fmtTime(row.mobileCreatedAt || row.timestamp || row.createdAt);
       const title = escapeHtml(row.syncError || '');
       return `
@@ -821,6 +886,7 @@
 
   function updateScannerPanel() {
     const loggedIn = Boolean(state.session?.token);
+    document.body.classList.toggle('scanner-active', loggedIn);
     byId('loginPanel').classList.toggle('hidden', loggedIn);
     byId('scannerPanel').classList.toggle('hidden', !loggedIn);
     renderAll();
@@ -1041,13 +1107,21 @@
     const qty = rowQty(row);
     const bin = rowBin(row);
     const mrp = Number(row.mrp ?? row.manualMRP ?? row.scanMRP ?? 0);
+    const errorText = clean(row.syncError || row.errorMessage || row.reason || '');
+    const statusText = status === 'synced'
+      ? 'Synced to server'
+      : status === 'duplicate' || status === 'failed-duplicate'
+        ? (errorText || 'Duplicate rejected')
+        : status === 'failed'
+          ? `Sync failed${errorText ? `: ${errorText}` : ''}`
+          : 'Pending sync';
     byId('lastScanTitle').textContent = part || 'Scan captured';
     byId('lastScanMeta').textContent = [
       mode,
       `Qty ${fmtNumber(qty)}`,
       bin ? `Bin ${bin}` : '',
       mrp > 0 ? `MRP ${fmtNumber(mrp)}` : '',
-      status === 'synced' ? 'Synced to server' : status === 'duplicate' || status === 'failed-duplicate' ? 'Duplicate rejected' : status === 'failed' ? 'Sync failed' : 'Queued for sync'
+      statusText
     ].filter(Boolean).join(' · ');
   }
 
@@ -1056,7 +1130,7 @@
     renderAll();
   }
 
-  async function saveRecord(record, { silent = false } = {}) {
+  async function saveRecord(record, { silent = false, deferSync = false } = {}) {
     await putRecord(record);
     state.allRows = await getAllRecords();
     applyRecordToUi(record);
@@ -1065,13 +1139,13 @@
       beep('ok');
       vibrate(40);
     }
-    if (navigator.onLine && state.session?.token) scheduleSync();
+    if (!deferSync && navigator.onLine && state.session?.token) scheduleSync();
   }
 
   function scheduleSync() {
     if (!navigator.onLine || !state.session?.token) return;
-    clearTimeout(state.syncTimer);
-    state.syncTimer = setTimeout(() => {
+    clearTimeout(state.syncDelayTimer);
+    state.syncDelayTimer = setTimeout(() => {
       syncQueue({ silent: true }).catch(() => undefined);
     }, 900);
   }
@@ -1082,6 +1156,37 @@
     const synced = statuses.filter((status) => status === 'synced').length;
     const failed = statuses.filter((status) => ['failed', 'failed-duplicate', 'invalid', 'duplicate', 'rejected'].includes(status)).length;
     return { total: rows.length, pending, synced, failed };
+  }
+
+  function syncIdentityKeys(row = {}) {
+    const values = [
+      row.scanId,
+      row.uniqueScanId,
+      row.clientScanId,
+      row.localId,
+      row.mobileScanId,
+      row.syncKey,
+      row.clientSyncKey,
+      row.localSyncKey,
+      row.offlineScanId,
+      row.offlineId
+    ];
+    const upi = extractUpiIdFromText(row);
+    if (upi) values.push(`UPI:${upi}`);
+    const scoped = scanIdentityKey(row);
+    if (scoped) values.push(scoped);
+    return Array.from(new Set(values.map((value) => clean(value)).filter(Boolean)));
+  }
+
+  function putIdentity(map, row = {}, value) {
+    syncIdentityKeys(row).forEach((key) => map.set(key, value));
+  }
+
+  function identityValue(map, row = {}) {
+    for (const key of syncIdentityKeys(row)) {
+      if (map.has(key)) return map.get(key);
+    }
+    return undefined;
   }
 
   function convertToSyncPayload(row = {}) {
@@ -1138,6 +1243,53 @@
     };
   }
 
+  async function markDuplicateRecord(record = {}, existing = {}, message = '') {
+    const latest = await getRecord(record.scanId).catch(() => null);
+    const source = latest || record;
+    const duplicateMessage = message || duplicateScanMessage(existing || source);
+    const next = {
+      ...source,
+      status: 'duplicate',
+      syncStatus: 'duplicate',
+      syncError: duplicateMessage,
+      retryCount: Number(source.retryCount || 0),
+      serverAck: existing || source
+    };
+    await putRecord(next);
+    state.allRows = await getAllRecords().catch(() => []);
+    updateLastScan(next);
+    renderAll();
+    cameraState('Duplicate blocked');
+    showDuplicateOnce(next, existing || next, duplicateMessage);
+  }
+
+  async function checkBackendDuplicateBeforeSync(record = {}) {
+    if (!navigator.onLine || !state.session?.token) {
+      scheduleSync();
+      return;
+    }
+    try {
+      const data = await api('/api/scans/duplicate-check', {
+        method: 'POST',
+        body: convertToSyncPayload(record),
+        timeoutMs: 10000
+      });
+      const latest = await getRecord(record.scanId).catch(() => null);
+      if (!latest || !['pending', 'failed'].includes(rowStatus(latest))) return;
+      if (data && data.duplicate) {
+        const existing = data.existing || data.scan || {};
+        await markDuplicateRecord(latest, existing, clean(data.message) || duplicateScanMessage(existing || latest));
+        return;
+      }
+    } catch (error) {
+      if (authExpired(error)) {
+        handleAuthExpired(error);
+        return;
+      }
+    }
+    scheduleSync();
+  }
+
   async function refreshHealth() {
     try {
       const health = await api('/api/health', { auth: false, timeoutMs: LOGIN_CONFIG_TIMEOUT_MS });
@@ -1185,8 +1337,12 @@
 
   function handleAuthExpired(error) {
     stopCamera({ preserveRequest: false });
+    clearTimeout(state.autoCameraTimer);
+    clearTimeout(state.syncDelayTimer);
     clearInterval(state.syncTimer);
     clearInterval(state.heartbeatTimer);
+    state.autoCameraTimer = null;
+    state.syncDelayTimer = null;
     state.syncTimer = null;
     state.heartbeatTimer = null;
     clearSession();
@@ -1198,12 +1354,57 @@
     toast(error?.message || 'Login expired. Please sign in again.', 'error');
   }
 
+  function logout() {
+    stopCamera({ preserveRequest: false });
+    clearTimeout(state.autoCameraTimer);
+    clearTimeout(state.syncDelayTimer);
+    clearInterval(state.syncTimer);
+    clearInterval(state.heartbeatTimer);
+    state.autoCameraTimer = null;
+    state.syncDelayTimer = null;
+    state.syncTimer = null;
+    state.heartbeatTimer = null;
+    state.cameraRequested = false;
+    state.paused = false;
+    state.pendingLogin = null;
+    state.manualRaw = '';
+    state.manualResumeAfterClose = false;
+    clearSession();
+    state.allRows = [];
+    updateScannerPanel();
+    toast('Logged out', 'info');
+  }
+
   function ensureScanSession() {
     if (!state.session?.token) {
       toast('Please login first', 'error');
       return false;
     }
     return true;
+  }
+
+  function requestAutoCameraStart({ focusBin = false } = {}) {
+    if (!state.session?.token) return;
+    state.cameraRequested = true;
+    state.paused = false;
+    clearTimeout(state.autoCameraTimer);
+    if (!isSecureScannerContext() && !LOCALHOST_NAMES.has(window.location.hostname)) {
+      cameraState('Open the secure Railway URL to use the camera.');
+      return;
+    }
+    if (requiresBin() && !loadActiveBin()) {
+      cameraState('Set bin location to start camera automatically.');
+      if (focusBin) byId('activeBinLocation')?.focus();
+      return;
+    }
+    cameraState('Starting camera automatically...');
+    state.autoCameraTimer = setTimeout(() => {
+      if (!state.session?.token || state.paused || !state.cameraRequested) return;
+      startCamera().catch((error) => {
+        cameraState(error.message || 'Camera failed to start');
+        toast(error.message || 'Camera failed to start', 'error');
+      });
+    }, 150);
   }
 
   async function startCamera() {
@@ -1239,7 +1440,7 @@
         }
       });
       state.cameraTimer = setTimeout(() => {
-        if (state.scanning) cameraState('Scanning');
+        if (state.scanning) cameraState('Scanning - show QR or barcode');
       }, 400);
       renderCameraListSoon();
     } catch (error) {
@@ -1294,11 +1495,25 @@
       partNumber: partCandidate,
       binLocation: requiresBin() ? loadActiveBin() : ''
     });
+    const localDuplicate = localDuplicateForRecord(record);
+    if (localDuplicate) {
+      const message = duplicateScanMessage(localDuplicate);
+      updateLastScan({
+        ...localDuplicate,
+        status: 'duplicate',
+        syncStatus: 'duplicate',
+        syncError: message
+      });
+      cameraState('Duplicate blocked');
+      showDuplicateOnce(record, localDuplicate, message);
+      return;
+    }
     state.saveInFlight = true;
     try {
-      await saveRecord(record);
-      cameraState('Scan captured');
+      await saveRecord(record, { deferSync: true });
+      cameraState('Scan captured - pending sync');
       byId('manualRawPreview').hidden = true;
+      void checkBackendDuplicateBeforeSync(record);
     } catch (error) {
       toast(error.message || 'Unable to save scan', 'error');
       vibrate([30, 30, 30]);
@@ -1334,21 +1549,23 @@
         }
       });
 
-      const inserted = new Map((response.insertedRecords || []).map((row) => [
-        clean(row.clientScanId || row.localId || row.scanId || row.uniqueScanId),
-        row
-      ]));
       const logs = Array.isArray(response.logs) ? response.logs : [];
-      const duplicateLogs = new Map(logs
-        .filter((log) => log.status === 'duplicate')
-        .map((log) => [clean(log.clientScanId || log.localId || log.mobileScanId || log.scanId), clean(log.errorMessage || log.reason || 'Duplicate rejected')]));
-      const failedLogs = new Map(logs
-        .filter((log) => log.status === 'failed' || log.status === 'invalid')
-        .map((log) => [clean(log.clientScanId || log.localId || log.mobileScanId || log.scanId), clean(log.errorMessage || log.reason || response.message || 'Sync failed')]));
+      const inserted = new Map();
+      (response.insertedRecords || []).forEach((row) => putIdentity(inserted, row, row));
+      logs
+        .filter((log) => ['inserted', 'synced', 'success'].includes(clean(log.status).toLowerCase()))
+        .forEach((log) => putIdentity(inserted, log, log));
+      const duplicateLogs = new Map();
+      logs
+        .filter((log) => clean(log.status).toLowerCase() === 'duplicate')
+        .forEach((log) => putIdentity(duplicateLogs, log, clean(log.errorMessage || log.reason || 'Duplicate rejected')));
+      const failedLogs = new Map();
+      logs
+        .filter((log) => ['failed', 'invalid'].includes(clean(log.status).toLowerCase()))
+        .forEach((log) => putIdentity(failedLogs, log, clean(log.errorMessage || log.reason || response.message || 'Sync failed')));
 
       for (const row of batch) {
-        const key = clean(row.scanId);
-        const saved = inserted.get(key) || inserted.get(clean(row.clientScanId || '')) || inserted.get(clean(row.uniqueScanId || ''));
+        const saved = identityValue(inserted, row);
         if (saved) {
           await putRecord({
             ...row,
@@ -1363,25 +1580,25 @@
           updateLastScan({ ...row, status: 'synced', syncStatus: 'synced' });
           continue;
         }
-        if (duplicateLogs.has(key) || duplicateLogs.has(clean(row.clientScanId || ''))) {
-          const message = duplicateLogs.get(key) || duplicateLogs.get(clean(row.clientScanId || ''));
+        const duplicateMessage = identityValue(duplicateLogs, row);
+        if (duplicateMessage !== undefined) {
           await putRecord({
             ...row,
             status: 'duplicate',
             syncStatus: 'duplicate',
-            syncError: message,
+            syncError: duplicateMessage,
             retryCount: Number(row.retryCount || 0)
           });
-          if (!silent) toast(message, 'warning');
+          if (!silent) showDuplicateOnce(row, row, duplicateMessage);
           continue;
         }
-        if (failedLogs.has(key) || failedLogs.has(clean(row.clientScanId || ''))) {
-          const message = failedLogs.get(key) || failedLogs.get(clean(row.clientScanId || ''));
+        const failedMessage = identityValue(failedLogs, row);
+        if (failedMessage !== undefined) {
           await putRecord({
             ...row,
             status: 'failed',
             syncStatus: 'failed',
-            syncError: message,
+            syncError: failedMessage,
             retryCount: Number(row.retryCount || 0) + 1
           });
           continue;
@@ -1410,29 +1627,33 @@
       }
       const retryable = !Number(error.status) || Number(error.status) >= 500 || Number(error.status) === 408 || Number(error.status) === 429;
       const logs = Array.isArray(error.data?.logs) ? error.data.logs : [];
-      const failedMap = new Map(logs
-        .filter((log) => log.status === 'failed' || log.status === 'invalid')
-        .map((log) => [clean(log.clientScanId || log.localId || log.mobileScanId || log.scanId), clean(log.errorMessage || log.reason || error.message)]));
-      const duplicateMap = new Map(logs
-        .filter((log) => log.status === 'duplicate')
-        .map((log) => [clean(log.clientScanId || log.localId || log.mobileScanId || log.scanId), clean(log.errorMessage || log.reason || error.message)]));
+      const failedMap = new Map();
+      logs
+        .filter((log) => ['failed', 'invalid'].includes(clean(log.status).toLowerCase()))
+        .forEach((log) => putIdentity(failedMap, log, clean(log.errorMessage || log.reason || error.message)));
+      const duplicateMap = new Map();
+      logs
+        .filter((log) => clean(log.status).toLowerCase() === 'duplicate')
+        .forEach((log) => putIdentity(duplicateMap, log, clean(log.errorMessage || log.reason || error.message)));
 
       for (const row of batch) {
-        const key = clean(row.scanId);
-        if (duplicateMap.has(key)) {
+        const duplicateMessage = identityValue(duplicateMap, row);
+        const failedMessage = identityValue(failedMap, row);
+        if (duplicateMessage !== undefined) {
           await putRecord({
             ...row,
             status: 'duplicate',
             syncStatus: 'duplicate',
-            syncError: duplicateMap.get(key),
+            syncError: duplicateMessage,
             retryCount: Number(row.retryCount || 0)
           });
-        } else if (failedMap.has(key)) {
+          showDuplicateOnce(row, row, duplicateMessage);
+        } else if (failedMessage !== undefined) {
           await putRecord({
             ...row,
             status: retryable ? 'pending' : 'failed',
             syncStatus: retryable ? 'pending' : 'failed',
-            syncError: failedMap.get(key),
+            syncError: failedMessage,
             retryCount: Number(row.retryCount || 0) + 1
           });
         } else {
@@ -1652,12 +1873,26 @@
       jobCardNo
     });
 
+    const localDuplicate = localDuplicateForRecord(record);
+    if (localDuplicate) {
+      const message = duplicateScanMessage(localDuplicate);
+      updateLastScan({
+        ...localDuplicate,
+        status: 'duplicate',
+        syncStatus: 'duplicate',
+        syncError: message
+      });
+      showDuplicateOnce(record, localDuplicate, message);
+      return;
+    }
+
     state.saveInFlight = true;
     try {
-      await saveRecord(record);
+      await saveRecord(record, { deferSync: true });
       closeManualDialog();
       updateLastScan(record);
       toast('Manual scan saved', 'success');
+      void checkBackendDuplicateBeforeSync(record);
     } catch (error) {
       toast(error.message || 'Manual save failed', 'error');
       vibrate([30, 30, 30]);
@@ -1677,9 +1912,7 @@
       const bin = setActiveBin(byId('activeBinLocation').value);
       if (bin) {
         toast(`Bin ${bin} saved`, 'success');
-        if (state.cameraRequested && !state.paused) {
-          startCamera().catch((error) => toast(error.message || 'Camera failed to start', 'error'));
-        }
+        requestAutoCameraStart();
       } else {
         toast('Enter a bin location first', 'error');
         byId('activeBinLocation').focus();
@@ -1828,7 +2061,7 @@
       state.allRows = await getAllRecords().catch(() => []);
       byId('loginMessage').textContent = '';
       renderLoginDealers(response.dealerCode || selectedDealer || payload.dealerCode || '');
-      state.cameraRequested = false;
+      state.cameraRequested = true;
       state.paused = false;
       updateScannerPanel();
       await refreshSessionContext();
@@ -1836,11 +2069,12 @@
       state.allRows = await getAllRecords().catch(() => []);
       renderAll();
       byId('cameraState').textContent = isSecureScannerContext()
-        ? 'Tap Start Camera to begin scanning'
+        ? (requiresBin() && !loadActiveBin() ? 'Set bin location to start camera automatically.' : 'Starting camera automatically...')
         : 'Camera is blocked on this HTTP page. Use the secure scanner URL.';
       startTimers();
       toast('Login successful', 'success');
       sendHeartbeat().catch(() => undefined);
+      requestAutoCameraStart({ focusBin: true });
     } catch (error) {
       if (showDealerSelectionError(error)) return;
       byId('loginMessage').textContent = error.message;
@@ -1876,8 +2110,10 @@
   }
 
   function startTimers() {
+    clearTimeout(state.syncDelayTimer);
     clearInterval(state.syncTimer);
     clearInterval(state.heartbeatTimer);
+    state.syncDelayTimer = null;
     state.syncTimer = setInterval(() => {
       syncQueue({ silent: true }).catch(() => undefined);
     }, SYNC_INTERVAL_MS);
@@ -1918,6 +2154,9 @@
       if (activeBin) {
         byId('manualBinLocation').value = activeBin;
       }
+    }
+    if (!state.scanning && state.cameraRequested && !state.paused && state.session?.token) {
+      requestAutoCameraStart({ focusBin: info.requiresBin });
     }
     if (!silent) toast(`${info.label} mode selected`, 'info');
   }
@@ -1974,18 +2213,21 @@
     if (state.session?.token) {
       byId('loginPanel').classList.add('hidden');
       byId('scannerPanel').classList.remove('hidden');
-      state.cameraRequested = false;
+      document.body.classList.add('scanner-active');
+      state.cameraRequested = true;
       await refreshSessionContext();
       await refreshHealth();
       state.allRows = await getAllRecords().catch(() => []);
       renderAll();
       startTimers();
       byId('cameraState').textContent = isSecureScannerContext()
-        ? 'Tap Start Camera to begin scanning'
+        ? (requiresBin() && !loadActiveBin() ? 'Set bin location to start camera automatically.' : 'Starting camera automatically...')
         : 'Camera is blocked on this HTTP page. Use the secure scanner URL.';
+      requestAutoCameraStart({ focusBin: false });
     } else {
       byId('scannerPanel').classList.add('hidden');
       byId('loginPanel').classList.remove('hidden');
+      document.body.classList.remove('scanner-active');
       renderAll();
     }
 
