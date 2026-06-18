@@ -2074,7 +2074,12 @@
     const scans = Array.isArray(payload.insertedRecords) ? payload.insertedRecords : [];
     scans.slice(-20).forEach((scan) => handleNewScan(scan).catch(() => undefined));
     const jobs = [loadSyncStatus(), loadDevices()];
-    if (!scans.length) jobs.push(loadDashboard(), loadScanHistory());
+    if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
+    if ($('#scan')?.classList.contains('active')) jobs.push(loadScanHistory());
+    if ($('#reports')?.classList.contains('active') && state.reportHasRun && activeReportType()) {
+      jobs.push(loadReport({ forceRefresh: true, showLoading: false }));
+    }
+    if (!scans.length && !jobs.some((job) => job === state.dashboardLoadPromise)) jobs.push(loadDashboard({ force: true }), loadScanHistory());
     await Promise.all(jobs);
   }
 
@@ -2092,11 +2097,13 @@
     queueReconciliationRefresh(reason);
     if (!state.reportHasRun || !activeReportType()) return;
     state.reportCache.clear();
-    const now = Date.now();
-    if (now - Number(state.reportStaleNoticeAt || 0) > 15000) {
-      state.reportStaleNoticeAt = now;
-      addConnectionLog(`Report data changed from ${reason}. Use Refresh Report to reload table.`, 'warning');
-    }
+    clearTimeout(state.reportRealtimeTimer);
+    state.reportRealtimeTimer = setTimeout(() => {
+      if (!$('#reports')?.classList.contains('active') || state.reportLoading) return;
+      loadReport({ forceRefresh: true, showLoading: false }).catch((error) => {
+        addConnectionLog(`Report refresh skipped after ${reason}: ${error.message}`, 'warning');
+      });
+    }, 900);
   }
 
   async function loadLatestSyncDebug() {
@@ -3378,9 +3385,9 @@
       normalized.rawBarcode = '';
       normalized.rawScanValue = '';
     }
-    normalized.synced = !isBarcodeForm;
-    normalized.isSynced = !isBarcodeForm;
-    normalized.syncStatus = isBarcodeForm ? 'pending' : 'synced';
+    normalized.synced = true;
+    normalized.isSynced = true;
+    normalized.syncStatus = 'synced';
     const needsManualBin = ['INWARD', 'DAMAGE'].includes(normalized.scanType);
     if (needsManualBin && !normalized.binLocation) {
       playScanTone('error');
@@ -3396,7 +3403,8 @@
       toast('Regd No and Job Card No are required for fitted parts.', 'error');
       return;
     }
-    if (!validPartText(normalized.partNumber)) {
+    const rawBarcodeText = normalizePartText(normalized.rawScan || normalized.rawScanString || normalized.rawBarcode || normalized.rawScanValue || normalized.barcode || normalized.barcodeValue || normalized.scanValue || normalized.scanText || '');
+    if ((!isBarcodeForm || !rawBarcodeText) && !validPartText(normalized.partNumber)) {
       playScanTone('error');
       toast('Invalid part number format', 'error');
       return;
@@ -3425,61 +3433,16 @@
         setTimeout(() => $('#barcodeRaw')?.focus(), 700);
         return;
       }
-      const scanRawLock = normalizePartText(normalized.rawScan || normalized.rawScanString || normalized.rawBarcode || '');
-      const queued = enqueueScan(normalized, 'Saved locally; waiting for background sync');
-      if (queued.queueDuplicate) {
-        const existing = queued.existingLocalScan || {};
-        const message = barcodeDuplicateMessage(existing);
-        addSyncLog({
-          partNumber: normalized.partNumber,
-          upiId: normalized.upiId,
-          dealer: normalized.dealerCode,
-          status: 'duplicate',
-          errorMessage: message
-        });
-        if (!lockBarcodeDuplicateNotice(existing || normalized)) {
-          playScanTone('duplicate');
-          toast(message, 'error');
-        }
-        state.barcodeLastRaw = scanRawLock || state.barcodeLastRaw;
-        state.barcodeLastAt = Date.now();
-        setLivePill('barcodeReadyStatus', 'Duplicate - Not Added', false);
-        resetBarcodeScanFields(form, normalized, options.expectedRaw);
-        setTimeout(() => $('#barcodeRaw')?.focus(), 700);
-        return;
-      }
-      localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
-      const pendingScan = normalizeQueuedHistoryScan({
-        ...normalized,
-        localStatus: 'pending',
-        syncStatus: 'pending',
-        synced: false,
-        isSynced: false,
-        scanStatus: 'ACCEPTED'
-      });
-      lockBarcodeScan(pendingScan, 3000);
-      state.barcodeLastRaw = scanRawLock || state.barcodeLastRaw;
-      state.barcodeLastAt = Date.now();
-      prependScanHistory(pendingScan);
-      addScanToStream(pendingScan);
-      playScanTone('success');
-      toast('Scan saved locally. Pending sync.');
-      setLivePill('barcodeReadyStatus', 'Pending Sync - Ready Next', true);
-      resetBarcodeScanFields(form, normalized, options.expectedRaw);
-      setTimeout(() => {
-        $('#barcodeRaw')?.focus();
-        syncBarcodeScanAfterDuplicateCheck(pendingScan).catch(() => undefined);
-      }, 100);
-      return;
     }
 
     try {
-      const data = await api('/api/scans/manual', { method: 'POST', body: normalized });
+      const data = await api('/api/scans/process', { method: 'POST', body: normalized });
       if (data && data.scan) {
+        const savedScan = data.scan || {};
         addSyncLog({
-          partNumber: normalized.partNumber,
-          upiId: normalized.upiId,
-          dealer: normalized.dealerCode,
+          partNumber: savedScan.partNumber || savedScan.part || normalized.partNumber,
+          upiId: savedScan.upiId || savedScan.upiNo || normalized.upiId,
+          dealer: savedScan.dealerCode || normalized.dealerCode,
           status: data.duplicate ? 'duplicate' : 'synced',
           errorMessage: data.duplicate ? 'Duplicate scan skipped' : ''
         });
@@ -3489,6 +3452,9 @@
       playScanTone(data.duplicate ? 'duplicate' : 'success');
       if (isBarcodeForm) {
         localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
+        lockBarcodeScan(data.scan || normalized, 1800);
+        state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
+        state.barcodeLastAt = Date.now();
         resetBarcodeScanFields(form, normalized, options.expectedRaw);
         setLivePill('barcodeReadyStatus', data.duplicate ? 'Duplicate skipped' : 'Saved - Ready Next', true);
         setTimeout(() => {
@@ -3500,16 +3466,27 @@
       }
       queueRealtimeReportRefresh(isBarcodeForm ? 'barcode scan' : 'manual scan');
     } catch (error) {
-      if (error.status === 409 && error.data?.upiDuplicate) {
+      if (
+        error.status === 409
+        && (isBarcodeForm || error.data?.duplicate || error.data?.upiDuplicate)
+        && !error.data?.fittedDuplicate
+        && !(!isBarcodeForm && error.data?.manualDuplicate)
+      ) {
         playScanTone('duplicate');
+        const duplicateScan = error.data?.scan || error.data?.existing || normalized;
         addSyncLog({
-          partNumber: normalized.partNumber,
-          upiId: normalized.upiId,
-          dealer: normalized.dealerCode,
+          partNumber: duplicateScan.partNumber || duplicateScan.part || normalized.partNumber,
+          upiId: duplicateScan.upiId || duplicateScan.upiNo || normalized.upiId,
+          dealer: duplicateScan.dealerCode || normalized.dealerCode,
           status: 'duplicate',
           errorMessage: error.message
         });
         toast(error.message, 'error');
+        if (isBarcodeForm) {
+          setLivePill('barcodeReadyStatus', 'Duplicate - Ready Next', false);
+          resetBarcodeScanFields(form, normalized, options.expectedRaw);
+          setTimeout(() => $('#barcodeRaw')?.focus(), 700);
+        }
         return;
       }
       if (!isBarcodeForm && error.status === 409 && error.data?.manualDuplicate) {
@@ -3523,7 +3500,7 @@
         if (window.confirm(message)) {
           normalized.addManualQuantity = true;
           normalized.confirmAddQuantity = true;
-          const updateData = await api('/api/scans/manual', { method: 'POST', body: normalized });
+          const updateData = await api('/api/scans/process', { method: 'POST', body: normalized });
           playScanTone('success');
           toast(updateData.message || 'Manual quantity updated');
           resetManualScanFields(form);
@@ -3536,7 +3513,7 @@
         playScanTone('duplicate');
         if (window.confirm(error.data.message || 'This fitted part already exists for this vehicle/job card. Add quantity?')) {
           normalized.addFittedQuantity = true;
-          const updateData = await api('/api/scans/manual', { method: 'POST', body: normalized });
+          const updateData = await api('/api/scans/process', { method: 'POST', body: normalized });
           playScanTone('success');
           toast(updateData.message || 'Fitted part quantity updated');
           if (isBarcodeForm) resetBarcodeScanFields(form, normalized, options.expectedRaw);
@@ -9648,9 +9625,14 @@
     socket.on('scanData', (scan) => {
       handleNewScan(scan).catch(console.warn);
     });
-    socket.on('scan:saved', () => {
+    socket.on('scan:saved', (scan = {}) => {
       state.lastRealtimeAt = Date.now();
+      if (scan && (scan.partNumber || scan.part || scan.scanId || scan.uniqueScanId)) {
+        handleNewScan(scan).catch(console.warn);
+      }
       queueRealtimeReportRefresh('scan saved');
+      if ($('#dashboard')?.classList.contains('active')) queueDashboardRefresh(700);
+      if ($('#scan')?.classList.contains('active')) queueScanRefresh(700);
       if ($('#binTransfer')?.classList.contains('active')) {
         Promise.all([loadBinTransferParts(activeBinTransferForm()), loadBinTransferHistory()]).catch(console.warn);
       }
@@ -9665,7 +9647,8 @@
       if ($('#scan')?.classList.contains('active')) queueScanRefresh(500);
       if ($('#binTransfer')?.classList.contains('active')) loadBinTransferParts(activeBinTransferForm()).catch(console.warn);
     });
-    socket.on('scan:count:update', (stats) => {
+    socket.on('scan:count:update', (payload = {}) => {
+      const stats = payload.stats || payload;
       if (stats && dashboardStatsMatchesActiveAudit(stats)) {
         updateDashboardCards(stats);
       }
@@ -9710,11 +9693,13 @@
     socket.on('scanner:status', (device = {}) => {
       updateScannerStatusBar({ connectedDevices: state.activeDeviceCount, activeScannerCount: state.activeDeviceCount, lastActivityAt: device.lastActivity || device.lastSeen || new Date() });
     });
-    socket.on('scan:last10:update', (scans = []) => {
+    socket.on('scan:last10:update', (payload = []) => {
       state.lastRealtimeAt = Date.now();
-      if (Array.isArray(scans)) renderScanStream(scans);
+      const scans = Array.isArray(payload) ? payload : (Array.isArray(payload.recent) ? payload.recent : []);
+      if (scans.length) renderScanStream(scans);
     });
-    socket.on('stats:update', (stats) => {
+    socket.on('stats:update', (payload = {}) => {
+      const stats = payload.stats || payload;
       if (stats && dashboardStatsMatchesActiveAudit(stats)) updateDashboardCards(stats);
       else queueDashboardRefresh(1200);
     });

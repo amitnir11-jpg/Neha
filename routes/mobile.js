@@ -385,11 +385,23 @@ router.post('/device-register', auth.requireAuth, async (req, res) => {
   }
 });
 
+async function processMobileScan(req, res) {
+  try {
+    const { processScan } = require('../services/ScanProcessingService');
+    const result = await processScan(req.body || {}, { req });
+    return res.status(result.httpStatus || (result.success ? 201 : 422)).json(result);
+  } catch (error) {
+    return res.status(500).json({ success: false, status: 'failed', message: error.message });
+  }
+}
+
+router.post('/process', auth.requireAuth, processMobileScan);
+router.post('/process-scan', auth.requireAuth, processMobileScan);
 router.post('/sync', auth.requireAuth, sync.pushHandler);
-router.post('/scan', auth.requireAuth, sync.pushHandler);
+router.post('/scan', auth.requireAuth, processMobileScan);
 router.post('/sync-batch', auth.requireAuth, sync.pushHandler);
 router.post('/sync-bulk', auth.requireAuth, sync.pushHandler);
-router.post('/realtime-scan', auth.requireAuth, sync.pushHandler);
+router.post('/realtime-scan', auth.requireAuth, processMobileScan);
 
 router.get('/status', auth.optionalAuth, async (req, res) => {
   try {

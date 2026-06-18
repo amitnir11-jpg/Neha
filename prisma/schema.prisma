@@ -627,9 +627,19 @@ model Inventory {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
+  @@index([dealerCode])
+  @@index([partNumber])
+  @@index([normalizedPartNumber])
+  @@index([upiNo])
+  @@index([binLocation])
+  @@index([createdAt])
   @@index([dealerCode, auditId, timestamp])
   @@index([dealerCode, auditId, normalizedPartNumber])
   @@index([dealerCode, auditId, scanType, timestamp])
+  @@index([dealerCode, partNumber])
+  @@index([dealerCode, upiNo])
+  @@index([dealerCode, binLocation])
+  @@index([dealerCode, scanStatus, createdAt])
   @@index([syncStatus])
   @@index([scanStatus])
   @@index([globalUpiKey])
@@ -677,6 +687,8 @@ model MasterCatalogue {
 
   @@index([partNumber])
   @@index([normalizedPartNumber])
+  @@index([dealerCode])
+  @@index([createdAt])
   @@map("mastercatalogues")
 }
 
@@ -720,6 +732,8 @@ model MasterPart {
   @@index([partNumber])
   @@index([normalizedPartNumber])
   @@index([binLocation])
+  @@index([dealerCode, partNumber])
+  @@index([dealerCode, normalizedPartNumber])
   @@map("masterparts")
 }
 

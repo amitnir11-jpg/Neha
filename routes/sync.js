@@ -503,6 +503,149 @@ function optionalNumber(value) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function booleanFlag(value) {
+  return value === true || value === 1 || String(value).trim().toLowerCase() === 'true' || String(value).trim() === '1';
+}
+
+function numericValue(value, fallback = 0) {
+  if (inventory.numberValue) return inventory.numberValue(value, fallback);
+  const parsed = optionalNumber(value);
+  return parsed === undefined ? fallback : parsed;
+}
+
+function requestedQuantity(scan = {}, fallback = 1) {
+  const source = scan.source && typeof scan.source === 'object' ? scan.source : {};
+  const value = firstValue(source, ['qty', 'quantity', 'count'])
+    || firstValue(scan, ['qty', 'quantity', 'count'])
+    || fallback;
+  const qty = Math.abs(numericValue(value, fallback));
+  return qty > 0 ? qty : fallback;
+}
+
+function hasScanFlag(scan = {}, keys = []) {
+  const source = scan.source && typeof scan.source === 'object' ? scan.source : {};
+  return keys.some((key) => booleanFlag(scan[key]) || booleanFlag(source[key]));
+}
+
+function publicScanRow(scan = {}) {
+  return inventory.publicScan ? inventory.publicScan(scan) : scan;
+}
+
+function manualDuplicatePayload(existing = {}, requestedQty = 1) {
+  if (typeof inventory.manualDuplicatePayload === 'function') {
+    return inventory.manualDuplicatePayload(existing, requestedQty);
+  }
+  const partNumber = normalizePartNumber(existing.normalizedPartNumber || existing.partNumber || existing.part || '');
+  const binLocation = upper(existing.binLocation || existing.bin || '');
+  const existingQty = numericValue(existing.qty !== undefined ? existing.qty : existing.quantity, 0);
+  const addQty = Math.abs(numericValue(requestedQty, 1));
+  return {
+    manualDuplicate: true,
+    partNumber,
+    binLocation,
+    existingQty,
+    requestedQty: addQty,
+    message: `Part ${partNumber} is already available in bin ${binLocation}. Current quantity: ${existingQty}. Do you want to add ${addQty} more?`
+  };
+}
+
+async function addFittedQuantity(existing = {}, scan = {}, req = {}) {
+  const addQty = requestedQuantity(scan, 1);
+  if (!(addQty > 0)) return { error: 'Quantity to add must be greater than zero.' };
+  const updated = await Inventory.findByIdAndUpdate(existing._id, {
+    $inc: { qty: addQty, quantity: addQty, fittedQty: addQty },
+    $set: {
+      fittedLocation: 'VEHICLE',
+      status: 'FITTED_ON_VEHICLE',
+      syncStatus: 'synced',
+      synced: true,
+      isSynced: true
+    }
+  }, { new: true }).lean();
+  const publicRow = publicScanRow(updated || existing);
+  const io = req.io || (req.app && typeof req.app.get === 'function' ? req.app.get('io') : null);
+  if (io) {
+    io.emit('scan:saved', publicRow);
+    io.emit('inventory:update', { reason: 'fitted-quantity-added', scan: publicRow, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: new Date() });
+    io.emit('reports:update', { reason: 'fitted-quantity-added', scan: publicRow, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: new Date() });
+    io.emit('stats:update');
+  }
+  return { updated: publicRow, addQty };
+}
+
+function duplicateResult(policy = {}, scan = {}) {
+  const existing = policy.existing || scan;
+  return {
+    status: policy.status || 'duplicate',
+    httpStatus: 409,
+    scan: existing,
+    existing,
+    error: policy.message || policy.reason || 'Duplicate scan skipped',
+    message: policy.message || policy.reason || 'Duplicate scan skipped',
+    duplicate: true,
+    skipped: true,
+    upiDuplicate: Boolean(policy.upiDuplicate),
+    manualDuplicate: Boolean(policy.manualDuplicate),
+    fittedDuplicate: Boolean(policy.fittedDuplicate),
+    requestedQty: policy.requestedQty,
+    existingQty: policy.existingQty,
+    binLocation: policy.binLocation || upper(existing.binLocation || existing.bin || scan.binLocation || scan.bin || ''),
+    partNumber: policy.partNumber || normalizePartNumber(existing.normalizedPartNumber || existing.partNumber || existing.part || scan.partNumber || scan.part || ''),
+    reason: policy.reason || ''
+  };
+}
+
+async function confirmedDuplicateUpdate(policy = {}, scan = {}, req = {}) {
+  const source = scan.source && typeof scan.source === 'object' ? scan.source : {};
+  if (policy.manualDuplicate && hasScanFlag(scan, ['addManualQuantity', 'confirmAddQuantity'])) {
+    if (typeof inventory.addManualQuantity !== 'function') {
+      return { status: 'failed', httpStatus: 400, scan: policy.existing || scan, error: 'Manual quantity update is not available.' };
+    }
+    const addQty = requestedQuantity(scan, 1);
+    const result = await inventory.addManualQuantity(policy.existing, {
+      ...source,
+      ...scan,
+      qty: addQty,
+      quantity: addQty,
+      manualAddRequestId: source.manualAddRequestId || scan.manualAddRequestId || scan.uniqueScanId || scan.scanId || scan.clientScanId || scan.syncKey
+    }, req);
+    if (result.error) return { status: 'failed', httpStatus: 400, scan: policy.existing || scan, error: result.error };
+    const newQty = numericValue(result.updated.qty !== undefined ? result.updated.qty : result.updated.quantity, 0);
+    return {
+      status: 'synced',
+      httpStatus: 200,
+      scan: result.updated,
+      updated: true,
+      duplicate: false,
+      alreadyApplied: Boolean(result.alreadyApplied),
+      addedQuantity: result.alreadyApplied ? 0 : result.addQty,
+      newQuantity: newQty,
+      error: '',
+      message: result.alreadyApplied
+        ? `Quantity was already added. Current quantity: ${newQty}.`
+        : `Added ${result.addQty} more. New quantity: ${newQty}.`
+    };
+  }
+  if (policy.fittedDuplicate && hasScanFlag(scan, ['addFittedQuantity', 'confirmAddQuantity'])) {
+    const result = await addFittedQuantity(policy.existing, scan, req);
+    if (result.error) return { status: 'failed', httpStatus: 400, scan: policy.existing || scan, error: result.error };
+    const newQty = numericValue(result.updated.qty !== undefined ? result.updated.qty : result.updated.quantity, 0);
+    return {
+      status: 'synced',
+      httpStatus: 200,
+      scan: result.updated,
+      updated: true,
+      duplicate: false,
+      alreadyApplied: false,
+      addedQuantity: result.addQty,
+      newQuantity: newQty,
+      error: '',
+      message: 'Fitted part quantity updated for this vehicle/job card'
+    };
+  }
+  return null;
+}
+
 function valuationFields({ scan = {}, rawScanText = '', scannedMrp, mrpProvided = false, manualEntry = false, master = null } = {}) {
   const source = normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, manualEntry ? 'manual' : 'mobile');
   const valued = decorateScanValue({
@@ -665,10 +808,11 @@ function normalizeScan(item = {}) {
   const timestamp = scanTimestamp({ ...item, serverReceivedAt });
   const dealerCode = upper(item.dealerCode || item.dealer || item.dealerId || parsed.dealerCode);
   const scanSource = normalizeSource(item.source?.source || item.source?.scanSource || item.scanSource || item.source, 'mobile');
+  const rawHasValue = Boolean(rawScan);
   const explicitPartNumber = firstValue(item, ['partNumber', 'partNo', 'part', 'sku', 'itemCode']);
   const partNumber = normalizePartNumber(scanSource === 'manual'
     ? (explicitPartNumber || parsed.part)
-    : (parsed.part || explicitPartNumber));
+    : (parsed.part || (rawHasValue ? '' : explicitPartNumber)));
   const scanType = normalizeScanType(item.scanType || item.action || item.type || item.movement || parsed.type || 'INWARD');
   const binLocation = clean(item.binLocation || item.bin || item.location || parsed.bin);
   const regdNo = upper(item.regdNo || item.regNo || item.registrationNo || item.regdNumber || item.vehicleRegNo);
@@ -871,7 +1015,38 @@ async function emitEnterpriseRealtime(io, scans = []) {
   io.emit('reports:update', realtimePayload);
   io.emit('warehouse:feed', realtimePayload);
   io.emit('syncData', realtimePayload);
-  logSync('socket broadcast success', { count: publicScans.length, events: ['scan:new', 'scan:saved', 'scanData', 'reports:update', 'syncData'] });
+  try {
+    const recentFilter = { ...dashboardFilter };
+    if (inventory.nonVerificationScanClause) {
+      recentFilter.$and = (recentFilter.$and || []).concat([inventory.nonVerificationScanClause()]);
+    }
+    const [statsResult, recentRows] = await Promise.all([
+      dashboardFilter.dealerCode && inventory.dashboardStats ? inventory.dashboardStats(dashboardFilter) : null,
+      Inventory.find(recentFilter).sort({ timestamp: -1, createdAt: -1 }).limit(10).lean()
+    ]);
+    const stats = statsResult ? {
+      ...statsResult,
+      dealerCode: dashboardFilter.dealerCode || statsResult.dealerCode || '',
+      auditId: dashboardFilter.auditId || statsResult.auditId || ''
+    } : null;
+    const recent = recentRows.map((scan) => inventory.publicScan ? inventory.publicScan(scan) : scan);
+    const updatePayload = {
+      ...realtimePayload,
+      stats,
+      recent,
+      totalScannedCount: stats ? stats.totalScanRecords : undefined
+    };
+    if (stats) {
+      io.emit('stats:update', updatePayload);
+      io.emit('scan:count:update', updatePayload);
+    }
+    io.emit('scan:last10:update', updatePayload);
+    io.emit('dashboard:update', updatePayload);
+    io.emit('inventory:update', updatePayload);
+  } catch (error) {
+    logSync('realtime dashboard payload failed', { message: error.message });
+  }
+  logSync('socket broadcast success', { count: publicScans.length, events: ['scan:new', 'scan:saved', 'scanData', 'reports:update', 'syncData', 'dashboard:update'] });
 }
 
 async function scanPolicyResult(scan = {}) {
@@ -891,15 +1066,34 @@ async function scanPolicyResult(scan = {}) {
   if (scan.scanType === 'FITTED') {
     const duplicate = await Inventory.findOne(duplicateQuery(scan)).sort({ timestamp: 1, createdAt: 1 }).lean();
     if (duplicate) {
+      const requestedQty = requestedQuantity(scan, 1);
       return {
         ok: false,
         status: 'duplicate',
         existing: duplicate,
+        fittedDuplicate: true,
+        requestedQty,
+        existingQty: numericValue(duplicate.qty !== undefined ? duplicate.qty : duplicate.quantity, 0),
+        partNumber: normalizePartNumber(duplicate.normalizedPartNumber || duplicate.partNumber || duplicate.part || scan.partNumber),
         reason: 'Fitted part already exists for this vehicle/job card',
-        message: 'Fitted part already exists for this vehicle/job card'
+        message: 'This fitted part already exists for this vehicle/job card. Add quantity?'
       };
     }
     return { ok: true };
+  }
+  if (isManualEntry(scan) && ['INWARD', 'DAMAGE'].includes(scan.scanType)) {
+    const manualFilter = duplicatePolicy.manualBinDuplicateFilter(scan);
+    const manualDuplicate = manualFilter ? await Inventory.findOne(manualFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+    if (manualDuplicate) {
+      const payload = manualDuplicatePayload(manualDuplicate, requestedQuantity(scan, 1));
+      return {
+        ok: false,
+        status: 'duplicate',
+        existing: manualDuplicate,
+        ...payload,
+        reason: 'Manual duplicate in same bin'
+      };
+    }
   }
   scan.rawUpiHash = scan.rawUpiHash || duplicatePolicy.rawUpiHash(scan);
   const identityFilter = duplicatePolicy.identityDuplicateFilter(scan);
@@ -984,6 +1178,7 @@ async function saveNormalizedScan(scan, req) {
   const errors = [];
   if (!scan.partNumber) errors.push('Part number missing');
   if (scan.partNumber && !isValidPartNumber(scan.partNumber)) errors.push('Invalid part number format');
+  if (!master) errors.push(`Part not found in Master Catalogue: ${scan.partNumber || scan.rawScanString || 'unknown'}`);
   if (['INWARD', 'DAMAGE'].includes(scan.scanType) && !scan.binLocation) errors.push(BIN_REQUIRED_MESSAGE);
   if (scan.scanType === 'FITTED') {
     inventory.prepareFittedScan(scan, scan.quantity || 1);
@@ -1052,9 +1247,11 @@ async function saveNormalizedScan(scan, req) {
   scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
   const policy = await scanPolicyResult(scan);
   if (!policy.ok) {
+    const confirmedUpdate = await confirmedDuplicateUpdate(policy, scan, req);
+    if (confirmedUpdate) return confirmedUpdate;
     if (policy.existing) await logDuplicateScan(scan, policy.existing, policy.reason);
     logSync('scan policy blocked', { status: policy.status, reason: policy.reason, deviceId: scan.deviceId, scanId: scan.uniqueScanId, existingId: policy.existing && policy.existing._id });
-    return { status: policy.status, scan: policy.existing || scan, error: policy.message || policy.reason };
+    return duplicateResult(policy, scan);
   }
 
   const warnings = [];

@@ -2046,11 +2046,16 @@ async function enrichScanUsers(scans = []) {
 
 async function buildReportData(query = {}) {
   query = normalizeReportQuery(query);
+  const scanLimit = Math.min(5000, Math.max(0, Number.parseInt(query._scanLimit || query.scanLimit || '0', 10) || 0));
+  const scanSkip = Math.max(0, Number.parseInt(query._scanSkip || query.scanSkip || '0', 10) || 0);
   const dealerStockFilter = query.dealerCode
     ? { dealerCode: query.dealerCode, ...(query.auditId ? { auditId: query.auditId } : {}) }
     : { _id: null };
+  const scanQuery = Inventory.find(scanBasedFilter(query)).select(REPORT_SCAN_SELECT).sort({ timestamp: -1, createdAt: -1 });
+  if (scanSkip) scanQuery.skip(scanSkip);
+  if (scanLimit) scanQuery.limit(scanLimit);
   let [rawScans, dealers, audits, dealerStockRows] = await Promise.all([
-    Inventory.find(scanBasedFilter(query)).select(REPORT_SCAN_SELECT).sort({ timestamp: -1 }).lean(),
+    scanQuery.lean(),
     Dealer.find({}).sort({ dealerName: 1 }).lean(),
     Audit.find({}).sort({ createdAt: -1 }).lean(),
     DealerStock.find(dealerStockFilter).lean()
@@ -2079,17 +2084,6 @@ async function buildReportData(query = {}) {
   const legacyPartNumbers = partNumbers.filter((partNo) => !catalogueFound.has(partNo));
   const masterFilter = legacyPartNumbers.length ? { $or: [{ normalizedPartNumber: { $in: legacyPartNumbers } }, { partNo: { $in: legacyPartNumbers } }, { partNumber: { $in: legacyPartNumbers } }] } : { _id: null };
   masters = masters.concat(await MasterPart.find(masterFilter).lean());
-  const foundParts = new Set(masters.map((master) => masterPartNumber(master)).filter(Boolean));
-  if (partNumbers.some((partNo) => !foundParts.has(partNo))) {
-    const allMasters = await MasterPart.find({}).lean();
-    const allByPart = new Map(allMasters.map((master) => [masterPartNumber(master), master]).filter(([partNo]) => partNo));
-    partNumbers.forEach((partNo) => {
-      if (!foundParts.has(partNo) && allByPart.has(partNo)) {
-        masters.push(allByPart.get(partNo));
-        foundParts.add(partNo);
-      }
-    });
-  }
   const masterByDealer = new Map();
   const masterByPart = new Map();
   masters.forEach((master) => {

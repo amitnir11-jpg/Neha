@@ -47,11 +47,17 @@ function cataloguePayload(record = {}) {
 async function findCataloguePart(partNumber) {
   const normalized = normalizePartNumber(partNumber);
   if (!normalized) return null;
-  const catalogue = await MasterCatalogue.findOne({ normalizedPartNumber: normalized }).lean();
+  const lookup = {
+    $or: [
+      { normalizedPartNumber: normalized },
+      { partNumber: normalized },
+      { partNo: normalized },
+      { part: normalized }
+    ]
+  };
+  const catalogue = await MasterCatalogue.findOne(lookup).lean();
   if (catalogue) return cataloguePayload(catalogue);
-  const legacy = await MasterPart.findOne({
-    $or: [{ normalizedPartNumber: normalized }, { partNo: normalized }, { partNumber: normalized }]
-  }).lean();
+  const legacy = await MasterPart.findOne(lookup).lean();
   return legacy ? cataloguePayload(legacy) : null;
 }
 

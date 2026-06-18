@@ -462,6 +462,55 @@ function parseQueryLikeText(rawScan) {
 
 function parseRawScan(rawScan) {
   const raw = String(rawScan || '').trim();
+  if (!raw) {
+    return {
+      part: '',
+      upiNo: '',
+      upiId: '',
+      qty: undefined,
+      mrp: undefined,
+      mrpProvided: false,
+      dlc: undefined,
+      dlcProvided: false,
+      bin: '',
+      dealerCode: '',
+      auditId: '',
+      staffName: '',
+      userName: '',
+      type: '',
+      rawScan: raw
+    };
+  }
+  try {
+    const parsedJson = JSON.parse(raw);
+    if (parsedJson && typeof parsedJson === 'object' && !Array.isArray(parsedJson)) {
+      const jsonPart = upper(firstValue(parsedJson, ['partNumber', 'partNo', 'part', 'sku', 'itemCode', 'item', 'p']));
+      const jsonQty = optionalNumber(firstValue(parsedJson, ['qty', 'quantity', 'q']));
+      const jsonMrp = optionalNumber(firstValue(parsedJson, ['mrp', 'price']));
+      const jsonDlc = optionalNumber(firstValue(parsedJson, ['dlc', 'cost', 'dealerPrice']));
+      const jsonScanType = upper(firstValue(parsedJson, ['type', 'scanType', 'movement']));
+      const jsonUpi = upper(firstValue(parsedJson, ['upiNo', 'upi', 'upiId', 'upiID', 'serial', 'sequence', 'transactionId', 'txnId']));
+      return {
+        part: normalizePartNumber(jsonPart),
+        upiNo: jsonUpi,
+        upiId: jsonUpi,
+        qty: jsonQty !== undefined ? jsonQty : 1,
+        mrp: jsonMrp,
+        mrpProvided: jsonMrp !== undefined,
+        dlc: jsonDlc,
+        dlcProvided: jsonDlc !== undefined,
+        bin: String(firstValue(parsedJson, ['bin', 'binLocation', 'location', 'rack']) || '').trim(),
+        dealerCode: upper(firstValue(parsedJson, ['dealerCode', 'dealer', 'dc'])),
+        auditId: String(firstValue(parsedJson, ['auditId', 'audit', 'auditNo', 'auditNumber']) || '').trim(),
+        staffName: String(firstValue(parsedJson, ['staffName', 'staff', 'username', 'user', 'operator', 'scannedBy']) || '').trim(),
+        userName: String(firstValue(parsedJson, ['userName', 'staffName', 'username', 'user']) || '').trim(),
+        type: VALID_TYPES.includes(jsonScanType) ? jsonScanType : '',
+        rawScan: raw
+      };
+    }
+  } catch (error) {
+    // Not JSON; continue with UPI/barcode text parsing.
+  }
   const slashParts = raw.split('/');
   if (slashParts.length >= 6 && slashParts[3] && slashParts[4] && slashParts[5]) {
     const slashQty = optionalNumber(slashParts[4]);
@@ -494,7 +543,8 @@ function parseRawScan(rawScan) {
     const partMatch = raw.match(/(?:part\s*no|part|pn|sku)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
     part = upper(partMatch ? partMatch[1] : '');
   }
-  if (!part && simpleTokens.length === 1) {
+  const rawLooksStructured = /[:?=&]|:\/\/|upi:|http/i.test(raw);
+  if (!part && simpleTokens.length === 1 && !rawLooksStructured && isValidPartNumber(simpleTokens[0])) {
     part = upper(simpleTokens[0]);
   }
 
@@ -2754,6 +2804,16 @@ async function verifyPartRequest(req, res) {
   }
 }
 
+async function processScanRequest(req, res) {
+  try {
+    const { processScan } = require('../services/ScanProcessingService');
+    const result = await processScan(req.body || {}, { req });
+    return res.status(result.httpStatus || (result.success ? 201 : 422)).json(result);
+  } catch (error) {
+    return res.status(500).json({ success: false, status: 'failed', message: error.message });
+  }
+}
+
 router.get('/verify', auth.optionalAuth, verifyPartRequest);
 router.post('/verify', auth.optionalAuth, verifyPartRequest);
 
@@ -2809,8 +2869,10 @@ router.post('/duplicate-check', auth.requireAuth, async (req, res) => {
   }
 });
 
-router.post('/scan', auth.optionalAuth, saveScanRequest);
-router.post('/manual', auth.optionalAuth, saveScanRequest);
+router.post('/process', auth.optionalAuth, processScanRequest);
+router.post('/process-scan', auth.optionalAuth, processScanRequest);
+router.post('/scan', auth.optionalAuth, processScanRequest);
+router.post('/manual', auth.optionalAuth, processScanRequest);
 router.post('/', auth.optionalAuth, saveScanRequest);
 router.patch('/:scanId/details', auth.requireAuth, updateScanDetails);
 router.patch('/:scanId/mrp', auth.requireAuth, updateManualMrp);
@@ -3552,6 +3614,8 @@ module.exports.findMasterPart = findMasterPart;
 module.exports.numberValue = numberValue;
 module.exports.dashboardStats = dashboardStats;
 module.exports.publicScan = publicScan;
+module.exports.manualDuplicatePayload = manualDuplicatePayload;
+module.exports.addManualQuantity = addManualQuantity;
 module.exports.fittedIdentityFilter = fittedIdentityFilter;
 module.exports.findBackendDuplicate = findBackendDuplicate;
 module.exports.duplicateLookupPayload = duplicateLookupPayload;

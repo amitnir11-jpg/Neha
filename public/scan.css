@@ -499,14 +499,13 @@ a {
 
 .camera-frame {
   position: relative;
-  border-radius: 28px;
+  border-radius: 18px;
   overflow: hidden;
-  min-height: 320px;
+  min-height: 260px;
   aspect-ratio: 4 / 3;
-  background:
-    radial-gradient(circle at center, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02) 32%, rgba(0, 0, 0, 0.6) 70%),
-    linear-gradient(180deg, rgba(10, 18, 32, 0.96), rgba(0, 0, 0, 0.94));
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, #eef5ff, #dfeaf7);
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.72);
 }
 
 .camera-frame video {
@@ -515,18 +514,28 @@ a {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scaleX(-1);
+  transform: none;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.camera-frame.camera-live video {
+  opacity: 1;
+}
+
+.camera-frame.camera-starting::before,
+.camera-frame.camera-idle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(135deg, rgba(37, 99, 235, 0.1), rgba(20, 184, 166, 0.08)),
+    linear-gradient(180deg, #f8fbff, #eaf2fc);
 }
 
 .scan-frame {
-  position: absolute;
-  inset: 12% 11%;
-  border-radius: 24px;
-  border: 2px solid rgba(37, 99, 235, 0.9);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
-    0 0 0 999px rgba(7, 11, 18, 0.18);
-  pointer-events: none;
+  display: none;
 }
 
 .scan-frame::before,
@@ -539,7 +548,7 @@ a {
 }
 
 .scan-frame::after {
-  inset: auto 12px 12px 12px;
+  inset: auto 18px 18px 18px;
   height: 3px;
   border: 0;
   border-radius: 999px;
@@ -549,24 +558,29 @@ a {
 
 .camera-overlay {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
   display: grid;
-  gap: 4px;
-  padding: 16px 18px;
-  background: linear-gradient(180deg, rgba(4, 7, 13, 0), rgba(4, 7, 13, 0.92));
+  gap: 2px;
+  padding: 9px 11px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(10px);
+  z-index: 2;
 }
 
 .camera-overlay span {
   font-weight: 800;
-  font-size: 1rem;
-  color: rgba(255, 255, 255, 0.96);
+  font-size: 0.86rem;
+  color: var(--text);
 }
 
 .camera-overlay small {
-  color: rgba(220, 231, 247, 0.8);
-  line-height: 1.5;
+  color: var(--muted);
+  line-height: 1.25;
+  font-size: 0.74rem;
 }
 
 .control-row {
@@ -865,50 +879,50 @@ a {
 }
 
 .scan-page.scanner-active .app-shell {
-  width: min(860px, calc(100vw - 12px));
-  padding: 8px 0 16px;
-  gap: 10px;
+  width: min(760px, calc(100vw - 8px));
+  padding: 4px 0 12px;
+  gap: 8px;
 }
 
 .scan-page.scanner-active .scanner-panel {
-  gap: 10px;
-  padding: 12px;
-  border-radius: 18px;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 16px;
 }
 
 .scan-page.scanner-active .scanner-header {
   align-items: stretch;
-  gap: 10px;
+  gap: 8px;
 }
 
 .scan-page.scanner-active .scanner-header h2 {
-  margin-top: 3px;
-  font-size: 1.25rem;
-  line-height: 1.15;
+  margin-top: 2px;
+  font-size: 1.05rem;
+  line-height: 1.1;
 }
 
 .scan-page.scanner-active #sessionUserLabel {
-  margin: 6px 0 0;
-  font-size: 0.88rem;
-  line-height: 1.35;
+  margin: 3px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.25;
   word-break: break-word;
 }
 
 .scan-page.scanner-active .header-stats {
   justify-content: flex-start;
-  gap: 6px;
+  gap: 5px;
 }
 
 .scan-page.scanner-active .status-pill {
-  min-height: 30px;
-  padding: 0 10px;
-  font-size: 0.76rem;
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 0.68rem;
 }
 
 .scan-page.scanner-active .btn-small {
-  min-height: 34px;
-  padding: 8px 12px;
-  font-size: 0.82rem;
+  min-height: 30px;
+  padding: 6px 10px;
+  font-size: 0.74rem;
 }
 
 .scan-page.scanner-active .mode-row {
@@ -916,14 +930,14 @@ a {
 }
 
 .scan-page.scanner-active .mode-btn {
-  padding: 8px 12px;
-  font-size: 0.86rem;
+  padding: 7px 9px;
+  font-size: 0.78rem;
 }
 
 .scan-page.scanner-active .bin-panel {
-  gap: 8px;
-  padding: 10px;
-  border-radius: 16px;
+  gap: 7px;
+  padding: 8px;
+  border-radius: 14px;
 }
 
 .scan-page.scanner-active .bin-panel .field {
@@ -931,9 +945,9 @@ a {
 }
 
 .scan-page.scanner-active .bin-panel .field input {
-  min-height: 42px;
-  padding: 10px 12px;
-  border-radius: 14px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border-radius: 12px;
 }
 
 .scan-page.scanner-active .bin-panel.ready .field-message {
@@ -954,18 +968,19 @@ a {
 .scan-page.scanner-active .camera-card,
 .scan-page.scanner-active .summary-card,
 .scan-page.scanner-active .history-card {
-  padding: 12px;
-  border-radius: 18px;
+  padding: 9px;
+  border-radius: 14px;
 }
 
 .scan-page.scanner-active .camera-head {
-  margin-bottom: 10px;
-  gap: 8px;
+  margin-bottom: 7px;
+  gap: 6px;
 }
 
 .scan-page.scanner-active .camera-head h3 {
-  margin-top: 3px;
-  font-size: 1.16rem;
+  margin-top: 2px;
+  font-size: 1rem;
+  line-height: 1.1;
 }
 
 .scan-page.scanner-active .camera-tools {
@@ -979,41 +994,45 @@ a {
 }
 
 .scan-page.scanner-active .camera-frame {
-  min-height: 180px;
-  max-height: 36vh;
-  aspect-ratio: 4 / 3;
-  border-radius: 20px;
+  height: clamp(220px, 42vh, 390px);
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: auto;
+  border-radius: 14px;
 }
 
 .scan-page.scanner-active .scan-frame {
-  inset: 11% 10%;
-  border-radius: 18px;
+  inset: 0;
+  border-radius: inherit;
 }
 
 .scan-page.scanner-active .camera-overlay {
-  padding: 12px 14px;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  padding: 7px 9px;
 }
 
 .scan-page.scanner-active .camera-overlay span {
-  font-size: 0.94rem;
+  font-size: 0.8rem;
 }
 
 .scan-page.scanner-active .camera-overlay small {
-  font-size: 0.78rem;
-  line-height: 1.35;
+  font-size: 0.68rem;
+  line-height: 1.2;
 }
 
 .scan-page.scanner-active .control-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 10px;
+  gap: 6px;
+  margin-top: 7px;
 }
 
 .scan-page.scanner-active .control-row .btn {
-  min-height: 40px;
-  padding: 8px 10px;
-  font-size: 0.84rem;
+  min-height: 36px;
+  padding: 7px 8px;
+  font-size: 0.76rem;
   width: 100%;
 }
 
@@ -1028,7 +1047,7 @@ a {
 }
 
 .scan-page.scanner-active .side-stack {
-  gap: 10px;
+  gap: 8px;
 }
 
 .scan-page.scanner-active .secondary-summary {
@@ -1036,24 +1055,24 @@ a {
 }
 
 .scan-page.scanner-active .last-scan-card {
-  gap: 6px;
+  gap: 4px;
   border-color: rgba(37, 99, 235, 0.16);
 }
 
 .scan-page.scanner-active .last-scan-card strong {
-  font-size: 1.05rem;
+  font-size: 0.96rem;
   line-height: 1.2;
   word-break: break-word;
 }
 
 .scan-page.scanner-active .last-scan-card p {
   margin: 0;
-  font-size: 0.88rem;
-  line-height: 1.4;
+  font-size: 0.78rem;
+  line-height: 1.25;
 }
 
 .scan-page.scanner-active .history-card {
-  gap: 10px;
+  gap: 7px;
 }
 
 .scan-page.scanner-active .panel-title.compact {
@@ -1061,7 +1080,7 @@ a {
 }
 
 .scan-page.scanner-active .history-card h3 {
-  font-size: 1.08rem;
+  font-size: 0.96rem;
 }
 
 .scan-page.scanner-active .history-note {
@@ -1081,8 +1100,8 @@ a {
 
 .scan-page.scanner-active .scan-table th,
 .scan-page.scanner-active .scan-table td {
-  padding: 8px 6px;
-  font-size: 0.78rem;
+  padding: 6px 5px;
+  font-size: 0.72rem;
   word-break: break-word;
 }
 
@@ -1094,12 +1113,12 @@ a {
 @media (max-width: 640px) {
   .scan-page.scanner-active .app-shell {
     width: 100%;
-    padding: 6px 6px 14px;
+    padding: 4px 5px 12px;
   }
 
   .scan-page.scanner-active .scanner-panel {
-    padding: 10px;
-    border-radius: 16px;
+    padding: 7px;
+    border-radius: 14px;
   }
 
   .scan-page.scanner-active .scanner-header,
@@ -1110,8 +1129,9 @@ a {
   }
 
   .scan-page.scanner-active .camera-frame {
-    min-height: 170px;
-    aspect-ratio: 4 / 3;
+    height: clamp(210px, 38vh, 340px);
+    min-height: 0;
+    aspect-ratio: auto;
   }
 
   .scan-page.scanner-active .control-row {

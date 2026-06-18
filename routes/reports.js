@@ -583,6 +583,13 @@ function stripRegisterOnlyFilters(query = {}) {
   return copy;
 }
 
+function rowReportScanWindow(query = {}) {
+  if (query.format) return {};
+  const { page, limit } = pagination(query);
+  const scanLimit = Math.min(5000, Math.max(limit * page + limit, limit, 500));
+  return { _scanLimit: scanLimit };
+}
+
 function registerFilterMatch(row = {}, query = {}) {
   const equals = (actual, expected) => !clean(expected) || clean(actual).toLowerCase() === clean(expected).toLowerCase();
   const contains = (actual, expected) => !clean(expected) || clean(actual).toLowerCase().includes(clean(expected).toLowerCase());
@@ -597,7 +604,7 @@ function registerFilterMatch(row = {}, query = {}) {
 }
 
 async function scanRegisterRows(query = {}) {
-  const sourceQuery = stripRegisterOnlyFilters(query);
+  const sourceQuery = { ...stripRegisterOnlyFilters(query), ...rowReportScanWindow(query) };
   const data = await reportModule.buildReportData(sourceQuery);
   const [duplicates, rejected] = await Promise.all([
     duplicateReportRows(sourceQuery),
@@ -936,7 +943,8 @@ async function handleReport(req, res, type, title) {
         message: rows.length ? '' : 'No scan register data found for selected filter'
       });
     }
-    const data = await reportModule.buildReportData(query);
+    const rowOriented = ['valid-scans', 'raw-upi'].includes(type);
+    const data = await reportModule.buildReportData(rowOriented ? { ...query, ...rowReportScanWindow(query) } : query);
     const rows = selectRows(data, type);
     const totals = reportTotals(data.scans || [], { visibleRows: rows.length });
     if (query.format === 'excel') return sendExcel(res, title, rows, type, query);
