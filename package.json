@@ -1,18 +1,24 @@
 {
   "name": "daksh-inventory-v2",
   "version": "2.0.0",
-  "description": "Advanced part inventory audit software with MongoDB, Socket.IO, Excel, PDF, email, backup, and device sync.",
+  "description": "Advanced part inventory audit software with Railway PostgreSQL, Prisma, Socket.IO, Excel, PDF, email, backup, and device sync.",
   "main": "server.js",
   "scripts": {
-    "build": "node scripts/build-check.js",
+    "build": "prisma generate && node scripts/build-check.js",
+    "postinstall": "prisma generate",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "start:api": "node server.js",
+    "start:web": "node scripts/web-server.js",
     "test": "node scripts/stock-valuation-check.js && node scripts/duplicate-upi-check.js",
     "test:catalogue-upload": "node scripts/catalogue-upload-check.js",
-    "start": "node server.js"
+    "start": "node scripts/railway-start.js"
   },
   "keywords": [
     "inventory",
     "audit",
-    "mongodb",
+    "postgresql",
+    "prisma",
     "socket.io",
     "exceljs",
     "jspdf"
@@ -21,6 +27,7 @@
   "license": "MIT",
   "dependencies": {
     "@zxing/library": "^0.21.3",
+    "@prisma/client": "^6.16.3",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
@@ -29,11 +36,11 @@
     "jsonwebtoken": "^9.0.2",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
-    "mongoose": "^8.9.5",
     "multer": "^2.1.1",
     "nodemailer": "^8.0.7",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.1",
+    "prisma": "^6.16.3",
     "xlsx": "^0.18.5"
   }
 }

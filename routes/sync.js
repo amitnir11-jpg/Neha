@@ -1,5 +1,4 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const { randomUUID } = require('crypto');
 const Inventory = require('../models/Inventory');
 const Bin = require('../models/Bin');
@@ -24,6 +23,7 @@ const { dateDebugPayload, formatIstDateTime, validDate: validTimestamp } = requi
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { findPricePeriod, pricePeriodPayload } = require('../utils/priceHistory');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
+const { isDatabaseReady } = require('../services/prisma');
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
@@ -1258,8 +1258,9 @@ async function syncSummary(activePort, dealerCode = '', req = null) {
   return {
     serverStatus: 'online',
     dealerCode: dealer,
-    mongoStatus: mongoose.connection.readyState === 1 ? 'online' : 'offline',
-    db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    databaseStatus: isDatabaseReady() ? 'online' : 'offline',
+    postgresStatus: isDatabaseReady() ? 'online' : 'offline',
+    db: isDatabaseReady() ? 'connected' : 'disconnected',
     lastSync,
     lastSyncTime: lastSync,
     lastSuccessfulSyncAt: lastSync,
@@ -2010,7 +2011,7 @@ async function pushHandler(req, res) {
     const metaByScanId = new Map(insertMeta.map((meta) => [clean(meta.scanId || meta.uniqueScanId), meta]));
     savedScans.forEach((scan) => {
       logSync('saved scan fields', { category: scan.category || '', partDescription: scan.partDescription || scan.partName || '' });
-      logSync('saved MongoDB timestamp verified', {
+      logSync('saved PostgreSQL timestamp verified', {
         scanId: scan.uniqueScanId || scan.scanId,
         partNumber: scan.partNumber || scan.part,
         ...dateDebugPayload({
@@ -2175,7 +2176,7 @@ router.get('/status', auth.optionalAuth, async (req, res) => {
     ]);
     res.json({ success: true, ...summary, syncEngineStatus: 'running', lastApiResponse: lastLog || null });
   } catch (error) {
-    res.status(500).json({ success: false, serverStatus: 'online', mongoStatus: 'offline', db: 'disconnected', message: error.message });
+    res.status(500).json({ success: false, serverStatus: 'online', databaseStatus: 'offline', postgresStatus: 'offline', db: 'disconnected', message: error.message });
   }
 });
 

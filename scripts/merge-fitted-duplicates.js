@@ -1,8 +1,8 @@
 require('dotenv').config();
-const mongoose = require('mongoose');
 const Inventory = require('../models/Inventory');
 const DeletedScanLog = require('../models/DeletedScanLog');
 const { normalizePartNumber } = require('../utils/normalize');
+const { connectDatabase, disconnectDatabase } = require('../services/prisma');
 
 function clean(value) {
   return String(value || '').trim();
@@ -19,23 +19,7 @@ function qtyOf(row = {}) {
 
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
-  const uris = [
-    process.env.MONGO_URI,
-    process.env.MONGO_FALLBACK_URI,
-    'mongodb://127.0.0.1:27017/daksh_inventory_v2'
-  ].filter(Boolean);
-  let connected = false;
-  for (const uri of uris) {
-    try {
-      await mongoose.connect(uri);
-      connected = true;
-      break;
-    } catch (error) {
-      await mongoose.disconnect().catch(() => undefined);
-      console.warn(`Mongo connect failed, trying next URI: ${error.message}`);
-    }
-  }
-  if (!connected) throw new Error('Unable to connect to MongoDB');
+  await connectDatabase();
   const rows = await Inventory.find({
     scanType: 'FITTED',
     syncStatus: { $nin: ['duplicate', 'rejected', 'failed'] },
@@ -91,11 +75,11 @@ async function main() {
     await Inventory.deleteMany({ _id: { $in: duplicates.map((scan) => scan._id) } });
   }
 
-  await mongoose.disconnect();
+  await disconnectDatabase();
 }
 
 main().catch(async (error) => {
   console.error(error);
-  await mongoose.disconnect().catch(() => undefined);
+  await disconnectDatabase().catch(() => undefined);
   process.exit(1);
 });

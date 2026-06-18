@@ -1,5 +1,4 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const Inventory = require('../models/Inventory');
 const MasterPart = require('../models/MasterPart');
 const Bin = require('../models/Bin');
@@ -73,9 +72,7 @@ function transactionPartMatch(partNumber, dealer = '') {
 
 function scanIdMatch(scanId) {
   const id = String(scanId || '').trim();
-  const clauses = [{ scanId: id }, { uniqueScanId: id }];
-  if (mongoose.Types.ObjectId.isValid(id)) clauses.push({ _id: id });
-  return { $or: clauses };
+  return { $or: [{ scanId: id }, { uniqueScanId: id }, { _id: id }] };
 }
 
 function dateRangeFilter(body = {}) {

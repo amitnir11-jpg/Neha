@@ -1,6 +1,5 @@
 require('dotenv').config();
 
-const dns = require('dns');
 const dgram = require('dgram');
 const fs = require('fs');
 const http = require('http');
@@ -8,11 +7,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const express = require('express');
-const mongoose = require('mongoose');
 const { Server } = require('socket.io');
-
-mongoose.set('bufferCommands', false);
-mongoose.set('bufferTimeoutMS', 0);
 
 function wrapAsyncHandler(fn) {
   if (typeof fn !== 'function' || fn.__dakshAsyncWrapped) return fn;
@@ -66,7 +61,6 @@ const User = require('./models/User');
 const Device = require('./models/Device');
 const Inventory = require('./models/Inventory');
 const SyncLog = require('./models/SyncLog');
-const duplicatePolicy = require('./utils/scanDuplicatePolicy');
 const { isPlaceholderPublicUrl, parseRequestHost, serverInfo } = require('./utils/network');
 const { getActiveAudit, publicAudit } = require('./utils/audit');
 const authRoutes = require('./routes/auth');
@@ -77,10 +71,15 @@ const DeviceDiscoveryService = require('./services/DeviceDiscoveryService');
 const SocketRealtimeService = require('./services/SocketRealtimeService');
 const QRPairService = require('./services/QRPairService');
 const OfflineSyncService = require('./services/OfflineSyncService');
+const {
+  connectDatabase,
+  isDatabaseReady,
+  databaseHealthDetails
+} = require('./services/prisma');
 
 const app = express();
 app.locals.reportRoutesVersion = 'dealer-report-dlc-20260602';
-app.locals.deployConfigVersion = 'railway-mongo-env-20260614';
+app.locals.deployConfigVersion = 'railway-postgresql-20260618';
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -101,7 +100,6 @@ const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();
 const DEFAULT_ADMIN_PASSWORD = String(process.env.DEFAULT_ADMIN_PASSWORD || 'admin');
-const DEFAULT_MONGO_URI = 'mongodb://127.0.0.1:27017/daksh_inventory_v2';
 const IS_PRODUCTION = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 const DEPLOY_TARGET = String(process.env.DAKSH_DEPLOY_TARGET || process.env.DEPLOY_TARGET || '').trim().toLowerCase();
 const IS_RENDER = DEPLOY_TARGET === 'render' ||
@@ -110,19 +108,7 @@ const IS_RENDER = DEPLOY_TARGET === 'render' ||
 const IS_RAILWAY = DEPLOY_TARGET === 'railway' ||
   Boolean(process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.RAILWAY_ENVIRONMENT_NAME);
 const DEPLOYMENT_NAME = IS_RENDER ? 'Render' : (IS_RAILWAY ? 'Railway' : (IS_PRODUCTION ? 'hosting provider' : 'local PC'));
-const MONGO_URI_ENV_NAMES = IS_RENDER
-  ? ['RENDER_MONGO_URI', 'MONGO_URI', 'MONGODB_URI', 'MONGO_URL', 'DATABASE_URL']
-  : ['MONGO_URI', 'MONGODB_URI', 'MONGO_URL', 'DATABASE_URL'];
-const configuredMongoUri = firstEnvValue(MONGO_URI_ENV_NAMES);
-const MONGO_ALLOW_LOCAL_DEFAULT = String(process.env.MONGO_ALLOW_LOCAL_DEFAULT || (IS_PRODUCTION ? 'false' : 'true')).toLowerCase() === 'true';
-const MONGO_URI = String(configuredMongoUri.value || (MONGO_ALLOW_LOCAL_DEFAULT ? DEFAULT_MONGO_URI : '')).trim();
-const MONGO_URI_SOURCE = configuredMongoUri.name || (MONGO_URI ? 'local default' : '');
-const MONGO_FALLBACK_URI = String(process.env.MONGO_FALLBACK_URI || (IS_PRODUCTION ? '' : DEFAULT_MONGO_URI)).trim();
-const MONGO_AUTO_LOCAL_FALLBACK = String(process.env.MONGO_AUTO_LOCAL_FALLBACK || (IS_PRODUCTION ? 'false' : 'true')).toLowerCase() !== 'false';
-const MONGO_AUTO_PROMOTE_TO_ATLAS = String(process.env.MONGO_AUTO_PROMOTE_TO_ATLAS || 'true').toLowerCase() !== 'false';
-const MONGO_PRIMARY_RETRY_MS = envNumber('MONGO_PRIMARY_RETRY_MS', 30000);
-const MONGO_CLOUD_SYNC_BATCH_SIZE = envNumber('MONGO_CLOUD_SYNC_BATCH_SIZE', 500);
-const MONGO_DB_NAME = String(process.env.MONGO_DB_NAME || 'daksh_inventory_v2').trim();
+const DATABASE_URL_SOURCE = String(process.env.DATABASE_URL || '').trim() ? 'DATABASE_URL' : '';
 const MOBILE_DISCOVERY_PORT = Number(process.env.MOBILE_DISCOVERY_PORT || PORT);
 const MOBILE_DISCOVERY_REQUEST = 'DAKSH_DISCOVER_V1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -146,636 +132,36 @@ app.set('qrPairService', qrPairService);
 app.set('offlineSyncService', offlineSyncService);
 app.set('trust proxy', 1);
 
-let activeMongoUri = MONGO_URI;
-let activeMongoLabel = 'primary';
-const mongoCandidateStatus = {};
-let atlasMonitorTimer = null;
-let atlasPromotionRunning = false;
-const cloudSyncState = {
-  status: 'idle',
-  pendingRecords: 0,
-  lastStartedAt: '',
-  lastSuccessAt: '',
-  lastError: '',
-  lastPromotionAt: '',
-  collections: {}
-};
-
-const CLOUD_SYNC_COLLECTIONS = [
-  { name: 'users', identity: ['username'] },
-  { name: 'settings', identity: ['key'] },
-  { name: 'dealers', identity: ['dealerCode'] },
-  { name: 'audits', identity: ['auditId'] },
-  { name: 'bins', identity: ['binCode', 'dealerCode'] },
-  { name: 'mastercatalogues', identity: ['normalizedPartNumber'] },
-  { name: 'partpricehistories', identity: ['normalizedPartNumber', 'mrp', 'effectiveFrom', 'effectiveTo'] },
-  { name: 'masterparts', identity: ['partNo'] },
-  { name: 'inventories', identity: ['scanId'] },
-  { name: 'rejectedscans', identity: ['originalScanId'] },
-  { name: 'duplicatescanlogs', identity: ['uniqueScanId'] },
-  { name: 'verificationlogs' },
-  { name: 'deletedscanlogs' },
-  { name: 'auditlogs' },
-  { name: 'synclogs' },
-  { name: 'devices', identity: ['deviceId'] },
-  { name: 'bluetoothdevices', identity: ['deviceId'] },
-  { name: 'bluetoothscanlogs' },
-  { name: 'scannerlogs' },
-  { name: 'scannersessions', identity: ['sessionId'] },
-  { name: 'bintransferhistories' },
-  { name: 'binlabelprintlogs' },
-  { name: 'dealer_stock_master' },
-  { name: 'offlinequeues' }
-];
-
-mongoose.connection.on('error', (error) => {
-  console.error(`MongoDB connection error: ${error.message}`);
-});
-mongoose.connection.on('disconnected', () => {
-  console.warn('MongoDB disconnected. The driver will keep retrying in the background.');
-  scheduleMongoReconnect(15000);
-});
-mongoose.connection.on('reconnected', () => {
-  cloudSyncState.status = 'atlas active';
-  // CRITICAL FIX: Immediately notify all connected clients that database is back online
-  if (io) {
-    io.emit('database:status', mongoHealthDetails());
-    io.emit('database:reconnected', { 
-      message: 'Database reconnected',
-      timestamp: new Date().toISOString(),
-      status: 'connected'
-    });
-  }
-});
-
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-function envNumber(name, fallback) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-function firstEnvValue(names) {
-  for (const name of names) {
-    const value = String(process.env[name] || '').trim();
-    if (value) return { name, value };
-  }
-  return { name: '', value: '' };
-}
-
-function configureMongoDnsServers() {
-  const servers = String(process.env.MONGO_DNS_SERVERS || '')
-    .split(',')
-    .map((server) => server.trim())
-    .filter(Boolean);
-
-  if (!servers.length) return;
-
-  try {
-    dns.setServers(servers);
-  } catch (error) {
-    console.warn(`Invalid MONGO_DNS_SERVERS value: ${error.message}`);
-  }
-}
-
-function maskMongoUri(uri) {
-  return String(uri || '').replace(/\/\/([^:@/?#]+):([^@/?#]+)@/, '//***:***@');
-}
-
-function sameMongoUri(left, right) {
-  return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase();
-}
-
-function isLocalMongoUri(uri) {
-  return /^mongodb:\/\/(127\.0\.0\.1|localhost)(?::|\/|$)/i.test(String(uri || '').trim());
-}
-
-function isProductionLocalMongoBlocked(uri) {
-  return IS_PRODUCTION && isLocalMongoUri(uri) && !MONGO_ALLOW_LOCAL_DEFAULT;
-}
-
-function mongoEnvLocation() {
-  if (IS_RENDER) return 'Render Environment Variables';
+function databaseEnvLocation() {
   if (IS_RAILWAY) return 'Railway Variables';
+  if (IS_RENDER) return 'Render Environment Variables';
   if (IS_PRODUCTION) return 'your hosting environment variables';
   return 'your .env file or environment variables';
 }
 
-function hostedMongoDescription() {
-  return IS_RENDER ? 'a MongoDB Atlas mongodb+srv URI' : 'a hosted MongoDB URI';
-}
-
-function localMongoBlockedMessage(source = 'configuration') {
-  return `Refusing local MongoDB URI from ${source} in production. ${DEPLOYMENT_NAME} needs ${hostedMongoDescription()}, not 127.0.0.1 or localhost.`;
-}
-
-function missingMongoMessage() {
-  return `Missing MongoDB connection string. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} in ${mongoEnvLocation()}.`;
-}
-
 function databaseOfflineMessage() {
-  if (IS_RENDER) {
-    return 'Database is offline on Render. Set RENDER_MONGO_URI or MONGO_URI to your MongoDB Atlas connection string in Render Environment Variables, then allow Render access in MongoDB Atlas Network Access.';
-  }
-  if (IS_RAILWAY) {
-    return 'Database is offline on Railway. Set MONGO_URI to your MongoDB Atlas connection string in Railway Variables, then allow Railway access in MongoDB Atlas Network Access.';
-  }
-  if (IS_PRODUCTION) {
-    return `Database is offline. Set one of ${MONGO_URI_ENV_NAMES.join(', ')} to ${hostedMongoDescription()} in ${mongoEnvLocation()} and check MongoDB Atlas Network Access.`;
-  }
-  return 'Database is offline. Check MongoDB Atlas Network Access or keep local MongoDB running.';
+  return `Database is offline. Set Railway PostgreSQL DATABASE_URL in ${databaseEnvLocation()} and run Prisma migrations.`;
 }
 
-function mongoUriHasDatabaseName(uri) {
-  try {
-    const parsed = new URL(uri);
-    return Boolean(parsed.pathname && parsed.pathname !== '/');
-  } catch (error) {
-    return /\/[^/?#]+(?:[?#].*)?$/.test(String(uri || '').replace(/^[a-z+]+:\/\/[^/]+/i, ''));
-  }
+function currentDatabaseStatus() {
+  return isDatabaseReady() ? 'connected' : 'disconnected';
 }
 
-function mongoConnectOptions(uri) {
-  const options = {
-    serverSelectionTimeoutMS: envNumber('MONGO_SERVER_SELECTION_TIMEOUT_MS', 15000),
-    connectTimeoutMS: envNumber('MONGO_CONNECT_TIMEOUT_MS', 15000),
-    socketTimeoutMS: envNumber('MONGO_SOCKET_TIMEOUT_MS', 45000),
-    maxPoolSize: envNumber('MONGO_MAX_POOL_SIZE', 20)
-  };
-
-  if (MONGO_DB_NAME && !mongoUriHasDatabaseName(uri)) {
-    options.dbName = MONGO_DB_NAME;
-  }
-
-  return options;
-}
-
-let mongoReconnectTimer = null;
-let mongoConnecting = false;
-
-function mongoConnectionCandidates() {
-  const candidates = [];
-  if (!MONGO_URI) return candidates;
-
-  const primaryLabel = /^mongodb\+srv:\/\//i.test(MONGO_URI) ? 'Atlas primary' : 'primary';
-  candidates.push({ label: primaryLabel, uri: MONGO_URI, source: MONGO_URI_SOURCE });
-  if (MONGO_AUTO_LOCAL_FALLBACK && MONGO_FALLBACK_URI && !sameMongoUri(MONGO_FALLBACK_URI, MONGO_URI)) {
-    candidates.push({ label: 'local fallback', uri: MONGO_FALLBACK_URI, source: 'MONGO_FALLBACK_URI' });
-  }
-  return candidates;
-}
-
-function mongoCandidateKey(candidate = {}) {
-  if (/^mongodb\+srv:\/\//i.test(candidate.uri)) return 'atlas';
-  if (/^mongodb:\/\/(127\.0\.0\.1|localhost)/i.test(candidate.uri)) return 'local';
-  return String(candidate.label || 'primary').replace(/\s+/g, '_').toLowerCase();
-}
-
-function markMongoCandidate(candidate = {}, patch = {}) {
-  const key = mongoCandidateKey(candidate);
-  mongoCandidateStatus[key] = {
-    key,
-    label: candidate.label || key,
-    uri: maskMongoUri(candidate.uri),
-    rawUri: candidate.uri,
-    checkedAt: new Date().toISOString(),
-    ...patch
-  };
-  return mongoCandidateStatus[key];
-}
-
-function publicMongoCandidateStatus(key) {
-  const status = mongoCandidateStatus[key] || {};
+function currentDatabasePayload() {
+  const connected = isDatabaseReady();
   return {
-    connected: status.connected === true,
-    status: status.status || 'not checked',
-    message: status.message || '',
-    uri: status.uri || '',
-    checkedAt: status.checkedAt || ''
+    database: connected ? 'online' : 'offline',
+    databaseStatus: connected ? 'online' : 'offline',
+    postgresStatus: connected ? 'online' : 'offline',
+    db: connected ? 'connected' : 'disconnected',
+    acceptedDatabaseEnvVars: ['DATABASE_URL'],
+    configuredDatabaseEnvVar: DATABASE_URL_SOURCE,
+    ...databaseHealthDetails()
   };
-}
-
-function activeMongoKey() {
-  return mongoCandidateKey({ label: activeMongoLabel, uri: activeMongoUri });
-}
-
-function mongoHealthDetails() {
-  const activeConnected = mongoose.connection.readyState === 1;
-  const activeKey = activeMongoKey();
-  const atlas = publicMongoCandidateStatus('atlas');
-  const local = publicMongoCandidateStatus('local');
-
-  if (activeConnected && activeKey === 'atlas') {
-    atlas.connected = true;
-    atlas.status = 'connected';
-    atlas.uri = maskMongoUri(activeMongoUri);
-    atlas.message = '';
-  }
-  if (activeConnected && activeKey === 'local') {
-    local.connected = true;
-    local.status = 'connected';
-    local.uri = maskMongoUri(activeMongoUri);
-    local.message = '';
-  }
-
-  return {
-    activeDatabase: activeMongoLabel,
-    activeDatabaseUri: maskMongoUri(activeMongoUri),
-    atlasConnected: atlas.connected,
-    atlasStatus: atlas.status,
-    atlasLastError: atlas.connected ? '' : atlas.message,
-    atlasCheckedAt: atlas.checkedAt,
-    localDbConnected: local.connected,
-    localDbStatus: local.status,
-    localDbLastError: local.connected ? '' : local.message,
-    localDbCheckedAt: local.checkedAt,
-    cloudSyncStatus: cloudSyncState.status,
-    cloudSyncPendingRecords: cloudSyncState.pendingRecords,
-    cloudSyncLastStartedAt: cloudSyncState.lastStartedAt,
-    cloudSyncLastSuccessAt: cloudSyncState.lastSuccessAt,
-    cloudSyncLastError: cloudSyncState.lastError,
-    cloudSyncLastPromotionAt: cloudSyncState.lastPromotionAt
-  };
-}
-
-function primaryMongoCandidate() {
-  return mongoConnectionCandidates()[0];
-}
-
-function shouldMonitorPrimaryMongo() {
-  const primary = primaryMongoCandidate();
-  return Boolean(
-    MONGO_AUTO_PROMOTE_TO_ATLAS &&
-    MONGO_AUTO_LOCAL_FALLBACK &&
-    primary &&
-    mongoCandidateKey(primary) === 'atlas' &&
-    !sameMongoUri(MONGO_URI, MONGO_FALLBACK_URI)
-  );
-}
-
-function scheduleAtlasMonitor(delayMs = MONGO_PRIMARY_RETRY_MS) {
-  if (!shouldMonitorPrimaryMongo() || atlasMonitorTimer) return;
-  atlasMonitorTimer = setTimeout(() => {
-    atlasMonitorTimer = null;
-    monitorAtlasAndPromote().catch((error) => {
-      cloudSyncState.status = 'failed';
-      cloudSyncState.lastError = error.message;
-      console.error(`Atlas monitor failed: ${error.message}`);
-    }).finally(() => {
-      scheduleAtlasMonitor(MONGO_PRIMARY_RETRY_MS);
-    });
-  }, delayMs);
-  if (typeof atlasMonitorTimer.unref === 'function') atlasMonitorTimer.unref();
-}
-
-async function openMongoCandidateConnection(candidate) {
-  configureMongoDnsServers();
-  const connection = await mongoose.createConnection(candidate.uri, mongoConnectOptions(candidate.uri)).asPromise();
-  markMongoCandidate(candidate, { connected: true, status: 'connected', message: '' });
-  return connection;
-}
-
-function identityFilterForDoc(doc = {}, config = {}) {
-  const fields = Array.isArray(config.identity) ? config.identity : [];
-  const filter = {};
-  for (const field of fields) {
-    const value = doc[field];
-    if (value === undefined || value === null || String(value).trim() === '') return { _id: doc._id };
-    filter[field] = value;
-  }
-  return fields.length ? filter : { _id: doc._id };
-}
-
-function upsertOperationForDoc(doc = {}, config = {}) {
-  const filter = identityFilterForDoc(doc, config);
-  const setDoc = { ...doc };
-  delete setDoc._id;
-  return {
-    updateOne: {
-      filter,
-      update: {
-        $set: setDoc,
-        $setOnInsert: { _id: doc._id }
-      },
-      upsert: true
-    }
-  };
-}
-
-async function flushCloudSyncBatch(targetCollection, operations) {
-  if (!operations.length) return { upserted: 0, modified: 0, matched: 0, errors: 0 };
-  try {
-    const result = await targetCollection.bulkWrite(operations, { ordered: false });
-    return {
-      upserted: result.upsertedCount || 0,
-      modified: result.modifiedCount || 0,
-      matched: result.matchedCount || 0,
-      errors: 0
-    };
-  } catch (error) {
-    const writeErrors = error.writeErrors || error.result?.result?.writeErrors || [];
-    return {
-      upserted: error.result?.upsertedCount || error.result?.result?.nUpserted || 0,
-      modified: error.result?.modifiedCount || error.result?.result?.nModified || 0,
-      matched: error.result?.matchedCount || error.result?.result?.nMatched || 0,
-      errors: writeErrors.length || 1,
-      message: error.message
-    };
-  }
-}
-
-async function syncCollectionToAtlas(localDb, atlasDb, config) {
-  const source = localDb.collection(config.name);
-  const target = atlasDb.collection(config.name);
-  const sourceCount = await source.countDocuments().catch(() => 0);
-  let processed = 0;
-  let upserted = 0;
-  let modified = 0;
-  let matched = 0;
-  let errors = 0;
-  const messages = [];
-  const cursor = source.find({}).sort({ _id: 1 }).batchSize(MONGO_CLOUD_SYNC_BATCH_SIZE);
-  let operations = [];
-
-  while (await cursor.hasNext()) {
-    const doc = await cursor.next();
-    operations.push(upsertOperationForDoc(doc, config));
-    processed += 1;
-    if (operations.length >= MONGO_CLOUD_SYNC_BATCH_SIZE) {
-      const result = await flushCloudSyncBatch(target, operations);
-      upserted += result.upserted;
-      modified += result.modified;
-      matched += result.matched;
-      errors += result.errors;
-      if (result.message) messages.push(result.message);
-      operations = [];
-    }
-  }
-
-  if (operations.length) {
-    const result = await flushCloudSyncBatch(target, operations);
-    upserted += result.upserted;
-    modified += result.modified;
-    matched += result.matched;
-    errors += result.errors;
-    if (result.message) messages.push(result.message);
-  }
-
-  const targetCount = await target.countDocuments().catch(() => 0);
-  return {
-    sourceCount,
-    targetCount,
-    processed,
-    upserted,
-    modified,
-    matched,
-    errors,
-    message: messages[0] || ''
-  };
-}
-
-async function syncDatabasesToAtlas(localDb, atlasDb) {
-  cloudSyncState.status = 'syncing';
-  cloudSyncState.lastStartedAt = new Date().toISOString();
-  cloudSyncState.lastError = '';
-  cloudSyncState.collections = {};
-  let totalErrors = 0;
-
-  for (const config of CLOUD_SYNC_COLLECTIONS) {
-    const summary = await syncCollectionToAtlas(localDb, atlasDb, config);
-    cloudSyncState.collections[config.name] = summary;
-    totalErrors += summary.errors || 0;
-  }
-
-  const inventorySummary = cloudSyncState.collections.inventories || {};
-  cloudSyncState.pendingRecords = Math.max(0, Number(inventorySummary.sourceCount || 0) - Number(inventorySummary.targetCount || 0));
-  cloudSyncState.status = totalErrors ? 'partial' : 'synced';
-  cloudSyncState.lastSuccessAt = new Date().toISOString();
-  if (totalErrors) cloudSyncState.lastError = `${totalErrors} cloud sync write error${totalErrors === 1 ? '' : 's'}`;
-  return cloudSyncState;
-}
-
-async function syncLocalDatabaseToAtlas(atlasConnection) {
-  if (!mongoose.connection.db || activeMongoKey() !== 'local') return cloudSyncState;
-  return syncDatabasesToAtlas(mongoose.connection.db, atlasConnection.db);
-}
-
-async function localFallbackNeedsAtlasSync(localDb, atlasDb) {
-  const [localInventoryCount, atlasInventoryCount, localCatalogueCount, atlasCatalogueCount, localLatest, atlasLatest] = await Promise.all([
-    localDb.collection('inventories').countDocuments().catch(() => 0),
-    atlasDb.collection('inventories').countDocuments().catch(() => 0),
-    localDb.collection('mastercatalogues').countDocuments().catch(() => 0),
-    atlasDb.collection('mastercatalogues').countDocuments().catch(() => 0),
-    localDb.collection('inventories').findOne({}, { sort: { updatedAt: -1, createdAt: -1, timestamp: -1 }, projection: { updatedAt: 1, createdAt: 1, timestamp: 1 } }).catch(() => null),
-    atlasDb.collection('inventories').findOne({}, { sort: { updatedAt: -1, createdAt: -1, timestamp: -1 }, projection: { updatedAt: 1, createdAt: 1, timestamp: 1 } }).catch(() => null)
-  ]);
-  const localLatestTime = localLatest ? new Date(localLatest.updatedAt || localLatest.createdAt || localLatest.timestamp || 0).getTime() : 0;
-  const atlasLatestTime = atlasLatest ? new Date(atlasLatest.updatedAt || atlasLatest.createdAt || atlasLatest.timestamp || 0).getTime() : 0;
-  cloudSyncState.pendingRecords = Math.max(0, localInventoryCount - atlasInventoryCount);
-  return localInventoryCount > atlasInventoryCount ||
-    localCatalogueCount > atlasCatalogueCount ||
-    localLatestTime > atlasLatestTime;
-}
-
-async function syncConfiguredLocalFallbackToActiveAtlas() {
-  if (!MONGO_AUTO_LOCAL_FALLBACK || activeMongoKey() !== 'atlas' || sameMongoUri(MONGO_URI, MONGO_FALLBACK_URI)) return;
-
-  const localCandidate = { label: 'local fallback', uri: MONGO_FALLBACK_URI };
-  let localConnection = null;
-  try {
-    localConnection = await openMongoCandidateConnection(localCandidate);
-    const needsSync = await localFallbackNeedsAtlasSync(localConnection.db, mongoose.connection.db);
-    if (needsSync) {
-      await syncDatabasesToAtlas(localConnection.db, mongoose.connection.db);
-    } else if (cloudSyncState.status !== 'atlas active') {
-      cloudSyncState.status = 'atlas active';
-      cloudSyncState.lastError = '';
-    }
-  } catch (error) {
-    markMongoCandidate(localCandidate, { connected: false, status: 'failed', message: error.message });
-    console.warn(`Local fallback availability check failed: ${error.message}`);
-  } finally {
-    if (localConnection) await localConnection.close().catch(() => undefined);
-  }
-}
-
-async function promoteActiveConnectionToAtlas(candidate) {
-  if (mongoConnecting) return;
-  mongoConnecting = true;
-  try {
-    await mongoose.disconnect().catch(() => undefined);
-    await connectMongoCandidate(candidate);
-    await runMongoStartupTasks();
-    cloudSyncState.status = 'atlas active';
-    cloudSyncState.pendingRecords = 0;
-    cloudSyncState.lastPromotionAt = new Date().toISOString();
-    io.emit('database:status', mongoHealthDetails());
-    io.emit('stats:update');
-  } catch (error) {
-    markMongoCandidate(candidate, { connected: false, status: 'failed', message: error.message });
-    console.error(`Atlas promotion failed: ${error.message}`);
-    mongoConnecting = false;
-    await connectMongoWithFallback().catch((fallbackError) => {
-      console.error(`Fallback reconnect after failed promotion failed: ${fallbackError.message}`);
-    });
-    return;
-  } finally {
-    mongoConnecting = false;
-  }
-}
-
-async function monitorAtlasAndPromote() {
-  if (atlasPromotionRunning || mongoConnecting || !shouldMonitorPrimaryMongo()) return;
-  const candidate = primaryMongoCandidate();
-  if (!candidate || activeMongoKey() === 'atlas') {
-    markMongoCandidate(candidate || { label: 'primary', uri: MONGO_URI }, {
-      connected: mongoose.connection.readyState === 1,
-      status: mongoose.connection.readyState === 1 ? 'connected' : 'not checked',
-      message: ''
-    });
-    return;
-  }
-
-  atlasPromotionRunning = true;
-  let atlasConnection = null;
-  try {
-    cloudSyncState.status = 'checking atlas';
-    atlasConnection = await openMongoCandidateConnection(candidate);
-    await syncLocalDatabaseToAtlas(atlasConnection);
-    await atlasConnection.close().catch(() => undefined);
-    atlasConnection = null;
-    await promoteActiveConnectionToAtlas(candidate);
-  } catch (error) {
-    markMongoCandidate(candidate, { connected: false, status: 'failed', message: error.message });
-    cloudSyncState.status = activeMongoKey() === 'local' ? 'queued locally' : 'failed';
-    cloudSyncState.lastError = error.message;
-    throw error;
-  } finally {
-    if (atlasConnection) await atlasConnection.close().catch(() => undefined);
-    atlasPromotionRunning = false;
-  }
-}
-
-async function connectMongoCandidate(candidate) {
-  if (!candidate || !candidate.uri) {
-    throw new Error(missingMongoMessage());
-  }
-  if (isProductionLocalMongoBlocked(candidate.uri)) {
-    throw new Error(localMongoBlockedMessage(candidate.source || 'configuration'));
-  }
-  configureMongoDnsServers();
-  await mongoose.connect(candidate.uri, mongoConnectOptions(candidate.uri));
-  activeMongoUri = candidate.uri;
-  activeMongoLabel = candidate.label;
-  app.locals.mongoConnection = {
-    label: activeMongoLabel,
-    uri: maskMongoUri(activeMongoUri),
-    dbName: mongoose.connection.name
-  };
-  markMongoCandidate(candidate, { connected: true, status: 'connected', message: '' });
-  if (mongoCandidateKey(candidate) === 'atlas') {
-    cloudSyncState.status = 'atlas active';
-    cloudSyncState.pendingRecords = 0;
-    cloudSyncState.lastError = '';
-  } else if (mongoCandidateKey(candidate) === 'local') {
-    cloudSyncState.status = 'queued locally';
-  }
-  return candidate;
-}
-
-async function connectMongoWithFallback() {
-  if (mongoConnecting) return null;
-  mongoConnecting = true;
-  let lastError = null;
-  try {
-    const candidates = mongoConnectionCandidates();
-    if (!candidates.length) {
-      throw new Error(missingMongoMessage());
-    }
-    for (const candidate of candidates) {
-      try {
-        return await connectMongoCandidate(candidate);
-      } catch (error) {
-        lastError = error;
-        lastError.mongoUri = candidate.uri;
-        lastError.mongoLabel = candidate.label;
-        markMongoCandidate(candidate, { connected: false, status: 'failed', message: error.message });
-        console.error(`MongoDB ${candidate.label} connection failed: ${error.message}`);
-        if (candidate.label === 'primary' && candidates.length > 1) {
-          console.warn('Trying local MongoDB fallback so PC and mobile scans can continue.');
-        }
-        if (mongoose.connection.readyState !== 0) {
-          await mongoose.disconnect().catch(() => undefined);
-        }
-      }
-    }
-    throw lastError || new Error('No MongoDB connection candidates configured');
-  } finally {
-    mongoConnecting = false;
-  }
-}
-
-async function runMongoStartupTasks() {
-  await fixInventoryIndexes();
-  await fixUserIndexes();
-  await normalizeDeviceTypes();
-  await createDefaultAdmin();
-}
-
-function scheduleMongoReconnect(delayMs = 30000) {
-  if (mongoReconnectTimer || mongoConnecting || mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) return;
-  mongoReconnectTimer = setTimeout(async () => {
-    mongoReconnectTimer = null;
-    if (mongoConnecting || mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) return;
-    try {
-      await connectMongoWithFallback();
-      await runMongoStartupTasks();
-      scheduleAtlasMonitor(5000);
-    } catch (error) {
-      console.error(`MongoDB retry failed: ${error.message}`);
-      scheduleMongoReconnect(delayMs);
-    }
-  }, delayMs);
-}
-
-function mongoConnectionHelp(error, uri = activeMongoUri || MONGO_URI) {
-  if (!uri) {
-    return [
-      'MongoDB connection string is missing.',
-      `Reason: ${error.message}`,
-      'Fix:',
-      `- In ${mongoEnvLocation()}, add one of: ${MONGO_URI_ENV_NAMES.join(', ')}.`,
-      `- Use ${hostedMongoDescription()}.`,
-      `- Do not use 127.0.0.1 or localhost for the ${DEPLOYMENT_NAME} deployment.`
-    ].join('\n');
-  }
-  const isAtlas = /^mongodb\+srv:\/\//i.test(uri);
-  const atlasAccessHint = IS_RENDER
-    ? 'In Atlas Network Access, allow access for testing with 0.0.0.0/0 or allow your Render outbound IP if your plan provides one.'
-    : (IS_RAILWAY
-      ? 'In Atlas Network Access, allow access for testing with 0.0.0.0/0 or allow your Railway outbound IP if your plan provides one.'
-      : 'Add your server IP address in Atlas Network Access, or use 0.0.0.0/0 during testing.');
-  const hints = isAtlas
-    ? [
-        `Check MongoDB Atlas username/password in ${MONGO_URI_SOURCE || 'MONGO_URI'}.`,
-        atlasAccessHint,
-        `If the error mentions querySrv, set MONGO_DNS_SERVERS=8.8.8.8,1.1.1.1 in ${mongoEnvLocation()}.`,
-        'Confirm the Atlas database user has readWrite permission.',
-        `Keep the MongoDB URI inside ${mongoEnvLocation()}, not in GitHub.`
-      ]
-    : [
-        'Check that MongoDB Community Server service is running on this PC.',
-        'Confirm local MongoDB is listening at 127.0.0.1:27017.',
-        `For ${DEPLOYMENT_NAME}, replace local MongoDB with ${hostedMongoDescription()}.`
-      ];
-  return [
-    `MongoDB connection failed for ${maskMongoUri(uri)}.`,
-    `Reason: ${error.message}`,
-    'Fix:',
-    ...hints.map((hint) => `- ${hint}`)
-  ].join('\n');
 }
 
 let mobileDiscoverySocket = null;
@@ -788,9 +174,7 @@ function mobileDiscoveryPayload(activePort, remoteAddress = '') {
     name: 'Daksh Inventory PC Server',
     status: 'online',
     serverStatus: 'online',
-    mongoStatus: mongoose.connection.readyState === 1 ? 'online' : 'offline',
-    db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    ...mongoHealthDetails(),
+    ...currentDatabasePayload(),
     discovery: 'udp',
     ip: info.ip,
     lanIp: info.ip,
@@ -898,6 +282,13 @@ app.use('/api/reports', (req, res, next) => {
   return authRoutes.requireAuth(req, res, () => reportsRouter.handleReport(req, res, 'scan-register', 'Scan Register Report'));
 });
 
+app.get('/config.js', (req, res) => {
+  const apiBaseUrl = String(process.env.PUBLIC_API_BASE_URL || process.env.API_BASE_URL || '').trim().replace(/\/+$/, '');
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.send(`window.DAKSH_CONFIG=${JSON.stringify({ apiBaseUrl })};`);
+});
+
 app.use('/vendor/zxing', express.static(path.join(__dirname, 'node_modules', '@zxing', 'library', 'umd')));
 app.use(express.static(PUBLIC_DIR));
 
@@ -938,15 +329,16 @@ app.get('/force-login', (req, res) => {
 app.get('/api/health', async (req, res) => {
   const activePort = req.app.locals.activePort || PORT;
   const info = serverInfo(activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
-  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
-  const databaseDetails = mongoHealthDetails();
+  const dbReady = isDatabaseReady();
+  const dbStatus = currentDatabaseStatus();
+  const databaseDetails = currentDatabasePayload();
   const [connectedDevices, pending, failed, lastSyncDoc, lastSyncLog, lastSyncDevice] = await Promise.all([
-    mongoose.connection.readyState === 1 ? Device.countDocuments({ status: 'online' }).catch(() => 0) : 0,
-    mongoose.connection.readyState === 1 ? Inventory.countDocuments({ $or: [{ syncStatus: 'pending' }, { isSynced: false }] }).catch(() => 0) : 0,
-    mongoose.connection.readyState === 1 ? Inventory.countDocuments({ syncStatus: 'failed' }).catch(() => 0) : 0,
-    mongoose.connection.readyState === 1 ? Inventory.findOne({ $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }).sort({ updatedAt: -1, timestamp: -1 }).select('updatedAt timestamp').lean().catch(() => null) : null,
-    mongoose.connection.readyState === 1 ? SyncLog.findOne({ status: { $in: ['success', 'partial'] } }).sort({ updatedAt: -1, createdAt: -1 }).select('updatedAt createdAt').lean().catch(() => null) : null,
-    mongoose.connection.readyState === 1 ? Device.findOne({ lastSyncTime: { $exists: true, $ne: null } }).sort({ lastSyncTime: -1 }).select('lastSyncTime').lean().catch(() => null) : null
+    dbReady ? Device.countDocuments({ status: 'online' }).catch(() => 0) : 0,
+    dbReady ? Inventory.countDocuments({ $or: [{ syncStatus: 'pending' }, { isSynced: false }] }).catch(() => 0) : 0,
+    dbReady ? Inventory.countDocuments({ syncStatus: 'failed' }).catch(() => 0) : 0,
+    dbReady ? Inventory.findOne({ $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }).sort({ updatedAt: -1, timestamp: -1 }).select('updatedAt timestamp').lean().catch(() => null) : null,
+    dbReady ? SyncLog.findOne({ status: { $in: ['success', 'partial'] } }).sort({ updatedAt: -1, createdAt: -1 }).select('updatedAt createdAt').lean().catch(() => null) : null,
+    dbReady ? Device.findOne({ lastSyncTime: { $exists: true, $ne: null } }).sort({ lastSyncTime: -1 }).select('lastSyncTime').lean().catch(() => null) : null
   ]);
   const lastSyncTimes = [
     lastSyncLog && (lastSyncLog.updatedAt || lastSyncLog.createdAt),
@@ -965,11 +357,7 @@ app.get('/api/health', async (req, res) => {
     deploymentTarget: DEPLOYMENT_NAME,
     render: IS_RENDER,
     railway: IS_RAILWAY,
-    acceptedMongoEnvVars: MONGO_URI_ENV_NAMES,
-    configuredMongoEnvVar: MONGO_URI_SOURCE,
-    mongodb: dbStatus === 'connected' ? 'online' : 'offline',
     serverStatus: 'online',
-    mongoStatus: dbStatus === 'connected' ? 'online' : 'offline',
     ...databaseDetails,
     connectedDevices,
     mobileConnectedDevices: connectedDevices,
@@ -1005,28 +393,23 @@ app.get('/api/ping', (req, res) => {
     deploymentTarget: DEPLOYMENT_NAME,
     render: IS_RENDER,
     railway: IS_RAILWAY,
-    db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    ...currentDatabasePayload(),
     serverUrl: info.serverUrl,
     mobileScannerUrl: info.mobileScannerUrl
   });
 });
 
 app.get('/api/ready', (req, res) => {
-  const mongoReady = mongoose.connection.readyState === 1;
-  res.status(mongoReady ? 200 : 503).json({
-    success: mongoReady,
-    status: mongoReady ? 'ready' : 'not_ready',
+  const dbReady = isDatabaseReady();
+  res.status(dbReady ? 200 : 503).json({
+    success: dbReady,
+    status: dbReady ? 'ready' : 'not_ready',
     serverStatus: 'online',
-    mongoStatus: mongoReady ? 'online' : 'offline',
-    db: mongoReady ? 'connected' : 'disconnected',
-    activeDatabase: activeMongoLabel,
-    activeDatabaseUri: maskMongoUri(activeMongoUri),
+    ...currentDatabasePayload(),
     deploymentTarget: DEPLOYMENT_NAME,
     render: IS_RENDER,
     railway: IS_RAILWAY,
-    acceptedMongoEnvVars: MONGO_URI_ENV_NAMES,
-    configuredMongoEnvVar: MONGO_URI_SOURCE,
-    message: mongoReady
+    message: dbReady
       ? 'Daksh is ready.'
       : databaseOfflineMessage()
   });
@@ -1040,9 +423,7 @@ app.get('/api/discovery', (req, res) => {
     name: 'Daksh Inventory PC Server',
     status: 'online',
     serverStatus: 'online',
-    mongoStatus: mongoose.connection.readyState === 1 ? 'online' : 'offline',
-    db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    ...mongoHealthDetails(),
+    ...currentDatabasePayload(),
     ip: info.ip,
     lanIp: info.ip,
     currentLanIp: info.ip,
@@ -1073,20 +454,15 @@ app.get('/api/reports/device-wise', directAuthenticatedReport(directScanRegister
 app.get('/api/reports/duplicate-scans', directAuthenticatedReport(directScanRegisterReport('Duplicate')));
 
 app.use('/api', (req, res, next) => {
-  if (mongoose.connection.readyState === 1) return next();
+  if (isDatabaseReady()) return next();
   return res.status(503).json({
     success: false,
     message: databaseOfflineMessage(),
     serverStatus: 'online',
-    mongoStatus: 'offline',
-    db: 'disconnected',
-    activeDatabase: activeMongoLabel,
-    activeDatabaseUri: maskMongoUri(activeMongoUri),
+    ...currentDatabasePayload(),
     deploymentTarget: DEPLOYMENT_NAME,
     render: IS_RENDER,
-    acceptedMongoEnvVars: MONGO_URI_ENV_NAMES,
-    configuredMongoEnvVar: MONGO_URI_SOURCE,
-    fallbackEnabled: MONGO_AUTO_LOCAL_FALLBACK
+    railway: IS_RAILWAY
   });
 });
 
@@ -1407,10 +783,9 @@ async function createDefaultAdmin() {
 
 }
 
-async function fixInventoryIndexes() {
+async function cleanupIncompleteInventoryRecords() {
   try {
-    const collection = mongoose.connection.db.collection('inventories');
-    const cleanupResult = await Inventory.deleteMany({
+    await Inventory.deleteMany({
       $or: [
         { scanId: { $exists: false } },
         { scanId: null },
@@ -1426,170 +801,8 @@ async function fixInventoryIndexes() {
         }
       ]
     });
-    void cleanupResult;
-
-    const indexes = await collection.indexes();
-    for (const index of indexes) {
-      const isOldSyncUnique = index.name === 'syncKey_1' && index.unique;
-      const isOldUpiUnique = index.name === 'upiId_1_dealerCode_1' && index.unique;
-      const isOldRawUpiUnique = index.name === 'unique_accepted_raw_upi'
-        || index.name === 'unique_accepted_raw_upi_by_audit'
-        || (
-          index.name === 'unique_accepted_raw_upi_by_audit'
-          && (!index.key || index.key.rawUpi !== 1 || index.key.dealerCode !== 1 || index.key.auditId !== 1)
-        )
-        || (index.unique && index.key && index.key.rawUpi === 1 && (!index.key.dealerCode || !index.key.auditId));
-      const isOldRawUpiLookup = index.name === 'raw_upi_scan_identity_lookup'
-        && (
-          !index.key
-          || index.key.rawUpi !== 1
-          || index.key.dealerCode !== 1
-          || index.key.auditId !== 1
-          || index.key.scanType !== 1
-          || index.key.userId
-          || index.key.loginId
-          || index.key.syncBatchId
-        );
-      const isNonUniqueScanId = index.name === 'scanId_1' && !index.unique;
-      const isInvalidGlobalUpiIndex = index.name === 'global_upi_key_unique'
-        && (!index.unique || !index.key || index.key.globalUpiKey !== 1);
-      const isInvalidDealerAuditUpiIndex = index.name === 'dealer_audit_upi_unique'
-        && (
-          !index.unique
-          || !index.key
-          || index.key.dealerCode !== 1
-          || index.key.auditId !== 1
-          || index.key.upiNo !== 1
-          || !index.partialFilterExpression
-          || index.partialFilterExpression.syncStatus !== 'synced'
-        );
-      if (isOldSyncUnique || isOldUpiUnique || isOldRawUpiUnique || isOldRawUpiLookup || isNonUniqueScanId || isInvalidGlobalUpiIndex || isInvalidDealerAuditUpiIndex) {
-        await collection.dropIndex(index.name);
-      }
-    }
-
-    const firstByGlobalUpi = new Map();
-    const migrationOps = [];
-    let migratedDuplicates = 0;
-    const cursor = collection.find({
-      scanStatus: { $in: duplicatePolicy.COUNTED_SCAN_STATUSES },
-      syncStatus: 'synced',
-      isDuplicate: { $ne: true },
-      $or: [
-        { globalUpiKey: { $type: 'string', $gt: '' } },
-        { upiNo: { $type: 'string', $gt: '' } },
-        { upiId: { $type: 'string', $gt: '' } },
-        { rawScan: { $type: 'string', $regex: '/' } },
-        { rawScanString: { $type: 'string', $regex: '/' } },
-        { rawUpi: { $type: 'string', $regex: '/' } }
-      ]
-    }).sort({ timestamp: 1, createdAt: 1, _id: 1 });
-    for await (const scan of cursor) {
-      const key = duplicatePolicy.globalUpiKey(scan);
-      if (!key) continue;
-      const first = firstByGlobalUpi.get(key);
-      if (!first) {
-        firstByGlobalUpi.set(key, scan);
-        if (scan.globalUpiKey !== key) migrationOps.push({
-          updateOne: { filter: { _id: scan._id }, update: { $set: { globalUpiKey: key } } }
-        });
-      } else {
-        migratedDuplicates += 1;
-        migrationOps.push({
-          updateOne: {
-            filter: { _id: scan._id },
-            update: {
-              $set: {
-                syncStatus: 'duplicate',
-                scanStatus: 'DUPLICATE_BLOCKED',
-                isDuplicate: true,
-                syncError: duplicatePolicy.duplicateUpiMessage(first)
-              },
-              $unset: { globalUpiKey: '' }
-            }
-          }
-        });
-      }
-      if (migrationOps.length >= 500) {
-        await collection.bulkWrite(migrationOps.splice(0), { ordered: false });
-      }
-    }
-    if (migrationOps.length) await collection.bulkWrite(migrationOps, { ordered: false });
-    if (migratedDuplicates) console.warn(`Marked ${migratedDuplicates} existing global UPI collision(s) as duplicate.`);
-
-    const refreshedIndexes = await collection.indexes();
-    const staleGlobalIndex = refreshedIndexes.find((index) => index.name === 'global_upi_key_unique');
-    if (staleGlobalIndex) await collection.dropIndex(staleGlobalIndex.name);
-    await collection.createIndex(
-      { scanId: 1 },
-      {
-        name: 'scanId_1',
-        unique: true,
-        partialFilterExpression: { scanId: { $type: 'string', $gt: '' } }
-      }
-    );
-    await collection.createIndex({ uniqueScanId: 1 }, { name: 'uniqueScanId_1', unique: true });
-    await collection.createIndex(
-      { qrFingerprint: 1 },
-      {
-        name: 'qrFingerprint_1',
-        unique: true,
-        partialFilterExpression: { qrFingerprint: { $type: 'string', $gt: '' } }
-      }
-    );
-    await collection.createIndex(
-      { rawUpi: 1, dealerCode: 1, auditId: 1, scanType: 1 },
-      {
-        name: 'raw_upi_scan_identity_lookup',
-        partialFilterExpression: {
-          rawUpi: { $type: 'string', $gt: '' },
-          scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] },
-          scanType: { $in: ['AUDIT', 'INWARD', 'OUTWARD', 'DAMAGE'] }
-        }
-      }
-    );
-    await collection.createIndex(
-      { dealerCode: 1, auditId: 1, upiNo: 1 },
-      {
-        name: 'dealer_audit_upi_unique',
-        unique: true,
-        partialFilterExpression: {
-          dealerCode: { $type: 'string', $gt: '' },
-          auditId: { $type: 'string', $gt: '' },
-          upiNo: { $type: 'string', $gt: '' },
-          scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] },
-          syncStatus: 'synced'
-        }
-      }
-    );
-    await collection.createIndex(
-      { globalUpiKey: 1 },
-      {
-        name: 'global_upi_key_unique',
-        unique: true,
-        partialFilterExpression: { globalUpiKey: { $type: 'string', $gt: '' } }
-      }
-    );
   } catch (error) {
-    console.warn('Inventory index cleanup skipped:', error.message);
-  }
-}
-
-async function fixUserIndexes() {
-  try {
-    const collection = mongoose.connection.db.collection('users');
-    const indexes = await collection.indexes();
-    for (const index of indexes) {
-      const isEmailOnlyIndex = index.key && Object.keys(index.key).length === 1 && index.key.email === 1;
-      const isOldEmailIndex = isEmailOnlyIndex && (index.unique || index.name !== 'email_1' || index.sparse !== true);
-      if (isOldEmailIndex) {
-        await collection.dropIndex(index.name);
-      }
-    }
-    await collection.createIndex({ username: 1 }, { name: 'username_1', unique: true, sparse: true });
-    await collection.createIndex({ email: 1 }, { name: 'email_1', sparse: true });
-  } catch (error) {
-    console.warn('User index cleanup skipped:', error.message);
+    console.warn('Inventory startup cleanup skipped:', error.message);
   }
 }
 
@@ -1627,6 +840,12 @@ async function normalizeDeviceTypes() {
   }
 }
 
+async function runPostgresStartupTasks() {
+  await cleanupIncompleteInventoryRecords();
+  await normalizeDeviceTypes();
+  await createDefaultAdmin();
+}
+
 async function listenOnConfiguredPort(port) {
   return new Promise((resolve, reject) => {
     const onError = (error) => {
@@ -1644,15 +863,12 @@ async function listenOnConfiguredPort(port) {
 }
 
 async function start() {
-  let mongoConnected = false;
   try {
-    await connectMongoWithFallback();
-    mongoConnected = true;
-    await runMongoStartupTasks();
+    await connectDatabase();
+    await runPostgresStartupTasks();
   } catch (error) {
-    console.error('MongoDB startup is offline. Daksh HTTP server will still start.');
-    console.error(mongoConnectionHelp(error, error.mongoUri || activeMongoUri || MONGO_URI));
-    scheduleMongoReconnect(30000);
+    console.error('PostgreSQL startup is offline. Daksh HTTP server will still start with API routes gated.');
+    console.error(error.stack || error.message);
   }
 
   try {
@@ -1661,44 +877,28 @@ async function start() {
     fs.writeFileSync(path.join(__dirname, 'server_port.txt'), String(activePort));
     startMobileDiscoveryServer(activePort);
 
-    // CRITICAL FIX: Start periodic health broadcast to keep clients in sync with database status
-    // This ensures "Server: Offline" status is updated in real-time every 10 seconds
     let healthBroadcastTimer = null;
     const startHealthBroadcast = () => {
       if (healthBroadcastTimer) clearInterval(healthBroadcastTimer);
       healthBroadcastTimer = setInterval(() => {
         try {
-          const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+          const dbStatus = currentDatabaseStatus();
           if (io && io.sockets && io.sockets.sockets.size > 0) {
             io.emit('database:health', {
               status: dbStatus === 'connected' ? 'online' : 'offline',
-              mongoStatus: dbStatus,
+              databaseStatus: dbStatus === 'connected' ? 'online' : 'offline',
+              db: dbStatus,
               timestamp: new Date().toISOString(),
-              details: mongoHealthDetails()
+              details: currentDatabasePayload()
             });
           }
         } catch (error) {
           console.warn('Health broadcast failed:', error.message);
         }
-      }, 10000); // Broadcast every 10 seconds
+      }, 10000);
       if (typeof healthBroadcastTimer.unref === 'function') healthBroadcastTimer.unref();
     };
     startHealthBroadcast();
-
-    if (!mongoConnected) {
-      console.warn('Daksh is running with MongoDB offline. Health will show mongoStatus=offline until Atlas allows this IP.');
-    }
-    if (mongoConnected) {
-      setTimeout(() => {
-        syncConfiguredLocalFallbackToActiveAtlas()
-          .catch((error) => {
-            cloudSyncState.status = activeMongoKey() === 'local' ? 'queued locally' : 'failed';
-            cloudSyncState.lastError = error.message;
-            console.error(`Background local-to-Atlas sync failed: ${error.message}`);
-          });
-      }, 2000);
-    }
-    scheduleAtlasMonitor(5000);
   } catch (error) {
     console.error('Failed to start Daksh Inventory v2');
     console.error(error.stack || error.message);

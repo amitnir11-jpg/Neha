@@ -938,13 +938,13 @@
           </div>
           <div class="sync-status-grid">
             <div class="status-tile"><span>Server Status</span><strong id="syncServerStatus" class="live-pill red-dot">Offline</strong></div>
-            <div class="status-tile"><span>MongoDB Status</span><strong id="syncMongoStatus" class="live-pill red-dot">Offline</strong></div>
+            <div class="status-tile"><span>PostgreSQL Status</span><strong id="syncDatabaseStatus" class="live-pill red-dot">Offline</strong></div>
             <div class="status-tile"><span>Active Database</span><strong id="syncActiveDatabase">Checking</strong></div>
-            <div class="status-tile"><span>Atlas Connection</span><strong id="syncAtlasStatus" class="live-pill orange-dot">Not checked</strong></div>
-            <div class="status-tile"><span>Local DB Connection</span><strong id="syncLocalDbStatus" class="live-pill orange-dot">Not checked</strong></div>
+            <div class="status-tile"><span>Database Provider</span><strong id="syncDatabaseProvider" class="live-pill orange-dot">Checking</strong></div>
+            <div class="status-tile"><span>Database URL</span><strong id="syncDatabaseUrl" class="live-pill orange-dot">Checking</strong></div>
             <div class="status-tile"><span>Current LAN IP</span><strong id="syncCurrentLanIp">-</strong></div>
-            <div class="status-tile"><span>Cloud Sync</span><strong id="syncCloudStatus" class="live-pill orange-dot">Idle</strong></div>
-            <div class="status-tile"><span>Cloud Pending</span><strong id="syncCloudPending">0</strong></div>
+            <div class="status-tile"><span>Railway Service</span><strong id="syncDatabaseServiceStatus" class="live-pill orange-dot">Checking</strong></div>
+            <div class="status-tile"><span>Sync Pending</span><strong id="syncDatabasePending">0</strong></div>
             <div class="status-tile"><span>Last Sync Time</span><strong id="syncCenterLastSync">Never</strong></div>
             <div class="status-tile"><span>Total Synced</span><strong id="syncCenterTotalSynced">0</strong></div>
             <div class="status-tile"><span>Pending Records</span><strong id="syncCenterPending">0</strong></div>
@@ -1337,6 +1337,7 @@
   </div>
   <div id="toast" class="toast"></div>
 
+  <script src="/config.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/ui.js?v=20260616-web-scan-local-queue"></script>
 </body>

@@ -2,9 +2,9 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-const mongoose = require('mongoose');
 const Inventory = require('../models/Inventory');
 const { validScanClause } = require('../utils/masterValidation');
+const { connectDatabase, disconnectDatabase } = require('../services/prisma');
 
 const outputPath = path.join(__dirname, '..', 'Parts Inventory Refresh Template.csv');
 
@@ -87,8 +87,7 @@ function fittedFieldExpression(field) {
 }
 
 async function main() {
-  const mongoUri = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/daksh_inventory_v2';
-  await mongoose.connect(mongoUri);
+  await connectDatabase();
 
   const rows = await Inventory.aggregate([
     {
@@ -154,5 +153,5 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
-    await mongoose.connection.close();
+    await disconnectDatabase();
   });

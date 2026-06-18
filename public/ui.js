@@ -30,6 +30,18 @@
   const bootWarn = (label, details = {}) => bootMark('warn', label, details);
   const bootError = (label, details = {}) => bootMark('error', label, details);
 
+  function apiBaseUrl() {
+    return String((window.DAKSH_CONFIG && window.DAKSH_CONFIG.apiBaseUrl) || window.DAKSH_API_BASE_URL || '').trim().replace(/\/+$/, '');
+  }
+
+  function apiUrl(path) {
+    const text = String(path || '');
+    if (/^https?:\/\//i.test(text)) return text;
+    const base = apiBaseUrl();
+    if (!base || !text.startsWith('/api')) return text;
+    return `${base}${text}`;
+  }
+
   function storageGet(key) {
     try {
       return window.localStorage ? localStorage.getItem(key) : null;
@@ -784,7 +796,7 @@
 
   async function api(path, options = {}) {
     const headers = options.headers ? { ...options.headers } : {};
-    const requestPath = withActiveDealerQuery(path);
+    const requestPath = apiUrl(withActiveDealerQuery(path));
     const requestBody = options.body ? withActiveDealerBody(options.body) : options.body;
     const isFormData = requestBody instanceof FormData;
     if (!isFormData) headers['Content-Type'] = 'application/json';
@@ -823,7 +835,7 @@
   }
 
   async function downloadGet(path, fileName) {
-    const response = await fetch(withActiveDealerQuery(path), {
+    const response = await fetch(apiUrl(withActiveDealerQuery(path)), {
       headers: state.token ? { Authorization: `Bearer ${state.token}` } : {}
     });
     if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
@@ -832,7 +844,7 @@
   }
 
   async function downloadPost(path, body, fileName) {
-    const response = await fetch(withActiveDealerQuery(path), {
+    const response = await fetch(apiUrl(withActiveDealerQuery(path)), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1032,10 +1044,9 @@
       status.server ||
       status.serverStatus ||
       status.db ||
-      status.mongoStatus ||
+      status.databaseStatus ||
+      status.postgresStatus ||
       status.activeDatabase ||
-      status.atlasStatus ||
-      status.localDbStatus ||
       status.serverUrl ||
       status.ip
     );
@@ -1379,9 +1390,9 @@
     const serverOk = data.server === 'online';
     const dbOk = data.db === 'connected';
     setLivePill('syncServerStatus', serverOk ? 'Connected' : 'Offline', serverOk);
-    setLivePill('syncMongoStatus', dbOk ? 'Connected' : 'Offline', dbOk);
+    setLivePill('syncDatabaseStatus', dbOk ? 'Connected' : 'Offline', dbOk);
     setDashboardSyncStatus(serverOk && dbOk ? 'Synced' : 'Failed', serverOk && dbOk);
-    if (!serverOk || !dbOk) throw new Error('Server or MongoDB is not connected');
+    if (!serverOk || !dbOk) throw new Error('Server or PostgreSQL is not connected');
     if (isLocalhostUrl(data.serverUrl)) {
       throw new Error('Do not use localhost on mobile. Use the cloud server URL from pairing QR.');
     }
@@ -1946,34 +1957,32 @@
     const lastSync = rememberLastSyncTime(reportedLastSync) || (serverReportedNoSync ? '' : normalizeLastSyncValue(storageGet(scopedStorageKey(LAST_SYNC_KEY))));
     storageSet(AUTO_SYNC_KEY, 'true');
     const serverStatusText = String(connectionStatus.server || connectionStatus.serverStatus || '').toLowerCase();
-    const mongoStatusText = String(connectionStatus.db || connectionStatus.mongoStatus || '').toLowerCase();
+    const databaseStatusText = String(connectionStatus.db || connectionStatus.databaseStatus || connectionStatus.postgresStatus || '').toLowerCase();
     const serverKnown = Boolean(serverStatusText);
-    const mongoKnown = Boolean(mongoStatusText);
+    const databaseKnown = Boolean(databaseStatusText);
     const serverOnline = serverKnown ? serverStatusText === 'online' : null;
-    const mongoOnline = mongoKnown ? mongoStatusText === 'connected' || mongoStatusText === 'online' : null;
+    const databaseOnline = databaseKnown ? databaseStatusText === 'connected' || databaseStatusText === 'online' : null;
     const connectedDevices = Number(status.connectedDevices ?? connectionStatus.connectedDevices ?? state.activeDeviceCount ?? 0);
     const totalSynced = Number(status.totalSynced ?? connectionStatus.totalSynced ?? $('#syncTotal')?.textContent ?? 0);
     state.activeDeviceCount = connectedDevices;
 
-    const connectionOk = (!serverKnown || serverOnline) && (!mongoKnown || mongoOnline);
+    const connectionOk = (!serverKnown || serverOnline) && (!databaseKnown || databaseOnline);
     const syncDetail = connectionOk ? (counts.total ? 'Pending' : 'Synced') : 'Failed';
     const syncOk = connectionOk && !counts.total;
     if (serverKnown) setStatusPill('topServerStatus', serverOnline ? 'Server: Connected' : 'Server: Offline', serverOnline ? 'green' : 'red');
-    if (serverKnown && mongoKnown) setDashboardSyncStatus(syncDetail, syncOk);
+    if (serverKnown && databaseKnown) setDashboardSyncStatus(syncDetail, syncOk);
     setHeaderDeviceStatus(connectedDevices);
     setHeaderSyncStatus(syncDetail, syncOk);
     setStatusPill('topPendingStatus', `Pending: ${counts.total}`, counts.total ? 'orange' : 'green');
     if (serverKnown) setLivePill('syncServerStatus', serverOnline ? 'Connected' : 'Offline', serverOnline);
-    if (mongoKnown) setLivePill('syncMongoStatus', mongoOnline ? 'Connected' : 'Offline', mongoOnline);
+    if (databaseKnown) setLivePill('syncDatabaseStatus', databaseOnline ? 'Connected' : 'Offline', databaseOnline);
     setLivePill('syncCenterAutoState', 'Auto ON', true);
     setText('syncActiveDatabase', connectionStatus.activeDatabase || 'Unknown');
-    setDbHealthPill('syncAtlasStatus', connectionStatus.atlasConnected, connectionStatus.atlasStatus);
-    setDbHealthPill('syncLocalDbStatus', connectionStatus.localDbConnected, connectionStatus.localDbStatus);
+    setStatusPill('syncDatabaseProvider', connectionStatus.databaseProvider || 'postgresql', 'green');
+    setStatusPill('syncDatabaseUrl', connectionStatus.activeDatabaseUrl ? 'Configured' : 'Missing', connectionStatus.activeDatabaseUrl ? 'green' : 'red');
     setText('syncCurrentLanIp', connectionStatus.currentLanIp || connectionStatus.lanIp || connectionStatus.ip || '-');
-    const cloudStatus = String(connectionStatus.cloudSyncStatus || '').trim() || 'idle';
-    const cloudOk = /atlas active|synced/i.test(cloudStatus) || (connectionStatus.atlasConnected === true && Number(connectionStatus.cloudSyncPendingRecords || 0) === 0);
-    setStatusPill('syncCloudStatus', cloudStatus.replace(/^./, (char) => char.toUpperCase()), cloudOk ? 'green' : /queued|syncing|checking|partial/i.test(cloudStatus) ? 'orange' : 'red');
-    setText('syncCloudPending', Number(connectionStatus.cloudSyncPendingRecords || 0));
+    setStatusPill('syncDatabaseServiceStatus', databaseOnline ? 'Connected' : 'Offline', databaseOnline ? 'green' : 'red');
+    setText('syncDatabasePending', counts.total);
 
     setText('homeLastSync', lastSync ? dashboardScanTime(lastSync) : 'Never');
     setText('homePendingSync', counts.total);
@@ -2007,7 +2016,7 @@
         updateSyncBadges(data);
         return data;
       } catch (healthError) {
-        updateSyncBadges({ serverStatus: 'offline', mongoStatus: 'offline', db: 'disconnected' });
+        updateSyncBadges({ serverStatus: 'offline', databaseStatus: 'offline', db: 'disconnected' });
       }
       return null;
     }
@@ -3616,7 +3625,7 @@
       error.healthFailed = true;
       setHeaderSyncStatus('Failed', false);
       setDashboardSyncStatus('Failed', false);
-      updateSyncBadges({ serverStatus: 'offline', mongoStatus: 'offline' });
+      updateSyncBadges({ serverStatus: 'offline', databaseStatus: 'offline', db: 'disconnected' });
       if (!options.silent) toast(error.message, 'error');
       if (!options.silent) addSyncLog({ status: 'failed', errorMessage: error.message });
       return { success: false, message: error.message, healthFailed: true };
@@ -3728,7 +3737,7 @@
       }));
       setHeaderSyncStatus(noActiveAudit ? 'Pending' : 'Failed', false);
       setDashboardSyncStatus(noActiveAudit ? 'Pending' : 'Failed', false);
-      updateSyncBadges(noActiveAudit ? { serverStatus: 'online', mongoStatus: 'connected' } : { serverStatus: 'offline', mongoStatus: 'offline' });
+      updateSyncBadges(noActiveAudit ? { serverStatus: 'online', databaseStatus: 'online', db: 'connected' } : { serverStatus: 'offline', databaseStatus: 'offline', db: 'disconnected' });
       if (!options.silent) toast(error.message, 'error');
       return { success: false, message: error.message };
     } finally {
@@ -9606,7 +9615,8 @@
   function bindSocket() {
     if (!window.io) return;
     if (state.dashboardSocket) return;
-    const socket = window.io({ transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000, reconnectionDelayMax: 5000 });
+    const socketOptions = { transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000, reconnectionDelayMax: 5000 };
+    const socket = apiBaseUrl() ? window.io(apiBaseUrl(), socketOptions) : window.io(socketOptions);
     state.dashboardSocket = socket;
     socket.on('connect', () => {
       state.lastRealtimeAt = Date.now();
@@ -9758,7 +9768,7 @@
     socket.on('sync:failed', () => {
       setHeaderSyncStatus('Failed', false);
       setDashboardSyncStatus('Failed', false);
-      updateSyncBadges({ serverStatus: 'offline', mongoStatus: 'offline' });
+      updateSyncBadges({ serverStatus: 'offline', databaseStatus: 'offline', db: 'disconnected' });
       addConnectionLog('Sync failed', 'error');
     });
     socket.on('offline-queue:update', (payload = {}) => {

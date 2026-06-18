@@ -1,256 +1,108 @@
 # Daksh Inventory v2
 
-Advanced part inventory audit software built with Node.js, Express, MongoDB, Socket.IO, HTML, CSS, JavaScript, ExcelJS, jsPDF, and Nodemailer.
+Node.js, Express, Prisma, Railway PostgreSQL, Socket.IO, HTML/CSS/JavaScript, ExcelJS, jsPDF, and Nodemailer inventory audit software.
 
-## Installation
+## Railway Project Layout
 
-1. Install Node.js.
-2. Install MongoDB Community Server and keep the MongoDB service running.
-3. Open a terminal in `daksh-inventory-v2`.
-4. Install dependencies:
+Create one Railway project with three services:
 
-```bash
-npm install
-```
+- `daksh-postgres`: Railway PostgreSQL database
+- `daksh-api`: backend API service from this repo
+- `daksh-web`: static web app service from this repo
 
-## MongoDB Requirement
+Use the same GitHub repo for `daksh-api` and `daksh-web`.
 
-The app uses MongoDB only. The default connection is:
+## Railway Variables
 
-```text
-mongodb://127.0.0.1:27017/daksh_inventory_v2
-```
-
-You can change it in `.env`.
-
-For online hosting, use MongoDB Atlas and set these environment variables in the hosting dashboard. Railway works with `MONGO_URI`, while Render can still use `RENDER_MONGO_URI` so the cloud database stays separate from the local PC `MONGO_URI`.
+API service:
 
 ```text
+DAKSH_SERVICE_ROLE=api
 DAKSH_DEPLOY_TARGET=railway
-MONGO_URI=mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/daksh_inventory_v2?retryWrites=true&w=majority
-MONGO_DB_NAME=daksh_inventory_v2
-MONGO_SERVER_SELECTION_TIMEOUT_MS=15000
-MONGO_CONNECT_TIMEOUT_MS=15000
-MONGO_SOCKET_TIMEOUT_MS=45000
-MONGO_MAX_POOL_SIZE=20
-MONGO_DNS_SERVERS=8.8.8.8,1.1.1.1
-MONGO_ALLOW_LOCAL_DEFAULT=false
-MONGO_AUTO_LOCAL_FALLBACK=false
-MOBILE_DISCOVERY_PORT=3001
-JWT_SECRET=replace-with-a-long-random-secret
-PUBLIC_BASE_URL=https://your-app.up.railway.app
-
-# Render alternative:
-# DAKSH_DEPLOY_TARGET=render
-# RENDER_MONGO_URI=mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/daksh_inventory_v2?retryWrites=true&w=majority
-# PUBLIC_BASE_URL=https://your-live-app-url
+NODE_ENV=production
+DATABASE_URL=${{daksh-postgres.DATABASE_URL}}
+PUBLIC_BASE_URL=https://your-web-service.up.railway.app
+JWT_SECRET=<long-random-secret>
+DEFAULT_ADMIN_USERNAME=admin
+DEFAULT_ADMIN_PASSWORD=<strong-password>
 ```
 
-In MongoDB Atlas, create a database user with `readWrite` permission, allow the Railway service in Network Access, and keep the full `MONGO_URI` secret in Railway Variables. For first testing, `0.0.0.0/0` is the simplest Atlas Network Access entry. The app also accepts `MONGO_URI`, `MONGO_URL`, `MONGODB_URI`, or `DATABASE_URL`. Do not put real database passwords in GitHub. `MONGO_DNS_SERVERS` is optional and only needed on networks where Node cannot resolve Atlas `mongodb+srv` records through the default DNS resolver.
+Web service:
 
-The mobile scanner app auto-discovers the PC server on the local network using UDP on `MOBILE_DISCOVERY_PORT`. Keep this port aligned with `PORT` unless you intentionally separate discovery from the HTTP API.
+```text
+DAKSH_SERVICE_ROLE=web
+DAKSH_DEPLOY_TARGET=railway
+NODE_ENV=production
+PUBLIC_API_BASE_URL=https://your-api-service.up.railway.app
+PUBLIC_BASE_URL=https://your-web-service.up.railway.app
+```
 
-## Run
+Both services can use:
 
-```bash
+```text
+npm run build
 npm start
 ```
 
-Then open:
+`npm start` uses `DAKSH_SERVICE_ROLE` to boot either the API or web service.
 
-```text
-http://localhost:3000
+## Database
+
+The backend connects only through Railway PostgreSQL `DATABASE_URL`.
+
+```bash
+npm run prisma:generate
+npm run prisma:migrate
 ```
 
-After login, the merged production UI opens at:
+Prisma schema and indexes live in `prisma/schema.prisma` and `prisma/migrations/`.
 
-```text
-http://localhost:3000/dashboard
+## Local Development
+
+```bash
+npm install
+cp .env.example .env
+npm run prisma:migrate
+npm start
 ```
 
-This page serves `public/Daksh.html` and contains Dashboard, Scan Management, Reports, Reconciliation, Master Data, QR / Barcode Tools, Device Control, and Admin Settings.
+For a split local setup:
 
-If port `3000` is busy, the server automatically tries the next available port and writes it to `server_port.txt`.
-
-## Run With Batch File
-
-Double-click:
-
-```text
-start_daksh.bat
+```bash
+DAKSH_SERVICE_ROLE=api npm start
+DAKSH_SERVICE_ROLE=web PUBLIC_API_BASE_URL=http://localhost:3000 npm start
 ```
 
-The batch file checks Node.js, starts MongoDB service if possible, runs `npm install` when `node_modules` is missing, starts the server, reads `server_port.txt`, opens the browser, and prints local network URLs for mobile scanners.
+On Windows PowerShell:
 
-## Login Details
+```powershell
+$env:DAKSH_SERVICE_ROLE='api'; npm start
+```
 
-Default admin:
+## Data Migration Safety
+
+Use the migration tooling only after both database URLs are available. Always run verification before deleting any old source data.
+
+Required order:
+
+1. Export source data.
+2. Import into Railway PostgreSQL.
+3. Verify counts and sampled records for users, dealers, catalogue, scan history, reports, bin locations, uploaded files, and settings.
+4. Save the migration logs and verification summary.
+5. Delete old source data only after manual confirmation from the owner.
+
+## Key URLs
+
+- Web app: `https://your-web-service.up.railway.app`
+- API health: `https://your-api-service.up.railway.app/api/health`
+- API readiness: `https://your-api-service.up.railway.app/api/ready`
+- Mobile scanner: `https://your-web-service.up.railway.app/scan`
+
+## Default Login
 
 ```text
 Username: admin
-Password: admin
+Password: value of DEFAULT_ADMIN_PASSWORD
 ```
 
-Staff login supports 4-digit PIN users stored in the `users` collection with role `staff` and `pinHash`.
-
-New users can request access from the login page. Admin approval is required before they can login. Admins can create users, approve pending users, block/activate users, update a user's email ID, send an OTP password reset link, or reset a password directly from `Admin Settings`.
-
-Password reset uses email + reset link token + 6-digit OTP. The default official OTP mail ID is:
-
-```text
-amitsvision4u@gmail.com
-```
-
-Admins can update the OTP mail ID from `Admin Settings > OTP Mail Settings`. Live email delivery requires SMTP settings in `.env`:
-
-```text
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=
-SMTP_PASS=
-REPORT_EMAIL=amitsvision4u@gmail.com
-```
-
-If SMTP credentials are not configured, reset OTPs are written to the server console/log for local setup testing.
-
-## Mobile Scanner URL
-
-Use the secure Railway scanner URL:
-
-```text
-https://daksh-inventory-v2-production.up.railway.app/scan
-```
-
-If you are testing on a local network, use the LAN URL printed by the server console or batch window. The scanner page loads from the same host as the dashboard, but camera access still needs HTTPS on most mobile browsers:
-
-```text
-http://YOUR_LOCAL_IP:PORT/scan
-```
-
-Mobile devices can also auto-connect with:
-
-```http
-POST /api/devices/connect
-```
-
-## Upload Master
-
-Go to `Dashboard > Master Catalogue` and upload an Excel sheet with these columns:
-
-```text
-Part Number, Part Description, Active Flag, Product Category, Product Group,
-Model, Product Type, Superceeded By, Part Group, Part SubGroup, GST Category,
-Split Flag, MRP, DLC
-```
-
-Column names are trimmed and matched case-insensitively. Part Number and Part
-Description are mandatory; MRP and DLC must be numeric. The upload result shows
-total, imported, failed, duplicate, and skipped rows. Failed rows can be downloaded
-as an Excel workbook with the original row data and error reason.
-
-## Scan
-
-Go to `Dashboard > Scan`.
-
-Supported scan sources:
-
-- Barcode machine scan
-- Manual part entry
-- Mobile scanner API
-- UPI / QR raw scan text
-
-Every scan stores dealer code, audit ID, device ID, staff name, raw scan text, timestamp, sync status, part details, values, and warnings.
-
-Validation checks master existence, MRP mismatch, DLC mismatch, inactive parts, duplicate raw scan, and duplicate part plus dealer plus audit plus timestamp. Admin users can override warnings.
-
-## Download Report
-
-Open `Reports` and use:
-
-- Download Full Report
-- Export PDF
-- Print Report
-- Email Report to Dealer
-
-The Excel report contains all 15 required sheets, including Audit Summary, Final Compile Report, Raw UPI Scan Log, and Dealer Backup Data.
-
-## Email Report
-
-Update `.env` with SMTP settings:
-
-```text
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=
-SMTP_PASS=
-REPORT_EMAIL=
-```
-
-Then use `Email Report to Dealer` from the report page.
-
-## Backup
-
-Go to `Dashboard > Backup`.
-
-Available backup options:
-
-- Download full backup JSON
-- Dealer-wise backup
-- Date-wise backup
-- Restore backup JSON
-
-Restore requires admin login.
-
-## API Summary
-
-All APIs are under `/api` and frontend calls use relative URLs:
-
-- `/api/auth/login`
-- `/api/auth/staff-login`
-- `/api/auth/register`
-- `/api/auth/request-password-reset`
-- `/api/auth/reset-password`
-- `/api/auth/users`
-- `/api/auth/settings`
-- `/api/scans/manual`
-- `/api/scans/sync`
-- `/api/scans/history`
-- `/api/inventory/scan`
-- `/api/inventory/list`
-- `/api/inventory/delete-selected`
-- `/api/inventory/delete-all`
-- `/api/reports/full`
-- `/api/reports/pdf`
-- `/api/reports/bin-wise`
-- `/api/reports/part-wise`
-- `/api/reports/dealer-wise`
-- `/api/reports/damage`
-- `/api/reports/excess`
-- `/api/reports/short`
-- `/api/reports/raw-upi`
-- `/api/reports/email`
-- `/api/dealers`
-- `/api/devices/connect`
-- `/api/devices/list`
-- `/api/devices/disconnect`
-- `/api/master/upload`
-- `/api/master/parts/upload`
-- `/api/master/parts`
-- `/api/master/parts/suggest`
-- `/api/master/dealers`
-- `/api/master/bins`
-- `/api/master/search`
-- `/api/backup/download`
-- `/api/backup/restore`
-- `/api/reconciliation`
-- `/api/qr/bin`
-- `/api/qr/part`
-- `/api/qr/bulk-pdf`
-
-## Notes
-
-- No React is used.
-- No MySQL is used.
-- MongoDB is the only database.
-- Socket.IO refreshes scans, devices, and reports in real time.
-- Synced scan records are insert-only and never overwritten.
+Change the admin password after first login.

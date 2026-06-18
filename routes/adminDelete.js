@@ -1,5 +1,4 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const Inventory = require('../models/Inventory');
 const MasterPart = require('../models/MasterPart');
 const Bin = require('../models/Bin');
@@ -43,9 +42,7 @@ function dateFilter(input = {}) {
 
 function idFilter(ids = []) {
   const terms = ids.map((id) => String(id || '').trim()).filter(Boolean).flatMap((id) => {
-    const row = [{ scanId: id }, { uniqueScanId: id }];
-    if (mongoose.Types.ObjectId.isValid(id)) row.push({ _id: id });
-    return row;
+    return [{ scanId: id }, { uniqueScanId: id }, { _id: id }];
   });
   return terms.length ? { $or: terms } : null;
 }

@@ -24,6 +24,18 @@
     }
   }
 
+  function apiBaseUrl() {
+    return String((window.DAKSH_CONFIG && window.DAKSH_CONFIG.apiBaseUrl) || window.DAKSH_API_BASE_URL || '').trim().replace(/\/+$/, '');
+  }
+
+  function apiUrl(path) {
+    const text = String(path || '');
+    if (/^https?:\/\//i.test(text)) return text;
+    const base = apiBaseUrl();
+    if (!base || !text.startsWith('/api')) return text;
+    return `${base}${text}`;
+  }
+
   function storageJson(key) {
     const raw = storageGet(key);
     if (!raw) return null;
@@ -268,7 +280,7 @@
     if (!isFormData) headers['Content-Type'] = 'application/json';
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
 
-    const response = await fetch(path, {
+    const response = await fetch(apiUrl(path), {
       ...options,
       headers,
       body: isFormData ? options.body : options.body ? JSON.stringify(options.body) : undefined
@@ -291,7 +303,7 @@
   }
 
   async function fetchBlob(path, fileName) {
-    const response = await fetch(path, {
+    const response = await fetch(apiUrl(path), {
       headers: state.token ? { Authorization: `Bearer ${state.token}` } : {}
     });
     if (!response.ok) {
@@ -1371,7 +1383,7 @@
     await Promise.all([loadDealers(), loadInventory(), loadDevices(), loadMasterSearch()]);
 
     if (window.io) {
-      const socket = window.io();
+      const socket = apiBaseUrl() ? window.io(apiBaseUrl()) : window.io();
       socket.on('connect', () => socket.emit('device:hello', { deviceId: clientDeviceId(), deviceName: 'Dashboard Browser' }));
       socket.on('scan:new', () => loadInventory().catch(console.warn));
       socket.on('scan:deleted', () => loadInventory().catch(console.warn));
@@ -1638,7 +1650,7 @@
     await loadReportDealers();
     await loadLegacyReportFilterSettings();
     if (window.io) {
-      const socket = window.io();
+      const socket = apiBaseUrl() ? window.io(apiBaseUrl()) : window.io();
       socket.on('scan:new', () => {});
       socket.on('scan:deleted', () => {});
       socket.on('stats:update', () => {});

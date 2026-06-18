@@ -3,7 +3,6 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const mongoose = require('mongoose');
 const Inventory = require('../models/Inventory');
 const MasterPart = require('../models/MasterPart');
 const Dealer = require('../models/Dealer');
@@ -290,34 +289,30 @@ async function restoreCollection(key, docs, options) {
     const filter = identityFilter(key, doc);
     if (!filter) continue;
     if (options.restoreMode === 'merge') {
-      const updateOptions = { upsert: true, setDefaultsOnInsert: false };
-      if (options.mongoSession) updateOptions.session = options.mongoSession;
-      await Model.findOneAndUpdate(filter, doc, updateOptions);
+      await Model.findOneAndUpdate(filter, doc, { upsert: true, setDefaultsOnInsert: false });
     } else {
-      const createOptions = options.mongoSession ? { session: options.mongoSession } : {};
-      await Model.create([doc], createOptions);
+      await Model.create([doc]);
     }
     restored += 1;
   }
   return restored;
 }
 
-async function deleteExistingForReplace(keys, dealerCode, auditId, mongoSession) {
+async function deleteExistingForReplace(keys, dealerCode, auditId) {
   const scoped = restoreScopeFilter(dealerCode, auditId);
   const dealerScoped = dealerCode ? { dealerCode } : {};
-  const withSession = (query) => (mongoSession ? query.session(mongoSession) : query);
   const deletes = [];
-  if (keys.includes('reportSnapshots')) deletes.push(withSession(ReportSnapshot.deleteMany(scoped)));
-  if (keys.includes('inventory')) deletes.push(withSession(Inventory.deleteMany(scoped)));
-  if (keys.includes('bins')) deletes.push(withSession(Bin.deleteMany(dealerScoped)));
-  if (keys.includes('binTransferHistory')) deletes.push(withSession(BinTransferHistory.deleteMany(dealerScoped)));
-  if (keys.includes('verificationLogs')) deletes.push(withSession(VerificationLog.deleteMany(dealerScoped)));
-  if (keys.includes('deletedScanLogs')) deletes.push(withSession(DeletedScanLog.deleteMany(dealerScoped)));
-  if (keys.includes('duplicateScanLogs')) deletes.push(withSession(DuplicateScanLog.deleteMany(scoped)));
-  if (keys.includes('rejectedScans')) deletes.push(withSession(RejectedScan.deleteMany(dealerScoped)));
-  if (keys.includes('audits')) deletes.push(withSession(Audit.deleteMany(auditId ? { auditId } : dealerScoped)));
-  if (keys.includes('dealers') && dealerCode) deletes.push(withSession(Dealer.deleteOne({ dealerCode })));
-  if (keys.includes('masterParts')) deletes.push(withSession(MasterPart.deleteMany(dealerScoped)));
+  if (keys.includes('reportSnapshots')) deletes.push(ReportSnapshot.deleteMany(scoped));
+  if (keys.includes('inventory')) deletes.push(Inventory.deleteMany(scoped));
+  if (keys.includes('bins')) deletes.push(Bin.deleteMany(dealerScoped));
+  if (keys.includes('binTransferHistory')) deletes.push(BinTransferHistory.deleteMany(dealerScoped));
+  if (keys.includes('verificationLogs')) deletes.push(VerificationLog.deleteMany(dealerScoped));
+  if (keys.includes('deletedScanLogs')) deletes.push(DeletedScanLog.deleteMany(dealerScoped));
+  if (keys.includes('duplicateScanLogs')) deletes.push(DuplicateScanLog.deleteMany(scoped));
+  if (keys.includes('rejectedScans')) deletes.push(RejectedScan.deleteMany(dealerScoped));
+  if (keys.includes('audits')) deletes.push(Audit.deleteMany(auditId ? { auditId } : dealerScoped));
+  if (keys.includes('dealers') && dealerCode) deletes.push(Dealer.deleteOne({ dealerCode }));
+  if (keys.includes('masterParts')) deletes.push(MasterPart.deleteMany(dealerScoped));
   await Promise.all(deletes);
 }
 
@@ -325,10 +320,6 @@ async function duplicateSummary(collections) {
   const scanIds = collections.inventory.map((scan) => clean(scan.uniqueScanId || scan.scanId)).filter(Boolean);
   const existingScans = scanIds.length ? await Inventory.countDocuments({ $or: [{ uniqueScanId: { $in: scanIds } }, { scanId: { $in: scanIds } }] }) : 0;
   return { existingScans };
-}
-
-function isTransactionUnsupported(error) {
-  return /Transaction numbers are only allowed|replica set member or mongos|Transaction.*not supported/i.test(error && error.message);
 }
 
 async function createArchiveZip(archiveId) {
@@ -429,14 +420,14 @@ router.post('/restore', auth.requireAuth, auth.requireAdmin, asyncRoute(async (r
     restoreStatus: 'started'
   });
 
-  async function performRestore(mongoSession) {
+  async function performRestore() {
     assertNotCancelled(sessionId);
     const duplicates = await duplicateSummary(loaded.collections);
     logLines.push(`Backup validated for dealer ${dealerCode}; duplicate active scans found: ${duplicates.existingScans}`);
     sessionProgress(sessionId, { percent: 8, duplicates }, logLines[logLines.length - 1]);
 
     if (restoreMode === 'replace') {
-      await deleteExistingForReplace(keys, dealerCode, auditId, mongoSession);
+      await deleteExistingForReplace(keys, dealerCode, auditId);
       logLines.push(`Existing data removed for ${dealerCode}${auditId ? ` / ${auditId}` : ''}`);
       sessionProgress(sessionId, { percent: 14 }, logLines[logLines.length - 1]);
     }
@@ -455,7 +446,7 @@ router.post('/restore', auth.requireAuth, auth.requireAdmin, asyncRoute(async (r
         counts[key] = 0;
         continue;
       }
-      const restored = await restoreCollection(key, docs, { sessionId, restoreMode, mongoSession, newAuditId });
+      const restored = await restoreCollection(key, docs, { sessionId, restoreMode, newAuditId });
       counts[key] = restored;
       totalRecordsRestored += restored;
       logLines.push(`Restored ${restored} ${key}`);
@@ -463,22 +454,8 @@ router.post('/restore', auth.requireAuth, auth.requireAdmin, asyncRoute(async (r
     }
   }
 
-  let mongoSession = await mongoose.startSession();
-  let fallbackRestore = false;
   try {
-    try {
-      await mongoSession.withTransaction(() => performRestore(mongoSession));
-    } catch (error) {
-      await mongoSession.endSession();
-      mongoSession = null;
-      if (!isTransactionUnsupported(error) || existingDealer) throw error;
-      fallbackRestore = true;
-      totalRecordsRestored = 0;
-      Object.keys(counts).forEach((key) => delete counts[key]);
-      logLines.push('MongoDB transaction support is unavailable locally; using safe non-conflicting restore fallback.');
-      sessionProgress(sessionId, { percent: 10 }, logLines[logLines.length - 1]);
-      await performRestore(null);
-    }
+    await performRestore();
 
     await Promise.all([Inventory, Bin, BinTransferHistory, VerificationLog, DeletedScanLog, DuplicateScanLog, RejectedScan, ReportSnapshot, Dealer, Audit].map((Model) => Model.createIndexes().catch(() => null)));
     logLines.push('Indexes verified after restore');
@@ -511,9 +488,6 @@ router.post('/restore', auth.requireAuth, auth.requireAdmin, asyncRoute(async (r
     });
   } catch (error) {
     console.error('[audit-backup-restore] failed', error);
-    if (fallbackRestore && !existingDealer) {
-      await deleteExistingForReplace(keys, dealerCode, restoreMode === 'new-audit-session' ? newAuditId : auditId, null).catch(() => null);
-    }
     const status = error.cancelled ? 'cancelled' : 'failed';
     await AuditRestoreLog.findByIdAndUpdate(restoreLog._id, {
       restoreStatus: status,
@@ -524,8 +498,6 @@ router.post('/restore', auth.requireAuth, auth.requireAdmin, asyncRoute(async (r
     }).catch(() => null);
     sessionProgress(sessionId, { status, percent: status === 'cancelled' ? 0 : 100, errorMessage: error.message }, error.message);
     res.status(error.cancelled ? 409 : 500).json({ success: false, sessionId, message: error.message });
-  } finally {
-    if (mongoSession) await mongoSession.endSession();
   }
 }));
 

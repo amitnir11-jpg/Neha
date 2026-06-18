@@ -2466,7 +2466,7 @@ async function saveScanRequest(req, res) {
       throw error;
     }
 
-    scanDebug('[SCAN TIME] saved MongoDB timestamp verified', {
+    scanDebug('[SCAN TIME] saved PostgreSQL timestamp verified', {
       id: scan._id,
       partNumber: scan.partNumber,
       dealerCode: scan.dealerCode,

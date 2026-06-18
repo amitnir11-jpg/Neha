@@ -26,6 +26,18 @@
   const qsa = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const byId = (id) => document.getElementById(id);
 
+  function apiBaseUrl() {
+    return String((window.DAKSH_CONFIG && window.DAKSH_CONFIG.apiBaseUrl) || window.DAKSH_API_BASE_URL || '').trim().replace(/\/+$/, '');
+  }
+
+  function apiUrl(path) {
+    const text = String(path || '');
+    if (/^https?:\/\//i.test(text)) return text;
+    const base = apiBaseUrl();
+    if (!base || !text.startsWith('/api')) return text;
+    return `${base}${text}`;
+  }
+
   const MODE_INFO = {
     INWARD: {
       label: 'Inward',
@@ -456,7 +468,7 @@
       timeout = setTimeout(() => controller.abort(), Number(timeoutMs));
     }
 
-    return fetch(path, fetchOptions).then(async (response) => {
+    return fetch(apiUrl(path), fetchOptions).then(async (response) => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.success === false) {
         const error = new Error(data.message || response.statusText || 'Request failed');
@@ -719,7 +731,7 @@
     const health = state.health || {};
     const parts = [];
     if (health.status || health.serverStatus) parts.push(`Server ${health.status || health.serverStatus}`);
-    if (health.mongoStatus || health.mongodb) parts.push(`DB ${health.mongoStatus || health.mongodb}`);
+    if (health.databaseStatus || health.postgresStatus || health.db) parts.push(`DB ${health.databaseStatus || health.postgresStatus || health.db}`);
     if (Number.isFinite(Number(health.connectedDevices))) parts.push(`Devices ${Number(health.connectedDevices)}`);
     if (health.lastSyncTime) parts.push(`Last sync ${fmtTime(health.lastSyncTime)}`);
     if (!parts.length) parts.push('Server status unavailable');

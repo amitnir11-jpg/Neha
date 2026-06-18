@@ -1,5 +1,4 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const Bin = require('../models/Bin');
 const auth = require('./auth');
 
@@ -178,7 +177,7 @@ router.post('/bulk-create', auth.requireAuth, auth.requireAdmin, async (req, res
 router.put('/:id', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const id = clean(req.params.id);
-    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'Invalid bin id' });
+    if (!id) return res.status(400).json({ success: false, message: 'Invalid bin id' });
     const existing = await Bin.findById(id);
     if (!existing) return res.status(404).json({ success: false, message: 'Bin not found' });
 
@@ -207,7 +206,7 @@ router.put('/:id', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 router.delete('/:id', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const id = clean(req.params.id);
-    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ success: false, message: 'Invalid bin id' });
+    if (!id) return res.status(400).json({ success: false, message: 'Invalid bin id' });
     const bin = await Bin.findByIdAndDelete(id).lean();
     if (!bin) return res.status(404).json({ success: false, message: 'Bin not found' });
     req.io.emit('master:update', { dealerCode: upper(bin.dealerCode), scope: 'bins' });

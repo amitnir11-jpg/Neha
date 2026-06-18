@@ -1,0 +1,1299 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Audit {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([auditId])
+  @@index([status])
+  @@map("audits")
+}
+
+model AuditLog {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([auditId])
+  @@index([createdAt])
+  @@map("auditlogs")
+}
+
+model AuditRestoreLog {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([auditId])
+  @@map("auditrestorelogs")
+}
+
+model Bin {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([bin])
+  @@index([binLocation])
+  @@map("bins")
+}
+
+model BinLabelPrintLog {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([createdAt])
+  @@map("binlabelprintlogs")
+}
+
+model BinTransferHistory {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([partNumber])
+  @@map("bintransferhistories")
+}
+
+model BluetoothDevice {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([deviceId])
+  @@index([dealerCode])
+  @@index([status])
+  @@map("bluetoothdevices")
+}
+
+model BluetoothScanLog {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([deviceId])
+  @@index([status])
+  @@index([scanTime])
+  @@map("bluetoothscanlogs")
+}
+
+model Dealer {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([currentAuditId])
+  @@map("dealers")
+}
+
+model DealerStock {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([auditId])
+  @@index([partNumber])
+  @@index([normalizedPartNumber])
+  @@map("dealer_stock_master")
+}
+
+model DeletedScanLog {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([auditId])
+  @@index([createdAt])
+  @@map("deletedscanlogs")
+}
+
+model Device {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([deviceId])
+  @@index([dealerCode])
+  @@index([status])
+  @@index([timestamp])
+  @@map("devices")
+}
+
+model DuplicateScanLog {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([auditId])
+  @@index([timestamp])
+  @@map("duplicatescanlogs")
+}
+
+model FailedScan {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([createdAt])
+  @@map("failedscans")
+}
+
+model Inventory {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode, auditId, timestamp])
+  @@index([dealerCode, auditId, normalizedPartNumber])
+  @@index([dealerCode, auditId, scanType, timestamp])
+  @@index([syncStatus])
+  @@index([scanStatus])
+  @@index([globalUpiKey])
+  @@index([qrFingerprint])
+  @@index([uniqueScanId])
+  @@index([scanId])
+  @@map("inventories")
+}
+
+model MasterCatalogue {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([partNumber])
+  @@index([normalizedPartNumber])
+  @@map("mastercatalogues")
+}
+
+model MasterPart {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([partNumber])
+  @@index([normalizedPartNumber])
+  @@index([binLocation])
+  @@map("masterparts")
+}
+
+model OfflineQueue {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([deviceId])
+  @@index([status])
+  @@map("offlinequeues")
+}
+
+model PartPriceHistory {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([normalizedPartNumber])
+  @@map("partpricehistories")
+}
+
+model RejectedScan {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([partNumber])
+  @@map("rejectedscans")
+}
+
+model ReportFilterSetting {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([reportName])
+  @@map("reportfiltersettings")
+}
+
+model ReportSnapshot {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([auditId])
+  @@index([reportName])
+  @@map("reportsnapshots")
+}
+
+model Scan {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([partNumber])
+  @@map("scans")
+}
+
+model ScannerLog {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([deviceId])
+  @@index([createdAt])
+  @@map("scannerlogs")
+}
+
+model ScannerSession {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([deviceId])
+  @@index([status])
+  @@map("scannersessions")
+}
+
+model Setting {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([key])
+  @@map("settings")
+}
+
+model SkewEvent {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([deviceId])
+  @@index([createdAt])
+  @@map("skewevents")
+}
+
+model SyncLog {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([status])
+  @@index([createdAt])
+  @@map("synclogs")
+}
+
+model User {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([username])
+  @@index([email])
+  @@map("users")
+}
+
+model UserDealerMapping {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([dealerCode])
+  @@map("userdealermappings")
+}
+
+model VerificationLog {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String?
+  auditId              String?
+  partNumber           String?
+  normalizedPartNumber String?
+  uniqueScanId         String?
+  scanId               String?
+  globalUpiKey         String?
+  qrFingerprint        String?
+  upiNo                String?
+  rawUpiHash           String?
+  bin                  String?
+  binLocation          String?
+  scanType             String?
+  type                 String?
+  syncStatus           String?
+  scanStatus           String?
+  status               String?
+  source               String?
+  userId               String?
+  loginId              String?
+  username             String?
+  email                String?
+  deviceId             String?
+  key                  String?
+  reportName           String?
+  currentAuditId       String?
+  timestamp            DateTime?
+  scanTime             DateTime?
+  time                 DateTime?
+  dateTime             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([auditId])
+  @@index([time])
+  @@map("verificationlogs")
+}
