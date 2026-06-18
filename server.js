@@ -455,6 +455,8 @@ app.get('/api/reports/valid-scans', directAuthenticatedReport(directScanRegister
 app.get('/api/reports/device-wise', directAuthenticatedReport(directScanRegisterReport('')));
 app.get('/api/reports/duplicate-scans', directAuthenticatedReport(directScanRegisterReport('Duplicate')));
 
+app.use('/api/auth', authRoutes);
+
 app.use('/api', (req, res, next) => {
   if (isDatabaseReady()) return next();
   return res.status(503).json({
@@ -468,7 +470,6 @@ app.use('/api', (req, res, next) => {
   });
 });
 
-app.use('/api/auth', authRoutes);
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/admin-delete', require('./routes/adminDelete'));
 app.use('/api/users', require('./routes/users'));

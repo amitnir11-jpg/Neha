@@ -8,6 +8,7 @@ const UserDealerMapping = require('../models/UserDealerMapping');
 const Setting = require('../models/Setting');
 const smtpConfig = require('../utils/smtpConfig');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
+const { isDatabaseReady, databaseHealthDetails } = require('../services/prisma');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
@@ -33,6 +34,37 @@ function publicUser(user) {
     active: user.isActive !== undefined ? user.isActive !== false : user.active !== false,
     isActive: user.isActive !== undefined ? user.isActive !== false : user.active !== false
   };
+}
+
+function offlineAdminUser() {
+  return {
+    _id: 'offline-admin',
+    id: 'offline-admin',
+    username: DEFAULT_ADMIN_USERNAME,
+    email: 'admin@localhost',
+    name: 'Administrator',
+    role: 'admin',
+    dealerAccess: ['ALL'],
+    permissions: {
+      canScanInward: true,
+      canScanOutward: true,
+      canScanFitted: true,
+      canScanDamage: true,
+      canVerifyParts: true,
+      canViewReports: true,
+      canDeleteScanData: true,
+      canExportExcel: true,
+      canManageUsers: true
+    },
+    approved: true,
+    active: true,
+    isActive: true,
+    databaseOffline: true
+  };
+}
+
+function isOfflineAdmin(user = {}) {
+  return user && user.id === 'offline-admin' && user.username === DEFAULT_ADMIN_USERNAME && user.role === 'admin';
 }
 
 function signToken(user) {
@@ -66,6 +98,10 @@ async function requireAuth(req, res, next) {
         success: false,
         message: req.authTokenPresent ? 'Auth expired: please login again' : 'Login required'
       });
+    }
+    if (!isDatabaseReady() && isOfflineAdmin(req.user)) {
+      req.user = { ...publicUser(offlineAdminUser()), databaseOffline: true };
+      return next();
     }
     const freshUser = await User.findOne({ _id: req.user.id, approved: { $ne: false } }).lean();
     if (!freshUser || !isUserActive(freshUser)) {
@@ -532,6 +568,31 @@ router.post('/login', async (req, res) => {
   try {
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
     const password = String(req.body.password || req.body.passwordOrPin || '');
+
+    if (!isDatabaseReady()) {
+      if (username === DEFAULT_ADMIN_USERNAME && password === DEFAULT_ADMIN_PASSWORD) {
+        const user = offlineAdminUser();
+        return res.json({
+          success: true,
+          token: signToken(user),
+          user: publicUser(user),
+          assignedDealers: [],
+          activeDealers: [],
+          needsDealerSelection: false,
+          activeDealerId: '',
+          databaseOffline: true,
+          database: databaseHealthDetails(),
+          message: 'Logged in with offline admin access. Configure PostgreSQL to load inventory and reports.'
+        });
+      }
+      return res.status(503).json({
+        success: false,
+        message: 'Database is offline. Admin can login with the default admin password only after DEFAULT_ADMIN_PASSWORD is set correctly.',
+        databaseOffline: true,
+        database: databaseHealthDetails()
+      });
+    }
+
     const pin = String(req.body.pin || req.body.passwordOrPin || '').trim();
     const user = await findUserByLogin(username);
 
@@ -691,6 +752,17 @@ router.post('/pin-login', async (req, res) => {
 
 router.get('/me', requireAuth, async (req, res) => {
   try {
+    if (!isDatabaseReady() && isOfflineAdmin(req.user)) {
+      return res.json({
+        success: true,
+        user: { ...req.user, databaseOffline: true },
+        assignedDealers: [],
+        activeDealers: [],
+        activeDealerId: '',
+        databaseOffline: true,
+        database: databaseHealthDetails()
+      });
+    }
     const assignedDealers = await activeDealersForUser(req.user);
     res.json({
       success: true,
