@@ -26,6 +26,17 @@ app.get('/config.js', (req, res) => {
   res.send(`window.DAKSH_CONFIG=${JSON.stringify({ apiBaseUrl })};`);
 });
 
+app.get(['/api/ready', '/api/health'], (req, res) => {
+  noStore(res);
+  res.json({
+    success: true,
+    status: 'ready',
+    role: 'web',
+    serverStatus: 'online',
+    apiBaseUrl: String(process.env.PUBLIC_API_BASE_URL || process.env.API_BASE_URL || '').trim().replace(/\/+$/, '')
+  });
+});
+
 app.get('/socket.io/socket.io.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
   res.sendFile(SOCKET_IO_CLIENT);

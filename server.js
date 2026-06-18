@@ -74,12 +74,14 @@ const OfflineSyncService = require('./services/OfflineSyncService');
 const {
   connectDatabase,
   isDatabaseReady,
-  databaseHealthDetails
+  databaseHealthDetails,
+  databaseUrlSource,
+  acceptedDatabaseEnvVars
 } = require('./services/prisma');
 
 const app = express();
 app.locals.reportRoutesVersion = 'dealer-report-dlc-20260602';
-app.locals.deployConfigVersion = 'railway-postgresql-20260618';
+app.locals.deployConfigVersion = 'railway-postgresql-ready-20260618';
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -108,7 +110,7 @@ const IS_RENDER = DEPLOY_TARGET === 'render' ||
 const IS_RAILWAY = DEPLOY_TARGET === 'railway' ||
   Boolean(process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.RAILWAY_ENVIRONMENT_NAME);
 const DEPLOYMENT_NAME = IS_RENDER ? 'Render' : (IS_RAILWAY ? 'Railway' : (IS_PRODUCTION ? 'hosting provider' : 'local PC'));
-const DATABASE_URL_SOURCE = String(process.env.DATABASE_URL || '').trim() ? 'DATABASE_URL' : '';
+const DATABASE_URL_SOURCE = databaseUrlSource();
 const MOBILE_DISCOVERY_PORT = Number(process.env.MOBILE_DISCOVERY_PORT || PORT);
 const MOBILE_DISCOVERY_REQUEST = 'DAKSH_DISCOVER_V1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -144,7 +146,7 @@ function databaseEnvLocation() {
 }
 
 function databaseOfflineMessage() {
-  return `Database is offline. Set Railway PostgreSQL DATABASE_URL in ${databaseEnvLocation()} and run Prisma migrations.`;
+  return `Database is offline. Set Railway PostgreSQL connection variables in ${databaseEnvLocation()} (${acceptedDatabaseEnvVars().join(', ')}) and redeploy.`;
 }
 
 function currentDatabaseStatus() {
@@ -158,8 +160,8 @@ function currentDatabasePayload() {
     databaseStatus: connected ? 'online' : 'offline',
     postgresStatus: connected ? 'online' : 'offline',
     db: connected ? 'connected' : 'disconnected',
-    acceptedDatabaseEnvVars: ['DATABASE_URL'],
-    configuredDatabaseEnvVar: DATABASE_URL_SOURCE,
+    acceptedDatabaseEnvVars: acceptedDatabaseEnvVars(),
+    configuredDatabaseEnvVar: databaseUrlSource() || DATABASE_URL_SOURCE,
     ...databaseHealthDetails()
   };
 }

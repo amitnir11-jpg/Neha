@@ -1,6 +1,11 @@
 const { PrismaClient, Prisma } = require('@prisma/client');
+const {
+  acceptedDatabaseEnvVars,
+  applyResolvedDatabaseUrl,
+  maskDatabaseUrl
+} = require('../utils/postgresEnv');
 
-const databaseUrl = String(process.env.DATABASE_URL || '').trim();
+let resolvedDatabaseUrl = applyResolvedDatabaseUrl();
 
 const prisma = new PrismaClient({
   log: process.env.PRISMA_LOG_QUERIES === 'true' ? ['query', 'warn', 'error'] : ['warn', 'error']
@@ -11,17 +16,19 @@ let lastError = '';
 let connectedAt = null;
 
 function hasDatabaseUrl() {
-  return Boolean(databaseUrl);
+  resolvedDatabaseUrl = applyResolvedDatabaseUrl();
+  return Boolean(resolvedDatabaseUrl.url);
 }
 
-function maskDatabaseUrl(url = databaseUrl) {
-  return String(url || '').replace(/\/\/([^:@/?#]+):([^@/?#]+)@/, '//***:***@');
+function databaseUrlSource() {
+  resolvedDatabaseUrl = applyResolvedDatabaseUrl();
+  return resolvedDatabaseUrl.source;
 }
 
 async function connectDatabase() {
   if (!hasDatabaseUrl()) {
     ready = false;
-    lastError = 'DATABASE_URL is required for Railway PostgreSQL.';
+    lastError = `PostgreSQL connection is not configured. Set one of: ${acceptedDatabaseEnvVars().join(', ')}.`;
     throw new Error(lastError);
   }
   try {
@@ -50,7 +57,8 @@ function isDatabaseReady() {
 function databaseHealthDetails() {
   return {
     activeDatabase: 'railway-postgresql',
-    activeDatabaseUrl: maskDatabaseUrl(),
+    activeDatabaseUrl: maskDatabaseUrl(resolvedDatabaseUrl.url),
+    configuredDatabaseEnvVar: databaseUrlSource(),
     databaseProvider: 'postgresql',
     databaseConnectedAt: connectedAt ? connectedAt.toISOString() : '',
     databaseLastError: lastError
@@ -64,5 +72,7 @@ module.exports = {
   disconnectDatabase,
   isDatabaseReady,
   databaseHealthDetails,
+  databaseUrlSource,
+  acceptedDatabaseEnvVars,
   maskDatabaseUrl
 };

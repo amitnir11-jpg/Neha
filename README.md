@@ -27,6 +27,19 @@ DEFAULT_ADMIN_USERNAME=admin
 DEFAULT_ADMIN_PASSWORD=<strong-password>
 ```
 
+If the Railway PostgreSQL service exposes a differently named URL, the API also accepts:
+
+```text
+DATABASE_PRIVATE_URL
+DATABASE_PUBLIC_URL
+POSTGRES_URL
+POSTGRES_PRISMA_URL
+POSTGRES_URL_NON_POOLING
+PGDATABASE_URL
+RAILWAY_DATABASE_URL
+PGHOST + PGPORT + PGUSER + PGPASSWORD + PGDATABASE
+```
+
 Web service:
 
 ```text
@@ -44,7 +57,7 @@ npm run build
 npm start
 ```
 
-`npm start` uses `DAKSH_SERVICE_ROLE` to boot either the API or web service.
+`npm start` uses `DAKSH_SERVICE_ROLE` to boot either the API or web service. For the API service it runs `prisma migrate deploy` before opening the server, unless `DAKSH_SKIP_MIGRATIONS=true` is set.
 
 ## Database
 
@@ -55,7 +68,7 @@ npm run prisma:generate
 npm run prisma:migrate
 ```
 
-Prisma schema and indexes live in `prisma/schema.prisma` and `prisma/migrations/`.
+Prisma schema and indexes live in `prisma/schema.prisma` and `prisma/migrations/`. Railway health checks use `/api/ready`, so the API service will not be marked ready while PostgreSQL is disconnected.
 
 ## Local Development
 
