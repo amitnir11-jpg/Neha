@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.2';
-  const CACHE_VERSION = '20260618-mobile-camera-live-compact';
+  const CACHE_VERSION = '20260619-mobile-camera-full-area';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -312,6 +312,70 @@
     return upper(String(value ?? '').replace(/\s+/g, ' ').trim());
   }
 
+  function parserKey(value) {
+    return clean(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  function firstParserValue(data = {}, keys = []) {
+    for (const key of keys) {
+      const value = data[parserKey(key)];
+      if (value !== undefined && clean(value) !== '') return value;
+    }
+    return '';
+  }
+
+  function firstObjectValue(input = {}, keys = []) {
+    const entries = Object.entries(input || {});
+    for (const key of keys) {
+      if (input[key] !== undefined && input[key] !== null && clean(input[key]) !== '') return input[key];
+      const normalizedKey = parserKey(key);
+      const found = entries.find(([entryKey, entryValue]) => parserKey(entryKey) === normalizedKey && clean(entryValue) !== '');
+      if (found) return found[1];
+    }
+    return '';
+  }
+
+  function normalizePartCandidateValue(value) {
+    return upper(clean(value).replace(/\s+/g, ''));
+  }
+
+  function isValidPartCandidate(value) {
+    const part = normalizePartCandidateValue(value);
+    return /^[A-Z0-9][A-Z0-9._\/-]{2,39}$/.test(part) && !/^UPI$/i.test(part);
+  }
+
+  function parseQueryLikeScan(raw = '') {
+    const data = {};
+    const text = clean(raw);
+    if (!text) return data;
+    const setValue = (value, key) => {
+      const normalizedKey = parserKey(key);
+      if (normalizedKey && clean(value)) data[normalizedKey] = clean(value);
+    };
+    try {
+      const parsedUrl = new URL(text);
+      parsedUrl.searchParams.forEach(setValue);
+      return data;
+    } catch (_) {
+      const normalized = text.includes('?') ? text.slice(text.indexOf('?') + 1) : text;
+      const params = new URLSearchParams(normalized.replace(/[|;]/g, '&'));
+      params.forEach(setValue);
+      return data;
+    }
+  }
+
+  function parseKeyValueScan(raw = '') {
+    const data = {};
+    const pairs = String(raw || '').match(/[a-zA-Z][a-zA-Z0-9 _-]{0,24}\s*[:=]\s*[^|,;\n\r]+/g) || [];
+    pairs.forEach((pair) => {
+      const splitAt = pair.search(/[:=]/);
+      const key = parserKey(pair.slice(0, splitAt));
+      const value = clean(pair.slice(splitAt + 1));
+      if (key && value) data[key] = value;
+    });
+    return data;
+  }
+
   function extractUpiIdFromText(payload = {}) {
     const direct = clean(payload.upiNo || payload.upiId || payload.upiID || payload.upiScanId || payload.transactionId || payload.txnId);
     if (direct) return upper(direct);
@@ -336,43 +400,35 @@
   }
 
   function parsePartCandidate(raw = '') {
-    const text = clean(raw).toUpperCase();
+    const text = clean(raw);
     if (!text) return '';
 
     try {
       const parsed = JSON.parse(text);
       if (parsed && typeof parsed === 'object') {
-        const fromObject = clean(
-          parsed.partNumber ||
-          parsed.partNo ||
-          parsed.part ||
-          parsed.sku ||
-          parsed.itemCode ||
-          parsed.code ||
-          ''
-        );
-        if (fromObject) return upper(fromObject);
+        const fromObject = firstObjectValue(parsed, ['partNumber', 'partNo', 'part', 'sku', 'itemCode', 'item', 'p']);
+        if (fromObject) return normalizePartCandidateValue(fromObject);
       }
     } catch (_) {}
 
-    const patterns = [
-      /(?:PART\s*NO|PART\s*NUMBER|PART|PN|SKU|ITEM)\s*[:=#-]?\s*([A-Z0-9._\/-]+)/i,
-      /"partNumber"\s*:\s*"([^"]+)"/i,
-      /"partNo"\s*:\s*"([^"]+)"/i,
-      /"part"\s*:\s*"([^"]+)"/i,
-      /"sku"\s*:\s*"([^"]+)"/i
-    ];
-
-    for (const pattern of patterns) {
-      const match = pattern.exec(text);
-      if (match && match[1]) return upper(match[1]);
+    const slashParts = text.split('/');
+    if (slashParts.length >= 6 && slashParts[3] && slashParts[4] && slashParts[5]) {
+      return normalizePartCandidateValue(slashParts[3]);
     }
 
-    const compact = text.replace(/[^A-Z0-9._\/-]+/g, ' ').trim();
-    const collapsed = compact.replace(/\s+/g, '');
-    if (/^[A-Z0-9][A-Z0-9._\/-]{2,39}$/.test(collapsed)) return collapsed;
-    if (compact && compact.length <= 60) return compact;
-    return text.slice(0, 60);
+    const data = { ...parseQueryLikeScan(text), ...parseKeyValueScan(text) };
+    const fromStructuredText = firstParserValue(data, ['partno', 'partnumber', 'part', 'pn', 'sku', 'item', 'p']);
+    if (fromStructuredText) return normalizePartCandidateValue(fromStructuredText);
+
+    const partMatch = text.match(/(?:part\s*no|part\s*number|part|pn|sku|item)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
+    if (partMatch && partMatch[1]) return normalizePartCandidateValue(partMatch[1]);
+
+    const simpleTokens = text.split(/[|,;\n\r\t ]+/).filter(Boolean);
+    const rawLooksStructured = /[:?=&]|:\/\/|upi:|http/i.test(text);
+    if (simpleTokens.length === 1 && !rawLooksStructured && isValidPartCandidate(simpleTokens[0])) {
+      return normalizePartCandidateValue(simpleTokens[0]);
+    }
+    return '';
   }
 
   function parseRawPreview(raw = '') {
@@ -2291,6 +2347,8 @@
       if (document.hidden) {
         if (state.scanning) stopCamera({ preserveRequest: true });
       } else if (state.cameraRequested && !state.paused && state.session?.token) {
+        syncQueue({ silent: true }).catch(() => undefined);
+        sendHeartbeat().catch(() => undefined);
         startCamera().catch(() => undefined);
       }
     });
@@ -2420,9 +2478,11 @@
     clearInterval(state.heartbeatTimer);
     state.syncDelayTimer = null;
     state.syncTimer = setInterval(() => {
+      if (document.hidden) return;
       syncQueue({ silent: true }).catch(() => undefined);
     }, SYNC_INTERVAL_MS);
     state.heartbeatTimer = setInterval(() => {
+      if (document.hidden) return;
       sendHeartbeat().catch(() => undefined);
     }, HEARTBEAT_INTERVAL_MS);
     syncQueue({ silent: true }).catch(() => undefined);

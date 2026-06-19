@@ -9841,7 +9841,12 @@
         }
       });
       if (state.headerHeartbeatTimer) clearInterval(state.headerHeartbeatTimer);
-      state.headerHeartbeatTimer = setInterval(sendHeartbeat, 30000);
+      state.headerHeartbeatTimer = null;
+      if (isMobileClient()) {
+        state.headerHeartbeatTimer = setInterval(() => {
+          if (!document.hidden) sendHeartbeat().catch(console.warn);
+        }, 60000);
+      }
       if (state.healthRefreshTimer) clearInterval(state.healthRefreshTimer);
       state.healthRefreshTimer = setInterval(() => {
         if (!document.hidden) loadHealth().catch(console.warn);
