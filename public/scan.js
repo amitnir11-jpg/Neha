@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.2';
-  const CACHE_VERSION = '20260619-mobile-camera-full-area';
+  const CACHE_VERSION = '20260619-mobile-bin-autostart';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -100,6 +100,8 @@
     cameraTimer: null,
     autoCameraTimer: null,
     saveLockTimer: null,
+    lastBinStartAt: 0,
+    lastBinStartValue: '',
     nativeDetector: null,
     nativeDetectorPromise: null,
     nativeDetectorTimer: null,
@@ -918,6 +920,27 @@
     return bin;
   }
 
+  function saveBinAndStartCamera() {
+    const input = byId('activeBinLocation');
+    const bin = setActiveBin(input?.value || '');
+    if (!bin) {
+      toast('Enter a bin location first', 'error');
+      input?.focus();
+      return '';
+    }
+    const startKey = `${state.mode}:${bin}`;
+    const now = Date.now();
+    if (state.lastBinStartValue === startKey && now - Number(state.lastBinStartAt || 0) < 700) return bin;
+    state.lastBinStartValue = startKey;
+    state.lastBinStartAt = now;
+    toast(`Bin ${bin} saved`, 'success');
+    state.paused = false;
+    state.cameraRequested = true;
+    clearTimeout(state.autoCameraTimer);
+    requestAutoCameraStart({ forceRestart: true });
+    return bin;
+  }
+
   function renderQueueBadgeCounts() {
     const rows = sessionRows();
     const pending = rows.filter((row) => rowStatus(row) === 'pending').length;
@@ -1011,7 +1034,10 @@
     video.dataset.cameraStateBound = 'true';
     ['playing', 'loadeddata', 'canplay'].forEach((eventName) => {
       video.addEventListener(eventName, () => {
-        if (state.scanning && video.srcObject) setCameraLive(true);
+        if (state.scanning && video.srcObject) {
+          setCameraLive(true);
+          startNativeDetector(video).catch(() => undefined);
+        }
       });
     });
     ['emptied', 'error'].forEach((eventName) => {
@@ -1378,12 +1404,12 @@
     if (!deferSync && navigator.onLine && state.session?.token) scheduleSync();
   }
 
-  function scheduleSync() {
+  function scheduleSync(delay = 250) {
     if (!navigator.onLine || !state.session?.token) return;
     clearTimeout(state.syncDelayTimer);
     state.syncDelayTimer = setTimeout(() => {
       syncQueue({ silent: true }).catch(() => undefined);
-    }, 900);
+    }, delay);
   }
 
   function recordStatusCounts(rows) {
@@ -1661,7 +1687,7 @@
     return true;
   }
 
-  function requestAutoCameraStart({ focusBin = false } = {}) {
+  function requestAutoCameraStart({ focusBin = false, forceRestart = false } = {}) {
     if (!state.session?.token) return;
     state.cameraRequested = true;
     state.paused = false;
@@ -1675,6 +1701,7 @@
       if (focusBin) byId('activeBinLocation')?.focus();
       return;
     }
+    if (forceRestart && state.scanning) stopCamera({ preserveRequest: true });
     cameraState('Starting camera automatically...');
     state.autoCameraTimer = setTimeout(() => {
       if (!state.session?.token || state.paused || !state.cameraRequested) return;
@@ -1682,7 +1709,7 @@
         cameraState(error.message || 'Camera failed to start');
         toast(error.message || 'Camera failed to start', 'error');
       });
-    }, 150);
+    }, forceRestart ? 50 : 150);
   }
 
   async function startCamera() {
@@ -1747,6 +1774,7 @@
       state.cameraTimer = setTimeout(() => {
         if (state.scanning) {
           if (video?.srcObject && video.readyState >= 2) setCameraLive(true);
+          if (video?.srcObject && video.readyState >= 2) startNativeDetector(video).catch(() => undefined);
           cameraState('Scanning automatically');
         }
       }, 400);
@@ -1822,11 +1850,10 @@
     state.saveInFlight = true;
     clearTimeout(state.saveLockTimer);
     try {
-      cameraState('Saving scan...');
-      const { response } = await saveRecordToServer(record);
-      cameraState('Saved - scanning again');
+      cameraState('Saved locally - sync pending');
+      await saveRecord(record, { silent: true, deferSync: false });
       byId('manualRawPreview').hidden = true;
-      toast(response.message || 'Scan saved', 'success');
+      toast('Scan saved locally. Syncing automatically...', 'success');
       beep('ok');
       vibrate(40);
     } catch (error) {
@@ -2270,14 +2297,7 @@
     });
     byId('logoutBtn')?.addEventListener('click', () => logout());
     byId('saveBinBtn').addEventListener('click', () => {
-      const bin = setActiveBin(byId('activeBinLocation').value);
-      if (bin) {
-        toast(`Bin ${bin} saved`, 'success');
-        requestAutoCameraStart();
-      } else {
-        toast('Enter a bin location first', 'error');
-        byId('activeBinLocation').focus();
-      }
+      saveBinAndStartCamera();
     });
     byId('clearBinBtn').addEventListener('click', () => {
       setActiveBin('');
@@ -2322,6 +2342,14 @@
     });
     byId('activeBinLocation').addEventListener('input', (event) => {
       event.target.value = upper(event.target.value);
+    });
+    byId('activeBinLocation').addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      saveBinAndStartCamera();
+    });
+    byId('activeBinLocation').addEventListener('change', () => {
+      if (byId('activeBinLocation').value) saveBinAndStartCamera();
     });
     qsa('.mode-btn').forEach((button) => {
       button.addEventListener('click', () => setMode(button.dataset.mode));
