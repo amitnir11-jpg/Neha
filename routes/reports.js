@@ -586,7 +586,7 @@ function stripRegisterOnlyFilters(query = {}) {
 function rowReportScanWindow(query = {}) {
   if (query.format) return {};
   const { page, limit } = pagination(query);
-  const scanLimit = Math.min(5000, Math.max(limit * page + limit, limit, 500));
+  const scanLimit = Math.min(2500, Math.max(limit * page + limit, limit, 250));
   return { _scanLimit: scanLimit };
 }
 
@@ -814,7 +814,7 @@ function selectedColumns(columns, query = {}) {
 
 function pagination(query = {}) {
   const page = Math.max(1, Number.parseInt(query.page || '1', 10) || 1);
-  const limit = Math.min(1000, Math.max(25, Number.parseInt(query.limit || '250', 10) || 250));
+  const limit = Math.min(500, Math.max(25, Number.parseInt(query.limit || '100', 10) || 100));
   const skip = (page - 1) * limit;
   return { page, limit, skip };
 }

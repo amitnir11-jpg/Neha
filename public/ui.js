@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260616-web-scan-local-queue';
+  const UI_BOOT_VERSION = '20260619-web-scan-instant-pending';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -130,6 +130,7 @@
     reportProductSubGroups: [],
     reportGroupSubGroups: {},
     autoSyncTimer: null,
+    barcodeSyncTimer: null,
     dashboardFallbackTimer: null,
     dashboardRefreshTimer: null,
     dashboardLoadPromise: null,
@@ -1835,14 +1836,21 @@
       return { ...normalized, queueAdded: false, queueDuplicate: true, existingLocalScan: existingHistory };
     }
     const exists = queue.find((item) => item.syncKey === normalized.syncKey || barcodeScanKey(item) === barcodeScanKey(normalized) || (normalized.upiId && normalizePartText(item.upiId) === normalizePartText(normalized.upiId)));
+    let queuedRecord = null;
     if (!exists) {
-      queue.push({
+      queuedRecord = {
         ...normalized,
         localId: normalized.localId || `LOCAL-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        synced: false,
+        isSynced: false,
+        syncStatus: 'pending',
         localStatus: 'pending',
         retryCount: 0,
         syncError: errorMessage
-      });
+      };
+      queuedRecord.scanId = queuedRecord.scanId || queuedRecord.localId;
+      queuedRecord.uniqueScanId = queuedRecord.uniqueScanId || queuedRecord.localId;
+      queue.push(queuedRecord);
       saveSyncQueue(queue);
     } else {
       return { ...normalized, queueAdded: false, queueDuplicate: true, existingLocalScan: exists };
@@ -1854,7 +1862,19 @@
       status: 'queued',
       errorMessage
     });
-    return { ...normalized, queueAdded: true, queueDuplicate: false };
+    return { ...queuedRecord, queueAdded: true, queueDuplicate: false };
+  }
+
+  function schedulePendingSync(delay = 120) {
+    clearTimeout(state.barcodeSyncTimer);
+    state.barcodeSyncTimer = setTimeout(() => {
+      if (document.hidden) return;
+      syncPendingQueue({ checkHealth: false, silent: true, includeFailed: false })
+        .then((result) => {
+          if (result && result.skipped && syncCounts().pending) schedulePendingSync(700);
+        })
+        .catch((error) => addConnectionLog(`Background sync skipped: ${error.message}`, 'warning'));
+    }, delay);
   }
 
   async function checkServerBarcodeDuplicate(scan = {}) {
@@ -2074,16 +2094,12 @@
 
   async function refreshAfterSync(payload = {}) {
     renderSyncApiResponse(payload);
-    localStorage.removeItem('dakshReportPreviewCache');
-    state.reportCache.clear();
+    markReportsStale('sync completed');
     const scans = Array.isArray(payload.insertedRecords) ? payload.insertedRecords : [];
     scans.slice(-20).forEach((scan) => handleNewScan(scan).catch(() => undefined));
     const jobs = [loadSyncStatus(), loadDevices()];
     if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
     if ($('#scan')?.classList.contains('active')) jobs.push(loadScanHistory());
-    if ($('#reports')?.classList.contains('active') && state.reportHasRun && activeReportType()) {
-      jobs.push(loadReport({ forceRefresh: true, showLoading: false }));
-    }
     if (!scans.length && !jobs.some((job) => job === state.dashboardLoadPromise)) jobs.push(loadDashboard({ force: true }), loadScanHistory());
     await Promise.all(jobs);
   }
@@ -2100,15 +2116,22 @@
 
   function queueRealtimeReportRefresh(reason = 'realtime scan') {
     queueReconciliationRefresh(reason);
-    if (!state.reportHasRun || !activeReportType()) return;
+    markReportsStale(reason);
+  }
+
+  function markReportsStale(reason = 'scan update') {
+    localStorage.removeItem('dakshReportPreviewCache');
     state.reportCache.clear();
+    if (!state.reportHasRun || !activeReportType()) return;
     clearTimeout(state.reportRealtimeTimer);
     state.reportRealtimeTimer = setTimeout(() => {
       if (!$('#reports')?.classList.contains('active') || state.reportLoading) return;
-      loadReport({ forceRefresh: true, showLoading: false }).catch((error) => {
-        addConnectionLog(`Report refresh skipped after ${reason}: ${error.message}`, 'warning');
-      });
-    }, 900);
+      const message = $('#reportMessage');
+      if (message) {
+        message.className = 'form-message warning';
+        message.textContent = `Report data changed after ${reason}. Click Refresh to update.`;
+      }
+    }, 500);
   }
 
   async function loadLatestSyncDebug() {
@@ -3438,6 +3461,40 @@
         setTimeout(() => $('#barcodeRaw')?.focus(), 700);
         return;
       }
+      normalized.synced = false;
+      normalized.isSynced = false;
+      normalized.syncStatus = 'pending';
+      normalized.localStatus = 'pending';
+      const queued = enqueueScan(normalized, 'Pending sync');
+      if (!queued.queueAdded) {
+        playScanTone('duplicate');
+        const existing = queued.existingLocalScan || normalized;
+        const message = String(existing.localStatus || existing.syncStatus || '').toLowerCase() === 'pending'
+          ? `Part ${existing.partNumber || existing.part || normalized.partNumber} is already pending sync.`
+          : barcodeDuplicateMessage(existing);
+        setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
+        toast(message, 'error');
+        resetBarcodeScanFields(form, normalized, options.expectedRaw);
+        setTimeout(() => $('#barcodeRaw')?.focus(), 500);
+        return;
+      }
+      const pendingScan = normalizeQueuedHistoryScan(queued);
+      replaceVisibleBarcodeScan(pendingScan, pendingScan);
+      localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
+      lockBarcodeScan(pendingScan, 900);
+      state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
+      state.barcodeLastAt = Date.now();
+      resetBarcodeScanFields(form, normalized, options.expectedRaw);
+      playScanTone('success');
+      setLivePill('barcodeReadyStatus', 'Pending - Syncing', true);
+      toast(`Queued ${pendingScan.partNumber || pendingScan.part || 'scan'} for sync`);
+      updateSyncBadges();
+      schedulePendingSync(80);
+      setTimeout(() => {
+        setLivePill('barcodeReadyStatus', 'Ready for Scan', true);
+        $('#barcodeRaw')?.focus();
+      }, 450);
+      return;
     }
 
     try {
@@ -3979,7 +4036,7 @@
     if (format) params.set('format', format);
     if (!format) {
       params.set('page', '1');
-      params.set('limit', '250');
+      params.set('limit', '100');
     }
     const query = params.toString();
     const url = `/api/reports/${paramsObject.reportType || activeReportType()}${query ? `?${query}` : ''}`;
@@ -4849,7 +4906,11 @@
       state.reportHasRun = false;
       return;
     }
-    const url = CSV_REPORT_TYPES.has(reportType) ? partsRefreshTemplatePreviewPath() : reportPath();
+    let url = CSV_REPORT_TYPES.has(reportType) ? partsRefreshTemplatePreviewPath() : reportPath();
+    if (forceRefresh) {
+      const joiner = url.includes('?') ? '&' : '?';
+      url = `${url}${joiner}refresh=true&_=${Date.now()}`;
+    }
     const cacheKey = reportCacheKey(url, reportType);
     const cached = !forceRefresh && useCache ? cachedReport(cacheKey) : null;
     if (cached) {
