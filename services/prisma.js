@@ -14,6 +14,7 @@ const prisma = new PrismaClient({
 let ready = false;
 let lastError = '';
 let connectedAt = null;
+let connectPromise = null;
 
 function hasDatabaseUrl() {
   resolvedDatabaseUrl = applyResolvedDatabaseUrl();
@@ -26,23 +27,30 @@ function databaseUrlSource() {
 }
 
 async function connectDatabase() {
+  if (ready) return true;
+  if (connectPromise) return connectPromise;
   if (!hasDatabaseUrl()) {
     ready = false;
     lastError = `PostgreSQL connection is not configured. Set one of: ${acceptedDatabaseEnvVars().join(', ')}.`;
     throw new Error(lastError);
   }
-  try {
-    await prisma.$connect();
-    await prisma.$queryRaw`SELECT 1`;
-    ready = true;
-    lastError = '';
-    connectedAt = new Date();
-    return true;
-  } catch (error) {
-    ready = false;
-    lastError = error.message || String(error);
-    throw error;
-  }
+  connectPromise = (async () => {
+    try {
+      await prisma.$connect();
+      await prisma.$queryRaw`SELECT 1`;
+      ready = true;
+      lastError = '';
+      connectedAt = new Date();
+      return true;
+    } catch (error) {
+      ready = false;
+      lastError = error.message || String(error);
+      throw error;
+    } finally {
+      connectPromise = null;
+    }
+  })();
+  return connectPromise;
 }
 
 async function disconnectDatabase() {

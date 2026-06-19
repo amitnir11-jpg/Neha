@@ -13,13 +13,9 @@ const resolvedDatabase = applyResolvedDatabaseUrl();
 
 function runApiMigrations() {
   if (role !== 'api') return;
-  if (String(process.env.DAKSH_SKIP_MIGRATIONS || '').toLowerCase() === 'true') {
-    console.log('Skipping Prisma migrations because DAKSH_SKIP_MIGRATIONS=true.');
-    return;
-  }
   if (!resolvedDatabase.url) {
-    console.warn(`Skipping Prisma migrations: PostgreSQL URL is missing. Set one of: ${acceptedDatabaseEnvVars().join(', ')}.`);
-    return;
+    console.error(`PostgreSQL URL is missing. Set one of: ${acceptedDatabaseEnvVars().join(', ')}.`);
+    process.exit(1);
   }
   console.log(`Running Prisma migrations using ${resolvedDatabase.source}: ${maskDatabaseUrl(resolvedDatabase.url)}`);
   const prismaCli = require.resolve('prisma/build/index.js');
@@ -28,6 +24,8 @@ function runApiMigrations() {
     env: process.env
   });
   if (result.status !== 0) process.exit(result.status || 1);
+  process.env.DAKSH_MIGRATIONS_COMPLETED = 'true';
+  console.log('Prisma migration completed');
 }
 
 runApiMigrations();

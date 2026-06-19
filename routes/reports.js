@@ -1020,11 +1020,7 @@ async function emailReport(req, res, type, title) {
 const REPORTS = {
   'bin-wise-stock': ['bin-wise-stock', 'Bin Wise Stock Report'],
   'user-dealer-wise': ['user-dealer-wise', 'User & Dealer Wise Report'],
-  'raw-upi': ['raw-upi', 'Raw UPI Report'],
   'scan-register': ['scan-register', 'Scan Register Report'],
-  'valid-scans': ['scan-register', 'Scan Register Report'],
-  'device-wise': ['scan-register', 'Scan Register Report'],
-  'duplicate-scans': ['scan-register', 'Scan Register Report'],
   'wrong-not-found-master': ['wrong-not-found-master', 'Rejected Report']
 };
 

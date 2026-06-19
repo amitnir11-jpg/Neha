@@ -57,7 +57,7 @@ npm run build
 npm start
 ```
 
-`npm start` uses `DAKSH_SERVICE_ROLE` to boot either the API or web service. For the API service it runs `prisma migrate deploy` before opening the server, unless `DAKSH_SKIP_MIGRATIONS=true` is set.
+`npm start` uses `DAKSH_SERVICE_ROLE` to boot either the API or web service. For the API service it runs `prisma migrate deploy` before opening the server. If PostgreSQL is missing or migrations fail, startup exits and Railway will not mark the service ready.
 
 ## Database
 

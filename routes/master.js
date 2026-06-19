@@ -41,6 +41,30 @@ const FIELD_ALIASES = {
   qty: ['QTY', 'STOCK', 'DMS QTY', 'QUANTITY', 'DMS STOCK', 'OPENING STOCK QTY', 'OPENING STOCK', 'SYSTEM QTY', 'SYSTEM QUANTITY', 'STOCK ON HAND']
 };
 
+/** Required columns for Part Master upload - displayed to users */
+const PART_MASTER_REQUIRED_COLUMNS = [
+  { field: 'partNumber', label: 'Part Number', aliases: FIELD_ALIASES.partNumber, mandatory: true, description: 'Unique part/item identifier' },
+  { field: 'partName', label: 'Part Name / Description', aliases: FIELD_ALIASES.partName, mandatory: false, description: 'Description of the part' },
+  { field: 'category', label: 'Category / Product Category', aliases: FIELD_ALIASES.category, mandatory: false, description: 'Product group or category' },
+  { field: 'model', label: 'Model', aliases: FIELD_ALIASES.model, mandatory: false, description: 'Vehicle or equipment model' },
+  { field: 'manufacturingYear', label: 'Manufacturing Year / Gen', aliases: FIELD_ALIASES.manufacturingYear, mandatory: false, description: 'Year or generation' },
+  { field: 'binLocation', label: 'Bin Location', aliases: FIELD_ALIASES.binLocation, mandatory: false, description: 'Storage bin or location code' },
+  { field: 'mrp', label: 'MRP / Price', aliases: FIELD_ALIASES.mrp, mandatory: false, description: 'Maximum retail price' },
+  { field: 'dlc', label: 'DLC / Landed Cost', aliases: FIELD_ALIASES.dlc, mandatory: false, description: 'Dealer landed cost' },
+  { field: 'dealerCode', label: 'Dealer Code', aliases: FIELD_ALIASES.dealerCode, mandatory: false, description: 'Dealer identifier' },
+  { field: 'dealerName', label: 'Dealer Name', aliases: FIELD_ALIASES.dealerName, mandatory: false, description: 'Dealer name' },
+  { field: 'qty', label: 'Qty / Opening Stock', aliases: FIELD_ALIASES.qty, mandatory: false, description: 'Opening stock quantity' }
+];
+
+/** GET /api/master/required-columns — returns the expected column format */
+router.get('/required-columns', auth.requireAuth, (_req, res) => {
+  res.json({
+    success: true,
+    columns: PART_MASTER_REQUIRED_COLUMNS,
+    message: 'Use any of the accepted header names in your Excel/CSV file. At minimum, a column matching Part Number is required.'
+  });
+});
+
 function aliasesFor(field) {
   return FIELD_ALIASES[field] || [];
 }
@@ -484,9 +508,42 @@ async function importParts(parts) {
 
 router.post('/upload', auth.requireAuth, auth.requireAdmin, upload.single('file'), async (req, res) => {
   try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded. Please select an Excel (.xlsx/.xls) or CSV file.',
+        requiredColumns: PART_MASTER_REQUIRED_COLUMNS
+      });
+    }
     const parts = await parsePartsFromUpload(req.file, req.body);
     if (!parts.length) {
-      return res.status(400).json({ success: false, message: 'No valid master parts found' });
+      // Detect if headers were present but nothing matched
+      const lowerName = String(req.file.originalname || '').toLowerCase();
+      let detectedHeaders = [];
+      try {
+        if (lowerName.endsWith('.csv') || req.file.mimetype === 'text/csv') {
+          const text = req.file.buffer.toString('utf8').split(/\r?\n/)[0];
+          detectedHeaders = text.split(',').map((h) => h.trim());
+        } else {
+          const ExcelJS = require('exceljs');
+          const workbook = new ExcelJS.Workbook();
+          await workbook.xlsx.load(req.file.buffer);
+          const sheet = workbook.worksheets[0];
+          if (sheet) {
+            sheet.getRow(1).eachCell((cell, colNumber) => {
+              detectedHeaders.push(String(cell.value || '').trim());
+            });
+          }
+        }
+      } catch (_e) { /* ignore read errors */ }
+
+      return res.status(400).json({
+        success: false,
+        message: 'No valid part master rows found. Your column headers do not match the expected format.',
+        detectedHeaders: detectedHeaders.filter(Boolean),
+        requiredColumns: PART_MASTER_REQUIRED_COLUMNS,
+        hint: 'Your Excel/CSV file must have a header row with at minimum a "Part Number" column. See requiredColumns for all accepted header names.'
+      });
     }
     const cleared = (await MasterPart.deleteMany({})).deletedCount || 0;
     const result = await importParts(parts);
@@ -499,9 +556,41 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, upload.single('file'
 
 router.post('/parts/upload', auth.requireAuth, auth.requireAdmin, upload.single('file'), async (req, res) => {
   try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded. Please select an Excel (.xlsx/.xls) or CSV file.',
+        requiredColumns: PART_MASTER_REQUIRED_COLUMNS
+      });
+    }
     const parts = await parsePartsFromUpload(req.file, req.body);
     if (!parts.length) {
-      return res.status(400).json({ success: false, message: 'No valid part master rows found' });
+      const lowerName = String(req.file.originalname || '').toLowerCase();
+      let detectedHeaders = [];
+      try {
+        if (lowerName.endsWith('.csv') || req.file.mimetype === 'text/csv') {
+          const text = req.file.buffer.toString('utf8').split(/\r?\n/)[0];
+          detectedHeaders = text.split(',').map((h) => h.trim());
+        } else {
+          const ExcelJS = require('exceljs');
+          const workbook = new ExcelJS.Workbook();
+          await workbook.xlsx.load(req.file.buffer);
+          const sheet = workbook.worksheets[0];
+          if (sheet) {
+            sheet.getRow(1).eachCell((cell, colNumber) => {
+              detectedHeaders.push(String(cell.value || '').trim());
+            });
+          }
+        }
+      } catch (_e) { /* ignore read errors */ }
+
+      return res.status(400).json({
+        success: false,
+        message: 'No valid part master rows found. Your column headers do not match the expected format.',
+        detectedHeaders: detectedHeaders.filter(Boolean),
+        requiredColumns: PART_MASTER_REQUIRED_COLUMNS,
+        hint: 'Your Excel/CSV file must have a header row with at minimum a "Part Number" column. See requiredColumns for all accepted header names.'
+      });
     }
     const cleared = (await MasterPart.deleteMany({})).deletedCount || 0;
     const result = await importParts(parts);

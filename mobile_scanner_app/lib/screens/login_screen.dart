@@ -69,7 +69,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final data = await ApiClient(_settings).health();
       if (!silent && mounted) {
         setState(() => _message =
-            'Server connected: ${data['db'] ?? data['mongoStatus'] ?? 'OK'}');
+            'Server connected: ${data['db'] ?? data['postgresStatus'] ?? 'OK'}');
       }
     } catch (error) {
       if (!silent && mounted) setState(() => _message = error.toString());

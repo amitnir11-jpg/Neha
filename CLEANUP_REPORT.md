@@ -117,7 +117,7 @@ Completed after cleanup:
 | `npm install` | Passed. Dependencies were already up to date; 277 packages audited. |
 | Active backend JS syntax | Passed for `server.js` and 21 active route files. |
 | `npm start` | Passed after restoring `routes/report.js`; app is listening on port 3001. |
-| MongoDB connection | Passed. `/api/health` reports `mongodb=online`, `mongoStatus=online`, `serverStatus=online`. |
+| PostgreSQL connection | Passed. `/api/ready` reports `databaseStatus=online`, `postgresStatus=online`, `serverStatus=online`. |
 | Login page `/` | 200 OK. |
 | Dashboard page `/dashboard` | 200 OK. Contains Scan, Reports, Users, and Dealer text. |
 | Reports page `/report` | 200 OK. |

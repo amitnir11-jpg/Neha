@@ -4,6 +4,7 @@ const dgram = require('dgram');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const express = require('express');
@@ -78,6 +79,10 @@ const {
   databaseUrlSource,
   acceptedDatabaseEnvVars
 } = require('./services/prisma');
+const {
+  applyResolvedDatabaseUrl,
+  maskDatabaseUrl
+} = require('./utils/postgresEnv');
 
 const app = express();
 app.locals.reportRoutesVersion = 'dealer-report-dlc-20260602';
@@ -121,6 +126,18 @@ const socketRealtimeService = new SocketRealtimeService(io);
 const qrPairService = new QRPairService({ portProvider: activePort });
 const offlineSyncService = new OfflineSyncService();
 
+const ADMIN_PERMISSIONS = {
+  canScanInward: true,
+  canScanOutward: true,
+  canScanFitted: true,
+  canScanDamage: true,
+  canVerifyParts: true,
+  canViewReports: true,
+  canDeleteScanData: true,
+  canExportExcel: true,
+  canManageUsers: true
+};
+
 process.on('unhandledRejection', (reason) => {
   const message = reason && reason.stack ? reason.stack : reason;
   console.error('Unhandled async error:', message);
@@ -145,8 +162,8 @@ function databaseEnvLocation() {
   return 'your .env file or environment variables';
 }
 
-function databaseOfflineMessage() {
-  return `Database is offline. Set Railway PostgreSQL connection variables in ${databaseEnvLocation()} (${acceptedDatabaseEnvVars().join(', ')}) and redeploy.`;
+function databaseUnavailableMessage() {
+  return `PostgreSQL is unavailable. Set Railway PostgreSQL connection variables in ${databaseEnvLocation()} (${acceptedDatabaseEnvVars().join(', ')}) and redeploy.`;
 }
 
 function currentDatabaseStatus() {
@@ -271,17 +288,6 @@ app.use((req, res, next) => {
 
   const targetUrl = new URL(req.originalUrl, /^https?:\/\//i.test(explicitPublicBaseUrl) ? explicitPublicBaseUrl : `https://${explicitPublicBaseUrl}`);
   return res.redirect(302, targetUrl.toString());
-});
-
-app.use('/api/reports', (req, res, next) => {
-  const pathName = String(req.path || '').toLowerCase();
-  const aliasStatus = {
-    '/valid-scans': 'Accepted',
-    '/duplicate-scans': 'Duplicate'
-  };
-  if (!['/scan-register', '/valid-scans', '/device-wise', '/duplicate-scans'].includes(pathName)) return next();
-  if (aliasStatus[pathName]) req.query = { ...(req.query || {}), scanStatus: aliasStatus[pathName] };
-  return authRoutes.requireAuth(req, res, () => reportsRouter.handleReport(req, res, 'scan-register', 'Scan Register Report'));
 });
 
 app.get('/config.js', (req, res) => {
@@ -413,7 +419,7 @@ app.get('/api/ready', (req, res) => {
     railway: IS_RAILWAY,
     message: dbReady
       ? 'Daksh is ready.'
-      : databaseOfflineMessage()
+      : databaseUnavailableMessage()
   });
 });
 
@@ -438,30 +444,13 @@ app.get('/api/discovery', (req, res) => {
   });
 });
 
-function directScanRegisterReport(scanStatus = '') {
-  return (req, res) => {
-    req.query = { ...(req.query || {}) };
-    if (scanStatus) req.query.scanStatus = scanStatus;
-    return reportsRouter.handleReport(req, res, 'scan-register', 'Scan Register Report');
-  };
-}
-
-function directAuthenticatedReport(handler) {
-  return (req, res, next) => authRoutes.requireAuth(req, res, () => handler(req, res, next));
-}
-
-app.get('/api/reports/scan-register', directAuthenticatedReport(directScanRegisterReport('')));
-app.get('/api/reports/valid-scans', directAuthenticatedReport(directScanRegisterReport('Accepted')));
-app.get('/api/reports/device-wise', directAuthenticatedReport(directScanRegisterReport('')));
-app.get('/api/reports/duplicate-scans', directAuthenticatedReport(directScanRegisterReport('Duplicate')));
-
 app.use('/api/auth', authRoutes);
 
 app.use('/api', (req, res, next) => {
   if (isDatabaseReady()) return next();
   return res.status(503).json({
     success: false,
-    message: databaseOfflineMessage(),
+    message: databaseUnavailableMessage(),
     serverStatus: 'online',
     ...currentDatabasePayload(),
     deploymentTarget: DEPLOYMENT_NAME,
@@ -478,18 +467,6 @@ app.use('/api/bin-master', require('./routes/binMaster'));
 app.use('/api/bin-transfer', require('./routes/binTransfer'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/scans', require('./routes/inventory'));
-function legacyScanReportAlias(scanStatus = '') {
-  return (req, res, next) => {
-    req.query = { ...(req.query || {}) };
-    if (scanStatus) req.query.scanStatus = scanStatus;
-    const query = new URLSearchParams(req.query).toString();
-    req.url = `/scan-register${query ? `?${query}` : ''}`;
-    return reportsRouter(req, res, next);
-  };
-}
-app.use('/api/reports/valid-scans', legacyScanReportAlias('Accepted'));
-app.use('/api/reports/device-wise', legacyScanReportAlias(''));
-app.use('/api/reports/duplicate-scans', legacyScanReportAlias('Duplicate'));
 app.use('/api/reports', reportsRouter);
 app.use('/api/report-filter-settings', require('./routes/reportFilterSettings'));
 app.use('/api/dealers', require('./routes/dealer'));
@@ -752,6 +729,8 @@ async function createDefaultAdmin() {
     if (existingAdmin.approved === false || existingAdmin.approved === undefined) update.approved = true;
     if (existingAdmin.active === false || existingAdmin.active === undefined) update.active = true;
     if (existingAdmin.isActive === false || existingAdmin.isActive === undefined) update.isActive = true;
+    if (!Array.isArray(existingAdmin.dealerAccess) || !existingAdmin.dealerAccess.length) update.dealerAccess = ['ALL'];
+    update.permissions = { ...(existingAdmin.permissions || {}), ...ADMIN_PERMISSIONS };
     if (!existingAdmin.passwordHash && !existingAdmin.password) {
       const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
       update.passwordHash = passwordHash;
@@ -777,6 +756,8 @@ async function createDefaultAdmin() {
     password: passwordHash,
     role: 'admin',
     name: 'Administrator',
+    dealerAccess: ['ALL'],
+    permissions: ADMIN_PERMISSIONS,
     approved: true,
     approvedBy: 'system',
     approvedAt: new Date(),
@@ -786,67 +767,26 @@ async function createDefaultAdmin() {
 
 }
 
-async function cleanupIncompleteInventoryRecords() {
-  try {
-    await Inventory.deleteMany({
-      $or: [
-        { scanId: { $exists: false } },
-        { scanId: null },
-        { scanId: '' },
-        { uniqueScanId: { $exists: false } },
-        { uniqueScanId: null },
-        { uniqueScanId: '' },
-        {
-          $and: [
-            { $or: [{ part: { $exists: false } }, { part: null }, { part: '' }] },
-            { $or: [{ partNumber: { $exists: false } }, { partNumber: null }, { partNumber: '' }] }
-          ]
-        }
-      ]
-    });
-  } catch (error) {
-    console.warn('Inventory startup cleanup skipped:', error.message);
-  }
-}
-
-async function normalizeDeviceTypes() {
-  try {
-    await Device.updateMany(
-      {
-        $or: [
-          { deviceName: /Dashboard Browser/i },
-          { deviceName: /Web Scanner/i },
-          { appVersion: 'web-dashboard' },
-          { ipAddress: { $in: ['127.0.0.1', '::1'] } }
-        ]
-      },
-      {
-        $set: {
-          deviceType: 'web',
-          status: 'offline',
-          disconnectedAt: new Date(),
-          disconnectedBy: 'browser-hidden'
-        }
-      }
-    );
-    await Device.updateMany(
-      {
-        $and: [
-          { $or: [{ deviceType: { $exists: false } }, { deviceType: 'unknown' }, { deviceType: '' }] },
-          { deviceName: { $not: /Dashboard Browser|Web Scanner/i } }
-        ]
-      },
-      { $set: { deviceType: 'mobile', approved: true } }
-    );
-  } catch (error) {
-    console.warn('Device type normalization skipped:', error.message);
-  }
-}
-
 async function runPostgresStartupTasks() {
-  await cleanupIncompleteInventoryRecords();
-  await normalizeDeviceTypes();
   await createDefaultAdmin();
+}
+
+function runPrismaMigrations() {
+  if (String(process.env.DAKSH_MIGRATIONS_COMPLETED || '').toLowerCase() === 'true') return;
+  const resolvedDatabase = applyResolvedDatabaseUrl();
+  if (!resolvedDatabase.url) {
+    throw new Error(`PostgreSQL URL is missing. Set one of: ${acceptedDatabaseEnvVars().join(', ')}.`);
+  }
+  console.log(`Running Prisma migrations using ${resolvedDatabase.source}: ${maskDatabaseUrl(resolvedDatabase.url)}`);
+  const prismaCli = require.resolve('prisma/build/index.js');
+  const result = spawnSync(process.execPath, [prismaCli, 'migrate', 'deploy'], {
+    stdio: 'inherit',
+    env: process.env
+  });
+  if (result.status !== 0) {
+    throw new Error(`Prisma migration failed with exit code ${result.status || 1}`);
+  }
+  console.log('Prisma migration completed');
 }
 
 async function listenOnConfiguredPort(port) {
@@ -867,14 +807,11 @@ async function listenOnConfiguredPort(port) {
 
 async function start() {
   try {
+    runPrismaMigrations();
     await connectDatabase();
+    console.log('PostgreSQL connected successfully');
     await runPostgresStartupTasks();
-  } catch (error) {
-    console.error('PostgreSQL startup is offline. Daksh HTTP server will still start with API routes gated.');
-    console.error(error.stack || error.message);
-  }
-
-  try {
+    console.log('Database seed completed');
     const activePort = await listenOnConfiguredPort(PORT);
     app.locals.activePort = activePort;
     fs.writeFileSync(path.join(__dirname, 'server_port.txt'), String(activePort));
@@ -898,12 +835,13 @@ async function start() {
         } catch (error) {
           console.warn('Health broadcast failed:', error.message);
         }
-      }, 10000);
+      }, 60000);
       if (typeof healthBroadcastTimer.unref === 'function') healthBroadcastTimer.unref();
     };
     startHealthBroadcast();
+    console.log(`Server started successfully on port ${activePort}`);
   } catch (error) {
-    console.error('Failed to start Daksh Inventory v2');
+    console.error('PostgreSQL startup failed. Server not started.');
     console.error(error.stack || error.message);
     process.exit(1);
   }

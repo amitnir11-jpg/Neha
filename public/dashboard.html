@@ -246,12 +246,44 @@
       <section id="masterView" class="view">
         <section class="panel compact-panel">
           <div class="panel-heading">
-            <h2>Master Part Catalog</h2>
+            <h2>Master Part Catalog - Upload</h2>
           </div>
           <form id="masterUploadForm" class="inline-form">
-            <input name="file" type="file" accept=".xlsx,.xls" required>
+            <input name="file" type="file" accept=".xlsx,.xls,.csv" required>
             <button class="primary-button admin-only" type="submit">Upload Excel</button>
           </form>
+          <div id="masterUploadResult" class="form-message" style="margin-top: 8px; display: none;"></div>
+
+          <details class="columns-reference" style="margin-top: 12px; background: #f8f9fc; border: 1px solid #e2e6ef; border-radius: 8px; padding: 12px;">
+            <summary style="cursor: pointer; font-weight: 600; font-size: 13px; color: #344054;">
+              Required Excel / CSV Columns for Part Master Upload
+            </summary>
+            <div style="margin-top: 10px; overflow-x: auto;">
+              <table class="columns-table" style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                <thead>
+                  <tr style="background: #eef0f5;">
+                    <th style="padding: 8px 10px; text-align: left; border-bottom: 2px solid #d0d5dd;">Column Name</th>
+                    <th style="padding: 8px 10px; text-align: left; border-bottom: 2px solid #d0d5dd;">Accepted Headers</th>
+                    <th style="padding: 8px 10px; text-align: left; border-bottom: 2px solid #d0d5dd;">Mandatory</th>
+                    <th style="padding: 8px 10px; text-align: left; border-bottom: 2px solid #d0d5dd;">Description</th>
+                  </tr>
+                </thead>
+                <tbody id="requiredColumnsBody">
+                  <tr><td colspan="4" style="padding: 8px;">Loading...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p style="margin: 8px 0 0; font-size: 11px; color: #667085;">
+              The first row of your file must contain headers. Any of the accepted header names will be recognised.
+              At minimum, a column matching <strong>Part Number</strong> is required.
+            </p>
+          </details>
+        </section>
+
+        <section class="panel compact-panel" style="margin-top: 16px;">
+          <div class="panel-heading">
+            <h2>Search Master Catalog</h2>
+          </div>
           <div class="toolbar">
             <label class="wide">
               Search Master

@@ -91,7 +91,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _settings.saveServerUrl(_serverController.text);
       final data = await ApiClient(_settings).health();
       setState(() => _message =
-          'Server connected: ${data['db'] ?? data['mongoStatus'] ?? 'OK'}');
+          'Server connected: ${data['db'] ?? data['postgresStatus'] ?? 'OK'}');
     } catch (error) {
       setState(() => _message = error.toString());
     } finally {

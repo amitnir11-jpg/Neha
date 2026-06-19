@@ -975,6 +975,7 @@
         $$('.view').forEach((view) => view.classList.remove('active'));
         $(`#${button.dataset.view}`).classList.add('active');
         $('#pageTitle').textContent = button.textContent;
+        if (button.dataset.view === 'masterView') loadRequiredColumns().catch(() => {});
         if (button.dataset.view === 'verifyView') loadVerification().catch((error) => toast(error.message, 'error'));
       });
     });
@@ -1164,14 +1165,79 @@
       }
     });
 
+    async function loadRequiredColumns() {
+      try {
+        const data = await api('/api/master/required-columns');
+        const columns = data.columns || [];
+        const body = $('#requiredColumnsBody');
+        if (!body) return;
+        body.innerHTML = columns.map((col) => `
+          <tr>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e6ef; font-weight: 500; color: #344054;">${escapeHtml(col.label)}</td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e6ef; color: #475467; font-family: monospace; font-size: 11px;">
+              ${col.aliases.map((a) => escapeHtml(a)).join(', ')}
+            </td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e6ef;">${col.mandatory ? '<span style="color: #c24132; font-weight: 600;">Yes</span>' : '<span style="color: #667085;">No</span>'}</td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e6ef; color: #667085; font-size: 11px;">${escapeHtml(col.description)}</td>
+          </tr>
+        `).join('');
+      } catch (error) {
+        const body = $('#requiredColumnsBody');
+        if (body) body.innerHTML = '<tr><td colspan="4" style="padding: 8px; color: #c24132;">Failed to load column reference</td></tr>';
+      }
+    }
+
     $('#masterUploadForm').addEventListener('submit', async (event) => {
       event.preventDefault();
+      const resultDiv = $('#masterUploadResult');
+      resultDiv.style.display = 'none';
+      resultDiv.className = 'form-message';
+      resultDiv.innerHTML = '';
+      const btn = event.currentTarget.querySelector('button[type="submit"]');
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Uploading...';
       try {
         const data = await api('/api/master/upload', { method: 'POST', body: new FormData(event.currentTarget) });
-        toast(`${data.imported} master parts uploaded, cleared ${data.clearedMasterRows || 0} old master rows`);
+        resultDiv.className = 'form-message success';
+        let msg = `${data.imported} master parts uploaded`;
+        if (data.clearedMasterRows) msg += `, cleared ${data.clearedMasterRows} old master rows`;
+        if (data.duplicateCount) msg += `, ${data.duplicateCount} duplicates updated`;
+        if (data.failedCount) msg += `, ${data.failedCount} rows failed`;
+        resultDiv.textContent = msg;
+        resultDiv.style.display = 'block';
+        toast(msg);
         await loadMasterSearch();
       } catch (error) {
-        toast(error.message, 'error');
+        resultDiv.className = 'form-message error';
+        // Show detected headers and required columns if the API returned them
+        if (error.data && error.data.detectedHeaders) {
+          const headers = error.data.detectedHeaders || [];
+          const cols = error.data.requiredColumns || [];
+          const hint = error.data.hint || 'Column headers do not match expected format.';
+          let html = `<div style="margin-bottom: 8px;"><strong>${escapeHtml(error.message)}</strong></div>`;
+          if (headers.length) {
+            html += `<div style="margin-bottom: 6px; font-size: 12px;"><strong>Your file headers (row 1):</strong> <span style="font-family: monospace; color: #c24132;">${headers.map((h) => escapeHtml(h || '(empty)')).join(' &middot; ')}</span></div>`;
+          }
+          html += `<div style="font-size: 12px; color: #667085; margin-bottom: 8px;">${escapeHtml(hint)}</div>`;
+          if (cols.length) {
+            html += '<div style="font-size: 12px; font-weight: 500; margin-bottom: 4px;">Required Columns (use any of the accepted headers):</div>';
+            html += '<table style="width: 100%; border-collapse: collapse; font-size: 11px;">';
+            html += '<thead><tr style="background: #fee;"><th style="padding: 4px 6px; border: 1px solid #fcd; text-align: left;">Column</th><th style="padding: 4px 6px; border: 1px solid #fcd; text-align: left;">Accepted Headers</th></tr></thead>';
+            html += '<tbody>';
+            cols.forEach((col) => {
+              html += `<tr><td style="padding: 4px 6px; border: 1px solid #fcd; font-weight: 500;">${escapeHtml(col.label)}${col.mandatory ? ' <span style="color:#c24132;">*</span>' : ''}</td><td style="padding: 4px 6px; border: 1px solid #fcd; font-family: monospace; font-size: 10px;">${col.aliases.map((a) => escapeHtml(a)).join(', ')}</td></tr>`;
+            });
+            html += '</tbody></table>';
+          }
+          resultDiv.innerHTML = html;
+        } else {
+          resultDiv.textContent = error.message;
+        }
+        resultDiv.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
       }
     });
 

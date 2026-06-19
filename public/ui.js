@@ -1942,7 +1942,12 @@
       clearInterval(state.autoSyncTimer);
       state.autoSyncTimer = null;
     }
-    state.autoSyncTimer = setInterval(() => syncPendingQueue({ silent: true, includeFailed: true }), 10000);
+    state.autoSyncTimer = setInterval(() => {
+      if (document.hidden) return;
+      const counts = syncCounts();
+      if (!counts.pending && !counts.failed) return;
+      syncPendingQueue({ silent: true, includeFailed: true }).catch(console.warn);
+    }, 30000);
   }
 
   function updateSyncBadges(status = {}) {
