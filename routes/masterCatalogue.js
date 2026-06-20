@@ -48,6 +48,12 @@ function prepareLongUpload(req, res) {
   if (typeof res.setTimeout === 'function') res.setTimeout(0);
 }
 
+function emitCatalogueUploadProgress(io, uploadId, progress = {}) {
+  const id = cleanText(uploadId);
+  if (!io || !id) return;
+  io.emit('catalogue:upload:progress', { uploadId: id, ...progress });
+}
+
 async function sendCachedJson(res, namespace, query, builder, options = {}) {
   const result = await getCachedResponse(namespace, query, builder, options);
   applyCacheHeaders(res, result);
@@ -82,12 +88,30 @@ async function uploadErrorResponse(res, error, sourceFileName = '', extra = {}) 
 
 router.post('/upload', auth.requireAuth, auth.requireAdmin, uploadCatalogueFile, async (req, res) => {
   prepareLongUpload(req, res);
+  const uploadId = cleanText(req.body && req.body.uploadId);
+  const emitProgress = (progress = {}) => emitCatalogueUploadProgress(req.io, uploadId, progress);
   try {
-    const result = await importCatalogue(req.file);
+    emitProgress({
+      stage: 'received',
+      percent: 0,
+      message: 'File received. Preparing upload...'
+    });
+    const result = await importCatalogue(req.file, { onProgress: emitProgress });
+    emitProgress({
+      stage: 'completed',
+      percent: 100,
+      message: 'Upload completed',
+      ...result
+    });
     req.io?.emit('master:update');
     invalidateCatalogueCaches();
-    return res.json({ success: true, ...result });
+    return res.json({ success: true, uploadId, ...result });
   } catch (error) {
+    emitProgress({
+      stage: 'error',
+      percent: 100,
+      message: error.message || 'Upload failed'
+    });
     return uploadErrorResponse(res, error, req.file && req.file.originalname);
   }
 });
@@ -144,9 +168,16 @@ router.delete('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 
 router.post('/delete-and-reupload', auth.requireAuth, auth.requireAdmin, uploadCatalogueFile, async (req, res) => {
   prepareLongUpload(req, res);
+  const uploadId = cleanText(req.body && req.body.uploadId);
+  const emitProgress = (progress = {}) => emitCatalogueUploadProgress(req.io, uploadId, progress);
   let deletedOldRowsCount = 0;
   let deletedPriceHistoryRowsCount = 0;
   try {
+    emitProgress({
+      stage: 'deleting-old-catalogue',
+      percent: 0,
+      message: 'Deleting old catalogue...'
+    });
     const [deletedRows, deletedPriceRows] = await Promise.all([
       MasterCatalogue.deleteMany({}),
       PartPriceHistory.deleteMany({})
@@ -154,16 +185,37 @@ router.post('/delete-and-reupload', auth.requireAuth, auth.requireAdmin, uploadC
     deletedOldRowsCount = deletedRows.deletedCount || 0;
     deletedPriceHistoryRowsCount = deletedPriceRows.deletedCount || 0;
     await purgeFailureFiles();
-    const result = await importCatalogue(req.file);
+    emitProgress({
+      stage: 'deleted-old-catalogue',
+      percent: 35,
+      deletedOldRowsCount,
+      deletedPriceHistoryRowsCount,
+      message: `Old catalogue deleted: ${deletedOldRowsCount} rows`
+    });
+    const result = await importCatalogue(req.file, { onProgress: emitProgress });
+    emitProgress({
+      stage: 'completed',
+      percent: 100,
+      deletedOldRowsCount,
+      deletedPriceHistoryRowsCount,
+      message: 'Delete and reupload completed',
+      ...result
+    });
     req.io?.emit('master:update');
     invalidateCatalogueCaches();
     return res.json({
       success: true,
+      uploadId,
       deletedOldRowsCount,
       deletedPriceHistoryRowsCount,
       ...result
     });
   } catch (error) {
+    emitProgress({
+      stage: 'error',
+      percent: 100,
+      message: error.message || 'Delete and reupload failed'
+    });
     return uploadErrorResponse(res, error, req.file && req.file.originalname, {
       deletedOldRowsCount,
       deletedPriceHistoryRowsCount

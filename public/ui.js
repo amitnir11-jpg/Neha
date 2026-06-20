@@ -191,6 +191,9 @@
     validatorInvalidRows: [],
     validatorMapIndex: null,
     catalogueFailureDownloadId: '',
+    catalogueUploadSessionId: '',
+    catalogueUploadInFlight: false,
+    catalogueUploadProgress: { stage: '', percent: 0, message: '', processedRows: 0, totalRows: 0, savedRowsCount: 0, failedRowsCount: 0, duplicateRowsCount: 0 },
     masterCatalogueCount: 0,
     masterSearch: { q: '', page: 1, limit: 25, total: 0 },
     masterSearchRows: [],
@@ -5740,6 +5743,131 @@
     triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'Master_Part_Search_Result.csv');
   }
 
+  function createCatalogueUploadSessionId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+    return `catalogue-upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function catalogueUploadProgressPercent(progress = {}) {
+    const explicit = Number(progress.percent);
+    if (Number.isFinite(explicit)) return Math.max(0, Math.min(100, explicit));
+    const stage = String(progress.stage || '').toLowerCase();
+    if (stage.includes('complete') || stage.includes('error') || stage.includes('blocked')) return 100;
+    const processed = Number(progress.processedRows ?? 0);
+    const total = Number(progress.totalRows ?? progress.fileRowsCount ?? 0);
+    if (total > 0) return Math.max(0, Math.min(100, (processed / total) * 100));
+    return 0;
+  }
+
+  function catalogueUploadProgressVariant(progress = {}, fallback = 'loading') {
+    const stage = String(progress.stage || '').toLowerCase();
+    if (stage.includes('error')) return 'error';
+    if (stage.includes('complete') || stage === 'completed') return 'success';
+    if (stage.includes('blocked') || stage.includes('warning')) return 'warning';
+    return fallback;
+  }
+
+  function catalogueUploadProgressLabel(progress = {}) {
+    if (String(progress.message || '').trim()) return String(progress.message).trim();
+    const stage = String(progress.stage || '').toLowerCase();
+    if (stage.includes('received')) return 'File received. Preparing upload...';
+    if (stage.includes('parsed')) return 'Parsing catalogue file...';
+    if (stage.includes('validat')) return 'Validating rows...';
+    if (stage.includes('deleting')) return 'Deleting old catalogue...';
+    if (stage.includes('writing-master')) return 'Saving master rows...';
+    if (stage.includes('writing-price-history')) return 'Saving price history rows...';
+    if (stage.includes('finalizing')) return 'Finalizing upload...';
+    if (stage.includes('complete')) return 'Upload completed';
+    if (stage.includes('error')) return 'Upload failed';
+    return 'Uploading...';
+  }
+
+  function catalogueUploadProgressText(progress = {}) {
+    const stage = String(progress.stage || '').toLowerCase();
+    const parts = [];
+    const fileRows = Number(progress.fileRowsCount ?? progress.totalRows ?? 0);
+    const processedRows = Number(progress.processedRows ?? 0);
+    const acceptedRowsCount = Number(progress.acceptedRowsCount ?? 0);
+    const savedRowsCount = Number(progress.savedRowsCount ?? 0);
+    const insertedRowsCount = Number(progress.insertedRowsCount ?? 0);
+    const updatedRowsCount = Number(progress.updatedRowsCount ?? 0);
+    const failedRowsCount = Number(progress.failedRowsCount ?? 0);
+    const duplicateRowsCount = Number(progress.duplicateRowsCount ?? 0);
+    const deletedOldRowsCount = Number(progress.deletedOldRowsCount ?? 0);
+    const deletedPriceHistoryRowsCount = Number(progress.deletedPriceHistoryRowsCount ?? 0);
+    const currentCount = Number(progress.currentMasterRecordCount ?? progress.finalMasterRecordCount ?? progress.masterCatalogueCount ?? 0);
+
+    if (deletedOldRowsCount) parts.push(`Old catalogue deleted: ${wholeNumber(deletedOldRowsCount)} rows`);
+    if (deletedPriceHistoryRowsCount) parts.push(`Price history deleted: ${wholeNumber(deletedPriceHistoryRowsCount)} rows`);
+    if (fileRows) parts.push(`File rows: ${wholeNumber(fileRows)}`);
+    if (processedRows && !stage.includes('complete') && !stage.includes('error')) parts.push(`Processed: ${wholeNumber(processedRows)}`);
+    if (acceptedRowsCount && !stage.includes('complete') && !stage.includes('error')) parts.push(`Valid rows: ${wholeNumber(acceptedRowsCount)}`);
+    if (insertedRowsCount || updatedRowsCount) {
+      parts.push(`Inserted: ${wholeNumber(insertedRowsCount)}`);
+      parts.push(`Updated existing: ${wholeNumber(updatedRowsCount)}`);
+    } else if (savedRowsCount || stage.includes('complete')) {
+      parts.push(`Saved: ${wholeNumber(savedRowsCount)}`);
+    }
+    if (duplicateRowsCount) parts.push(`Duplicates merged: ${wholeNumber(duplicateRowsCount)}`);
+    if (failedRowsCount || stage.includes('complete') || stage.includes('error')) parts.push(`Failed rows: ${wholeNumber(failedRowsCount)}`);
+    if (currentCount) parts.push(`Final Part Master Records: ${wholeNumber(currentCount)}`);
+    return parts.join(' | ');
+  }
+
+  function setCatalogueUploadProgress(progress = {}, options = {}) {
+    const node = $('#catalogueUploadProgress');
+    if (!node) return;
+    const stage = String(progress.stage || options.stage || '').trim();
+    const variant = catalogueUploadProgressVariant(progress, options.variant || 'loading');
+    const percent = catalogueUploadProgressPercent(progress);
+    const label = catalogueUploadProgressLabel(progress);
+    const text = String(options.text || catalogueUploadProgressText(progress) || '').trim();
+    const visible = options.visible !== false && Boolean(stage || label || text || progress.uploadId || state.catalogueUploadInFlight);
+
+    if (progress.uploadId) state.catalogueUploadSessionId = String(progress.uploadId);
+    state.catalogueUploadProgress = { ...state.catalogueUploadProgress, ...progress, stage, percent, message: label };
+    state.catalogueUploadInFlight = variant === 'loading';
+
+    node.hidden = !visible;
+    node.className = `catalogue-upload-progress ${variant}`.trim();
+    node.setAttribute('aria-busy', variant === 'loading' ? 'true' : 'false');
+
+    const labelNode = $('#catalogueUploadProgressLabel');
+    const percentNode = $('#catalogueUploadProgressPercent');
+    const textNode = $('#catalogueUploadProgressText');
+    const barNode = $('#catalogueUploadProgressBarFill');
+    const progressBarNode = $('#catalogueUploadProgress .catalogue-upload-progress-bar');
+    if (labelNode) labelNode.textContent = label;
+    if (percentNode) percentNode.textContent = `${Math.round(percent)}%`;
+    if (textNode) textNode.textContent = text;
+    if (barNode) barNode.style.width = `${Math.round(percent)}%`;
+    if (progressBarNode) progressBarNode.setAttribute('aria-valuenow', String(Math.round(percent)));
+  }
+
+  function setCatalogueUploadBusy(busy, progress = {}) {
+    const form = $('#partUploadForm');
+    const submitButton = $('#partUploadForm button[type="submit"]');
+    const deleteReuploadButton = $('#deleteReuploadCatalogueBtn');
+    const deleteButton = $('#deleteCatalogueBtn');
+    const fileInput = $('[name="file"]', form);
+    const failedRowsButton = $('#downloadCatalogueFailedRowsBtn');
+    if (form) {
+      form.classList.toggle('is-uploading', Boolean(busy));
+      form.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
+    if (fileInput) fileInput.disabled = Boolean(busy);
+    if (submitButton) submitButton.disabled = Boolean(busy);
+    if (deleteReuploadButton) deleteReuploadButton.disabled = Boolean(busy);
+    if (deleteButton) deleteButton.disabled = Boolean(busy);
+    if (failedRowsButton) failedRowsButton.disabled = Boolean(busy);
+    state.catalogueUploadInFlight = Boolean(busy);
+    if (busy) {
+      const uploadStats = $('#uploadStats');
+      if (uploadStats) uploadStats.textContent = 'Upload in progress...';
+      setCatalogueUploadProgress(progress, { visible: true, variant: 'loading' });
+    }
+  }
+
   function setCatalogueUploadMessage(message = '', variant = 'success') {
     const node = $('#catalogueUploadMessage');
     if (!node) return;
@@ -5787,19 +5915,19 @@
 
     const summarySegments = [];
     if (action === 'delete' || action === 'delete-reupload') {
-      summarySegments.push(`Old catalogue deleted ${wholeNumber(deletedOldRowsCount)} rows`);
-      if (deletedPriceHistoryRowsCount) summarySegments.push(`Price history deleted ${wholeNumber(deletedPriceHistoryRowsCount)} rows`);
+      summarySegments.push(`Old catalogue deleted: ${wholeNumber(deletedOldRowsCount)} rows`);
+      if (deletedPriceHistoryRowsCount) summarySegments.push(`Price history deleted: ${wholeNumber(deletedPriceHistoryRowsCount)} rows`);
     }
-    if (action === 'delete-reupload') summarySegments.push(`New catalogue uploaded ${wholeNumber(savedRowsCount)} rows`);
+    if (action === 'delete-reupload') summarySegments.push(`New catalogue uploaded: ${wholeNumber(savedRowsCount)} rows`);
     if (action !== 'delete') {
-      summarySegments.push(`File rows ${wholeNumber(fileRowsCount)}`);
-      summarySegments.push(`Inserted ${wholeNumber(insertedRowsCount)}`);
-      summarySegments.push(`Updated ${wholeNumber(updatedRowsCount)}`);
-      summarySegments.push(`Duplicates merged ${wholeNumber(duplicateRowsCount)}`);
-      summarySegments.push(`Failed rows ${wholeNumber(failedRowsCount)}`);
-      summarySegments.push(`Final Part Master Records ${wholeNumber(currentCount)}`);
+      summarySegments.push(`File rows: ${wholeNumber(fileRowsCount)}`);
+      summarySegments.push(`Inserted: ${wholeNumber(insertedRowsCount)}`);
+      summarySegments.push(`Updated existing: ${wholeNumber(updatedRowsCount)}`);
+      summarySegments.push(`Duplicates merged: ${wholeNumber(duplicateRowsCount)}`);
+      summarySegments.push(`Failed rows: ${wholeNumber(failedRowsCount)}`);
+      summarySegments.push(`Final Part Master Records: ${wholeNumber(currentCount)}`);
     } else {
-      summarySegments.push(`Final Part Master Records ${wholeNumber(currentCount)}`);
+      summarySegments.push(`Final Part Master Records: ${wholeNumber(currentCount)}`);
     }
     const summary = summarySegments.filter(Boolean).join(' | ');
     $('#uploadStats').textContent = summary;
@@ -9464,15 +9592,45 @@
     $('#partUploadForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       try {
-        const data = await api('/api/master-catalogue/upload', { method: 'POST', body: new FormData(event.currentTarget) });
+        const uploadId = createCatalogueUploadSessionId();
+        const formData = new FormData(event.currentTarget);
+        formData.set('uploadId', uploadId);
+        state.catalogueUploadSessionId = uploadId;
+        setCatalogueUploadBusy(true, {
+          uploadId,
+          stage: 'received',
+          percent: 0,
+          message: 'Sending file to server...'
+        });
+        const data = await api('/api/master-catalogue/upload', { method: 'POST', body: formData });
+        setCatalogueUploadBusy(false);
         updateCatalogueUploadStats(data, { action: 'upload' });
         const uploadMismatch = Boolean(data.rowCountMismatch) || (Number(data.fileRowsCount || 0) > 0 && Number(data.savedRowsCount ?? data.importedRowsCount ?? 0) !== Number(data.fileRowsCount || 0));
+        setCatalogueUploadProgress({
+          ...data,
+          stage: 'completed',
+          message: uploadMismatch ? 'Upload completed with mismatch' : 'Upload completed'
+        }, {
+          visible: true,
+          variant: uploadMismatch ? 'warning' : 'success',
+          text: catalogueUploadProgressText(data)
+        });
         toast(uploadMismatch
           ? 'Upload completed with mismatch. Download failed rows to check missing parts.'
           : 'Upload completed', uploadMismatch ? 'warning' : 'success');
         if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
       } catch (error) {
+        setCatalogueUploadBusy(false);
         if (error.data) updateCatalogueUploadStats(error.data);
+        setCatalogueUploadProgress({
+          stage: 'error',
+          percent: 100,
+          message: error.message || 'Upload failed'
+        }, {
+          visible: true,
+          variant: 'error',
+          text: error.message || 'Upload failed'
+        });
         if (error.message) setCatalogueUploadMessage(error.message, 'error');
         toast(error.message, 'error');
       }
@@ -9481,7 +9639,13 @@
     $('#deleteCatalogueBtn')?.addEventListener('click', async () => {
       if (!window.confirm('This will permanently delete the current Part Master catalogue. Scan and audit data will not be deleted. Continue?')) return;
       try {
+        setCatalogueUploadBusy(true, {
+          stage: 'deleting-old-catalogue',
+          percent: 0,
+          message: 'Deleting old catalogue...'
+        });
         const data = await api('/api/master-catalogue', { method: 'DELETE', body: {} });
+        setCatalogueUploadBusy(false);
         updateCatalogueUploadStats({
           fileRowsCount: 0,
           totalRowsCount: 0,
@@ -9500,12 +9664,34 @@
           deletedOldRowsCount: data.deletedOldRowsCount || 0,
           message: `Old catalogue deleted: ${data.deletedOldRowsCount || 0} rows`
         }, { action: 'delete' });
+        setCatalogueUploadProgress({
+          stage: 'deleted-old-catalogue',
+          percent: 100,
+          deletedOldRowsCount: data.deletedOldRowsCount || 0,
+          deletedPriceHistoryRowsCount: data.deletedPriceHistoryRowsCount || 0,
+          currentMasterRecordCount: data.currentMasterRecordCount || 0,
+          message: 'Old catalogue deleted'
+        }, {
+          visible: true,
+          variant: 'warning',
+          text: `Old catalogue deleted: ${wholeNumber(data.deletedOldRowsCount || 0)} rows | Price history deleted: ${wholeNumber(data.deletedPriceHistoryRowsCount || 0)} rows | Final Part Master Records: ${wholeNumber(data.currentMasterRecordCount || 0)}`
+        });
         state.catalogueFailureDownloadId = '';
         if ($('#downloadCatalogueFailedRowsBtn')) $('#downloadCatalogueFailedRowsBtn').hidden = true;
         clearPartSearch('Old catalogue deleted. Scan and audit data was not deleted.');
         toast(`Old catalogue deleted: ${data.deletedOldRowsCount || 0} rows`);
       } catch (error) {
+        setCatalogueUploadBusy(false);
         if (error.data) updateCatalogueUploadStats(error.data);
+        setCatalogueUploadProgress({
+          stage: 'error',
+          percent: 100,
+          message: error.message || 'Delete failed'
+        }, {
+          visible: true,
+          variant: 'error',
+          text: error.message || 'Delete failed'
+        });
         setCatalogueUploadMessage(error.message || 'Delete failed', 'error');
         toast(error.message, 'error');
       }
@@ -9517,9 +9703,29 @@
       if (!fileInput || !fileInput.files.length) return toast('Select new master file first', 'error');
       if (!window.confirm('This will delete the current Part Master catalogue completely, then upload the selected file. Scan and audit data will not be deleted. Continue?')) return;
       try {
-        const data = await api('/api/master-catalogue/delete-and-reupload', { method: 'POST', body: new FormData(form) });
+        const uploadId = createCatalogueUploadSessionId();
+        const formData = new FormData(form);
+        formData.set('uploadId', uploadId);
+        state.catalogueUploadSessionId = uploadId;
+        setCatalogueUploadBusy(true, {
+          uploadId,
+          stage: 'deleting-old-catalogue',
+          percent: 0,
+          message: 'Deleting old catalogue...'
+        });
+        const data = await api('/api/master-catalogue/delete-and-reupload', { method: 'POST', body: formData });
+        setCatalogueUploadBusy(false);
         updateCatalogueUploadStats(data, { action: 'delete-reupload' });
         const uploadMismatch = Boolean(data.rowCountMismatch) || (Number(data.fileRowsCount || 0) > 0 && Number(data.savedRowsCount ?? data.importedRowsCount ?? 0) !== Number(data.fileRowsCount || 0));
+        setCatalogueUploadProgress({
+          ...data,
+          stage: 'completed',
+          message: uploadMismatch ? 'Delete and reupload completed with mismatch' : 'Delete and reupload completed'
+        }, {
+          visible: true,
+          variant: uploadMismatch ? 'warning' : 'success',
+          text: catalogueUploadProgressText(data)
+        });
         toast([
           `Old catalogue deleted: ${data.deletedOldRowsCount || 0} rows`,
           `New catalogue uploaded: ${data.importedRowsCount || 0} rows`,
@@ -9527,7 +9733,17 @@
         ].filter(Boolean).join(' | '), uploadMismatch ? 'warning' : 'success');
         if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
       } catch (error) {
+        setCatalogueUploadBusy(false);
         if (error.data) updateCatalogueUploadStats(error.data);
+        setCatalogueUploadProgress({
+          stage: 'error',
+          percent: 100,
+          message: error.message || 'Delete and reupload failed'
+        }, {
+          visible: true,
+          variant: 'error',
+          text: error.message || 'Delete and reupload failed'
+        });
         if (error.message) setCatalogueUploadMessage(error.message, 'error');
         toast(error.message, 'error');
       }
@@ -10024,6 +10240,16 @@
       setDashboardSyncStatus('Failed', false);
       updateSyncBadges({ serverStatus: 'offline', databaseStatus: 'offline', db: 'disconnected' });
       addConnectionLog('Sync failed', 'error');
+    });
+    socket.on('catalogue:upload:progress', (payload = {}) => {
+      const uploadId = String(payload.uploadId || '').trim();
+      if (state.catalogueUploadSessionId && uploadId && uploadId !== state.catalogueUploadSessionId) return;
+      if (uploadId) state.catalogueUploadSessionId = uploadId;
+      setCatalogueUploadProgress(payload, { visible: true });
+      const stage = String(payload.stage || '').toLowerCase();
+      if (stage.includes('error') || stage.includes('complete') || stage.includes('blocked')) {
+        setCatalogueUploadBusy(false, payload);
+      }
     });
     socket.on('offline-queue:update', (payload = {}) => {
       updateScannerStatusBar({ pendingSyncCount: payload.queuedCount || syncCounts().total, at: new Date() });

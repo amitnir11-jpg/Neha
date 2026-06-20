@@ -344,6 +344,31 @@ function canonicalCatalogueFailureReason(reason) {
   return text;
 }
 
+function createUploadProgressReporter(onProgress) {
+  if (typeof onProgress !== 'function') return null;
+  let lastSignature = '';
+  return (progress = {}, { force = false } = {}) => {
+    const payload = { ...progress };
+    if (payload.percent !== undefined) {
+      const percent = Number(payload.percent);
+      payload.percent = Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0;
+    }
+    const signature = JSON.stringify([
+      payload.stage || '',
+      payload.percent || 0,
+      payload.processedRows || 0,
+      payload.totalRows || 0,
+      payload.acceptedRowsCount || 0,
+      payload.savedRowsCount || 0,
+      payload.failedRowsCount || 0,
+      payload.message || ''
+    ]);
+    if (!force && signature === lastSignature) return;
+    lastSignature = signature;
+    onProgress(payload);
+  };
+}
+
 function betterCatalogueRow(existing = null, candidate = null) {
   if (!existing) return { winner: candidate, loser: null };
   if (!candidate) return { winner: existing, loser: null };
@@ -355,93 +380,144 @@ function betterCatalogueRow(existing = null, candidate = null) {
   return { winner: existing, loser: candidate };
 }
 
-function validateCatalogueRows(parsed, sourceFileName = '') {
+function validateCatalogueRows(parsed, sourceFileName = '', options = {}) {
+  const onProgress = typeof options === 'function' ? options : options.onProgress;
+  const emit = createUploadProgressReporter(onProgress);
   const acceptedRows = [];
   const failedRows = [];
   const duplicateRows = [];
   const skippedRows = [];
   const winnersByPart = new Map();
   let missingMandatoryFieldsCount = 0;
+  const totalRows = parsed.rows.length;
+  const progressStep = Math.max(250, Math.ceil(Math.max(totalRows, 1) / 100));
 
-  parsed.rows.forEach((row) => {
+  if (emit) {
+    emit({
+      stage: 'validating',
+      percent: 5,
+      processedRows: 0,
+      totalRows,
+      fileRowsCount: totalRows,
+      acceptedRowsCount: 0,
+      failedRowsCount: 0,
+      duplicateRowsCount: 0,
+      skippedRowsCount: 0,
+      message: `Parsing ${totalRows.toLocaleString('en-IN')} file row${totalRows === 1 ? '' : 's'}`
+    }, { force: true });
+  }
+
+  parsed.rows.forEach((row, index) => {
     const hasAnyValue = row.originalValues.some((value) => cleanText(value) !== '');
     if (!hasAnyValue) {
       skippedRows.push({ ...row, status: 'SKIPPED', reason: 'Blank mandatory fields' });
-      return;
-    }
-    const partNumber = normalizePartNumber(row.values.partNumber);
-    const partDescription = upper(row.values.partDescription);
-    const mrp = parseNumeric(row.values.mrp, 'MRP', {
-      required: true,
-      blankError: 'Blank mandatory fields',
-      invalidError: 'Invalid MRP/DLC'
-    });
-    const dlc = parseNumeric(row.values.dlc, 'DLP', {
-      required: true,
-      blankError: 'Blank mandatory fields',
-      invalidError: 'Invalid MRP/DLC'
-    });
-    let failureReason = '';
-    if (!partNumber) {
-      failureReason = 'Missing Part Number';
-    } else if (!partDescription || mrp.error === 'Blank mandatory fields' || dlc.error === 'Blank mandatory fields') {
-      failureReason = 'Blank mandatory fields';
-    } else if (mrp.error || dlc.error) {
-      failureReason = 'Invalid MRP/DLC';
-    }
-    if (failureReason) missingMandatoryFieldsCount += 1;
-    if (failureReason) {
-      failedRows.push({
-        ...row,
-        status: 'FAILED',
-        reason: failureReason,
-        validationErrors: [failureReason]
+    } else {
+      const partNumber = normalizePartNumber(row.values.partNumber);
+      const partDescription = upper(row.values.partDescription);
+      const mrp = parseNumeric(row.values.mrp, 'MRP', {
+        required: true,
+        blankError: 'Blank mandatory fields',
+        invalidError: 'Invalid MRP/DLC'
       });
-      return;
+      const dlc = parseNumeric(row.values.dlc, 'DLP', {
+        required: true,
+        blankError: 'Blank mandatory fields',
+        invalidError: 'Invalid MRP/DLC'
+      });
+      let failureReason = '';
+      if (!partNumber) {
+        failureReason = 'Missing Part Number';
+      } else if (!partDescription || mrp.error === 'Blank mandatory fields' || dlc.error === 'Blank mandatory fields') {
+        failureReason = 'Blank mandatory fields';
+      } else if (mrp.error || dlc.error) {
+        failureReason = 'Invalid MRP/DLC';
+      }
+      if (failureReason) missingMandatoryFieldsCount += 1;
+      if (failureReason) {
+        failedRows.push({
+          ...row,
+          status: 'FAILED',
+          reason: failureReason,
+          validationErrors: [failureReason]
+        });
+      } else {
+        const mapped = {
+          partNumber,
+          normalizedPartNumber: partNumber,
+          partDescription,
+          activeFlag: upper(row.values.activeFlag) || 'Y',
+          activeStatus: activeStatus(row.values.activeFlag),
+          productCategory: upper(row.values.productCategory),
+          productGroup: upper(row.values.productGroup),
+          partSubGroup: upper(row.values.partSubGroup),
+          model: upper(row.values.model),
+          manufacturingYear: upper(row.values.manufacturingYear),
+          productType: upper(row.values.productType),
+          superceededBy: upper(row.values.superceededBy),
+          partGroup: upper(row.values.partGroup),
+          gstCategory: upper(row.values.gstCategory),
+          splitFlag: upper(row.values.splitFlag),
+          mrp: mrp.value,
+          dlc: dlc.value,
+          sourceFileName,
+          uploadedAt: new Date()
+        };
+        const grouping = applyProductGroup(mapped, { force: false });
+        mapped.productGroup = grouping.productGroup;
+        mapped.partSubGroup = grouping.partSubGroup;
+        const candidate = { ...row, mapped };
+        const existing = winnersByPart.get(partNumber) || null;
+        if (!existing) {
+          winnersByPart.set(partNumber, candidate);
+        } else {
+          const { winner, loser } = betterCatalogueRow(existing, candidate);
+          if (loser) {
+            duplicateRows.push({
+              ...loser,
+              status: 'DUPLICATE',
+              reason: 'Duplicate conflict',
+              duplicateOfRowNumber: winner.rowNumber
+            });
+          }
+          winnersByPart.set(partNumber, winner);
+        }
+      }
     }
-    const mapped = {
-      partNumber,
-      normalizedPartNumber: partNumber,
-      partDescription,
-      activeFlag: upper(row.values.activeFlag) || 'Y',
-      activeStatus: activeStatus(row.values.activeFlag),
-      productCategory: upper(row.values.productCategory),
-      productGroup: upper(row.values.productGroup),
-      partSubGroup: upper(row.values.partSubGroup),
-      model: upper(row.values.model),
-      manufacturingYear: upper(row.values.manufacturingYear),
-      productType: upper(row.values.productType),
-      superceededBy: upper(row.values.superceededBy),
-      partGroup: upper(row.values.partGroup),
-      gstCategory: upper(row.values.gstCategory),
-      splitFlag: upper(row.values.splitFlag),
-      mrp: mrp.value,
-      dlc: dlc.value,
-      sourceFileName,
-      uploadedAt: new Date()
-    };
-    const grouping = applyProductGroup(mapped, { force: false });
-    mapped.productGroup = grouping.productGroup;
-    mapped.partSubGroup = grouping.partSubGroup;
-    const candidate = { ...row, mapped };
-    const existing = winnersByPart.get(partNumber) || null;
-    if (!existing) {
-      winnersByPart.set(partNumber, candidate);
-      return;
-    }
-    const { winner, loser } = betterCatalogueRow(existing, candidate);
-    if (loser) {
-      duplicateRows.push({
-        ...loser,
-        status: 'DUPLICATE',
-        reason: 'Duplicate conflict',
-        duplicateOfRowNumber: winner.rowNumber
+
+    if (emit && (index === 0 || (index + 1) % progressStep === 0 || index + 1 === totalRows)) {
+      const processed = index + 1;
+      const percent = totalRows ? 5 + ((processed / totalRows) * 35) : 40;
+      emit({
+        stage: 'validating',
+        percent,
+        processedRows: processed,
+        totalRows,
+        fileRowsCount: totalRows,
+        acceptedRowsCount: winnersByPart.size,
+        failedRowsCount: failedRows.length,
+        duplicateRowsCount: duplicateRows.length,
+        skippedRowsCount: skippedRows.length,
+        message: `Validated ${processed.toLocaleString('en-IN')} of ${totalRows.toLocaleString('en-IN')} file rows`
       });
     }
-    winnersByPart.set(partNumber, winner);
   });
 
   winnersByPart.forEach((value) => acceptedRows.push(value));
+
+  if (emit) {
+    emit({
+      stage: 'validation-complete',
+      percent: 40,
+      processedRows: totalRows,
+      totalRows,
+      fileRowsCount: totalRows,
+      acceptedRowsCount: acceptedRows.length,
+      failedRowsCount: failedRows.length,
+      duplicateRowsCount: duplicateRows.length,
+      skippedRowsCount: skippedRows.length,
+      message: `Validation complete. Accepted ${acceptedRows.length.toLocaleString('en-IN')} rows`
+    }, { force: true });
+  }
 
   return {
     ...parsed,
@@ -472,9 +548,46 @@ function errorMessage(error) {
   return cleanText(error && (error.errmsg || error.message || error.code)) || 'Database write failed';
 }
 
-async function writeRowsInChunks(Model, rows, operationForRow) {
+async function writeRowsInChunks(Model, rows, operationForRow, options = {}) {
+  const onProgress = typeof options === 'function' ? options : options.onProgress;
+  const emit = createUploadProgressReporter(onProgress);
+  const stage = cleanText(options.stage || 'writing');
+  const label = cleanText(options.label || Model.modelName || 'rows') || 'rows';
+  const totalRows = rows.length;
   const successfulRows = [];
   const failedRows = [];
+  const progressStart = Number.isFinite(Number(options.progressStart)) ? Number(options.progressStart) : 0;
+  const progressSpan = Number.isFinite(Number(options.progressSpan)) ? Number(options.progressSpan) : 100;
+  const startMessage = cleanText(options.startMessage || `Saving ${label}...`);
+  const completeMessage = cleanText(options.completeMessage || `${label} saved`);
+
+  if (emit) {
+    emit({
+      stage: stage ? `${stage}:start` : 'writing:start',
+      percent: progressStart,
+      processedRows: 0,
+      totalRows,
+      savedRowsCount: 0,
+      failedRowsCount: 0,
+      message: startMessage
+    }, { force: true });
+  }
+
+  if (!totalRows) {
+    if (emit) {
+      emit({
+        stage: stage ? `${stage}:complete` : 'writing:complete',
+        percent: progressStart + progressSpan,
+        processedRows: 0,
+        totalRows: 0,
+        savedRowsCount: 0,
+        failedRowsCount: 0,
+        message: completeMessage
+      }, { force: true });
+    }
+    return { successfulRows, failedRows };
+  }
+
   for (const rowChunk of chunks(rows)) {
     const operations = rowChunk.map(operationForRow);
     try {
@@ -497,6 +610,32 @@ async function writeRowsInChunks(Model, rows, operationForRow) {
         }
       }
     }
+
+    if (emit) {
+      const processedRows = Math.min(totalRows, successfulRows.length + failedRows.length);
+      const percent = progressStart + (progressSpan * (processedRows / totalRows));
+      emit({
+        stage,
+        percent,
+        processedRows,
+        totalRows,
+        savedRowsCount: successfulRows.length,
+        failedRowsCount: failedRows.length,
+        message: `${cleanText(options.progressMessagePrefix || 'Saved')} ${processedRows.toLocaleString('en-IN')} of ${totalRows.toLocaleString('en-IN')} ${label}`
+      });
+    }
+  }
+
+  if (emit) {
+    emit({
+      stage: stage ? `${stage}:complete` : 'writing:complete',
+      percent: progressStart + progressSpan,
+      processedRows: totalRows,
+      totalRows,
+      savedRowsCount: successfulRows.length,
+      failedRowsCount: failedRows.length,
+      message: completeMessage
+    }, { force: true });
   }
   return { successfulRows, failedRows };
 }
@@ -725,8 +864,35 @@ function failureReasonCounts(rows = []) {
 
 async function importCatalogue(file, options = {}) {
   const sourceFileName = cleanText(file && file.originalname);
+  const emit = createUploadProgressReporter(options.onProgress);
+
+  if (emit) {
+    emit({
+      stage: 'received',
+      percent: 0,
+      processedRows: 0,
+      totalRows: 0,
+      savedRowsCount: 0,
+      failedRowsCount: 0,
+      message: 'File received. Parsing catalogue...'
+    }, { force: true });
+  }
+
   const parsed = await parseCatalogueUpload(file);
-  const validation = validateCatalogueRows(parsed, sourceFileName);
+
+  if (emit) {
+    emit({
+      stage: 'parsed',
+      percent: 3,
+      processedRows: 0,
+      totalRows: parsed.rows.length,
+      savedRowsCount: 0,
+      failedRowsCount: 0,
+      message: `Parsed ${parsed.rows.length.toLocaleString('en-IN')} file rows`
+    });
+  }
+
+  const validation = validateCatalogueRows(parsed, sourceFileName, { onProgress: options.onProgress });
   const validationIssueCount = validation.failedRows.length + validation.duplicateRows.length + validation.skippedRows.length;
   if (options.rejectOnValidationIssues && validationIssueCount) {
     const currentMasterRecordCount = await MasterCatalogue.countDocuments({});
@@ -734,6 +900,17 @@ async function importCatalogue(file, options = {}) {
     summary.failureDownloadId = await createFailedRowsWorkbook(validation, summary.nonImportedRows);
     delete summary.nonImportedRows;
     summary.blocked = true;
+    if (emit) {
+      emit({
+        stage: 'validation-blocked',
+        percent: 100,
+        processedRows: validation.rows.length,
+        totalRows: validation.rows.length,
+        savedRowsCount: 0,
+        failedRowsCount: validationIssueCount,
+        message: 'Upload blocked by validation errors'
+      }, { force: true });
+    }
     await appendUploadLog({
       event: 'catalogue-upload-blocked',
       sourceFileName,
@@ -748,12 +925,48 @@ async function importCatalogue(file, options = {}) {
   let deletedOldRowsCount = 0;
   let deletedPriceHistoryRowsCount = 0;
   if (options.replaceExisting) {
+    if (emit) {
+      emit({
+        stage: 'deleting-old-catalogue',
+        percent: 42,
+        processedRows: 0,
+        totalRows: 0,
+        savedRowsCount: 0,
+        failedRowsCount: 0,
+        message: 'Deleting old catalogue...'
+      }, { force: true });
+    }
     const [deleted, deletedPrices] = await Promise.all([
       MasterCatalogue.deleteMany({}),
       PartPriceHistory.deleteMany({})
     ]);
     deletedOldRowsCount = deleted.deletedCount || 0;
     deletedPriceHistoryRowsCount = deletedPrices.deletedCount || 0;
+    if (emit) {
+      emit({
+        stage: 'deleted-old-catalogue',
+        percent: 48,
+        processedRows: deletedOldRowsCount,
+        totalRows: deletedOldRowsCount,
+        savedRowsCount: 0,
+        failedRowsCount: 0,
+        deletedOldRowsCount,
+        deletedPriceHistoryRowsCount,
+        message: `Old catalogue deleted: ${deletedOldRowsCount.toLocaleString('en-IN')} rows`
+      }, { force: true });
+    }
+  }
+
+  if (emit) {
+    emit({
+      stage: 'writing-master',
+      percent: 52,
+      processedRows: 0,
+      totalRows: validation.acceptedRows.length,
+      savedRowsCount: 0,
+      failedRowsCount: 0,
+      message: `Saving ${validation.acceptedRows.length.toLocaleString('en-IN')} master rows...`
+    }, { force: true });
   }
 
   const masterResult = await writeRowsInChunks(MasterCatalogue, validation.acceptedRows, (row) => ({
@@ -762,7 +975,15 @@ async function importCatalogue(file, options = {}) {
       update: { $set: row.mapped },
       upsert: true
     }
-  }));
+  }), {
+    onProgress: options.onProgress,
+    stage: 'writing-master',
+    label: 'master rows',
+    progressStart: 52,
+    progressSpan: 28,
+    startMessage: `Saving ${validation.acceptedRows.length.toLocaleString('en-IN')} master rows...`,
+    completeMessage: 'Master rows saved'
+  });
   const successfulPartSet = new Set(masterResult.successfulRows.map((row) => row.mapped.normalizedPartNumber));
   const priceRows = masterResult.successfulRows.map((row) => ({
     ...row,
@@ -778,13 +999,44 @@ async function importCatalogue(file, options = {}) {
       uploadedAt: row.mapped.uploadedAt
     }
   }));
+  if (emit) {
+    emit({
+      stage: 'writing-price-history',
+      percent: 82,
+      processedRows: 0,
+      totalRows: priceRows.length,
+      savedRowsCount: 0,
+      failedRowsCount: 0,
+      message: `Saving ${priceRows.length.toLocaleString('en-IN')} price history rows...`
+    }, { force: true });
+  }
+
   const priceResult = await writeRowsInChunks(PartPriceHistory, priceRows, (row) => ({
     updateOne: {
       filter: { normalizedPartNumber: row.price.normalizedPartNumber, effectiveFrom: null, effectiveTo: null },
       update: { $set: row.price },
       upsert: true
     }
-  }));
+  }), {
+    onProgress: options.onProgress,
+    stage: 'writing-price-history',
+    label: 'price history rows',
+    progressStart: 82,
+    progressSpan: 10,
+    startMessage: `Saving ${priceRows.length.toLocaleString('en-IN')} price history rows...`,
+    completeMessage: 'Price history saved'
+  });
+  if (emit) {
+    emit({
+      stage: 'finalizing',
+      percent: 95,
+      processedRows: validation.rows.length,
+      totalRows: validation.rows.length,
+      savedRowsCount: masterResult.successfulRows.length,
+      failedRowsCount: masterResult.failedRows.length + priceResult.failedRows.length,
+      message: 'Finalizing upload summary...'
+    }, { force: true });
+  }
   const currentMasterRecordCount = await MasterCatalogue.countDocuments({});
   const summary = summaryFrom(
     validation,
@@ -800,6 +1052,19 @@ async function importCatalogue(file, options = {}) {
   delete summary.nonImportedRows;
   summary.deletedOldRowsCount = deletedOldRowsCount;
   summary.deletedPriceHistoryRowsCount = deletedPriceHistoryRowsCount;
+  if (emit) {
+    emit({
+      stage: 'completed',
+      percent: 100,
+      processedRows: validation.rows.length,
+      totalRows: validation.rows.length,
+      savedRowsCount: summary.savedRowsCount,
+      failedRowsCount: summary.failedRowsCount,
+      deletedOldRowsCount,
+      deletedPriceHistoryRowsCount,
+      message: 'Upload completed'
+    }, { force: true });
+  }
   await appendUploadLog({
     event: 'catalogue-upload-complete',
     sourceFileName,

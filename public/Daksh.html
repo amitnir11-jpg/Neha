@@ -688,6 +688,17 @@
                   <p class="catalogue-columns-note">Download the template first, then keep the first row as headers. The template uses the latest accepted master format.</p>
                 </details>
               </div>
+              <div id="catalogueUploadProgress" class="catalogue-upload-progress loading" hidden aria-live="polite" aria-busy="false">
+                <div class="catalogue-upload-progress-head">
+                  <span class="catalogue-upload-spinner" aria-hidden="true"></span>
+                  <strong id="catalogueUploadProgressLabel">Upload in progress...</strong>
+                  <span id="catalogueUploadProgressPercent" class="catalogue-upload-progress-percent">0%</span>
+                </div>
+                <div class="catalogue-upload-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Part Master upload progress">
+                  <span id="catalogueUploadProgressBarFill" class="catalogue-upload-progress-bar-fill"></span>
+                </div>
+                <div id="catalogueUploadProgressText" class="catalogue-upload-progress-text muted"></div>
+              </div>
               <div id="catalogueUploadMessage" class="form-message" hidden></div>
             </section>
 
