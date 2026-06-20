@@ -14,7 +14,8 @@ const {
   catalogueFieldReference,
   createCatalogueTemplateWorkbook,
   failureFilePath,
-  importCatalogue
+  importCatalogue,
+  purgeFailureFiles
 } = require('../utils/catalogueUpload');
 
 const router = express.Router();
@@ -125,6 +126,7 @@ router.delete('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
       MasterCatalogue.deleteMany({}),
       PartPriceHistory.deleteMany({})
     ]);
+    await purgeFailureFiles();
     req.io?.emit('master:update');
     invalidateCatalogueCaches();
     return res.json({

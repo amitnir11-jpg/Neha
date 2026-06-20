@@ -9433,13 +9433,31 @@
     $('#downloadCatalogueTemplateBtn')?.addEventListener('click', () => downloadGet('/api/master-catalogue/template', 'Part_Master_Catalogue_Template.xlsx').catch((error) => toast(error.message, 'error')));
     $('#deleteCatalogueBtn')?.addEventListener('click', async () => {
       if (!window.confirm('Are you sure you want to delete old catalogue? Scan and audit data will not be deleted.')) return;
-      const data = await api('/api/master-catalogue', { method: 'DELETE', body: {} });
-      $('#uploadStats').textContent = `Deleted old rows ${data.deletedOldRowsCount || 0} | Deleted price history ${data.deletedPriceHistoryRowsCount || 0}`;
-      setPartMasterRecordCount(data.currentMasterRecordCount || 0);
-      state.catalogueFailureDownloadId = '';
-      if ($('#downloadCatalogueFailedRowsBtn')) $('#downloadCatalogueFailedRowsBtn').hidden = true;
-      setCatalogueUploadMessage(`Deleted old rows ${data.deletedOldRowsCount || 0} | Deleted price history ${data.deletedPriceHistoryRowsCount || 0}`, 'warning');
-      clearPartSearch('Old catalogue deleted. Scan and audit data was not deleted.');
+      try {
+        const data = await api('/api/master-catalogue', { method: 'DELETE', body: {} });
+        updateCatalogueUploadStats({
+          totalRowsCount: 0,
+          importedRowsCount: 0,
+          failedRowsCount: 0,
+          duplicateRowsCount: 0,
+          skippedRowsCount: 0,
+          insertedRowsCount: 0,
+          updatedRowsCount: 0,
+          missingMandatoryFieldsCount: 0,
+          priceHistoryRowsCount: data.deletedPriceHistoryRowsCount || 0,
+          currentMasterRecordCount: data.currentMasterRecordCount || 0,
+          masterCatalogueCount: data.currentMasterRecordCount || 0,
+          message: `Deleted old rows ${data.deletedOldRowsCount || 0} | Deleted price history ${data.deletedPriceHistoryRowsCount || 0}`
+        });
+        state.catalogueFailureDownloadId = '';
+        if ($('#downloadCatalogueFailedRowsBtn')) $('#downloadCatalogueFailedRowsBtn').hidden = true;
+        setCatalogueUploadMessage(`Deleted old rows ${data.deletedOldRowsCount || 0} | Deleted price history ${data.deletedPriceHistoryRowsCount || 0}`, 'warning');
+        clearPartSearch('Old catalogue deleted. Scan and audit data was not deleted.');
+      } catch (error) {
+        if (error.data) updateCatalogueUploadStats(error.data);
+        setCatalogueUploadMessage(error.message || 'Delete failed', 'error');
+        toast(error.message, 'error');
+      }
     });
     $('#downloadCatalogueFailedRowsBtn')?.addEventListener('click', () => downloadCatalogueFailedRows().catch((error) => toast(error.message, 'error')));
     $('#deleteReuploadCatalogueBtn')?.addEventListener('click', async () => {

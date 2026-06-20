@@ -487,6 +487,18 @@ async function cleanupFailureFiles() {
   }
 }
 
+async function purgeFailureFiles() {
+  try {
+    await fs.promises.mkdir(FAILURE_DIR, { recursive: true });
+    const entries = await fs.promises.readdir(FAILURE_DIR, { withFileTypes: true });
+    await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.xlsx')).map(async (entry) => {
+      await fs.promises.unlink(path.join(FAILURE_DIR, entry.name));
+    }));
+  } catch (error) {
+    console.warn('Catalogue failed-row purge skipped:', error.message);
+  }
+}
+
 function catalogueFieldReference() {
   return CATALOGUE_FIELD_DEFINITIONS.map((column) => ({
     field: column.key,
@@ -730,6 +742,7 @@ module.exports = {
   createCatalogueTemplateWorkbook,
   failureFilePath,
   importCatalogue,
+  purgeFailureFiles,
   parseCatalogueUpload,
   validateCatalogueRows
 };
