@@ -1164,20 +1164,23 @@ function publicScanWithMaster(record = {}, masterLookup = {}) {
   const scan = publicScan(record);
   const master = masterForScan(scan, masterLookup) || null;
   if (!master) {
+    const fallbackCategory = canonicalizePartCategory(scan.productCategory || scan.category || '');
+    const fallbackMrp = numberValue(scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.valuationMRP ?? scan.mrp ?? 0, 0);
+    const fallbackDlc = numberValue(scan.currentCatalogueDLC ?? scan.dlc ?? 0, 0);
     return {
       ...scan,
-      category: 'Uncategorized',
-      productCategory: 'Uncategorized',
-      currentCatalogueMRP: 0,
-      currentCatalogueDLC: 0,
-      displayMRP: 0,
-      mrp: 0,
-      scanMRP: 0,
-      manualMRP: 0,
-      valuationMRP: 0,
-      finalMRP: 0,
-      finalInventoryValue: 0,
-      dlc: 0,
+      category: fallbackCategory,
+      productCategory: fallbackCategory,
+      currentCatalogueMRP: fallbackMrp,
+      currentCatalogueDLC: fallbackDlc,
+      displayMRP: fallbackMrp,
+      mrp: fallbackMrp,
+      scanMRP: numberValue(scan.scanMRP ?? 0, 0),
+      manualMRP: numberValue(scan.manualMRP ?? 0, 0),
+      valuationMRP: fallbackMrp,
+      finalMRP: fallbackMrp,
+      finalInventoryValue: Number(scan.finalInventoryValue ?? 0),
+      dlc: fallbackDlc,
       valuationSource: 'PART_MASTER_PRICE_MISSING',
       _masterLookupComplete: true,
       masterFound: false,

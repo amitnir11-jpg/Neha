@@ -1,4 +1,5 @@
 const MasterCatalogue = require('../models/MasterCatalogue');
+const MasterPart = require('../models/MasterPart');
 const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
 const { applyProductGroup } = require('./productGroupClassifier');
 const { resolveCategoryFromMaster } = require('./categoryResolver');
@@ -70,6 +71,90 @@ function latestSort(left = {}, right = {}) {
     || String(right.partNumber || '').localeCompare(String(left.partNumber || ''));
 }
 
+function priceTextValue(record = {}, keys = []) {
+  const records = Array.isArray(record) ? record : [record];
+  for (const row of records) {
+    for (const key of keys) {
+      const value = cleanText(row && row[key]);
+      if (!value) continue;
+      const normalized = value.replace(/\s+/g, ' ').trim();
+      if (!normalized) continue;
+      if (/^(0+|N\/?A|NA|NONE|UNKNOWN|UNCATEGORIZED|null)$/i.test(normalized)) continue;
+      return normalized;
+    }
+  }
+  return '';
+}
+
+function firstPositiveNumber(records = [], keys = []) {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = numberValue(record[key], 0);
+      if (value > 0) return value;
+    }
+  }
+  return 0;
+}
+
+function mergePriceRecordCandidates(records = [], dealerCode = '') {
+  const candidates = records
+    .map((item) => item && item.normalized ? item.normalized : asPriceRecord(item.record, item.source, dealerCode))
+    .filter(Boolean)
+    .sort(latestSort);
+  const primary = candidates[0] || null;
+  if (!primary) return null;
+  const merged = { ...primary };
+  const description = priceTextValue(primary, ['description', 'partDescription', 'partName'])
+    || priceTextValue(candidates, ['description', 'partDescription', 'partName']);
+  const category = priceTextValue(primary, ['category', 'productCategory']) || priceTextValue(candidates, ['category', 'productCategory']);
+  const productGroup = priceTextValue(primary, ['productGroup']) || priceTextValue(candidates, ['productGroup']);
+  const partSubGroup = priceTextValue(primary, ['partSubGroup', 'productSubGroup']) || priceTextValue(candidates, ['partSubGroup', 'productSubGroup']);
+  const productSubGroup = priceTextValue(primary, ['productSubGroup', 'partSubGroup']) || priceTextValue(candidates, ['productSubGroup', 'partSubGroup']);
+  const model = priceTextValue(primary, ['model']) || priceTextValue(candidates, ['model']);
+  const year = priceTextValue(primary, ['year', 'manufacturingYear']) || priceTextValue(candidates, ['year', 'manufacturingYear']);
+  const manufacturingYear = priceTextValue(primary, ['manufacturingYear', 'year']) || priceTextValue(candidates, ['manufacturingYear', 'year']);
+  const mrp = firstPositiveNumber([primary].concat(candidates), ['mrp', 'currentCatalogueMRP', 'currentCatalogueMrp', 'rate', 'price']);
+  const dlc = firstPositiveNumber([primary].concat(candidates), ['dlc', 'dlp']);
+  if (description) {
+    merged.description = description;
+    merged.partDescription = description;
+    merged.partName = description;
+  }
+  if (category && !/^UNCATEGORIZED$/i.test(category)) {
+    merged.category = category;
+    merged.productCategory = category;
+  }
+  if (productGroup) merged.productGroup = productGroup;
+  if (partSubGroup) merged.partSubGroup = partSubGroup;
+  if (productSubGroup) merged.productSubGroup = productSubGroup;
+  if (model) merged.model = model;
+  if (year) merged.year = year;
+  if (manufacturingYear) merged.manufacturingYear = manufacturingYear;
+  if (mrp > 0) {
+    merged.mrp = mrp;
+    merged.currentCatalogueMRP = mrp;
+    merged.displayMRP = mrp;
+    merged.valuationMRP = mrp;
+    merged.finalMRP = mrp;
+    merged.defaultMRP = mrp;
+  }
+  if (dlc > 0) {
+    merged.dlc = dlc;
+    merged.currentCatalogueDLC = dlc;
+  }
+  merged.dealerMatched = candidates.some((item) => item.dealerMatched) || merged.dealerMatched;
+  const { masterRecord: primaryMasterRecord, sourceRecord: primarySourceRecord, ...mergedFields } = merged;
+  merged.masterRecord = {
+    ...(primaryMasterRecord || {}),
+    ...mergedFields
+  };
+  merged.sourceRecord = primarySourceRecord || null;
+  merged.masterFound = true;
+  merged.masterMatch = true;
+  merged.isMasterMatched = true;
+  return merged;
+}
+
 function asPriceRecord(record = {}, source = 'MASTER_PART', dealerCode = '') {
   if (!record) return null;
   const partNumber = normalizePartNumber(record.normalizedPartNumber || record.partNumber || record.partNo || record.part || '');
@@ -87,7 +172,19 @@ function asPriceRecord(record = {}, source = 'MASTER_PART', dealerCode = '') {
             : record.price,
     0
   );
-  const dlc = numberValue(record.dlc !== undefined ? record.dlc : record.dlp, 0);
+  const dlc = numberValue(
+    record.dlc !== undefined ? record.dlc
+      : record.dlp !== undefined ? record.dlp
+        : record.currentCatalogueDLC !== undefined ? record.currentCatalogueDLC
+          : record.currentCatalogueDlc !== undefined ? record.currentCatalogueDlc
+            : record.catalogueDLC !== undefined ? record.catalogueDLC
+              : record.catalogueDlc !== undefined ? record.catalogueDlc
+                : record.landedCost !== undefined ? record.landedCost
+                  : record.dealerLandedCost !== undefined ? record.dealerLandedCost
+                    : record.costPrice !== undefined ? record.costPrice
+                      : record.purchasePrice,
+    0
+  );
   const payload = {
     source,
     pricingSource: source === 'MASTER_CATALOGUE' ? 'Master Catalogue' : 'Part Master',
@@ -168,9 +265,13 @@ async function getPriceFromPartMaster(partNumber, dealerCode = '') {
   const part = normalizePartNumber(partNumber);
   if (!part) return null;
   const lookup = partLookup(part);
-  const catalogueRows = await MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean();
-  return pickBestPriceRecord(
-    catalogueRows.map((record) => ({ source: 'MASTER_CATALOGUE', record })),
+  const [catalogueRows, masterRows] = await Promise.all([
+    MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean(),
+    MasterPart.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean()
+  ]);
+  return mergePriceRecordCandidates(
+    catalogueRows.map((record) => ({ source: 'MASTER_CATALOGUE', record }))
+      .concat(masterRows.map((record) => ({ source: 'MASTER_PART', record }))),
     dealerCode
   );
 }
@@ -180,17 +281,20 @@ async function getPricesFromPartMaster(partNumbers = [], dealerCode = '') {
   const map = new Map();
   if (!parts.length) return map;
   const lookup = partListLookup(parts);
-  const catalogueRows = await MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean();
+  const [catalogueRows, masterRows] = await Promise.all([
+    MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean(),
+    MasterPart.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean()
+  ]);
   const byPart = new Map();
-  catalogueRows.forEach((record) => {
-    const normalized = asPriceRecord(record, 'MASTER_CATALOGUE', dealerCode);
+  [...catalogueRows.map((record) => ({ source: 'MASTER_CATALOGUE', record })), ...masterRows.map((record) => ({ source: 'MASTER_PART', record }))].forEach((entry) => {
+    const normalized = asPriceRecord(entry.record, entry.source, dealerCode);
     if (!normalized) return;
     const list = byPart.get(normalized.partNumber) || [];
     list.push({ normalized });
     byPart.set(normalized.partNumber, list);
   });
   parts.forEach((part) => {
-    const picked = pickBestPriceRecord(byPart.get(part) || [], dealerCode);
+    const picked = mergePriceRecordCandidates(byPart.get(part) || [], dealerCode);
     if (picked) map.set(part, picked);
   });
   return map;

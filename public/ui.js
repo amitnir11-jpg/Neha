@@ -1586,10 +1586,64 @@
     return normalizePartText(scan.rawScan || scan.rawScanString || scan.rawBarcode || scan.rawScanValue || '');
   }
 
+  function scanHistoryRecordIdentity(scan = {}) {
+    return {
+      key: scanHistoryRecordKey(scan),
+      barcodeKey: barcodeScanKey(scan),
+      scanId: clean(scan.scanId || scan.uniqueScanId || scan._id || ''),
+      syncKey: clean(scan.syncKey || ''),
+      localId: clean(scan.localId || '')
+    };
+  }
+
+  function scanHistoryRecordMatches(candidate = {}, reference = {}) {
+    const left = scanHistoryRecordIdentity(candidate);
+    const right = scanHistoryRecordIdentity(reference);
+    if (left.key && right.key && left.key === right.key) return true;
+    if (left.barcodeKey && right.barcodeKey && left.barcodeKey === right.barcodeKey) return true;
+    if (left.scanId && right.scanId && left.scanId === right.scanId) return true;
+    if (left.syncKey && right.syncKey && left.syncKey === right.syncKey) return true;
+    if (left.localId && right.localId && left.localId === right.localId) return true;
+    return false;
+  }
+
   function scanHistoryRecordAlreadyVisible(scan = {}) {
     const key = scanHistoryRecordKey(scan);
     if (!key) return false;
     return (state.scanHistoryRecords || []).some((item) => scanHistoryRecordKey(item) === key);
+  }
+
+  function removeScanHistoryRecords(scans = []) {
+    const references = (Array.isArray(scans) ? scans : [scans]).filter(Boolean);
+    if (!references.length) return { queueDeleted: 0, logDeleted: 0, historyDeleted: 0, streamDeleted: 0 };
+    const matches = (record = {}) => references.some((reference) => scanHistoryRecordMatches(record, reference));
+    const beforeQueue = getSyncQueue();
+    const beforeLog = getSyncLog();
+    const nextQueue = beforeQueue.filter((record) => !matches(record));
+    const nextLog = beforeLog.filter((record) => !matches(record));
+    saveSyncQueue(nextQueue);
+    writeJsonStorage(scopedStorageKey(SYNC_LOG_KEY), nextLog);
+    renderSyncLog();
+
+    const beforeHistory = state.scanHistoryRecords || [];
+    const beforeStream = state.scanStreamRecords || [];
+    state.scanHistoryRecords = beforeHistory.filter((record) => !matches(record)).slice(0, 500);
+    state.scanStreamRecords = beforeStream.filter((record) => !matches(record)).slice(0, 12);
+
+    const historyBody = $('#scanHistoryRows');
+    if (historyBody) {
+      historyBody.innerHTML = state.scanHistoryRecords.length ? state.scanHistoryRecords.map(scanHistoryRow).join('') : '<tr><td colspan="18" class="muted">No scan history found</td></tr>';
+      updateScanHistorySummary(state.scanHistoryRecords, scanHistorySummary(state.scanHistoryRecords, {}));
+      bindScanHistoryActions();
+    }
+    renderScanStream(state.scanStreamRecords);
+
+    return {
+      queueDeleted: beforeQueue.length - nextQueue.length,
+      logDeleted: beforeLog.length - nextLog.length,
+      historyDeleted: beforeHistory.length - state.scanHistoryRecords.length,
+      streamDeleted: beforeStream.length - state.scanStreamRecords.length
+    };
   }
 
   function localQueuedScanHistoryRecords() {
@@ -3146,7 +3200,7 @@
 
   function scanHistoryRecord(scanId = '') {
     return (state.scanHistoryRecords || []).find((scan) => {
-      const id = scan.scanId || scan.uniqueScanId || scan._id || '';
+      const id = scan.scanId || scan.uniqueScanId || scan.localId || scan._id || '';
       return String(id) === String(scanId);
     }) || null;
   }
@@ -3188,7 +3242,7 @@
   }
 
   function scanHistoryRow(scan = {}) {
-    const id = scan.scanId || scan.uniqueScanId || scan._id || '';
+    const id = scan.scanId || scan.uniqueScanId || scan.localId || scan._id || '';
     const partNumber = scan.partNumber || scan.part || scan.normalizedPartNumber || '';
     const partDescription = scan.partDescription || scan.partName || scan.description || partNumber || '-';
     const rowMrp = scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.valuationMRP ?? scan.mrp ?? 0;
@@ -3206,7 +3260,7 @@
         <td>${escapeHtml(dateTime(scan.timestamp))}</td>
         <td>${partLink(partNumber || scan.rawScanString || scan.rawScan || '')}</td>
         <td>${escapeHtml(partDescription)}</td>
-        <td>${escapeHtml(scan.productCategory || 'Uncategorized')}</td>
+        <td>${escapeHtml(scan.productCategory || scan.category || 'Uncategorized')}</td>
         <td>${escapeHtml(money(rowMrp))}</td>
         <td>${escapeHtml(money(rowDlc))}</td>
         <td>${escapeHtml(scan.productGroup || '')}</td>
@@ -7702,7 +7756,9 @@
       return;
     }
     if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
+    const scan = scanHistoryRecord(scanId) || { scanId, uniqueScanId: scanId, localId: scanId };
     await api(`/api/admin/scans/${encodeURIComponent(scanId)}`, { method: 'DELETE', body: {} });
+    removeScanHistoryRecords([scan]);
     toast('Scan deleted');
     await refreshAfterDelete();
   }
@@ -7714,7 +7770,9 @@
       return;
     }
     if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
+    const scans = ids.map((id) => scanHistoryRecord(id) || { scanId: id, uniqueScanId: id, localId: id });
     await api('/api/admin/scans/delete-selected', { method: 'POST', body: { ids } });
+    removeScanHistoryRecords(scans);
     toast('Selected scans deleted');
     await refreshAfterDelete();
   }
@@ -7722,6 +7780,7 @@
   async function cleanUnknownParts(criteria = {}) {
     if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
     await api('/api/admin/cleanup-unknown-parts', { method: 'POST', body: criteria });
+    removeLocalMatching(criteria);
     toast('Unknown part scans cleaned');
     await refreshAfterDelete();
   }
@@ -7734,6 +7793,7 @@
     }
     if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
     await api(`/api/admin/dealer/${encodeURIComponent(dealer)}/scans`, { method: 'DELETE', body: {} });
+    removeLocalMatching({ dealerCode: dealer });
     toast('Dealer scan data deleted');
     await refreshAfterDelete();
   }
@@ -7751,23 +7811,29 @@
         const ids = selectedScanIds();
         if (!ids.length) throw new Error('Select one scan in Scan History first');
         await api(`/api/admin/scans/${encodeURIComponent(ids[0])}`, { method: 'DELETE', body: {} });
+        removeScanHistoryRecords([scanHistoryRecord(ids[0]) || { scanId: ids[0], uniqueScanId: ids[0], localId: ids[0] }]);
       } else if (action === 'selected-scans') {
         const ids = selectedScanIds();
         if (!ids.length) throw new Error('Select scans in Scan History first');
         await api('/api/admin/scans/delete-selected', { method: 'POST', body: { ids } });
+        removeScanHistoryRecords(ids.map((id) => scanHistoryRecord(id) || { scanId: id, uniqueScanId: id, localId: id }));
       } else if (action === 'multiple-parts') {
         await api('/api/admin/scans/delete-by-parts', { method: 'POST', body: criteria });
+        removeLocalMatching(criteria);
       } else if (action === 'dealer-scans') {
         if (!criteria.dealerCode) throw new Error('Dealer code is required');
         await api(`/api/admin/dealer/${encodeURIComponent(cleanDealerCode(criteria.dealerCode))}/scans`, { method: 'DELETE', body: {} });
+        removeLocalMatching({ dealerCode: cleanDealerCode(criteria.dealerCode) });
       } else if (action === 'dealer-master') {
         if (!criteria.dealerCode) throw new Error('Dealer code is required');
         await api(`/api/admin/dealer/${encodeURIComponent(cleanDealerCode(criteria.dealerCode))}/master`, { method: 'DELETE', body: {} });
       } else if (action === 'dealer-full') {
         if (!criteria.dealerCode) throw new Error('Dealer code is required');
         await api(`/api/admin/dealer/${encodeURIComponent(cleanDealerCode(criteria.dealerCode))}/all`, { method: 'DELETE', body: {} });
+        removeLocalMatching({ dealerCode: cleanDealerCode(criteria.dealerCode) });
       } else if (action === 'unknown') {
         await api('/api/admin/cleanup-unknown-parts', { method: 'POST', body: criteria });
+        removeLocalMatching(criteria);
       }
     }
     toast(`Cleanup complete${runLocal ? ` | Local ${localResult.localQueueDeleted}` : ''}`);
