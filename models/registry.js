@@ -260,7 +260,6 @@ module.exports = {
   ScannerLog: model('ScannerLog', 'scannerLog', 'scannerlogs', { prepare: prepareCommonLog }),
   ScannerSession: model('ScannerSession', 'scannerSession', 'scannersessions', { prepare: prepareCommonLog }),
   Setting: model('Setting', 'setting', 'settings', { prepare: prepareCommonLog }),
-  SkewEvent: model('SkewEvent', 'skewEvent', 'skewevents', { prepare: prepareCommonLog }),
   SyncLog: model('SyncLog', 'syncLog', 'synclogs', { prepare: prepareCommonLog }),
   User: model('User', 'user', 'users', { prepare: prepareUser }),
   UserDealerMapping: model('UserDealerMapping', 'userDealerMapping', 'userdealermappings', { prepare: prepareCommonLog }),

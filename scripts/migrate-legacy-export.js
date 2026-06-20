@@ -36,8 +36,7 @@ const COLLECTIONS = [
   { key: 'synclogs', model: models.SyncLog, identities: ['syncBatchId', 'deviceId', 'createdAt'] },
   { key: 'auditlogs', model: models.AuditLog, identities: ['dealerCode', 'auditId', 'createdAt'] },
   { key: 'auditrestorelogs', model: models.AuditRestoreLog, identities: ['archiveId', 'dealerCode', 'createdAt'] },
-  { key: 'offlinequeues', model: models.OfflineQueue, identities: ['queueId', 'deviceId', 'createdAt'] },
-  { key: 'skewevents', model: models.SkewEvent, identities: ['deviceId', 'createdAt'] }
+  { key: 'offlinequeues', model: models.OfflineQueue, identities: ['queueId', 'deviceId', 'createdAt'] }
 ];
 
 function cleanId(value) {

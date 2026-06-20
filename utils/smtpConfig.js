@@ -254,7 +254,7 @@ async function changeSmtpPassword(newPassword, confirmPassword, updatedBy = '') 
 async function getVerifiedSmtpConfig() {
   const config = await getStoredSmtp(true);
   if (!config.smtpEmail || !config.password || !config.smtpHost || !config.smtpPort || !config.verified) {
-    throw new Error('SMTP is not configured. Please configure SMTP from Admin Settings.');
+    throw new Error('SMTP is not configured. Set SMTP credentials on the server.');
   }
   return config;
 }

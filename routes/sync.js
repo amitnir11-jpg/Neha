@@ -6,7 +6,6 @@ const MasterPart = require('../models/MasterPart');
 const Dealer = require('../models/Dealer');
 const Device = require('../models/Device');
 const SyncLog = require('../models/SyncLog');
-const SkewEvent = require('../models/SkewEvent');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const VerificationLog = require('../models/VerificationLog');
 const User = require('../models/User');
@@ -1246,41 +1245,6 @@ async function saveNormalizedScan(scan, req) {
       skewMs
     });
 
-    // Emit realtime socket event if skew exceeds threshold
-    try {
-      const io = req && (req.io || req.app.get('io'));
-      const thresholdMs = Number(process.env.CLOCK_SKEW_THRESHOLD_MS || 300000);
-      if (io && skewMs > thresholdMs) {
-        io.emit('sync:clockSkew', {
-          batchId,
-          dealerCode: scan.dealerCode,
-          userId: scan.userId || scan.loginId || '',
-          deviceId: scan.deviceId || '',
-          mobileTime: mobileTime ? mobileTime.toISOString() : '',
-          serverTime: finalSavedTime.toISOString(),
-          skewMs,
-          timeZone: tz,
-          lastSyncStatus: 'skew_detected'
-        });
-        try {
-          await SkewEvent.create({
-            deviceId: scan.deviceId || '',
-            dealerCode: scan.dealerCode || '',
-            userId: scan.userId || scan.loginId || '',
-            batchId,
-            serverTime: finalSavedTime,
-            deviceTime: mobileTime || undefined,
-            mobileReceivedTimeUtc: mobileTime ? mobileTime.toISOString() : '',
-            skewMs,
-            status: 'skew_detected',
-            eventType: 'sync_detected',
-            message: `Detected clock skew of ${skewMs} ms for device ${scan.deviceId || ''}`
-          });
-        } catch (eventError) {
-          logSync('skew event save failed', { message: eventError.message, batchId, deviceId: scan.deviceId || '', skewMs });
-        }
-      }
-    } catch (e) {}
   } catch (e) {}
 
   let doc;

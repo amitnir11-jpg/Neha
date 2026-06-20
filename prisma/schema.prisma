@@ -1115,47 +1115,6 @@ model Setting {
   @@map("settings")
 }
 
-model SkewEvent {
-  id                   String    @id @default(cuid())
-  data                 Json      @default("{}")
-  dealerCode           String?
-  auditId              String?
-  partNumber           String?
-  normalizedPartNumber String?
-  uniqueScanId         String?
-  scanId               String?
-  globalUpiKey         String?
-  qrFingerprint        String?
-  upiNo                String?
-  rawUpiHash           String?
-  bin                  String?
-  binLocation          String?
-  scanType             String?
-  type                 String?
-  syncStatus           String?
-  scanStatus           String?
-  status               String?
-  source               String?
-  userId               String?
-  loginId              String?
-  username             String?
-  email                String?
-  deviceId             String?
-  key                  String?
-  reportName           String?
-  currentAuditId       String?
-  timestamp            DateTime?
-  scanTime             DateTime?
-  time                 DateTime?
-  dateTime             DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-
-  @@index([deviceId])
-  @@index([createdAt])
-  @@map("skewevents")
-}
-
 model SyncLog {
   id                   String    @id @default(cuid())
   data                 Json      @default("{}")

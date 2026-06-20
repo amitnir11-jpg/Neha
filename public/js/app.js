@@ -1399,36 +1399,6 @@
       }
     });
 
-    const resetUserForm = $('#resetUserForm');
-    if (resetUserForm) {
-      resetUserForm.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const message = $('#resetUserMessage') || { set className(c) {}, set textContent(t) { toast(t); } };
-        try {
-          const payload = formValues(event.currentTarget);
-          if (!payload.username) throw new Error("User not found");
-
-          let url, body;
-          if (payload.newPassword) {
-            url = '/api/auth/users/reset-password';
-            body = { username: payload.username, newPassword: payload.newPassword };
-          } else if (payload.newPin) {
-            url = '/api/auth/users/reset-pin';
-            body = { username: payload.username, newPin: payload.newPin };
-          } else {
-            throw new Error("Provide a new Password or PIN");
-          }
-
-          const data = await api(url, { method: 'POST', body });
-          message.className = 'form-message success';
-          message.textContent = data.message || 'Reset successful';
-          event.currentTarget.reset();
-        } catch (error) {
-          message.className = 'form-message error';
-          message.textContent = error.message;
-        }
-      });
-    }
   }
 
   async function initDashboard() {

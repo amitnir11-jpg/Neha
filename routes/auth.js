@@ -5,7 +5,6 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Dealer = require('../models/Dealer');
 const UserDealerMapping = require('../models/UserDealerMapping');
-const Setting = require('../models/Setting');
 const smtpConfig = require('../utils/smtpConfig');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
 
@@ -391,31 +390,8 @@ function cleanPublicUser(user) {
   };
 }
 
-async function getOtpMailId() {
-  const setting = await Setting.findOne({ key: 'auth' }).lean();
-  return cleanEmail(setting && setting.value ? setting.value.otpMailId : '') || cleanEmail(process.env.REPORT_EMAIL) || DEFAULT_OTP_MAIL_ID;
-}
-
-async function setOtpMailId(otpMailId, updatedBy) {
-  const clean = cleanEmail(otpMailId);
-  if (!clean || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) {
-    throw new Error('Enter a valid OTP mail ID');
-  }
-  const setting = await Setting.findOneAndUpdate(
-    { key: 'auth' },
-    { key: 'auth', value: { otpMailId: clean }, updatedBy: updatedBy || '' },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
-  return setting.value.otpMailId;
-}
-
-async function mailTransportReady() {
-  const status = smtpConfig.publicStatus(await smtpConfig.getStoredSmtp(false));
-  return status.configured;
-}
-
 async function sendOtpMail(user, otp, token, req) {
-  const otpMailId = await getOtpMailId();
+  const otpMailId = cleanEmail(process.env.REPORT_EMAIL) || DEFAULT_OTP_MAIL_ID;
   const resetUrl = `${req.protocol}://${req.get('host')}/?resetToken=${encodeURIComponent(token)}&email=${encodeURIComponent(user.email)}`;
   const mail = await smtpConfig.sendOtpEmail(user.email, otp, {
     subject: 'Daksh Inventory password reset OTP',
@@ -930,47 +906,6 @@ router.post('/users/:id/email', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/users/reset-password', requireAuth, requireAdmin, async (req, res) => {
-  try {
-    const username = cleanUsername(req.body.username);
-    const password = String(req.body.newPassword || req.body.password || '');
-    if (!username) return res.status(400).json({ success: false, message: 'Username is required' });
-    if (!password) return res.status(400).json({ success: false, message: 'Password is required' });
-
-    const user = await User.findOne({ username });
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    user.passwordHash = passwordHash;
-    user.password = passwordHash;
-    user.forcePasswordChange = req.body.forcePasswordChange === true || req.body.forcePasswordChange === 'true';
-    await user.save();
-    res.json({ success: true, message: 'Password reset successful' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-router.post('/users/reset-pin', requireAuth, requireAdmin, async (req, res) => {
-  try {
-    const username = cleanUsername(req.body.username);
-    const pin = String(req.body.newPin || req.body.pin || '').trim();
-    if (!username) return res.status(400).json({ success: false, message: 'Username is required' });
-    if (!/^\d{4}$/.test(pin)) return res.status(400).json({ success: false, message: 'PIN must be exactly 4 digits' });
-
-    const user = await User.findOne({ username });
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-
-    const pinHash = await bcrypt.hash(pin, 10);
-    user.pinHash = pinHash;
-    user.pin = pinHash;
-    await user.save();
-    res.json({ success: true, message: 'PIN reset successful' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
 router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, res) => {
   try {
     const password = String(req.body.password || '');
@@ -978,29 +913,6 @@ router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, 
       return res.status(400).json({ success: false, message: 'Password is required' });
     }
     const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    const passwordHash = await bcrypt.hash(password, 10);
-    user.passwordHash = passwordHash;
-    user.password = passwordHash;
-    user.forcePasswordChange = req.body.forcePasswordChange === true || req.body.forcePasswordChange === 'true';
-    user.resetOtpHash = '';
-    user.resetTokenHash = '';
-    user.resetExpiresAt = undefined;
-    user.resetRequestedAt = undefined;
-    await user.save();
-    res.json({ success: true, user: cleanPublicUser(user), message: 'Password reset by admin' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-router.post('/admin-reset-password', requireAuth, requireAdmin, async (req, res) => {
-  try {
-    const userId = String(req.body.userId || req.body.id || '').trim();
-    const username = cleanUsername(req.body.username || '');
-    const password = String(req.body.newPassword || req.body.password || '');
-    if (!password) return res.status(400).json({ success: false, message: 'Password is required' });
-    const user = userId ? await User.findById(userId) : await User.findOne({ username });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
     const passwordHash = await bcrypt.hash(password, 10);
     user.passwordHash = passwordHash;
@@ -1032,23 +944,6 @@ router.post('/users/:id/send-reset', requireAuth, requireAdmin, async (req, res)
   } catch (error) {
     const status = /^SMTP is not configured|^SMTP configuration failed/i.test(error.message) ? 400 : 500;
     res.status(status).json({ success: false, message: error.message });
-  }
-});
-
-router.get('/settings', requireAuth, requireAdmin, async (req, res) => {
-  try {
-    res.json({ success: true, settings: { otpMailId: await getOtpMailId(), smtpReady: await mailTransportReady() } });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-router.post('/settings/otp-mail', requireAuth, requireAdmin, async (req, res) => {
-  try {
-    const otpMailId = await setOtpMailId(req.body.otpMailId, req.user.username || req.user.name || 'admin');
-    res.json({ success: true, settings: { otpMailId, smtpReady: await mailTransportReady() } });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
   }
 });
 

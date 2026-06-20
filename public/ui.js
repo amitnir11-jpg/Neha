@@ -156,8 +156,6 @@
     adminDeleteRows: [],
     adminDeleteSelectedIds: new Set(),
     adminDeleteLastPreview: null,
-    clockSkewRows: [],
-    clockSkewSelectedIds: new Set(),
     locationDeleteLastCount: null,
     auditBackups: [],
     auditRestoreSessionId: '',
@@ -330,8 +328,7 @@
     qr: 'QR / Barcode',
     devices: 'Device Control',
     syncCenter: 'Sync Report',
-    archiveRestore: 'Archive & Restore Center',
-    admin: 'Admin Settings'
+    archiveRestore: 'Archive & Restore Center'
   };
 
   function ensureDeviceId() {
@@ -879,18 +876,6 @@
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-  }
-
-  function moveMasterDataAdminTools() {
-    const userPanel = $('#userApprovalTab');
-    const deletePanel = $('#adminDeleteMasterTab');
-    const userCard = $('#createUserForm')?.closest('.card');
-    const editModal = $('#editUserModal');
-    const adminDeleteCard = $('.admin-delete-card');
-
-    if (userPanel && userCard && userCard.parentElement !== userPanel) userPanel.appendChild(userCard);
-    if (userPanel && editModal && editModal.parentElement !== userPanel) userPanel.appendChild(editModal);
-    if (deletePanel && adminDeleteCard && adminDeleteCard.parentElement !== deletePanel) deletePanel.appendChild(adminDeleteCard);
   }
 
   function formObject(form) {
@@ -3793,7 +3778,7 @@
         const unknownBlocked = /part does not exist|unknown/i.test(warnings) && localStorage.getItem('dakshAllowUnknown') !== 'true';
         if (unknownBlocked) {
           playScanTone('error');
-          toast('Unknown part save is disabled in Admin Settings', 'error');
+          toast('Unknown part save is disabled for this account', 'error');
           return;
         }
         if (window.confirm(`Warnings: ${warnings}\nOverride and save?`)) {
@@ -7190,138 +7175,6 @@
     loadScannerLogs().catch(() => null);
   }
 
-  async function loadAuthSettings() {
-    if (!state.user || state.user.role !== 'admin') return;
-    const data = await api('/api/admin/smtp-status');
-    renderSmtpSettings(data.smtp || {});
-  }
-
-  function smtpPayloadFromForm(form) {
-    const payload = formObject(form);
-    payload.secure = Boolean($('#smtpSecure')?.checked);
-    payload.requireTLS = Boolean($('#smtpRequireTls')?.checked);
-    return payload;
-  }
-
-  function setSmtpMessage(selector, message, type = 'success') {
-    const node = $(selector);
-    if (!node) return;
-    node.className = `form-message ${type}`;
-    node.textContent = message || '';
-  }
-
-  function renderSmtpSettings(settings = {}) {
-    const smtpEmail = settings.smtpEmail || 'amitsvision4u@gmail.com';
-    $('#smtpEmail').value = smtpEmail;
-    $('#smtpHost').value = settings.smtpHost || 'smtp.gmail.com';
-    $('#smtpPort').value = settings.smtpPort || 587;
-    $('#smtpSecure').checked = Boolean(settings.secure);
-    $('#smtpRequireTls').checked = settings.requireTLS !== false;
-    $('#fromEmail').value = settings.fromEmail || smtpEmail;
-    $('#smtpPassword').value = settings.passwordSaved ? '********' : '';
-    $('#smtpPassword').disabled = Boolean(settings.passwordSaved);
-    $('#smtpPassword').placeholder = settings.passwordSaved ? '********' : 'Enter once during first setup';
-    $('#smtpTestEmail').value = settings.fromEmail || smtpEmail;
-    $('#smtpStatus').textContent = settings.configured ? 'SMTP Configured OK' : 'SMTP Not Configured';
-    $('#smtpStatus').classList.toggle('green-dot', Boolean(settings.configured));
-    $('#smtpStatus').classList.toggle('red-dot', !settings.configured);
-    setSmtpMessage('#smtpSettingsMessage', settings.passwordSaved ? 'Password Saved Securely' : 'Change Password Required', settings.passwordSaved ? 'success' : 'error');
-  }
-
-  function clockSkewCriteria() {
-    const form = $('#clockSkewFilters');
-    return {
-      dealerCode: cleanDealerCode($('[name="dealerCode"]', form)?.value || ''),
-      deviceId: String($('[name="deviceId"]', form)?.value || '').trim(),
-      userId: String($('[name="userId"]', form)?.value || '').trim(),
-      thresholdMinutes: Number($('[name="thresholdMinutes"]', form)?.value || 5),
-      sinceDays: Number($('[name="sinceDays"]', form)?.value || 7)
-    };
-  }
-
-  function setClockSkewMessage(message, type = 'success') {
-    const node = $('#clockSkewMessage');
-    if (!node) return;
-    node.className = `form-message ${type}`;
-    node.textContent = message || '';
-  }
-
-  function selectedClockSkewDeviceIds() {
-    return Array.from(state.clockSkewSelectedIds || []);
-  }
-
-  function renderClockSkewRows(rows = []) {
-    state.clockSkewRows = rows;
-    state.clockSkewSelectedIds = new Set();
-    const body = $('#clockSkewRows');
-    if (!body) return;
-    if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="8" class="muted">No skewed device records found. Use Load or adjust filters.</td></tr>';
-      const selectAll = $('#clockSkewSelectAll');
-      if (selectAll) selectAll.checked = false;
-      return;
-    }
-    body.innerHTML = rows.map((item) => `
-      <tr>
-        <td><input class="clock-skew-select" type="checkbox" data-id="${escapeHtml(item.deviceId || '')}" ${state.clockSkewSelectedIds.has(item.deviceId) ? 'checked' : ''}></td>
-        <td>${deviceLink(item.deviceId)}</td>
-        <td>${escapeHtml(item.dealerCode || '')}</td>
-        <td>${escapeHtml(item.userId || '')}</td>
-        <td>${escapeHtml(item.batchId || '')}</td>
-        <td>${escapeHtml(item.serverTime || '')}</td>
-        <td>${escapeHtml(item.deviceTime || '')}</td>
-        <td>${escapeHtml(String(item.skewMs || 0))}</td>
-      </tr>
-    `).join('');
-    $('#clockSkewSelectAll')?.addEventListener('change', (event) => {
-      const checked = event.target.checked;
-      $$('.clock-skew-select').forEach((box) => {
-        box.checked = checked;
-        const id = String(box.dataset.id || '').trim();
-        if (id) {
-          if (checked) state.clockSkewSelectedIds.add(id);
-          else state.clockSkewSelectedIds.delete(id);
-        }
-      });
-    });
-    $$('.clock-skew-select').forEach((box) => {
-      box.addEventListener('change', (event) => {
-        const id = String(event.target.dataset.id || '').trim();
-        if (!id) return;
-        if (event.target.checked) state.clockSkewSelectedIds.add(id);
-        else state.clockSkewSelectedIds.delete(id);
-      });
-    });
-  }
-
-  async function loadClockSkewDevices() {
-    const criteria = clockSkewCriteria();
-    const params = new URLSearchParams();
-    if (criteria.dealerCode) params.set('dealerCode', criteria.dealerCode);
-    if (criteria.deviceId) params.set('deviceId', criteria.deviceId);
-    if (criteria.userId) params.set('userId', criteria.userId);
-    params.set('thresholdMinutes', String(criteria.thresholdMinutes || 5));
-    params.set('sinceDays', String(criteria.sinceDays || 7));
-    setClockSkewMessage('Loading skewed devices...', 'success');
-    const data = await api(`/api/admin/clock-skew?${params.toString()}`);
-    renderClockSkewRows(data.list || []);
-    setClockSkewMessage(`Loaded ${data.count || 0} skewed device(s).`, 'success');
-  }
-
-  async function notifySelectedClockSkewDevices() {
-    const deviceIds = selectedClockSkewDeviceIds();
-    if (!deviceIds.length) {
-      setClockSkewMessage('Select at least one device to notify.', 'error');
-      return;
-    }
-    setClockSkewMessage('Sending notify event to selected devices...', 'success');
-    const data = await api('/api/admin/clock-skew/notify', {
-      method: 'POST',
-      body: { deviceIds }
-    });
-    setClockSkewMessage(data.message || 'Notification queued.', data.success ? 'success' : 'error');
-  }
-
   async function loadMasterScanValidator() {
     const panel = $('#validatorStats');
     if (!panel) return;
@@ -8232,7 +8085,6 @@
   }
 
   function renderUsers() {
-    renderResetUserOptions();
     $('#userRows').innerHTML = state.users.map((user) => `
       <tr>
         <td>${escapeHtml(user.name)}</td>
@@ -8400,16 +8252,6 @@
     closeEditUserModal();
   }
 
-  function renderResetUserOptions() {
-    const select = $('#resetUsernameSelect');
-    if (!select) return;
-    const selected = select.value;
-    select.innerHTML = '<option value="">Select user</option>' + state.users.map((user) => (
-      `<option value="${escapeHtml(user.username)}">${escapeHtml(user.name || user.username)} (${escapeHtml(user.username)} - ${escapeHtml(user.role)})</option>`
-    )).join('');
-    select.value = selected;
-  }
-
   async function loadPairingQr() {
     const dealerCode = currentDealerCode();
     const data = await api(`/api/qr/pairing?dealerCode=${encodeURIComponent(dealerCode)}`);
@@ -8498,10 +8340,9 @@
     if ($('#reports')?.classList.contains('active')) viewJobs.push(loadCategories());
     if ($('#scan')?.classList.contains('active')) viewJobs.push(loadScanHistory(), loadBins(), loadBarcodeBins(), loadPairingQr());
     if ($('#binTransfer')?.classList.contains('active')) viewJobs.push(loadBinTransferHistory());
-    if ($('#master')?.classList.contains('active')) viewJobs.push(loadPartSearchFilters());
+    if ($('#master')?.classList.contains('active')) viewJobs.push(loadPartSearchFilters(), loadCatalogueRequiredColumns(), loadUsers());
     if ($('#validator')?.classList.contains('active')) viewJobs.push(loadMasterScanValidator());
     if ($('#devices')?.classList.contains('active')) viewJobs.push(loadDevices(), loadPairingQr());
-    if ($('#admin')?.classList.contains('active')) viewJobs.push(loadAuthSettings(), loadUsers());
     await Promise.all(viewJobs);
     renderSyncQueue();
     renderSyncLog();
@@ -8965,6 +8806,7 @@
   }
 
   function openView(viewId, title) {
+    if (viewId === 'admin') viewId = 'master';
     if (!$(`#${viewId}`)) viewId = 'dashboard';
     localStorage.setItem(ACTIVE_VIEW_KEY, viewId);
     document.body.classList.toggle('dashboard-view-active', viewId === 'dashboard');
@@ -8972,7 +8814,9 @@
     $$('.view').forEach((view) => view.classList.remove('active'));
     const target = $(`#${viewId}`);
     if (target) target.classList.add('active');
-    $('#viewTitle').textContent = VIEW_TITLES[viewId] || title || viewId;
+    const viewTitle = VIEW_TITLES[viewId] || title || viewId;
+    $('#viewTitle').textContent = viewTitle;
+    document.title = `DAKSH INVENTORY SYSTEM - ${viewTitle}`;
     if (viewId === 'dashboard' && state.dashboardLoaded) {
       loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
     } else if (viewId !== 'dashboard') {
@@ -8990,17 +8834,17 @@
       loadCategories().catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'master') {
-      loadPartSearchFilters().catch((error) => toast(error.message, 'error'));
-      loadCatalogueRequiredColumns().catch((error) => toast(error.message, 'error'));
+      Promise.all([
+        loadPartSearchFilters(),
+        loadCatalogueRequiredColumns(),
+        loadUsers()
+      ]).catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'validator') {
       loadMasterScanValidator().catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'devices') {
       Promise.all([loadDevices(), loadPairingQr()]).catch((error) => toast(error.message, 'error'));
-    }
-    if (viewId === 'admin') {
-      Promise.all([loadAuthSettings(), loadUsers()]).catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'archiveRestore') {
       loadAuditBackups().catch((error) => toast(error.message, 'error'));
@@ -9014,7 +8858,8 @@
     const params = new URLSearchParams(window.location.search);
     const requestedView = params.get('view') || '';
     const savedView = requestedView || localStorage.getItem(ACTIVE_VIEW_KEY) || 'dashboard';
-    const viewId = $(`#${savedView}`) ? savedView : 'dashboard';
+    const normalizedView = savedView === 'admin' ? 'master' : savedView;
+    const viewId = $(`#${normalizedView}`) ? normalizedView : 'dashboard';
     openView(viewId, VIEW_TITLES[viewId]);
     let hasPartSearch = false;
     if (viewId === 'reports') {
@@ -9178,9 +9023,6 @@
       setLivePill('barcodeReadyStatus', 'Enter Bin Location', false);
       $('#barcodeBinLocation').focus();
     });
-    $('#loadClockSkewBtn')?.addEventListener('click', () => loadClockSkewDevices().catch((error) => toast(error.message, 'error')));
-    $('#loadClockSkewFiltersBtn')?.addEventListener('click', () => loadClockSkewDevices().catch((error) => toast(error.message, 'error')));
-    $('#notifyClockSkewBtn')?.addEventListener('click', () => notifySelectedClockSkewDevices().catch((error) => toast(error.message, 'error')));
     $('#binManagementDealer')?.addEventListener('change', () => {
       $('#binMasterRows').innerHTML = '<tr><td colspan="5" class="muted">Loading BIN locations...</td></tr>';
       loadBins().catch((error) => toast(error.message, 'error'));
@@ -10117,30 +9959,6 @@
         toast(error.message, 'error');
       }
     });
-    $('#resetUserForm').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const message = $('#resetUserMessage');
-      try {
-        const payload = formObject(event.currentTarget);
-        if (!payload.username) throw new Error('User not found');
-        if (payload.newPassword && payload.newPassword !== payload.confirmPassword) throw new Error('New password and confirm password do not match');
-        if (payload.newPassword && payload.newPin) throw new Error('Enter either a new Password or a new PIN');
-        if (!payload.newPassword && !payload.newPin) throw new Error('Enter a new Password or PIN');
-
-        const url = payload.newPassword ? '/api/auth/admin-reset-password' : '/api/users/reset-pin';
-        const body = payload.newPassword
-          ? { username: payload.username, newPassword: payload.newPassword, forcePasswordChange: payload.forcePasswordChange === 'on' }
-          : { username: payload.username, newPin: payload.newPin };
-        const data = await api(url, { method: 'POST', body });
-        message.className = 'form-message success';
-        message.textContent = data.message || (payload.newPassword ? 'Password reset successful' : 'PIN reset successful');
-        event.currentTarget.reset();
-        renderResetUserOptions();
-      } catch (error) {
-        message.className = 'form-message error';
-        message.textContent = error.message || 'User not found';
-      }
-    });
     $('#editUserForm')?.addEventListener('submit', (event) => saveEditedUser(event).catch((error) => {
       const message = $('#editUserMessage');
       message.className = 'form-message error';
@@ -10152,63 +9970,6 @@
     });
     $('#refreshUsersBtn').addEventListener('click', () => loadUsers().then(() => toast('Users refreshed')).catch((error) => toast(error.message, 'error')));
     $('#userRows')?.addEventListener('change', onUserActionChange);
-    $('#smtpSettingsForm').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      setSmtpMessage('#smtpSettingsMessage', 'Saving SMTP settings...', 'success');
-      try {
-        const payload = smtpPayloadFromForm(event.currentTarget);
-        if (payload.smtpPassword === '********') delete payload.smtpPassword;
-        const data = await api('/api/admin/smtp-save', { method: 'POST', body: payload });
-        renderSmtpSettings(data.smtp || {});
-        setSmtpMessage('#smtpSettingsMessage', data.message || 'SMTP Configured', 'success');
-        toast(data.message || 'SMTP Configured');
-      } catch (error) {
-        setSmtpMessage('#smtpSettingsMessage', error.message || 'SMTP Test Failed', 'error');
-        toast(error.message || 'SMTP Test Failed', 'error');
-      }
-    });
-    $('#changeSmtpPasswordBtn').addEventListener('click', () => {
-      $('#smtpChangePasswordForm').classList.remove('hidden');
-      setSmtpMessage('#smtpPasswordMessage', 'Change Password Required', 'error');
-    });
-    $('#cancelSmtpPasswordBtn').addEventListener('click', () => {
-      $('#smtpChangePasswordForm').classList.add('hidden');
-      $('#smtpChangePasswordForm').reset();
-      setSmtpMessage('#smtpPasswordMessage', '');
-    });
-    $('#smtpChangePasswordForm').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const payload = formObject(event.currentTarget);
-      if (payload.newPassword !== payload.confirmPassword) {
-        setSmtpMessage('#smtpPasswordMessage', 'SMTP App Password and Confirm Password must match', 'error');
-        return;
-      }
-      setSmtpMessage('#smtpPasswordMessage', 'Testing new SMTP password...', 'success');
-      try {
-        const data = await api('/api/admin/smtp-change-password', { method: 'POST', body: payload });
-        renderSmtpSettings(data.smtp || {});
-        $('#smtpChangePasswordForm').reset();
-        $('#smtpChangePasswordForm').classList.add('hidden');
-        setSmtpMessage('#smtpPasswordMessage', data.message || 'Password Saved Securely', 'success');
-        toast(data.message || 'Password Saved Securely');
-      } catch (error) {
-        setSmtpMessage('#smtpPasswordMessage', error.message || 'SMTP Test Failed', 'error');
-        toast(error.message || 'SMTP Test Failed', 'error');
-      }
-    });
-    $('#smtpTestForm').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      setSmtpMessage('#smtpTestMessage', 'Sending test OTP...', 'success');
-      try {
-        const data = await api('/api/admin/smtp-test', { method: 'POST', body: formObject(event.currentTarget) });
-        setSmtpMessage('#smtpTestMessage', data.message || 'OTP Sent Successfully', 'success');
-        toast(data.message || 'OTP Sent Successfully');
-        await loadAuthSettings();
-      } catch (error) {
-        setSmtpMessage('#smtpTestMessage', error.message || 'SMTP Test Failed', 'error');
-        toast(error.message || 'SMTP Test Failed', 'error');
-      }
-    });
     $('#allowUnknownToggle').addEventListener('change', (event) => {
       localStorage.setItem('dakshAllowUnknown', event.target.checked ? 'true' : 'false');
       toast(event.target.checked ? 'Unknown save prompt enabled' : 'Unknown save prompt disabled');
@@ -10404,8 +10165,7 @@
       const jobs = [];
       if ($('#scan')?.classList.contains('active')) jobs.push(loadBins());
       if ($('#reports')?.classList.contains('active')) jobs.push(loadCategories());
-      if ($('#master')?.classList.contains('active')) jobs.push(loadPartSearchFilters());
-      if ($('#master')?.classList.contains('active')) jobs.push(loadCatalogueRequiredColumns());
+      if ($('#master')?.classList.contains('active')) jobs.push(loadPartSearchFilters(), loadCatalogueRequiredColumns(), loadUsers());
       queueDashboardRefresh(400);
       if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) jobs.push(loadParts(state.masterSearch.page || 1));
       if (jobs.length) Promise.all(jobs).catch(console.warn);
@@ -10436,7 +10196,6 @@
       });
       restoreBarcodeScanDefaults();
       bootLog('binding dashboard UI start');
-      moveMasterDataAdminTools();
       bindNavigation();
       bindEvents();
       bindSuggestions();
