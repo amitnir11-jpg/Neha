@@ -11,6 +11,7 @@ const { formatDateLikeFields, parseIstFilterDate } = require('../utils/time');
 const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
 const { reportTotals, signedScanQuantity } = require('../utils/reportTotals');
+const { canonicalizePartCategory } = require('../utils/categoryResolver');
 
 const autoTable = autoTableModule.default || autoTableModule;
 
