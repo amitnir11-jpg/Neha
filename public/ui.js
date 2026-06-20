@@ -569,7 +569,10 @@
 
   function partLink(partNumber, className = 'table-link') {
     const part = String(partNumber || '').trim();
-    return part ? enterpriseLink(part, dashboardHref({ view: 'master', partNumber: part }), { className, label: `Open part ${part} in a new tab` }) : escapeHtml(partNumber || '-');
+    if (!part) return escapeHtml(partNumber || '-');
+    const link = enterpriseLink(part, dashboardHref({ view: 'master', partNumber: part }), { className, label: `Open part ${part} in a new tab` });
+    const copyButton = `<button type="button" class="copy-part-btn" data-part="${escapeHtml(part)}" title="Copy part number" aria-label="Copy part number ${escapeHtml(part)}" style="border:0;background:transparent;color:var(--link,#005db8);cursor:pointer;padding:0 0 0 4px;font-size:12px;line-height:1;vertical-align:middle;">📋</button>`;
+    return `<span class="part-link-copy-group" style="display:inline-flex;align-items:center;gap:4px;max-width:100%;vertical-align:middle;">${link}${copyButton}</span>`;
   }
 
   function deviceLink(deviceId, className = 'table-link') {
@@ -670,7 +673,7 @@
     node.innerHTML = `
       <strong>Part Scanned Successfully</strong>
       <dl>
-        <div><dt>Part Number</dt><dd>${escapeHtml(partNumber)}</dd></div>
+        <div><dt>Part Number</dt><dd>${partLink(partNumber)}</dd></div>
         <div><dt>Part Description</dt><dd>${escapeHtml(scan.partDescription || scan.partName || '-')}</dd></div>
         <div><dt>Category</dt><dd>${escapeHtml(scan.category || '-')}</dd></div>
         <div><dt>Qty</dt><dd>${escapeHtml(scan.qty || scan.quantity || 0)}</dd></div>
@@ -2758,7 +2761,7 @@
     return `
       <tr>
         <td>${escapeHtml(compactDateTime(scan.timestamp || scan.scanTime || scan.createdAt || ''))}</td>
-        <td>${escapeHtml(scan.partNumber || scan.part || scan.normalizedPartNumber || '-')}</td>
+        <td>${partLink(scan.partNumber || scan.part || scan.normalizedPartNumber || '')}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.mrp ?? 0))}</td>
         <td>${escapeHtml(scan.scanType || scan.type || '-')}</td>
@@ -3186,7 +3189,10 @@
 
   function scanHistoryRow(scan = {}) {
     const id = scan.scanId || scan.uniqueScanId || scan._id || '';
-    const rowMrp = scan.displayMRP || scan.currentCatalogueMRP || 0;
+    const partNumber = scan.partNumber || scan.part || scan.normalizedPartNumber || '';
+    const partDescription = scan.partDescription || scan.partName || scan.description || partNumber || '-';
+    const rowMrp = scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.valuationMRP ?? scan.mrp ?? 0;
+    const rowDlc = scan.currentCatalogueDLC ?? scan.dlc ?? 0;
     const totalQty = scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1);
     const canEditDetails = canEditScanDetails(scan);
     const editOption = canEditDetails ? '<option value="edit-qty">Edit Quantity</option><option value="edit">Edit Part Details</option>' : '';
@@ -3198,11 +3204,11 @@
       <tr>
         <td class="select-cell"><input class="scan-history-checkbox" type="checkbox" value="${escapeHtml(id)}"></td>
         <td>${escapeHtml(dateTime(scan.timestamp))}</td>
-        <td>${partLink(scan.partNumber || scan.part)}</td>
-        <td>${escapeHtml(scan.partDescription || scan.partName)}</td>
+        <td>${partLink(partNumber || scan.rawScanString || scan.rawScan || '')}</td>
+        <td>${escapeHtml(partDescription)}</td>
         <td>${escapeHtml(scan.productCategory || 'Uncategorized')}</td>
         <td>${escapeHtml(money(rowMrp))}</td>
-        <td>${escapeHtml(money(scan.currentCatalogueDLC ?? 0))}</td>
+        <td>${escapeHtml(money(rowDlc))}</td>
         <td>${escapeHtml(scan.productGroup || '')}</td>
         <td>${escapeHtml(scan.model || '')}</td>
         <td>${escapeHtml(scan.manufacturingYear || scan.year || '')}</td>
@@ -5490,7 +5496,7 @@
           <tbody>${rows.map((row) => `
             <tr>
               <td>${escapeHtml(row.rowNumber || '')}</td>
-              <td>${escapeHtml(row.partNumber || '')}</td>
+              <td>${partLink(row.partNumber || row.part || row.normalizedPartNumber || '')}</td>
               <td>${escapeHtml(row.dealerCode || '')}</td>
               <td>${escapeHtml(row.message || '')}</td>
             </tr>
@@ -9040,8 +9046,20 @@
       setUserMenuOpen($('#userDropdown')?.hidden !== false);
     });
     document.addEventListener('click', (event) => {
+      const copyButton = event.target.closest('.copy-part-btn');
+      if (copyButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const part = String(copyButton.dataset.part || '').trim();
+        if (!part) {
+          toast('Part number is not available', 'error');
+          return;
+        }
+        copyTextValue(part, 'Part number').catch((error) => toast(error.message, 'error'));
+        return;
+      }
       if (!event.target.closest('#userMenu')) setUserMenuOpen(false);
-    });
+    }, true);
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         setUserMenuOpen(false);

@@ -108,6 +108,9 @@
     nativeDetectorFrame: null,
     nativeDetectorRunId: 0,
     nativeDetectorRunning: false,
+    cameraStream: null,
+    partMasterCache: new Map(),
+    partMasterLookupPromise: new Map(),
     lastDecodeAtByKey: new Map(),
     duplicateNoticeLocks: new Map(),
     recentCleanupTimer: null,
@@ -1039,6 +1042,7 @@
     ['playing', 'loadeddata', 'canplay'].forEach((eventName) => {
       video.addEventListener(eventName, () => {
         if (state.scanning && video.srcObject) {
+          setCameraStarting(false);
           setCameraLive(true);
           startNativeDetector(video).catch(() => undefined);
         }
@@ -1051,9 +1055,10 @@
 
   function cameraConstraints(deviceId = '') {
     const video = {
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
-      frameRate: { ideal: 30, max: 60 }
+      width: { ideal: 1280, max: 1280 },
+      height: { ideal: 720, max: 720 },
+      frameRate: { ideal: 24, max: 30 },
+      resizeMode: 'crop-and-scale'
     };
     if (deviceId) {
       video.deviceId = { exact: deviceId };
@@ -1149,6 +1154,12 @@
         state.scanReader.reset();
       } catch (_) {}
     }
+    if (state.cameraStream) {
+      try {
+        state.cameraStream.getTracks().forEach((track) => track.stop());
+      } catch (_) {}
+      state.cameraStream = null;
+    }
     const video = byId('cameraPreview');
     if (video) {
       try {
@@ -1228,6 +1239,7 @@
     hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
     hints.set(DecodeHintType.TRY_HARDER, true);
     state.scanReader = new BrowserMultiFormatReader(hints, 120);
+    state.scanReader.timeBetweenDecodingAttempts = 80;
     return state.scanReader;
   }
 
@@ -1368,8 +1380,121 @@
     return record;
   }
 
+  function partMasterCacheKey(partNumber = '', dealerCode = activeDealerCode()) {
+    const part = normalizePartCandidateValue(partNumber);
+    const dealer = upper(dealerCode || activeDealerCode());
+    return part ? `${dealer || 'ALL'}::${part}` : '';
+  }
+
+  function partMasterFieldsFromLookup(data = {}) {
+    const partDescription = clean(data.partDescription || data.partName || data.description || '');
+    const productCategory = clean(data.productCategory || data.category || '');
+    const productGroup = clean(data.productGroup || '');
+    const partSubGroup = clean(data.partSubGroup || '');
+    const model = clean(data.model || '');
+    const year = clean(data.year || data.manufacturingYear || '');
+    const manufacturingYear = clean(data.manufacturingYear || data.year || '');
+    const mrp = Number(data.mrp || 0);
+    const dlc = Number(data.dlc || 0);
+    return {
+      partName: partDescription,
+      partDescription,
+      description: partDescription,
+      category: productCategory,
+      productCategory,
+      productGroup,
+      partSubGroup,
+      model,
+      year,
+      manufacturingYear,
+      mrp,
+      currentCatalogueMRP: mrp,
+      displayMRP: mrp,
+      valuationMRP: mrp,
+      dlc,
+      currentCatalogueDLC: dlc,
+      masterFound: true,
+      masterMatch: true,
+      isMasterMatched: true,
+      valuationSource: mrp > 0 ? 'PART_MASTER_MRP_DLC' : 'PART_MASTER_PRICE_MISSING'
+    };
+  }
+
+  function mergeMasterFields(record = {}, masterFields = null) {
+    if (!masterFields) return record;
+    const partDescription = clean(masterFields.partDescription || masterFields.partName || record.partDescription || record.partName || '');
+    return {
+      ...record,
+      ...masterFields,
+      partName: partDescription || record.partName || '',
+      partDescription: partDescription || record.partDescription || '',
+      description: partDescription || record.description || '',
+      category: masterFields.category || record.category || '',
+      productCategory: masterFields.productCategory || record.productCategory || '',
+      productGroup: masterFields.productGroup || record.productGroup || '',
+      partSubGroup: masterFields.partSubGroup || record.partSubGroup || '',
+      model: masterFields.model || record.model || '',
+      year: masterFields.year || record.year || '',
+      manufacturingYear: masterFields.manufacturingYear || record.manufacturingYear || '',
+      mrp: Number(masterFields.mrp ?? record.mrp ?? 0),
+      currentCatalogueMRP: Number(masterFields.currentCatalogueMRP ?? record.currentCatalogueMRP ?? masterFields.mrp ?? record.mrp ?? 0),
+      displayMRP: Number(masterFields.displayMRP ?? record.displayMRP ?? masterFields.mrp ?? record.currentCatalogueMRP ?? record.mrp ?? 0),
+      valuationMRP: Number(masterFields.valuationMRP ?? record.valuationMRP ?? masterFields.mrp ?? record.mrp ?? 0),
+      dlc: Number(masterFields.dlc ?? record.dlc ?? 0),
+      currentCatalogueDLC: Number(masterFields.currentCatalogueDLC ?? record.currentCatalogueDLC ?? masterFields.dlc ?? record.dlc ?? 0),
+      masterFound: true,
+      masterMatch: true,
+      isMasterMatched: true
+    };
+  }
+
+  async function lookupMasterFields(partNumber = '', dealerCode = activeDealerCode()) {
+    const part = normalizePartCandidateValue(partNumber);
+    const key = partMasterCacheKey(part, dealerCode);
+    if (!key) return null;
+    if (state.partMasterCache.has(key)) return state.partMasterCache.get(key);
+    if (state.partMasterLookupPromise.has(key)) return state.partMasterLookupPromise.get(key);
+    if (!navigator.onLine) return null;
+    const promise = api(`/api/mobile/validate-part?${new URLSearchParams({
+      partNumber: part,
+      dealerCode: upper(dealerCode || activeDealerCode())
+    }).toString()}`, { timeoutMs: 10000 })
+      .then((data) => {
+        const fields = data && data.found ? partMasterFieldsFromLookup(data) : null;
+        state.partMasterCache.set(key, fields);
+        return fields;
+      })
+      .catch(() => {
+        state.partMasterCache.set(key, null);
+        return null;
+      })
+      .finally(() => {
+        state.partMasterLookupPromise.delete(key);
+      });
+    state.partMasterLookupPromise.set(key, promise);
+    return promise;
+  }
+
+  async function enrichStoredRecord(record = {}) {
+    const partNumber = normalizePartCandidateValue(record.partNumber || record.part || record.normalizedPartNumber || '');
+    if (!partNumber) return null;
+    const existingDescription = clean(record.partDescription || record.partName || '');
+    const existingMrp = Number(record.currentCatalogueMRP ?? record.displayMRP ?? record.valuationMRP ?? record.mrp ?? 0);
+    const existingDlc = Number(record.currentCatalogueDLC ?? record.dlc ?? 0);
+    if (existingDescription && existingMrp > 0 && existingDlc > 0) return null;
+    const masterFields = await lookupMasterFields(partNumber, record.dealerCode || activeDealerCode()).catch(() => null);
+    if (!masterFields) return null;
+    const latest = await getRecord(record.scanId).catch(() => null);
+    const next = mergeMasterFields(latest || record, masterFields);
+    await putRecord(next);
+    state.allRows = await getAllRecords().catch(() => []);
+    applyRecordToUi(next);
+    return next;
+  }
+
   function updateLastScan(row = {}) {
     const part = rowPart(row);
+    const description = clean(row.partDescription || row.partName || '');
     const mode = rowMode(row);
     const status = rowStatus(row);
     const qty = rowQty(row);
@@ -1383,8 +1508,9 @@
         : status === 'failed'
           ? `Sync failed${errorText ? `: ${errorText}` : ''}`
           : 'Pending sync';
-    byId('lastScanTitle').textContent = part || 'Scan captured';
+    byId('lastScanTitle').textContent = description || part || 'Scan captured';
     byId('lastScanMeta').textContent = [
+      part ? `Part ${part}` : '',
       mode,
       `Qty ${fmtNumber(qty)}`,
       bin ? `Bin ${bin}` : '',
@@ -1402,6 +1528,7 @@
     await putRecord(record);
     state.allRows = await getAllRecords();
     applyRecordToUi(record);
+    void enrichStoredRecord(record).catch(() => undefined);
     if (!silent) {
       toast(state.paused ? 'Saved locally' : navigator.onLine ? 'Saved locally. Sync starting...' : 'Saved locally. Will sync when online.', 'success');
       beep('ok');
@@ -1660,6 +1787,8 @@
     state.pendingLogin = null;
     state.manualRaw = '';
     state.manualResumeAfterClose = false;
+    state.partMasterCache.clear();
+    state.partMasterLookupPromise.clear();
     updateScannerPanel();
     toast(error?.message || 'Login expired. Please sign in again.', 'error');
   }
@@ -1679,6 +1808,8 @@
     state.pendingLogin = null;
     state.manualRaw = '';
     state.manualResumeAfterClose = false;
+    state.partMasterCache.clear();
+    state.partMasterLookupPromise.clear();
     clearSession();
     state.allRows = [];
     updateScannerPanel();
@@ -1740,62 +1871,107 @@
     state.paused = false;
     state.scanning = true;
     const video = byId('cameraPreview');
-    bindVideoState(video);
-    if (video) {
-      video.muted = true;
-      video.autoplay = true;
-      video.setAttribute('playsinline', '');
+    if (!video) {
+      state.scanning = false;
+      throw new Error('Camera preview is unavailable');
     }
+    bindVideoState(video);
+    video.muted = true;
+    video.autoplay = true;
+    video.setAttribute('playsinline', '');
     const selected = state.selectedCameraId || preferredCameraId(state.cameraDevices || []);
-    cameraState('Loading scanner library...');
+    cameraState('Opening camera...');
     setCameraStarting(true);
     try {
-      const reader = await ensureReader();
-      cameraState('Starting camera...');
+      const readerPromise = ensureReader();
       const onDecode = (result) => {
         if (result) handleDecodeResult(result);
       };
-      const startDecode = (deviceId) => {
-        if (typeof reader.decodeFromConstraints === 'function') {
-          return reader.decodeFromConstraints(cameraConstraints(deviceId), video, onDecode);
-        }
-        return reader.decodeFromVideoDevice(deviceId || null, video, onDecode);
-      };
-      let promise = startDecode(selected);
-      promise = Promise.resolve(promise).catch((error) => {
+      const openStream = async (deviceId) => navigator.mediaDevices.getUserMedia(cameraConstraints(deviceId));
+      let stream = null;
+      try {
+        stream = await openStream(selected);
+      } catch (firstError) {
         if (selected) {
           setSelectedCamera('');
-          return startDecode('');
+          stream = await openStream('');
+        } else {
+          throw firstError;
         }
-        throw error;
-      });
-      promise.then(() => {
-        if (!state.scanning) return;
-        if (video?.srcObject && video.readyState >= 2) setCameraLive(true);
-        startNativeDetector(video).catch(() => undefined);
-      }).catch((error) => {
-        if (state.scanning) {
-          state.scanning = false;
-          setCameraStarting(false);
-          setCameraLive(false);
-          const message = error?.message || 'Camera failed to start';
-          cameraState(message);
-          toast(message, 'error');
+      }
+      if (!state.scanning) {
+        stream?.getTracks?.().forEach((track) => track.stop());
+        return;
+      }
+      state.cameraStream = stream;
+      video.srcObject = stream;
+      try {
+        await video.play();
+      } catch (_) {}
+      setCameraLive(true);
+      setCameraStarting(false);
+      cameraState('Camera ready');
+      startNativeDetector(video).catch(() => undefined);
+      const reader = await readerPromise;
+      if (!state.scanning) return;
+      if (reader && typeof reader.decodeContinuously === 'function') {
+        try {
+          reader.decodeContinuously(video, onDecode);
+        } catch (error) {
+          throw error;
         }
-      });
+      } else if (reader && typeof reader.decodeFromConstraints === 'function') {
+        state.cameraStream = null;
+        try {
+          stream.getTracks().forEach((track) => track.stop());
+        } catch (_) {}
+        const startDecode = (deviceId) => reader.decodeFromConstraints(cameraConstraints(deviceId), video, onDecode);
+        let promise = startDecode(selected);
+        promise = Promise.resolve(promise).catch((error) => {
+          if (selected) {
+            setSelectedCamera('');
+            return startDecode('');
+          }
+          throw error;
+        });
+        promise.catch((error) => {
+          if (state.scanning) {
+            state.scanning = false;
+            setCameraStarting(false);
+            setCameraLive(false);
+            const message = error?.message || 'Camera failed to start';
+            cameraState(message);
+            toast(message, 'error');
+          }
+        });
+      } else {
+        throw new Error('Scanner library failed to initialize');
+      }
       state.cameraTimer = setTimeout(() => {
         if (state.scanning) {
           if (video?.srcObject && video.readyState >= 2) setCameraLive(true);
           if (video?.srcObject && video.readyState >= 2) startNativeDetector(video).catch(() => undefined);
           cameraState('Scanning automatically');
         }
-      }, 400);
+      }, 250);
       setTimeout(() => enableCameraFocus(video), 650);
       renderCameraListSoon();
     } catch (error) {
       state.scanning = false;
       setCameraStarting(false);
       setCameraLive(false);
+      if (state.cameraStream) {
+        try {
+          state.cameraStream.getTracks().forEach((track) => track.stop());
+        } catch (_) {}
+      }
+      state.cameraStream = null;
+      if (video) {
+        try {
+          video.pause();
+        } catch (_) {}
+        video.srcObject = null;
+      }
       cameraState(error.message || 'Camera failed to start');
       toast(error.message || 'Camera failed to start', 'error');
     }
@@ -2608,6 +2784,7 @@
     await refreshMobileConfig();
     await dbReady;
     ensureReader().catch(() => undefined);
+    nativeBarcodeDetector().catch(() => undefined);
     refreshCameraList().catch(() => undefined);
     setMode(state.mode, { silent: true });
     renderUrlState();

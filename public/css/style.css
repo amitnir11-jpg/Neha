@@ -1941,6 +1941,10 @@ body[data-page="report"] table thead {
     box-shadow: none;
     border: 0;
   }
+
+  .copy-part-btn {
+    display: none !important;
+  }
 }
 
 /* Professional authentication workspace */

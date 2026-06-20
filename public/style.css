@@ -147,11 +147,11 @@ a:focus-visible,
   border-radius: 6px;
 }
 
-.enterprise-link,
-.table-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  .enterprise-link,
+  .table-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
   max-width: 100%;
   min-height: 24px;
   padding: 1px 2px;
@@ -4067,6 +4067,10 @@ td.numeric,
   body.print-bin-labels #binLabelPrintSheet .table-link {
     color: #020617 !important;
     text-decoration: none !important;
+  }
+
+  .copy-part-btn {
+    display: none !important;
   }
 }
 
