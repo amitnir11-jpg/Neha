@@ -298,7 +298,7 @@
 
       <section id="reports" class="view">
         <section class="card">
-          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Submit</button><button id="reportRefresh" class="btn light" type="button" disabled>Manual Show</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button></div></div>
+          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Load Report</button><button id="reportRefresh" class="btn light" type="button" disabled>Refresh Now</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button></div></div>
           <form id="reportFilters" class="filter-grid">
             <label>Report Type<select name="reportType" id="reportTypeSelect" required>
               <option value="">Select report</option>
@@ -346,7 +346,7 @@
             <label class="toggle hidden" data-report-filter-key="scanModeOptions"><input name="showScannedPartsOnly" type="checkbox">Scanned Parts Only</label>
             <label class="toggle hidden" data-report-filter-key="scanModeOptions"><input name="showFullMasterWithZeroScan" type="checkbox">Full Master With Zero Scan</label>
           </form>
-          <div id="reportMessage" class="form-message"></div>
+          <div id="reportMessage" class="form-message">Select filters to load report automatically.</div>
         </section>
         <section id="reportPreviewCard" class="card report-preview-card">
           <div class="card-head report-preview-head">
@@ -592,7 +592,7 @@
               <label>Movement<select name="movement"><option value="">All Movement</option><option>Fast Moving</option><option>Slow Moving</option><option>Dead Stock</option><option>Critical Shortage</option><option>Excess Stock</option><option>Normal</option></select></label>
               <button id="reconShow" class="btn primary" type="submit">Submit</button>
             </form>
-            <div id="reconMessage" class="form-message">Please select filters and click Submit.</div>
+            <div id="reconMessage" class="form-message">Select filters to load reconciliation automatically.</div>
             <div class="metric-grid six">
               <div class="metric mini"><span>DMS Stock</span><strong id="reconDms">0</strong></div>
               <div class="metric mini"><span>Actual Scanned</span><strong id="reconPhysical">0</strong></div>

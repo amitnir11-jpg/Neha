@@ -172,6 +172,8 @@
     reportAbortController: null,
     reportCache: new Map(),
     reportSearchTimer: null,
+    reportAutoLoadTimer: null,
+    reportRealtimeTimer: null,
     reportStaleNoticeAt: 0,
     reportTableRows: [],
     reportTableColumns: [],
@@ -2134,8 +2136,9 @@
       const message = $('#reportMessage');
       if (message) {
         message.className = 'form-message warning';
-        message.textContent = `Report data changed after ${reason}. Click Refresh to update.`;
+        message.textContent = `Report data changed after ${reason}. Refreshing automatically...`;
       }
+      loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error'));
     }, 500);
   }
 
@@ -4202,6 +4205,7 @@
   function applyReportData(data, reportType = activeReportType()) {
     $('#reportTitle').textContent = data.title || REPORT_TITLES[reportType];
     const rows = data.rows || [];
+    const totalRows = Number(data.totalRows || rows.length || 0);
     state.reportTableSummary = data.summary || null;
     state.reportTableSections = data.sections || null;
     renderMovementWiseStockSummary(data.summary || {}, reportType);
@@ -4209,7 +4213,9 @@
     const message = $('#reportMessage');
     if (message) {
       message.className = rows.length ? 'form-message success' : 'form-message error';
-      message.textContent = rows.length ? '' : (data.message || 'No report data found for selected filter');
+      message.textContent = rows.length
+        ? `Report loaded${totalRows > rows.length ? ` - showing ${wholeNumber(rows.length)} of ${wholeNumber(totalRows)} rows` : ` - ${wholeNumber(rows.length)} rows`}.`
+        : (data.message || 'No report data found for selected filter');
     }
     state.reportLoaded = true;
     state.reportHasRun = true;
@@ -4239,7 +4245,7 @@
 
   function validateReportSelection(showToast = false) {
     const params = reportParams();
-    const missingDealerMessage = 'Select dealer code first to view report.';
+    const missingDealerMessage = 'Select dealer code first to load report automatically.';
     if (params.reportType && !params.dealerCode) {
       const box = $('#reportMessage');
       if (box) {
@@ -4252,9 +4258,36 @@
     const box = $('#reportMessage');
     if (box && box.textContent === missingDealerMessage) {
       box.className = 'form-message';
-      box.textContent = 'Please select filters and click Submit.';
+      box.textContent = 'Select filters to load report automatically.';
     }
     return true;
+  }
+
+  function cancelScheduledReportLoad() {
+    clearTimeout(state.reportAutoLoadTimer);
+    state.reportAutoLoadTimer = null;
+  }
+
+  function scheduleReportLoad(delay = 350, pendingMessage = 'Applying filters...') {
+    cancelScheduledReportLoad();
+    const params = reportParams();
+    if (!params.reportType) return;
+    if (!params.dealerCode) {
+      resetReportPreview('Select dealer code first to load report automatically.');
+      updateReportButtons();
+      return;
+    }
+    if (state.reportAbortController) state.reportAbortController.abort();
+    const message = $('#reportMessage');
+    if (message) {
+      message.className = 'form-message loading';
+      message.textContent = pendingMessage;
+    }
+    updateReportButtons();
+    state.reportAutoLoadTimer = setTimeout(() => {
+      state.reportAutoLoadTimer = null;
+      loadReport().catch((error) => toast(error.message, 'error'));
+    }, delay);
   }
 
   function queueDashboardRefresh(delay = 1200) {
@@ -4349,7 +4382,7 @@
     if (fullMaster.checked) scannedOnly.checked = false;
   }
 
-  function resetReportPreview(message = 'Please select filters and click Submit.') {
+  function resetReportPreview(message = 'Select filters to load report automatically.') {
     state.reportLoaded = false;
     state.reportHasRun = false;
     state.reportTableRows = [];
@@ -4993,9 +5026,10 @@
     const useCache = options.useCache !== false;
     const forceRefresh = options.forceRefresh === true;
     const showLoading = options.showLoading !== false;
+    cancelScheduledReportLoad();
     const reportType = activeReportType();
     if (!reportType) {
-      resetReportPreview('Select report type, choose filters and click Submit.');
+      resetReportPreview('Select report type to load report automatically.');
       return;
     }
     if (!validateReportSelection(true)) {
@@ -5003,7 +5037,7 @@
       return;
     }
     if (!hasReportCriteria()) {
-      resetReportPreview('Please select filters and click Submit.');
+      resetReportPreview('Select filters to load report automatically.');
       state.reportHasRun = false;
       return;
     }
@@ -5080,7 +5114,7 @@
     ensureActiveReportTabVisible();
     applyReportScanModeDefaults();
     loadReportFilterSettings(type).catch((error) => console.warn('Report filter settings failed', error));
-    resetReportPreview(CSV_REPORT_TYPES.has(type) ? 'Click Submit to view rows.' : 'Please select filters and click Submit.');
+    resetReportPreview(CSV_REPORT_TYPES.has(type) ? 'Select filters to load report automatically.' : 'Select filters to load report automatically.');
     if (options.persist !== false) saveReportState(false);
   }
 
@@ -5558,7 +5592,7 @@
       setReconciliationSummary({});
       if (message && !silent) {
         message.className = 'form-message';
-        message.textContent = 'Please select Dealer Code and click Submit.';
+        message.textContent = 'Select Dealer Code to load the reconciliation report.';
       }
       state.reconLoaded = false;
       return;
@@ -8927,7 +8961,7 @@
 
   async function finishRestoredViewLoad(restored = {}) {
     if (restored.viewId === 'reports') {
-      resetReportPreview('Saved report filters loaded. Click Submit to fetch report data.');
+      resetReportPreview('Saved report filters loaded. Changes will load automatically.');
     }
     if (restored.viewId === 'master' && restored.hasPartSearch) {
       await loadParts();
@@ -9412,40 +9446,56 @@
       if (event.target.id === 'validatorMapModal') closeValidatorMapModal();
     });
 
-    $('#reportFilters').addEventListener('submit', (event) => {
+    const reportFiltersForm = $('#reportFilters');
+    reportFiltersForm?.addEventListener('submit', (event) => {
       event.preventDefault();
       loadReport().catch((error) => toast(error.message, 'error'));
+    });
+    reportFiltersForm?.addEventListener('input', (event) => {
+      const field = event.target;
+      if (!field || field.disabled) return;
+      if (field.type === 'checkbox' || field.type === 'radio' || field.type === 'button' || field.type === 'submit' || field.type === 'reset' || field.type === 'file') return;
+      if (!field.name || field.name === 'reportTableSearch') return;
+      scheduleReportLoad(field.type === 'date' || field.type === 'datetime-local' ? 220 : 450);
+    });
+    reportFiltersForm?.addEventListener('change', (event) => {
+      const field = event.target;
+      if (!field || field.disabled) return;
+      if (field.type === 'submit' || field.type === 'button' || field.type === 'reset') return;
+      const fieldName = String(field.name || '').trim();
+      if (!fieldName) return;
+      if (fieldName === 'productGroup') refreshReportSubGroupOptions();
+      if (fieldName === 'showScannedPartsOnly' && field.checked) {
+        const opposite = $('[name="showFullMasterWithZeroScan"]', reportFiltersForm);
+        if (opposite) opposite.checked = false;
+      }
+      if (fieldName === 'showFullMasterWithZeroScan' && field.checked) {
+        const opposite = $('[name="showScannedPartsOnly"]', reportFiltersForm);
+        if (opposite) opposite.checked = false;
+      }
+      if (fieldName === 'dealerCode') {
+        const params = reportParams();
+        if (!params.dealerCode) {
+          cancelScheduledReportLoad();
+          resetReportPreview('Select dealer code first to load report automatically.');
+          return;
+        }
+        syncScanDealerScope(params.dealerCode, field);
+        scheduleReportLoad(220, 'Loading report...');
+        return;
+      }
+      if (!reportParams().dealerCode) {
+        cancelScheduledReportLoad();
+        resetReportPreview('Select dealer code first to load report automatically.');
+        return;
+      }
+      scheduleReportLoad(field.type === 'date' || field.type === 'datetime-local' ? 220 : 350, 'Loading report...');
     });
     $('#reportTypeSelect').addEventListener('change', (event) => {
       setReportTab(event.target.value);
       state.reportCache.clear();
       updateReportButtons();
-    });
-    $('#reportCategoryFilter')?.addEventListener('change', updateReportButtons);
-    $('#reportProductGroupFilter')?.addEventListener('change', () => {
-      refreshReportSubGroupOptions();
-      updateReportButtons();
-    });
-    $('#reportProductSubGroupFilter')?.addEventListener('change', updateReportButtons);
-    $('[name="dealerCode"]', $('#reportFilters')).addEventListener('change', (event) => {
-      state.reportCache.clear();
-      updateReportButtons();
-      if (!reportParams().dealerCode) {
-        resetReportPreview('Select dealer code first to view report.');
-        return;
-      }
-      syncScanDealerScope(reportParams().dealerCode, event.currentTarget);
-      if (state.reportHasRun) {
-        loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error'));
-      } else {
-        resetReportPreview('Dealer selected. Click Submit to fetch report data.');
-      }
-    });
-    $('[name="showScannedPartsOnly"]', $('#reportFilters'))?.addEventListener('change', (event) => {
-      if (event.target.checked) $('[name="showFullMasterWithZeroScan"]', $('#reportFilters')).checked = false;
-    });
-    $('[name="showFullMasterWithZeroScan"]', $('#reportFilters'))?.addEventListener('change', (event) => {
-      if (event.target.checked) $('[name="showScannedPartsOnly"]', $('#reportFilters')).checked = false;
+      scheduleReportLoad(220, 'Loading report...');
     });
     $('#reportShow').addEventListener('click', () => loadReport().catch((error) => toast(error.message, 'error')));
     $('#reportRefresh')?.addEventListener('click', () => loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error')));
@@ -9489,16 +9539,18 @@
       try {
         await saveReportFilterSettings(selected);
         closeReportFilterSettings();
-        resetReportPreview('Report filters updated. Click Submit to fetch report data.');
+        resetReportPreview('Report filters updated. Changes will load automatically.');
+        scheduleReportLoad(220, 'Loading report...');
       } catch (error) {
         toast(error.message, 'error');
       }
     });
     $('#reportReset')?.addEventListener('click', () => {
+      cancelScheduledReportLoad();
       if (state.reportAbortController) state.reportAbortController.abort();
       $('#reportFilters').reset();
       applyReportScanModeDefaults();
-      resetReportPreview('Please select filters and click Submit.');
+      resetReportPreview('Select filters to load report automatically.');
     });
     $('#reportTableSearch')?.addEventListener('input', () => {
       clearTimeout(state.reportSearchTimer);
@@ -10310,7 +10362,7 @@
       renderSyncQueue();
       renderSyncLog();
       renderConnectionLog();
-      resetReportPreview('Please select filters and click Submit.');
+      resetReportPreview('Select filters to load report automatically.');
       applyReportFilterVisibility();
       restoredView = restoreActiveViewShell();
       bootLog('active view restored', restoredView);

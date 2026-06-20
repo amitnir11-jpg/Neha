@@ -70,7 +70,8 @@
     audits: [],
     deleteAction: null,
     lastReportRows: [],
-    reportFilterSettings: {}
+    reportFilterSettings: {},
+    reportAutoLoadTimer: null
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -1578,7 +1579,45 @@
     });
   }
 
+  function cancelReportPreviewTimer() {
+    clearTimeout(state.reportAutoLoadTimer);
+    state.reportAutoLoadTimer = null;
+  }
+
+  function setLegacyReportMessage(message, className = 'form-message') {
+    const box = $('#legacyReportMessage');
+    if (!box) return;
+    box.className = className;
+    box.textContent = message;
+  }
+
+  function scheduleReportPreview(delay = 350, pendingMessage = 'Applying filters...') {
+    cancelReportPreviewTimer();
+    const params = Object.fromEntries(new URLSearchParams(queryFromForm($('#reportFilterForm'))).entries());
+    const dealerCode = cleanDealerCode($('#reportDealerFilter')?.value || '');
+    const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === dealerCode);
+    const resolvedDealerCode = selectedDealer?.dealerCode || dealerCode || '';
+    if (!resolvedDealerCode) {
+      renderReport({ summary: {}, finalRows: [] });
+      setLegacyReportMessage('Select dealer code first to load report automatically.', 'form-message error');
+      return;
+    }
+    params.dealerCode = resolvedDealerCode;
+    const hasFilter = Object.values(params).some((value) => String(value || '').trim());
+    if (!hasFilter) {
+      renderReport({ summary: {}, finalRows: [] });
+      setLegacyReportMessage('Select filters to load report automatically.');
+      return;
+    }
+    setLegacyReportMessage(pendingMessage, 'form-message loading');
+    state.reportAutoLoadTimer = setTimeout(() => {
+      state.reportAutoLoadTimer = null;
+      loadReportPreview().catch((error) => toast(error.message, 'error'));
+    }, delay);
+  }
+
   async function loadReportPreview() {
+    cancelReportPreviewTimer();
     const selectedDealerCode = cleanDealerCode($('#reportDealerFilter')?.value || '');
     const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === selectedDealerCode);
     const dealerCode = selectedDealer?.dealerCode || selectedDealerCode || '';
@@ -1587,22 +1626,18 @@
       const message = $('#legacyReportMessage');
       if (message) {
         message.className = 'form-message error';
-        message.textContent = 'Select dealer code first to view report.';
+        message.textContent = 'Select dealer code first to load report automatically.';
       }
       return;
     }
     const params = Object.fromEntries(new URLSearchParams(queryFromForm($('#reportFilterForm'))).entries());
+    params.dealerCode = dealerCode;
     const hasFilter = Object.values(params).some((value) => String(value || '').trim());
     if (!hasFilter) {
       renderReport({ summary: {}, finalRows: [] });
-      const message = $('#legacyReportMessage');
-      if (message) {
-        message.className = 'form-message';
-        message.textContent = 'Please select filters and click Submit.';
-      }
+      setLegacyReportMessage('Select filters to load report automatically.');
       return;
     }
-    params.dealerCode = dealerCode;
     params.page = params.page || '1';
     params.limit = params.limit || '250';
     const query = new URLSearchParams(params).toString();
@@ -1616,8 +1651,11 @@
     renderReport(data);
     if (message) {
       const rows = data.finalRows || [];
+      const totalRows = Number(data.totalRows || rows.length || 0);
       message.className = rows.length ? 'form-message success' : 'form-message error';
-      message.textContent = rows.length ? '' : 'No report data found for selected filter';
+      message.textContent = rows.length
+        ? `Report loaded${totalRows > rows.length ? ` - showing ${rows.length.toLocaleString('en-IN')} of ${totalRows.toLocaleString('en-IN')} rows` : ` - ${rows.length.toLocaleString('en-IN')} rows`}.`
+        : 'No report data found for selected filter';
     }
   }
 
@@ -1628,7 +1666,8 @@
   }
 
   function initReportEvents() {
-    $('#reportFilterForm').addEventListener('submit', async (event) => {
+    const reportFilterForm = $('#reportFilterForm');
+    reportFilterForm?.addEventListener('submit', async (event) => {
       event.preventDefault();
       try {
         await loadReportPreview();
@@ -1636,14 +1675,24 @@
         toast(error.message, 'error');
       }
     });
+    reportFilterForm?.addEventListener('input', (event) => {
+      const field = event.target;
+      if (!field || field.disabled) return;
+      if (field.type === 'checkbox' || field.type === 'radio' || field.type === 'button' || field.type === 'submit' || field.type === 'reset' || field.type === 'file') return;
+      if (!field.name) return;
+      scheduleReportPreview(field.type === 'date' || field.type === 'datetime-local' ? 220 : 450);
+    });
+    reportFilterForm?.addEventListener('change', (event) => {
+      const field = event.target;
+      if (!field || field.disabled) return;
+      if (field.type === 'submit' || field.type === 'button' || field.type === 'reset') return;
+      scheduleReportPreview(220, 'Loading report...');
+    });
     $('#resetReportFilterButton')?.addEventListener('click', () => {
+      cancelReportPreviewTimer();
       $('#reportFilterForm').reset();
       renderReport({ summary: {}, finalRows: [] });
-      const message = $('#legacyReportMessage');
-      if (message) {
-        message.className = 'form-message';
-        message.textContent = 'Please select filters and click Submit.';
-      }
+      setLegacyReportMessage('Select filters to load report automatically.');
     });
     $('#legacyReportFilterSettingsOpen')?.addEventListener('click', () => {
       renderLegacyReportFilterSettingsList();
@@ -1664,11 +1713,8 @@
         await saveLegacyReportFilterSettings(selected);
         $('#legacyReportFilterSettingsModal')?.classList.add('hidden');
         renderReport({ summary: {}, finalRows: [] });
-        const message = $('#legacyReportMessage');
-        if (message) {
-          message.className = 'form-message';
-          message.textContent = 'Report filters updated. Click Submit to fetch data.';
-        }
+        setLegacyReportMessage('Report filters updated. Changes will load automatically.');
+        scheduleReportPreview(200, 'Loading report...');
       } catch (error) {
         toast(error.message, 'error');
       }
@@ -1707,6 +1753,9 @@
         toast(error.message, 'error');
       }
     });
+    if (cleanDealerCode($('#reportDealerFilter')?.value || '')) {
+      scheduleReportPreview(150, 'Loading report...');
+    }
   }
 
   async function initReport() {
