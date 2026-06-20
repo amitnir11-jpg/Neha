@@ -502,7 +502,7 @@ a {
   border-radius: 18px;
   overflow: hidden;
   min-height: 260px;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 1 / 1;
   background: linear-gradient(180deg, #eef5ff, #dfeaf7);
   border: 1px solid rgba(37, 99, 235, 0.14);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.72);
@@ -809,7 +809,7 @@ a {
 
   .camera-frame {
     min-height: 260px;
-    aspect-ratio: 1 / 1.08;
+    aspect-ratio: 1 / 1;
   }
 
   .scan-table {
@@ -1082,9 +1082,9 @@ a {
   }
 
   .scan-page.scanner-active .camera-frame {
-    height: clamp(210px, 38vh, 340px);
+    height: auto;
     min-height: 0;
-    aspect-ratio: auto;
+    aspect-ratio: 1 / 1;
   }
 
   .scan-page.scanner-active .control-row {

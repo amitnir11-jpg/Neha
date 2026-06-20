@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.2';
-  const CACHE_VERSION = '20260619-mobile-bin-autostart';
+  const CACHE_VERSION = '20260620-mobile-auto-start-square';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -1698,6 +1698,7 @@
     state.cameraRequested = true;
     state.paused = false;
     clearTimeout(state.autoCameraTimer);
+    state.autoCameraTimer = null;
     if (!isSecureScannerContext() && !LOCALHOST_NAMES.has(window.location.hostname)) {
       cameraState('Open the secure Railway URL to use the camera.');
       return;
@@ -1709,13 +1710,18 @@
     }
     if (forceRestart && state.scanning) stopCamera({ preserveRequest: true });
     cameraState('Starting camera automatically...');
-    state.autoCameraTimer = setTimeout(() => {
+    const startAttempt = () => {
       if (!state.session?.token || state.paused || !state.cameraRequested) return;
       startCamera().catch((error) => {
         cameraState(error.message || 'Camera failed to start');
         toast(error.message || 'Camera failed to start', 'error');
       });
-    }, forceRestart ? 50 : 150);
+    };
+    if (forceRestart) {
+      Promise.resolve().then(startAttempt);
+      return;
+    }
+    state.autoCameraTimer = setTimeout(startAttempt, 150);
   }
 
   async function startCamera() {
@@ -2469,7 +2475,7 @@
       startTimers();
       toast('Login successful', 'success');
       sendHeartbeat().catch(() => undefined);
-      requestAutoCameraStart({ focusBin: true });
+      requestAutoCameraStart({ focusBin: true, forceRestart: true });
     } catch (error) {
       if (showDealerSelectionError(error)) return;
       byId('loginMessage').textContent = error.message;
@@ -2601,6 +2607,8 @@
 
     await refreshMobileConfig();
     await dbReady;
+    ensureReader().catch(() => undefined);
+    refreshCameraList().catch(() => undefined);
     setMode(state.mode, { silent: true });
     renderUrlState();
     renderConnectionBadge();
@@ -2620,7 +2628,7 @@
       byId('cameraState').textContent = isSecureScannerContext()
         ? (requiresBin() && !loadActiveBin() ? 'Set bin location to start camera automatically.' : 'Starting camera automatically...')
         : 'Camera is blocked on this HTTP page. Use the secure scanner URL.';
-      requestAutoCameraStart({ focusBin: false });
+      requestAutoCameraStart({ focusBin: false, forceRestart: true });
     } else {
       byId('scannerPanel').classList.add('hidden');
       byId('loginPanel').classList.remove('hidden');

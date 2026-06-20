@@ -649,6 +649,14 @@ function applyTestScanMode(filter = {}, mode = 'real') {
   return filter;
 }
 
+function applyRecentScanMode(filter = {}, mode = 'real') {
+  const selected = String(mode || 'real').trim().toLowerCase();
+  const clauses = [nonVerificationScanClause()];
+  if (selected !== 'all') clauses.push(selected === 'test' ? testScanClause() : { $nor: testScanClause().$or });
+  filter.$and = (filter.$and || []).concat(clauses);
+  return filter;
+}
+
 async function activeDashboardScope(query = {}) {
   const filter = {};
   const requestedDealerCode = normalizeDealerCode(query.dealerCode || query.dealer || '');
@@ -761,6 +769,51 @@ function dashboardUniqueScanStages(filter = {}) {
     { $group: { _id: '$__dashboardIdentity', scan: { $first: '$$ROOT' } } },
     { $replaceRoot: { newRoot: '$scan' } }
   ];
+}
+
+function dashboardRecentUniqueStages(filter = {}, mode = 'real') {
+  return [
+    { $match: applyRecentScanMode({ ...(filter || {}) }, mode) },
+    {
+      $addFields: {
+        __dashboardIdentity: dashboardIdentityExpression(),
+        __dashboardEventAt: { $ifNull: ['$timestamp', { $ifNull: ['$scanTime', '$createdAt'] }] },
+        __dashboardType: dashboardUpperExpression(['scanType', 'type'], 'INWARD'),
+        __dashboardPart: dashboardUpperExpression(['normalizedPartNumber', 'partNumber', 'part']),
+        __dashboardQty: numberExpression(['qty', 'quantity']),
+        __dashboardMrp: numberExpression(['valuationMRP', 'currentCatalogueMRP', 'finalMRP', 'mrp']),
+        __dashboardStoredValue: numberExpression(['finalInventoryValue']),
+        __dashboardDlc: numberExpression(['dlc', 'currentCatalogueDLC']),
+        __dashboardGroup: dashboardUpperExpression(['productGroup', 'partGroup', 'productCategory', 'category'], 'OTHERS'),
+        __dashboardSubGroup: dashboardUpperExpression(['partSubGroup', 'productSubGroup', 'productType'], 'GENERAL')
+      }
+    },
+    {
+      $addFields: {
+        __dashboardValue: {
+          $cond: [
+            { $gt: ['$__dashboardStoredValue', 0] },
+            '$__dashboardStoredValue',
+            { $multiply: ['$__dashboardQty', '$__dashboardMrp'] }
+          ]
+        }
+      }
+    },
+    { $sort: { __dashboardEventAt: 1, _id: 1 } },
+    { $group: { _id: '$__dashboardIdentity', scan: { $first: '$$ROOT' } } },
+    { $replaceRoot: { newRoot: '$scan' } }
+  ];
+}
+
+async function dashboardRecentRows(filter = {}, limit = 12) {
+  const cappedLimit = Math.max(0, Math.min(Number(limit || 12) || 12, 100));
+  const rows = await Inventory.aggregate([
+    ...dashboardRecentUniqueStages(filter, 'real'),
+    { $sort: { __dashboardEventAt: -1, _id: -1 } },
+    { $limit: cappedLimit || 12 }
+  ]).allowDiskUse(true);
+  const masterLookup = await masterLookupForScans(rows);
+  return rows.map((record) => publicScanWithMaster(record, masterLookup));
 }
 
 async function dashboardStats(filter) {
@@ -3297,11 +3350,7 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
     const { filter, activeAudit } = await activeDashboardScope(req.query);
     const [stats, recent] = await Promise.all([
       dashboardStats(filter),
-      Inventory.find(applyTestScanMode({ ...filter }, 'real'))
-        .select('scanId uniqueScanId part partNumber normalizedPartNumber qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue currentCatalogueMRP currentCatalogueDLC dlc scanType type bin binLocation dealerCode dealerName auditId deviceId deviceName source scanMode entryMode syncStatus synced isSynced timestamp scanTime createdAt')
-        .sort({ timestamp: -1, createdAt: -1 })
-        .limit(12)
-        .lean()
+      dashboardRecentRows(filter, 12)
     ]);
     const reconciliation = filter.dealerCode ? await require('./report').validateValuationReports(filter) : null;
     if (reconciliation) {
@@ -3329,9 +3378,8 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
 router.get('/recent', auth.requireAuth, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit || 10), 100);
-    const records = await Inventory.find(applyTestScanMode({}, req.query.testScanMode || 'real')).sort({ timestamp: -1, createdAt: -1 }).limit(limit).lean();
-    const masterLookup = await masterLookupForScans(records);
-    const scans = records.map((record) => publicScanWithMaster(record, masterLookup));
+    const { filter } = await activeDashboardScope(req.query);
+    const scans = await dashboardRecentRows(filter, limit);
     res.json({ success: true, records: scans, scans });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -3535,6 +3583,7 @@ module.exports.parseRawScan = parseRawScan;
 module.exports.buildListQuery = buildListQuery;
 module.exports.testScanClause = testScanClause;
 module.exports.applyTestScanMode = applyTestScanMode;
+module.exports.applyRecentScanMode = applyRecentScanMode;
 module.exports.applyTransactionScanFilter = applyTransactionScanFilter;
 module.exports.nonVerificationScanClause = nonVerificationScanClause;
 module.exports.cleanupTestScans = cleanupTestScans;
@@ -3545,6 +3594,7 @@ module.exports.normalizeDealerCode = normalizeDealerCode;
 module.exports.findMasterPart = findMasterPart;
 module.exports.numberValue = numberValue;
 module.exports.dashboardStats = dashboardStats;
+module.exports.dashboardRecentRows = dashboardRecentRows;
 module.exports.publicScan = publicScan;
 module.exports.manualDuplicatePayload = manualDuplicatePayload;
 module.exports.addManualQuantity = addManualQuantity;

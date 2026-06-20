@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260619-web-scan-instant-pending';
+  const UI_BOOT_VERSION = '20260620-dashboard-stream-camera-fix';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -2725,6 +2725,24 @@
     `;
   }
 
+  function safeScanStreamRow(scan = {}) {
+    const syncStatus = normalizedDisplaySyncStatus(scan) || 'pending';
+    return `
+      <tr>
+        <td>${escapeHtml(compactDateTime(scan.timestamp || scan.scanTime || scan.createdAt || ''))}</td>
+        <td>${escapeHtml(scan.partNumber || scan.part || scan.normalizedPartNumber || '-')}</td>
+        <td>${escapeHtml(scanQuantity(scan, 0))}</td>
+        <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.mrp ?? 0))}</td>
+        <td>${escapeHtml(scan.scanType || scan.type || '-')}</td>
+        <td>${escapeHtml(scan.binLocation || scan.bin || '-')}</td>
+        <td>${escapeHtml(scan.dealerCode || '-')}</td>
+        <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
+        <td>${escapeHtml(scan.deviceId || '-')}</td>
+        <td>${syncStatusBadge(syncStatus)}</td>
+      </tr>
+    `;
+  }
+
   function renderScanStream(scans = [], options = {}) {
     const body = $('#streamRows');
     try {
@@ -2737,7 +2755,19 @@
           : (options.skipActiveAuditFilter === true
             ? 'No scans yet'
             : (Array.isArray(scans) && scans.length ? 'No scans match the active dealer / audit filter' : 'No scans yet'));
-        body.innerHTML = rows.length ? rows.map(scanStreamRow).join('') : `<tr><td colspan="10" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
+        body.innerHTML = rows.length
+          ? rows.map((scan, index) => {
+            try {
+              return scanStreamRow(scan);
+            } catch (rowError) {
+              console.warn('[DASHBOARD] stream row render failed', {
+                index,
+                message: rowError.message
+              });
+              return safeScanStreamRow(scan);
+            }
+          }).join('')
+          : `<tr><td colspan="10" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
       }
       if (!rows.length && Array.isArray(merged) && merged.length && options.skipActiveAuditFilter !== true) {
         console.warn('[DASHBOARD] stream filtered to zero rows', {
@@ -2964,8 +2994,16 @@
       const stats = data.stats || {};
       updateDashboardCards(stats);
       try {
-        const recent = data.recent || data.records || data.scans || [];
-        const rows = renderScanStream(recent, { skipActiveAuditFilter: true });
+        let recent = data.recent || data.records || data.scans || [];
+        if ((!Array.isArray(recent) || !recent.length) && Number(stats.totalScanRecords || stats.totalScannedQuantity || stats.totalScannedValue || 0) > 0) {
+          try {
+            const fallback = await api('/api/scans/recent?limit=12');
+            recent = fallback.records || fallback.scans || recent;
+          } catch (fallbackError) {
+            console.warn('[DASHBOARD] fallback recent load failed', fallbackError.message);
+          }
+        }
+        const rows = renderScanStream(Array.isArray(recent) ? recent : [], { skipActiveAuditFilter: true });
         if (!rows.length && Array.isArray(recent) && recent.length) {
           console.warn('[DASHBOARD] server returned recent scans but none rendered', {
             dealerCode: data.dealerCode || '',

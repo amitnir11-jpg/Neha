@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>Daksh Scan</title>
-  <link rel="stylesheet" href="/scan.css?v=20260619-mobile-bin-autostart">
+  <link rel="stylesheet" href="/scan.css?v=20260620-mobile-auto-start-square">
 </head>
 <body class="scan-page">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -124,8 +124,8 @@
           <div class="camera-frame">
             <video id="cameraPreview" playsinline muted autoplay></video>
             <div class="camera-overlay">
-              <span id="cameraState">Tap Start Camera to begin scanning</span>
-              <small id="cameraHint">HTTPS is required on mobile devices for camera access.</small>
+              <span id="cameraState">Camera will start automatically after login</span>
+              <small id="cameraHint">Point the QR or barcode inside the square frame.</small>
             </div>
           </div>
 
@@ -254,6 +254,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="/config.js"></script>
-  <script src="/scan.js?v=20260619-mobile-bin-autostart"></script>
+  <script src="/scan.js?v=20260620-mobile-auto-start-square"></script>
 </body>
 </html>

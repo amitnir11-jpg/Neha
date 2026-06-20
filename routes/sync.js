@@ -976,14 +976,14 @@ async function emitEnterpriseRealtime(io, scans = []) {
     }
     const [statsResult, recentRows] = await Promise.all([
       dashboardFilter.dealerCode && inventory.dashboardStats ? inventory.dashboardStats(dashboardFilter) : null,
-      Inventory.find(recentFilter).sort({ timestamp: -1, createdAt: -1 }).limit(10).lean()
+      inventory.dashboardRecentRows ? inventory.dashboardRecentRows(recentFilter, 10) : Inventory.find(recentFilter).sort({ timestamp: -1, createdAt: -1 }).limit(10).lean()
     ]);
     const stats = statsResult ? {
       ...statsResult,
       dealerCode: dashboardFilter.dealerCode || statsResult.dealerCode || '',
       auditId: dashboardFilter.auditId || statsResult.auditId || ''
     } : null;
-    const recent = recentRows.map((scan) => inventory.publicScan ? inventory.publicScan(scan) : scan);
+    const recent = inventory.dashboardRecentRows ? recentRows : recentRows.map((scan) => inventory.publicScan ? inventory.publicScan(scan) : scan);
     const updatePayload = {
       ...realtimePayload,
       stats,
