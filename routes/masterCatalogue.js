@@ -61,7 +61,7 @@ function invalidateCatalogueCaches(scope = {}) {
   });
 }
 
-async function uploadErrorResponse(res, error, sourceFileName = '') {
+async function uploadErrorResponse(res, error, sourceFileName = '', extra = {}) {
   console.error('Master catalogue upload failed:', error);
   await appendUploadLog({
     event: 'catalogue-upload-error',
@@ -75,7 +75,8 @@ async function uploadErrorResponse(res, error, sourceFileName = '') {
     success: false,
     message: error.message,
     missingColumns: error.missingColumns || undefined,
-    duplicateColumns: error.duplicateColumns || undefined
+    duplicateColumns: error.duplicateColumns || undefined,
+    ...extra
   });
 }
 
@@ -143,20 +144,30 @@ router.delete('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 
 router.post('/delete-and-reupload', auth.requireAuth, auth.requireAdmin, uploadCatalogueFile, async (req, res) => {
   prepareLongUpload(req, res);
+  let deletedOldRowsCount = 0;
+  let deletedPriceHistoryRowsCount = 0;
   try {
-    const result = await importCatalogue(req.file, { replaceExisting: true, rejectOnValidationIssues: true });
-    if (result.blocked) {
-      return res.status(422).json({
-        success: false,
-        message: 'Old catalogue was not deleted because the uploaded file contains failed or duplicate rows',
-        ...result
-      });
-    }
+    const [deletedRows, deletedPriceRows] = await Promise.all([
+      MasterCatalogue.deleteMany({}),
+      PartPriceHistory.deleteMany({})
+    ]);
+    deletedOldRowsCount = deletedRows.deletedCount || 0;
+    deletedPriceHistoryRowsCount = deletedPriceRows.deletedCount || 0;
+    await purgeFailureFiles();
+    const result = await importCatalogue(req.file);
     req.io?.emit('master:update');
     invalidateCatalogueCaches();
-    return res.json({ success: true, ...result });
+    return res.json({
+      success: true,
+      deletedOldRowsCount,
+      deletedPriceHistoryRowsCount,
+      ...result
+    });
   } catch (error) {
-    return uploadErrorResponse(res, error, req.file && req.file.originalname);
+    return uploadErrorResponse(res, error, req.file && req.file.originalname, {
+      deletedOldRowsCount,
+      deletedPriceHistoryRowsCount
+    });
   }
 });
 

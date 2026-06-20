@@ -5758,31 +5758,44 @@
     state.catalogueFailureDownloadId = String(data.failureDownloadId || '');
     const failedRowsButton = $('#downloadCatalogueFailedRowsBtn');
     if (failedRowsButton) failedRowsButton.hidden = !state.catalogueFailureDownloadId;
-    const currentCount = Number(data.currentMasterRecordCount ?? data.masterCatalogueCount ?? data.uniquePartsCount ?? data.importedCount ?? 0);
+    const fileRowsCount = Number(data.fileRowsCount ?? data.totalRowsCount ?? data.totalRowsUploaded ?? data.uploadedRowsCount ?? 0);
+    const insertedRowsCount = Number(data.insertedRowsCount ?? 0);
+    const updatedRowsCount = Number(data.updatedRowsCount ?? data.updatedDuplicateCount ?? 0);
+    const duplicateRowsCount = Number(data.duplicateRowsCount ?? data.duplicateMergedRowsCount ?? data.duplicateSkippedRows ?? 0);
+    const failedRowsCount = Number(data.failedRowsCount ?? 0);
+    const blankRowsCount = Number(data.skippedRowsCount ?? data.blankRowsCount ?? 0);
+    const savedRowsCount = Number(data.savedRowsCount ?? data.importedRowsCount ?? data.importedCount ?? (insertedRowsCount + updatedRowsCount));
+    const currentCount = Number(data.currentMasterRecordCount ?? data.finalMasterRecordCount ?? data.masterCatalogueCount ?? savedRowsCount ?? 0);
     setPartMasterRecordCount(currentCount);
-    const summary = [
-      `Total rows ${wholeNumber(data.totalRowsCount ?? data.totalRowsUploaded ?? data.uploadedRowsCount ?? 0)}`,
-      `Imported ${wholeNumber(data.importedRowsCount ?? data.importedCount ?? 0)}`,
-      `Failed ${wholeNumber(data.failedRowsCount ?? data.skippedInvalidRowsCount ?? 0)}`,
-      `Duplicates ${wholeNumber(data.duplicateRowsCount ?? data.duplicateSkippedRows ?? 0)}`,
-      `Skipped ${wholeNumber(data.skippedRowsCount ?? 0)}`,
-      `Inserted ${wholeNumber(data.insertedRowsCount ?? 0)}`,
-      `Updated ${wholeNumber(data.updatedRowsCount ?? data.updatedDuplicateCount ?? 0)}`,
-      `Missing mandatory ${wholeNumber(data.missingMandatoryFieldsCount ?? 0)}`,
-      `Current records ${wholeNumber(currentCount)}`,
-      `Price history ${wholeNumber(data.priceHistoryRowsCount ?? 0)}`
-    ].join(' | ');
+    const reviewRowsCount = failedRowsCount + blankRowsCount;
+    const summarySegments = [
+      `File rows ${wholeNumber(fileRowsCount)}`,
+      `Inserted ${wholeNumber(insertedRowsCount)}`,
+      `Updated ${wholeNumber(updatedRowsCount)}`,
+      `Duplicates merged ${wholeNumber(duplicateRowsCount)}`,
+      blankRowsCount ? `Blank rows ${wholeNumber(blankRowsCount)}` : '',
+      `Failed rows ${wholeNumber(reviewRowsCount)}`,
+      `Final Part Master Records ${wholeNumber(currentCount)}`
+    ];
+    if (Number(data.missingMandatoryFieldsCount || 0)) summarySegments.push(`Missing mandatory ${wholeNumber(data.missingMandatoryFieldsCount)}`);
+    if (Number(data.priceHistoryRowsCount || 0)) summarySegments.push(`Price history ${wholeNumber(data.priceHistoryRowsCount)}`);
+    if (Number(data.deletedOldRowsCount || 0)) summarySegments.push(`Old catalogue deleted ${wholeNumber(data.deletedOldRowsCount)}`);
+    summarySegments.push(`Saved ${wholeNumber(savedRowsCount)}`);
+    const summary = summarySegments.filter(Boolean).join(' | ');
     $('#uploadStats').textContent = summary;
-    const imported = Number(data.importedRowsCount ?? data.importedCount ?? 0);
-    const failed = Number(data.failedRowsCount ?? data.skippedInvalidRowsCount ?? 0);
-    const duplicates = Number(data.duplicateRowsCount ?? data.duplicateSkippedRows ?? 0);
-    if (data.totalRowsCount || imported || failed || duplicates || currentCount) {
-      const variant = failed ? 'warning' : 'success';
+    const mismatch = Boolean(data.rowCountMismatch) || (fileRowsCount > 0 && savedRowsCount !== fileRowsCount);
+    if (fileRowsCount || savedRowsCount || reviewRowsCount || duplicateRowsCount || currentCount) {
+      const variant = mismatch ? 'warning' : 'success';
       setCatalogueUploadMessage([
-        `Uploaded ${wholeNumber(imported)} part${imported === 1 ? '' : 's'}`,
-        `Failed ${wholeNumber(failed)}`,
-        `Duplicates ${wholeNumber(duplicates)}`,
-        `Current master records ${wholeNumber(currentCount)}`
+        'Upload Completed',
+        `File rows: ${wholeNumber(fileRowsCount)}`,
+        `Inserted: ${wholeNumber(insertedRowsCount)}`,
+        `Updated: ${wholeNumber(updatedRowsCount)}`,
+        `Duplicates merged: ${wholeNumber(duplicateRowsCount)}`,
+        blankRowsCount ? `Blank rows: ${wholeNumber(blankRowsCount)}` : '',
+        `Failed rows: ${wholeNumber(reviewRowsCount)}`,
+        `Final Part Master Records: ${wholeNumber(currentCount)}`,
+        mismatch ? 'Upload completed with mismatch. Download failed rows to check missing parts.' : ''
       ].join(' | '), variant);
     } else if (data.message) {
       setCatalogueUploadMessage(data.message, data.success === false ? 'error' : 'warning');
@@ -9422,7 +9435,9 @@
       try {
         const data = await api('/api/master-catalogue/upload', { method: 'POST', body: new FormData(event.currentTarget) });
         updateCatalogueUploadStats(data);
-        toast(`Master catalogue upload complete: ${data.importedRowsCount || 0} imported, ${data.failedRowsCount || 0} failed, ${data.duplicateRowsCount || 0} duplicates`);
+        toast(data.rowCountMismatch || (Number(data.fileRowsCount || 0) > 0 && Number(data.savedRowsCount ?? data.importedRowsCount ?? 0) !== Number(data.fileRowsCount || 0))
+          ? 'Upload completed with mismatch. Download failed rows to check missing parts.'
+          : 'Upload completed');
         if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
       } catch (error) {
         if (error.data) updateCatalogueUploadStats(error.data);
@@ -9436,8 +9451,10 @@
       try {
         const data = await api('/api/master-catalogue', { method: 'DELETE', body: {} });
         updateCatalogueUploadStats({
+          fileRowsCount: 0,
           totalRowsCount: 0,
           importedRowsCount: 0,
+          savedRowsCount: 0,
           failedRowsCount: 0,
           duplicateRowsCount: 0,
           skippedRowsCount: 0,
@@ -9446,13 +9463,16 @@
           missingMandatoryFieldsCount: 0,
           priceHistoryRowsCount: data.deletedPriceHistoryRowsCount || 0,
           currentMasterRecordCount: data.currentMasterRecordCount || 0,
+          finalMasterRecordCount: data.currentMasterRecordCount || 0,
           masterCatalogueCount: data.currentMasterRecordCount || 0,
-          message: `Deleted old rows ${data.deletedOldRowsCount || 0} | Deleted price history ${data.deletedPriceHistoryRowsCount || 0}`
+          deletedOldRowsCount: data.deletedOldRowsCount || 0,
+          message: `Old catalogue deleted: ${data.deletedOldRowsCount || 0} rows`
         });
         state.catalogueFailureDownloadId = '';
         if ($('#downloadCatalogueFailedRowsBtn')) $('#downloadCatalogueFailedRowsBtn').hidden = true;
-        setCatalogueUploadMessage(`Deleted old rows ${data.deletedOldRowsCount || 0} | Deleted price history ${data.deletedPriceHistoryRowsCount || 0}`, 'warning');
+        setCatalogueUploadMessage(`Old catalogue deleted: ${data.deletedOldRowsCount || 0} rows | Price history deleted: ${data.deletedPriceHistoryRowsCount || 0}`, 'warning');
         clearPartSearch('Old catalogue deleted. Scan and audit data was not deleted.');
+        toast(`Old catalogue deleted: ${data.deletedOldRowsCount || 0} rows`);
       } catch (error) {
         if (error.data) updateCatalogueUploadStats(error.data);
         setCatalogueUploadMessage(error.message || 'Delete failed', 'error');
@@ -9468,7 +9488,14 @@
       try {
         const data = await api('/api/master-catalogue/delete-and-reupload', { method: 'POST', body: new FormData(form) });
         updateCatalogueUploadStats(data);
-        toast(`Catalogue replaced: ${data.importedRowsCount || 0} rows imported`);
+        toast(`Old catalogue deleted: ${data.deletedOldRowsCount || 0} rows | New catalogue uploaded: ${data.importedRowsCount || 0} rows`);
+        setCatalogueUploadMessage([
+          `Old catalogue deleted: ${data.deletedOldRowsCount || 0} rows`,
+          `New catalogue uploaded: ${data.importedRowsCount || 0} rows`,
+          (data.rowCountMismatch || (Number(data.fileRowsCount || 0) > 0 && Number(data.savedRowsCount ?? data.importedRowsCount ?? 0) !== Number(data.fileRowsCount || 0)))
+            ? 'Upload completed with mismatch. Download failed rows to check missing parts.'
+            : ''
+        ].filter(Boolean).join(' | '), (data.rowCountMismatch || (Number(data.fileRowsCount || 0) > 0 && Number(data.savedRowsCount ?? data.importedRowsCount ?? 0) !== Number(data.fileRowsCount || 0))) ? 'warning' : 'success');
         if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
       } catch (error) {
         if (error.data) updateCatalogueUploadStats(error.data);

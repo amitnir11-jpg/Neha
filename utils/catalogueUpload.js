@@ -310,15 +310,15 @@ async function parseCatalogueUpload(file) {
   return parseXlsx(file.buffer);
 }
 
-function parseNumeric(value, fieldName, { required = false } = {}) {
+function parseNumeric(value, fieldName, { required = false, blankError = `${fieldName} is mandatory`, invalidError = `${fieldName} must be numeric` } = {}) {
   const text = cleanText(value);
   if (!text) {
-    if (required) return { error: `${fieldName} is mandatory` };
+    if (required) return { error: blankError };
     return { value: 0 };
   }
   const normalized = text.replace(/,/g, '');
   const number = Number(normalized);
-  if (!Number.isFinite(number)) return { error: `${fieldName} must be numeric` };
+  if (!Number.isFinite(number)) return { error: invalidError };
   return { value: number };
 }
 
@@ -332,43 +332,61 @@ function upper(value) {
   return cleanText(value).toUpperCase();
 }
 
+function betterCatalogueRow(existing = null, candidate = null) {
+  if (!existing) return { winner: candidate, loser: null };
+  if (!candidate) return { winner: existing, loser: null };
+  const existingMrp = Number(existing.mapped && existing.mapped.mrp || 0);
+  const candidateMrp = Number(candidate.mapped && candidate.mapped.mrp || 0);
+  if (candidateMrp > existingMrp) return { winner: candidate, loser: existing };
+  if (candidateMrp < existingMrp) return { winner: existing, loser: candidate };
+  if (Number(candidate.rowNumber || 0) > Number(existing.rowNumber || 0)) return { winner: candidate, loser: existing };
+  return { winner: existing, loser: candidate };
+}
+
 function validateCatalogueRows(parsed, sourceFileName = '') {
   const acceptedRows = [];
   const failedRows = [];
   const duplicateRows = [];
   const skippedRows = [];
-  const seenParts = new Map();
+  const winnersByPart = new Map();
   let missingMandatoryFieldsCount = 0;
 
   parsed.rows.forEach((row) => {
     const hasAnyValue = row.originalValues.some((value) => cleanText(value) !== '');
     if (!hasAnyValue) {
-      skippedRows.push({ ...row, status: 'SKIPPED', reason: 'Blank row' });
+      skippedRows.push({ ...row, status: 'SKIPPED', reason: 'Blank mandatory fields' });
       return;
     }
     const partNumber = normalizePartNumber(row.values.partNumber);
     const partDescription = upper(row.values.partDescription);
-    const errors = [];
-    if (!partNumber) errors.push('Part Number is mandatory');
-    if (!partDescription) errors.push('Part Description is mandatory');
-    const mrp = parseNumeric(row.values.mrp, 'MRP', { required: true });
-    const dlc = parseNumeric(row.values.dlc, 'DLP', { required: true });
-    if (mrp.error) errors.push(mrp.error);
-    if (dlc.error) errors.push(dlc.error);
-    if (!partNumber || !partDescription || mrp.error || dlc.error) missingMandatoryFieldsCount += 1;
-    if (errors.length) {
-      failedRows.push({ ...row, status: 'FAILED', reason: errors.join('; ') });
-      return;
+    const mrp = parseNumeric(row.values.mrp, 'MRP', {
+      required: true,
+      blankError: 'Blank mandatory fields',
+      invalidError: 'Invalid MRP/DLC'
+    });
+    const dlc = parseNumeric(row.values.dlc, 'DLP', {
+      required: true,
+      blankError: 'Blank mandatory fields',
+      invalidError: 'Invalid MRP/DLC'
+    });
+    let failureReason = '';
+    if (!partNumber) {
+      failureReason = 'Missing Part Number';
+    } else if (!partDescription || mrp.error === 'Blank mandatory fields' || dlc.error === 'Blank mandatory fields') {
+      failureReason = 'Blank mandatory fields';
+    } else if (mrp.error || dlc.error) {
+      failureReason = 'Invalid MRP/DLC';
     }
-    if (seenParts.has(partNumber)) {
-      duplicateRows.push({
+    if (failureReason) missingMandatoryFieldsCount += 1;
+    if (failureReason) {
+      failedRows.push({
         ...row,
-        status: 'DUPLICATE',
-        reason: `Duplicate Part Number in uploaded file; first occurrence is Excel row ${seenParts.get(partNumber)}`
+        status: 'FAILED',
+        reason: failureReason,
+        validationErrors: [failureReason]
       });
       return;
     }
-    seenParts.set(partNumber, row.rowNumber);
     const mapped = {
       partNumber,
       normalizedPartNumber: partNumber,
@@ -393,8 +411,25 @@ function validateCatalogueRows(parsed, sourceFileName = '') {
     const grouping = applyProductGroup(mapped, { force: false });
     mapped.productGroup = grouping.productGroup;
     mapped.partSubGroup = grouping.partSubGroup;
-    acceptedRows.push({ ...row, mapped });
+    const candidate = { ...row, mapped };
+    const existing = winnersByPart.get(partNumber) || null;
+    if (!existing) {
+      winnersByPart.set(partNumber, candidate);
+      return;
+    }
+    const { winner, loser } = betterCatalogueRow(existing, candidate);
+    if (loser) {
+      duplicateRows.push({
+        ...loser,
+        status: 'DUPLICATE',
+        reason: 'Duplicate conflict',
+        duplicateOfRowNumber: winner.rowNumber
+      });
+    }
+    winnersByPart.set(partNumber, winner);
   });
+
+  winnersByPart.forEach((value) => acceptedRows.push(value));
 
   return {
     ...parsed,
@@ -563,7 +598,6 @@ async function createCatalogueTemplateWorkbook() {
 }
 
 async function createFailedRowsWorkbook(validation, nonImportedRows) {
-  if (!nonImportedRows.length) return '';
   await cleanupFailureFiles();
   const id = crypto.randomUUID();
   const target = failureFilePath(id);
@@ -578,7 +612,13 @@ async function createFailedRowsWorkbook(validation, nonImportedRows) {
     { header: 'Row Status', key: 'rowStatus', width: 15 },
     { header: 'Error Reason', key: 'errorReason', width: 55 }
   ];
-  nonImportedRows.forEach((row) => {
+  const rowsToWrite = nonImportedRows.length ? nonImportedRows : [{
+    rowNumber: '',
+    status: 'INFO',
+    reason: 'No failed rows in this upload',
+    originalValues: []
+  }];
+  rowsToWrite.forEach((row) => {
     const record = { excelRow: row.rowNumber, rowStatus: row.status || 'FAILED', errorReason: row.reason || 'Upload failed' };
     originalHeaders.forEach((header, index) => {
       record[`source${index}`] = row.originalValues[index] === undefined ? '' : row.originalValues[index];
@@ -609,27 +649,38 @@ function summaryFrom(validation, successfulRows, persistenceFailures, existingSe
   const importedRowsCount = successfulRows.length;
   const insertedRowsCount = successfulRows.filter((row) => !existingSet.has(row.mapped.normalizedPartNumber)).length;
   const updatedRowsCount = importedRowsCount - insertedRowsCount;
+  const fileRowsCount = validation.rows.length;
+  const duplicateRowsCount = validation.duplicateRows.length;
+  const skippedRowsCount = validation.skippedRows.length;
+  const nonImportedRows = failedRows.concat(validation.duplicateRows, validation.skippedRows);
   return {
-    totalRowsCount: validation.rows.length,
+    fileRowsCount,
+    totalRowsCount: fileRowsCount,
     importedRowsCount,
-    failedRowsCount: failedRows.length,
-    duplicateRowsCount: validation.duplicateRows.length,
-    skippedRowsCount: validation.skippedRows.length,
+    savedRowsCount: importedRowsCount,
+    failedRowsCount: validation.failedRows.length,
+    duplicateRowsCount,
+    duplicateMergedRowsCount: duplicateRowsCount,
+    skippedRowsCount,
+    blankRowsCount: skippedRowsCount,
     insertedRowsCount,
     updatedRowsCount,
     missingMandatoryFieldsCount: validation.missingMandatoryFieldsCount,
     priceHistoryRowsCount,
     priceHistoryFailedRowsCount,
     currentMasterRecordCount,
+    finalMasterRecordCount: currentMasterRecordCount,
     masterCatalogueCount: currentMasterRecordCount,
     totalRowsUploaded: validation.rows.length,
     uploadedRowsCount: validation.rows.length,
     importedCount: importedRowsCount,
     uniquePartsCount: importedRowsCount,
     updatedDuplicateCount: updatedRowsCount,
-    duplicateSkippedRows: validation.duplicateRows.length,
-    skippedInvalidRowsCount: failedRows.length,
-    nonImportedRows: failedRows.concat(validation.duplicateRows, validation.skippedRows)
+    duplicateSkippedRows: duplicateRowsCount,
+    skippedInvalidRowsCount: failedRows.length + skippedRowsCount,
+    nonImportedRows,
+    nonImportedRowsCount: nonImportedRows.length,
+    rowCountMismatch: fileRowsCount !== importedRowsCount
   };
 }
 

@@ -169,17 +169,21 @@ async function run() {
   const result = await importCatalogue(file);
   assert.deepEqual(
     {
+      fileRows: result.fileRowsCount,
       total: result.totalRowsCount,
       imported: result.importedRowsCount,
+      saved: result.savedRowsCount,
       failed: result.failedRowsCount,
       duplicates: result.duplicateRowsCount,
-      skipped: result.skippedRowsCount,
+      blankRows: result.blankRowsCount,
       missingMandatory: result.missingMandatoryFieldsCount,
       inserted: result.insertedRowsCount,
       updated: result.updatedRowsCount,
-      current: result.currentMasterRecordCount
+      current: result.currentMasterRecordCount,
+      finalCount: result.finalMasterRecordCount,
+      mismatch: result.rowCountMismatch
     },
-    { total: 5007, imported: 5001, failed: 4, duplicates: 1, skipped: 1, missingMandatory: 4, inserted: 5000, updated: 1, current: 5001 }
+    { fileRows: 5007, total: 5007, imported: 5001, saved: 5001, failed: 4, duplicates: 1, blankRows: 1, missingMandatory: 4, inserted: 5000, updated: 1, current: 5001, finalCount: 5001, mismatch: true }
   );
 
   const failedWorkbookPath = failureFilePath(result.failureDownloadId);
@@ -211,6 +215,7 @@ async function run() {
   const blockedReplace = await importCatalogue(file, { replaceExisting: true, rejectOnValidationIssues: true });
   assert.equal(blockedReplace.blocked, true);
   assert.equal(catalogue.size, recordsBeforeBlockedReplace);
+  assert.equal(blockedReplace.rowCountMismatch, true);
 
   const incompleteBuffer = await incompleteMasterBuffer();
   await assert.rejects(
