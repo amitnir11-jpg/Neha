@@ -137,7 +137,7 @@ function publicRow(scan = {}) {
     id: String(scan.scanId || scan.uniqueScanId || scan._id || ''),
     partNumber: scan.normalizedPartNumber || scan.partNumber || scan.part || '',
     partDescription: scan.partDescription || scan.partName || '',
-    productCategory: scan.productCategory || scan.category || '',
+    productCategory: scan.productCategory || '',
     binLocation: scan.binLocation || scan.bin || '',
     quantity: scan.qty ?? scan.quantity ?? 0,
     scanType: scan.scanType || scan.type || '',

@@ -17,6 +17,7 @@ const { applyMovementCountRules, signedScanQuantity } = require('../utils/report
 const { calculateStockValuation } = require('../utils/stockValuation');
 const { resolvePartPricing } = require('../utils/partPricing');
 const { getPricesFromPartMaster } = require('../utils/partMasterPrice');
+const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
 
 const router = express.Router();
@@ -29,6 +30,7 @@ const NEGATIVE_SCAN_TYPES = ['OUTWARD', 'FITTED', 'DAMAGE'];
 const UPLOAD_ERROR_LIMIT = 250;
 const PREVIEW_LIMIT = 500;
 const ACCEPTED_SCAN_STATUSES = ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'];
+const MASTER_NOT_FOUND_LABEL = 'UNKNOWN PART / MASTER NOT FOUND';
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -424,22 +426,33 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
 }
 
 function publicStock(row, pricing = null) {
-  const mrp = pricing ? pricing.mrp : Number(row.mrp || 0);
-  const dlp = pricing ? (pricing.dlc ?? pricing.dlp ?? null) : Number(row.dlp || row.dlc || 0);
+  const hasMasterRecord = Boolean(pricing && (pricing.partNumber || pricing.normalizedPartNumber || pricing.description || pricing.partDescription || pricing.partName || pricing.productGroup || pricing.productCategory || pricing.category));
+  const hasValidPrice = Boolean(Number(pricing && pricing.mrp || 0) > 0 && Number(pricing && (pricing.dlc ?? pricing.dlp) || 0) > 0);
+  const mrp = hasValidPrice ? Number(pricing.mrp || 0) : 0;
+  const dlp = hasValidPrice ? Number(pricing.dlc ?? pricing.dlp ?? 0) : 0;
+  const category = hasMasterRecord ? resolveCategoryFromMaster(pricing) : 'Uncategorized';
+  const partDescription = hasMasterRecord
+    ? clean(pricing.description || pricing.partDescription || pricing.partName || '')
+    : MASTER_NOT_FOUND_LABEL;
   const dmsStock = Number(row.dmsStock || row.systemQty || 0);
   return {
     id: String(row._id || ''),
     auditId: row.auditId || '',
     dealerCode: row.dealerCode || '',
     partNumber: row.partNumber || '',
-    partDescription: (pricing && pricing.partDescription) || row.partDescription || '',
-    productCategory: (pricing && pricing.productCategory) || row.productCategory || row.category || '',
-    category: (pricing && pricing.category) || row.category || row.productCategory || '',
+    partDescription,
+    productCategory: category,
+    category,
     mrp,
     dlp,
     dlc: dlp,
     dmsStock,
     systemQty: dmsStock,
+    model: hasMasterRecord ? clean(pricing.model || '') : '',
+    year: hasMasterRecord ? clean(pricing.manufacturingYear || pricing.year || '') : '',
+    manufacturingYear: hasMasterRecord ? clean(pricing.manufacturingYear || pricing.year || '') : '',
+    productGroup: hasMasterRecord ? clean(pricing.productGroup || '') : '',
+    partSubGroup: hasMasterRecord ? clean(pricing.partSubGroup || pricing.productSubGroup || '') : '',
     binLoc1: row.binLoc1 || row.systemBinLoc1 || '',
     binLoc2: row.binLoc2 || row.systemBinLoc2 || '',
     binLoc3: row.binLoc3 || row.systemBinLoc3 || '',
@@ -454,13 +467,13 @@ function publicStock(row, pricing = null) {
     safetyStock: Number(row.safetyStock || 0),
     rop: Number(row.rop || 0),
     pendingOrder: Number(row.pendingOrder || 0),
-    stockValue: pricing ? (pricing.dmsStockValue ?? null) : money(row.stockValue || dmsStock * Number(dlp || 0)),
+    stockValue: hasValidPrice ? money(dmsStock * dlp) : 0,
     uploadBatchId: row.uploadBatchId || '',
     uploadedAt: row.uploadedAt || row.updatedAt || row.createdAt,
-    pricingStatus: pricing ? pricing.pricingStatus : '',
-    pricingSource: pricing ? pricing.pricingSource : '',
-    pricingWarnings: pricing ? pricing.pricingWarnings : [],
-    warnings: pricing ? pricing.warnings : []
+    pricingStatus: hasMasterRecord ? (hasValidPrice ? (pricing.pricingStatus || '') : 'PART_MASTER_PRICE_MISSING') : 'PART_MASTER_PRICE_MISSING',
+    pricingSource: hasMasterRecord ? (pricing.pricingSource || '') : 'PART_MASTER_PRICE_MISSING',
+    pricingWarnings: hasMasterRecord ? (pricing.pricingWarnings || []) : [],
+    warnings: hasMasterRecord ? (pricing.warnings || []) : [MASTER_NOT_FOUND_LABEL]
   };
 }
 
@@ -588,23 +601,15 @@ async function physicalRows(scope, filters = {}) {
     const group = groups.get(partNumber) || {
       _id: partNumber,
       partNumber,
-      partDescription: clean(scan.partDescription || scan.partName),
-      productCategory: clean(scan.productCategory || scan.category),
-      model: clean(scan.model),
-      year: clean(scan.manufacturingYear || scan.year),
-      productGroup: clean(scan.productGroup),
-      partSubGroup: clean(scan.partSubGroup),
-      mrp: 0,
-      dlp: 0,
       actualStock: 0,
       bins: new Set(),
       sources: new Set(),
       scanModes: new Set(),
-      valuationSources: new Set()
+      valuationSources: new Set(),
+      scanCount: 0
     };
-    group.mrp = Math.max(group.mrp, numberValue(scan.valuationMRP || scan.finalMRP || scan.mrp, 0));
-    group.dlp = Math.max(group.dlp, numberValue(scan.dlc, 0));
     group.actualStock += scanQty(scan);
+    group.scanCount += 1;
     const bin = clean(scan.binLocation || scan.bin);
     if (bin) group.bins.add(bin);
     if (scan.source) group.sources.add(scan.source);
@@ -612,21 +617,41 @@ async function physicalRows(scope, filters = {}) {
     if (scan.valuationSource) group.valuationSources.add(scan.valuationSource);
     groups.set(partNumber, group);
   });
+  const partNumbers = Array.from(groups.keys());
+  const prices = partNumbers.length ? await getPricesFromPartMaster(partNumbers, scope.dealerCode) : new Map();
   return Array.from(groups.values())
     .filter((row) => row.actualStock !== 0 && row._id)
-    .map((row) => ({
-      ...row,
-      actualStock: money(row.actualStock),
-      bins: Array.from(row.bins),
-      sources: Array.from(row.sources),
-      scanModes: Array.from(row.scanModes),
-      valuationSources: Array.from(row.valuationSources)
-    }));
+    .map((row) => {
+      const pricing = prices.get(row.partNumber) || null;
+      const hasMasterRecord = Boolean(pricing && (pricing.partNumber || pricing.normalizedPartNumber || pricing.description || pricing.partDescription || pricing.partName || pricing.productGroup || pricing.productCategory || pricing.category));
+      const hasValidPrice = Boolean(Number(pricing && pricing.mrp || 0) > 0 && Number(pricing && (pricing.dlc ?? pricing.dlp) || 0) > 0);
+      const mrp = hasValidPrice ? Number(pricing.mrp || 0) : 0;
+      const dlc = hasValidPrice ? Number(pricing.dlc ?? pricing.dlp ?? 0) : 0;
+      return {
+        ...row,
+        partDescription: hasMasterRecord ? clean(pricing.description || pricing.partDescription || pricing.partName || '') : MASTER_NOT_FOUND_LABEL,
+        productCategory: hasMasterRecord ? resolveCategoryFromMaster(pricing) : 'Uncategorized',
+        category: hasMasterRecord ? resolveCategoryFromMaster(pricing) : 'Uncategorized',
+        model: hasMasterRecord ? clean(pricing.model || '') : '',
+        year: hasMasterRecord ? clean(pricing.manufacturingYear || pricing.year || '') : '',
+        manufacturingYear: hasMasterRecord ? clean(pricing.manufacturingYear || pricing.year || '') : '',
+        productGroup: hasMasterRecord ? clean(pricing.productGroup || '') : '',
+        partSubGroup: hasMasterRecord ? clean(pricing.partSubGroup || pricing.productSubGroup || '') : '',
+        mrp,
+        dlp: dlc,
+        dlc,
+        actualStock: money(row.actualStock),
+        bins: Array.from(row.bins),
+        sources: Array.from(row.sources),
+        scanModes: Array.from(row.scanModes),
+        valuationSources: Array.from(row.valuationSources)
+      };
+    });
 }
 
 function stockFilter(row, filters = {}) {
   if (filters.partNumber && normalizePart(row.partNumber) !== normalizePart(filters.partNumber)) return false;
-  if (filters.category && !upper(row.productCategory || row.category).includes(upper(filters.category))) return false;
+  if (filters.category && !upper(row.productCategory).includes(upper(filters.category))) return false;
   if (filters.bin) {
     const bins = [row.binLocation, row.bin, row.binLoc1, row.binLoc2, row.binLoc3, row.systemBinLoc1, row.systemBinLoc2, row.systemBinLoc3].map(upper);
     if (!bins.some((bin) => bin.includes(upper(filters.bin)))) return false;
@@ -973,7 +998,7 @@ function movementAnalysisRow(row = {}) {
     auditId: row.auditId || '',
     partNumber: row.partNumber || row.partNo || '',
     partDescription: row.partDescription || row.partName || '',
-    productCategory: row.productCategory || row.category || '',
+    productCategory: row.productCategory || 'Uncategorized',
     dmsStock,
     actualStock: Number(row.actualStock ?? row.physicalStock ?? 0),
     variance: Number(row.variance ?? row.netDifference ?? 0),

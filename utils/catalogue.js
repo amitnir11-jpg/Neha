@@ -1,5 +1,4 @@
 const MasterCatalogue = require('../models/MasterCatalogue');
-const MasterPart = require('../models/MasterPart');
 const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
 const { applyProductGroup } = require('./productGroupClassifier');
 const { decorateScanValue } = require('./inventoryValueEngine');
@@ -57,9 +56,7 @@ async function findCataloguePart(partNumber) {
     ]
   };
   const catalogue = await MasterCatalogue.findOne(lookup).lean();
-  if (catalogue) return cataloguePayload(catalogue);
-  const legacy = await MasterPart.findOne(lookup).lean();
-  return legacy ? cataloguePayload(legacy) : null;
+  return catalogue ? cataloguePayload(catalogue) : null;
 }
 
 function enrichScanFields(scan = {}, catalogue = null) {

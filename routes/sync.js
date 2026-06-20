@@ -1666,9 +1666,8 @@ async function pushHandler(req, res) {
     const businessDuplicateClauses = normalized
       .map((item) => duplicatePolicy.businessDuplicateFilter(item.scan))
       .filter(Boolean);
-    const [catalogueMasters, legacyMasters, dealers, existingScans] = await Promise.all([
+    const [catalogueMasters, dealers, existingScans] = await Promise.all([
       MasterCatalogue.find({ normalizedPartNumber: { $in: partNumbers } }).lean(),
-      MasterPart.find({ $or: [{ normalizedPartNumber: { $in: partNumbers } }, { partNo: { $in: partNumbers } }, { partNumber: { $in: partNumbers } }] }).lean(),
       Dealer.find({ dealerCode: { $in: dealerCodes } }).lean(),
       Inventory.find({
         $or: [
@@ -1690,7 +1689,7 @@ async function pushHandler(req, res) {
     ]);
     const masterByPart = new Map();
     const masterByDealer = new Map();
-    catalogueMasters.map(cataloguePayload).concat(legacyMasters).forEach((master) => {
+    catalogueMasters.map(cataloguePayload).forEach((master) => {
       const partNo = normalizePartNumber(master.normalizedPartNumber || master.partNo || master.partNumber);
       if (!partNo) return;
       if (!masterByPart.has(partNo)) masterByPart.set(partNo, master);
@@ -1987,15 +1986,15 @@ async function pushHandler(req, res) {
         part: scan.partNumber,
         partNumber: scan.partNumber,
         normalizedPartNumber: scan.normalizedPartNumber || scan.partNumber,
-        partName: master ? master.partDescription || master.partName || '' : scan.partName || '',
-        partDescription: master ? master.partDescription || master.partName || '' : scan.partDescription || scan.partName || '',
-        model: master && master.model ? master.model : clean(scan.source.model),
-        year: master && (master.manufacturingYear || master.year) ? (master.manufacturingYear || master.year) : clean(scan.source.manufacturingYear || scan.source.year),
-        manufacturingYear: master && (master.manufacturingYear || master.year) ? (master.manufacturingYear || master.year) : clean(scan.source.manufacturingYear || scan.source.year),
-        category: resolveCategoryFromMaster(master || { productCategory: scan.category || scan.source.productCategory || scan.source.category || '' }),
-        productCategory: resolveCategoryFromMaster(master || { productCategory: scan.category || scan.source.productCategory || scan.source.category || '' }),
-        productGroup: master ? master.productGroup || '' : clean(scan.source.productGroup).toUpperCase(),
-        partSubGroup: master ? master.partSubGroup || '' : clean(scan.source.partSubGroup || scan.source.productSubGroup).toUpperCase(),
+        partName: master ? master.partDescription || master.partName || '' : '',
+        partDescription: master ? master.partDescription || master.partName || '' : '',
+        model: master && master.model ? master.model : '',
+        year: master && (master.manufacturingYear || master.year) ? (master.manufacturingYear || master.year) : '',
+        manufacturingYear: master && (master.manufacturingYear || master.year) ? (master.manufacturingYear || master.year) : '',
+        category: resolveCategoryFromMaster(master || {}),
+        productCategory: resolveCategoryFromMaster(master || {}),
+        productGroup: master ? master.productGroup || '' : '',
+        partSubGroup: master ? master.partSubGroup || '' : '',
         qty: finalQty,
         quantity: finalQty,
         mrp: valueFields.mrp,

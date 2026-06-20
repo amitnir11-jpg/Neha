@@ -1,5 +1,4 @@
 const MasterCatalogue = require('../models/MasterCatalogue');
-const MasterPart = require('../models/MasterPart');
 const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
 const { applyProductGroup } = require('./productGroupClassifier');
 const { resolveCategoryFromMaster } = require('./categoryResolver');
@@ -169,14 +168,11 @@ async function getPriceFromPartMaster(partNumber, dealerCode = '') {
   const part = normalizePartNumber(partNumber);
   if (!part) return null;
   const lookup = partLookup(part);
-  const [catalogueRows, masterRows] = await Promise.all([
-    MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean(),
-    MasterPart.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean()
-  ]);
-  return pickBestPriceRecord([
-    ...catalogueRows.map((record) => ({ source: 'MASTER_CATALOGUE', record })),
-    ...masterRows.map((record) => ({ source: 'MASTER_PART', record }))
-  ], dealerCode);
+  const catalogueRows = await MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean();
+  return pickBestPriceRecord(
+    catalogueRows.map((record) => ({ source: 'MASTER_CATALOGUE', record })),
+    dealerCode
+  );
 }
 
 async function getPricesFromPartMaster(partNumbers = [], dealerCode = '') {
@@ -184,20 +180,10 @@ async function getPricesFromPartMaster(partNumbers = [], dealerCode = '') {
   const map = new Map();
   if (!parts.length) return map;
   const lookup = partListLookup(parts);
-  const [catalogueRows, masterRows] = await Promise.all([
-    MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean(),
-    MasterPart.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean()
-  ]);
+  const catalogueRows = await MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean();
   const byPart = new Map();
   catalogueRows.forEach((record) => {
     const normalized = asPriceRecord(record, 'MASTER_CATALOGUE', dealerCode);
-    if (!normalized) return;
-    const list = byPart.get(normalized.partNumber) || [];
-    list.push({ normalized });
-    byPart.set(normalized.partNumber, list);
-  });
-  masterRows.forEach((record) => {
-    const normalized = asPriceRecord(record, 'MASTER_PART', dealerCode);
     if (!normalized) return;
     const list = byPart.get(normalized.partNumber) || [];
     list.push({ normalized });

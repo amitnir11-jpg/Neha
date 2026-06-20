@@ -326,6 +326,8 @@ const CATEGORY_VARIANCE_ACTIONS = [
   'Damage'
 ];
 
+const MASTER_NOT_FOUND_LABEL = 'UNKNOWN PART / MASTER NOT FOUND';
+
 function cleanText(value) {
   return normalizedCleanText(value);
 }
@@ -529,6 +531,10 @@ function normalizeCategory(value) {
 
 function displayCategory(value) {
   return canonicalizePartCategory(value);
+}
+
+function reportCategory(row = {}) {
+  return displayCategory(row.productCategory || '');
 }
 
 function displayAction(value) {
@@ -927,7 +933,7 @@ async function buildLegacyReportData(query = {}) {
   if (query.bin) finalRows = finalRows.filter((row) => new RegExp(escapeRegExp(query.bin), 'i').test(row.binLocation || row.bin || ''));
   const categoryMap = new Map();
   finalRows.forEach((row) => {
-    const key = displayCategory(row.category || row.productCategory || '');
+    const key = reportCategory(row);
     const item = categoryMap.get(key) || {
       category: key,
       systemQty: 0,
@@ -1000,7 +1006,7 @@ async function buildLegacyReportData(query = {}) {
       bin: row.bin,
       partNumber: row.partNumber || row.partNo,
       partDescription: row.partDescription || row.partName,
-      productCategory: displayCategory(row.productCategory || row.category || ''),
+      productCategory: displayCategory(row.productCategory || ''),
       systemQty: row.systemQty,
       physicalQty: row.physicalQty,
       differenceQty: row.differenceQty,
@@ -1265,7 +1271,7 @@ function mainAuditRows(data) {
   return data.finalRows.map((row) => ({
     partNumber: row.partNumber || row.partNo,
     partDescription: row.partDescription || row.partName,
-    productCategory: displayCategory(row.productCategory || row.category || ''),
+    productCategory: displayCategory(row.productCategory || ''),
     mrp: row.mrp,
     dlc: row.dlc,
     latestMrpEffectiveDate: row.latestMrpEffectiveDate || '',
@@ -1356,7 +1362,7 @@ function categoryActionRows(rows) {
   const map = new Map();
   rows.forEach((row) => {
     const action = actionForDifference(row.differenceQty);
-    const category = displayCategory(row.category || row.productCategory || '');
+    const category = reportCategory(row);
     const key = `${category}:${action}`;
     const current = map.get(key) || {
       category,
@@ -1382,7 +1388,7 @@ function countingRows(data) {
     landedCost: Number(scan.currentCatalogueMRP || 0),
     count: Number(scan.qty || 0),
     finalCount: Number(scan.qty || 0),
-    category: displayCategory(scan.category || scan.productCategory || ''),
+    category: reportCategory(scan),
     remark: (scan.warnings || []).length ? (scan.warnings || []).join(', ') : 'OK',
     notInPartMaster: (scan.warnings || []).some((warning) => /not found|unknown|does not exist/i.test(warning)) ? 'Yes' : '',
     dateCreated: scan.timestamp,
@@ -1420,7 +1426,7 @@ function damageRows(data) {
     count: Number(scan.qty || 0),
     finalCount: Number(scan.qty || 0),
     value: Number(scanValueRow(scan).finalInventoryValue || 0),
-    category: displayCategory(scan.category || scan.productCategory || ''),
+    category: reportCategory(scan),
     remark: 'Damaged',
     dateCreated: scan.timestamp,
     dateModified: scan.updatedAt || ''
@@ -1560,16 +1566,18 @@ function masterQty(master = {}) {
   return firstPositiveNumber(master.dmsStock, master.systemQty, master.qty, master.openingStockQty, master.quantity, master.stockOnHand);
 }
 
-function enrichScan(scan = {}, master = {}) {
+function enrichScan(scan = {}, master = {}, system = {}) {
   master = master || {};
+  system = system || {};
   scan = scanWithPartMasterPrice(decorateScanValue(scan), master && master.partNumber ? master : null);
   const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
   const hasMaster = Boolean(master && (master.partNo || master.partNumber || master.normalizedPartNumber));
-  const binLocation = scan.binLocation || scan.bin || master.binLocation || master.bin || '';
+  const hasSystem = Boolean(system && (system.partNo || system.partNumber || system.normalizedPartNumber || system.dmsStock !== undefined || system.systemQty !== undefined));
+  const binLocation = scan.binLocation || scan.bin || system.binLocation || system.bin || master.binLocation || master.bin || '';
   const year = hasMaster ? master.manufacturingYear || master.year || '' : '';
   const qty = Number(scan.qty || scan.quantity || 0);
-  const partDescription = rowDescription(scan, hasMaster ? master : {});
-  const category = rowCategory(scan, hasMaster ? master : {});
+  const partDescription = hasMaster ? unknownIfBlank(rowDescription(scan, master)) : MASTER_NOT_FOUND_LABEL;
+  const category = hasMaster ? rowCategory(scan, master) : 'Uncategorized';
   const source = scanSourceLabels(scan);
   const enriched = {
     ...scan,
@@ -1596,8 +1604,8 @@ function enrichScan(scan = {}, master = {}) {
     finalInventoryValue: Number(scan.finalInventoryValue || 0),
     currentCatalogueMRP: Number(master.mrp || 0),
     dlc: firstPositiveNumber(master.dlc, master.dlp),
-    productGroup: hasMaster ? master.productGroup || scan.productGroup || '' : scan.productGroup || '',
-    partSubGroup: hasMaster ? master.partSubGroup || scan.partSubGroup || '' : scan.partSubGroup || '',
+    productGroup: hasMaster ? master.productGroup || master.partGroup || '' : 'UNKNOWN',
+    partSubGroup: hasMaster ? master.partSubGroup || master.productSubGroup || '' : 'UNKNOWN',
     qty,
     quantity: qty,
     type: scan.type || scan.scanType || '',
@@ -1608,8 +1616,8 @@ function enrichScan(scan = {}, master = {}) {
     entryChannel: source.entryChannel,
     scanSourceLabel: source.scanSourceLabel,
     masterFound: hasMaster,
-    dmsQty: hasMaster ? masterQty(master) : 0,
-    systemQty: hasMaster ? masterQty(master) : 0
+    dmsQty: hasSystem ? masterQty(system) : 0,
+    systemQty: hasSystem ? masterQty(system) : 0
   };
   return enriched;
 }
@@ -1764,7 +1772,7 @@ function finalReportCsv(rows = []) {
   const columns = [
     ['Part Number', (row) => row.partNo || row.partNumber || ''],
     ['Part Description', (row) => row.partDescription || row.partName || ''],
-    ['Product Category', (row) => displayCategory(row.productCategory || row.category || '')],
+    ['Product Category', (row) => displayCategory(row.productCategory || '')],
     ['MRP', (row) => row.mrp || ''],
     ['DLC', (row) => row.dlc || ''],
     ['Latest MRP Effective Date', (row) => row.latestMrpEffectiveDate || ''],
@@ -1792,7 +1800,7 @@ function finalReportCsv(rows = []) {
   return `${lines.join('\r\n')}\r\n`;
 }
 
-function buildAuditRow(group, master = {}, priceHistories = []) {
+function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
   const first = group.scans[0] || {};
   const scanBreakdown = group.scans.reduce((total, scan) => {
     const type = String(scan.scanType || scan.type || '').toUpperCase();
@@ -1824,17 +1832,18 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     if (item.damageQty) parts.push(`Damage ${money(item.damageQty)}`);
     return parts.join(' / ');
   }).join('; ');
-  const hasMaster = Boolean(master && (master.partNo || master.partNumber || master.normalizedPartNumber));
-  const dmsQty = hasMaster ? masterQty(master) : 0;
+  const hasCatalogue = Boolean(master && (master.partNo || master.partNumber || master.normalizedPartNumber));
+  const hasSystemStock = Boolean(system && (system.partNo || system.partNumber || system.normalizedPartNumber || system.dmsStock !== undefined || system.systemQty !== undefined || system.openingStockQty !== undefined || system.quantity !== undefined));
+  const dmsQty = hasSystemStock ? systemQtyValue(system) : 0;
   const binPhysicalQty = numberValue(group.binPhysicalQty !== undefined ? group.binPhysicalQty : group.qty, 0);
   const fittedQty = numberValue(scanBreakdown.fittedQty, 0);
   const physicalQty = binPhysicalQty;
   const auditedQty = physicalQty;
   const diffQty = auditedQty - dmsQty;
-  const valueSummary = rowValueSummary(group.scans, master);
+  const valueSummary = rowValueSummary(group.scans, hasCatalogue ? master : {});
   const pricing = resolvePartPricing({
     partNumber: group.partNo,
-    partMasterPrice: master && master.masterFound ? master : null,
+    partMasterPrice: hasCatalogue ? master : null,
     actualQty: auditedQty,
     dmsQty
   });
@@ -1844,9 +1853,9 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
   const systemValueOnMrp = pricing.dmsMrpValue;
   const varianceValueOnMrp = pricing.varianceMrpValue;
   const physicalBins = binDisplayWithFitted(group.scans);
-  const systemBins = splitBins(master.binLocation || master.bin || '');
-  const partDescription = unknownIfBlank(pricing.partDescription || rowDescription(first, hasMaster ? master : {}));
-  const category = displayCategory(pricing.productCategory || rowCategory(first, hasMaster ? master : {}));
+  const systemBins = splitBins((system && (system.binLocation || system.bin)) || master.binLocation || master.bin || '');
+  const partDescription = hasCatalogue ? unknownIfBlank(pricing.partDescription || master.partDescription || master.partName || '') : MASTER_NOT_FOUND_LABEL;
+  const category = displayCategory(pricing.productCategory || master.productCategory || master.category || '');
   const fitted = fittedDetails(group.scans);
   const status = auditStockStatus({ mrp, physicalQty, fittedQty, systemQty: dmsQty });
   const actionRemarks = inventoryRiskAction(status);
@@ -1855,9 +1864,9 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     partNumber: group.partNo,
     partName: partDescription,
     partDescription,
-    model: pricing.model || (hasMaster ? master.model || '' : ''),
-    year: pricing.year || (hasMaster ? master.manufacturingYear || master.year || '' : ''),
-    manufacturingYear: pricing.manufacturingYear || (hasMaster ? master.manufacturingYear || master.year || '' : ''),
+    model: pricing.model || (hasCatalogue ? master.model || '' : ''),
+    year: pricing.year || (hasCatalogue ? master.manufacturingYear || master.year || '' : ''),
+    manufacturingYear: pricing.manufacturingYear || (hasCatalogue ? master.manufacturingYear || master.year || '' : ''),
     category,
     productCategory: category,
     bin: physicalBins.bin1 || '',
@@ -1874,8 +1883,8 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     pricePeriod: valueSummary.pricePeriod,
     latestMrpEffectiveDate: masterPriceDateText(master),
     dlc,
-    productGroup: pricing.productGroup || (hasMaster ? master.productGroup || '' : first.productGroup || ''),
-    partSubGroup: pricing.partSubGroup || (hasMaster ? master.partSubGroup || '' : first.partSubGroup || ''),
+    productGroup: pricing.productGroup || (hasCatalogue ? master.productGroup || '' : 'UNKNOWN'),
+    partSubGroup: pricing.partSubGroup || (hasCatalogue ? master.partSubGroup || master.productSubGroup || '' : 'UNKNOWN'),
     dmsQty,
     systemQty: dmsQty,
     physicalQty,
@@ -1899,7 +1908,7 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     fittedStatus: scanBreakdown.fittedQty > 0 ? 'Fitted' : 'Not Fitted',
     damageQty: scanBreakdown.damageQty,
     totalAuditQty: auditedQty,
-    reservedQty: Number(master.reservedQty || 0),
+    reservedQty: Number((system && system.reservedQty) || master.reservedQty || 0),
     physicalBin1: physicalBins.bin1,
     physicalBin2: physicalBins.bin2,
     physicalBin3: physicalBins.bin3,
@@ -2101,29 +2110,26 @@ async function buildReportData(query = {}) {
     if (partNo && dealerCode) masterByDealer.set(masterKey(partNo, dealerCode), master);
     if (partNo && !masterByPart.has(partNo)) masterByPart.set(partNo, master);
   });
+  const systemByPart = new Map();
   dealerStockRows.forEach((stock) => {
     const partNo = masterPartNumber(stock);
     if (!partNo) return;
-    const dealerCode = cleanText(stock.dealerCode || query.dealerCode).toUpperCase();
-    const currentPrice = priceByPart.get(partNo) || null;
-    const merged = {
+    systemByPart.set(partNo, {
       ...stock,
-      ...(currentPrice || {}),
-      mrp: currentPrice ? currentPrice.mrp : 0,
-      dlc: currentPrice ? currentPrice.dlc : 0,
       dmsStock: firstPositiveNumber(stock.dmsStock, stock.systemQty),
       systemQty: firstPositiveNumber(stock.systemQty, stock.dmsStock)
-    };
-    masterByPart.set(partNo, merged);
-    if (dealerCode) masterByDealer.set(masterKey(partNo, dealerCode), merged);
+    });
   });
   let scans = rawScans.map((scan) => {
     const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
     const dealerCode = cleanText(scan.dealerCode).toUpperCase();
-    return enrichScan(scan, masterByDealer.get(masterKey(partNo, dealerCode)) || masterByPart.get(partNo) || null);
+    return enrichScan(
+      scan,
+      masterByDealer.get(masterKey(partNo, dealerCode)) || masterByPart.get(partNo) || null,
+      systemByPart.get(partNo) || null
+    );
   });
   const matchedCount = scans.filter((scan) => scan.masterFound).length;
-  scans = scans.filter((scan) => scan.masterFound);
   if (query.category) scans = scans.filter((scan) => new RegExp(escapeRegExp(query.category), 'i').test(scan.category || ''));
   const scanTotalsSummary = reportTotals(scans);
 
@@ -2140,13 +2146,14 @@ async function buildReportData(query = {}) {
   });
   const allFinalRows = Array.from(groupMap.values()).map((group) => buildAuditRow(
     group,
-    masterByDealer.get(masterKey(group.partNo, group.dealerCode)) || masterByPart.get(group.partNo) || {}
+    masterByDealer.get(masterKey(group.partNo, group.dealerCode)) || masterByPart.get(group.partNo) || {},
+    systemByPart.get(group.partNo) || {}
   )).sort((a, b) => sortText(a.partNo, b.partNo));
   const finalRows = applyVarianceFilter(allFinalRows, query.varianceType).filter((row) => row.physicalQty > 0);
 
   const categoryMap = new Map();
   finalRows.forEach((row) => {
-    const key = displayCategory(row.category || row.productCategory || '');
+    const key = reportCategory(row);
     const item = categoryMap.get(key) || { category: key, systemQty: 0, physicalQty: 0, differenceQty: 0, differenceMrpValue: 0, differenceDlcValue: 0, matched: 0, short: 0, excess: 0 };
     item.systemQty += row.systemQty;
     item.physicalQty += row.physicalQty;
@@ -2247,8 +2254,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const firstScan = scans[0] || {};
   const hasCatalogue = Boolean(catalogue && (catalogue.partNo || catalogue.partNumber || catalogue.normalizedPartNumber));
   const hasSystemStock = Boolean(system && (system.partNo || system.partNumber || system.normalizedPartNumber));
-  const detailSource = hasCatalogue ? catalogue : (hasSystemStock ? system : firstScan);
-  const valueSummary = rowValueSummary(scans, detailSource, priceHistories);
+  const valueSummary = rowValueSummary(scans, hasCatalogue ? catalogue : {}, priceHistories);
   const auditTypes = new Set(['AUDIT']);
   const userSummary = new Map();
   const breakdown = scans.reduce((total, scan) => {
@@ -2319,7 +2325,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     physicalBins.bin2,
     physicalBins.bin3,
     physicalBins.otherBins,
-    ...splitBins(firstPresent(system.binLocation, system.bin, detailSource.binLocation, detailSource.bin) || ''),
+    ...splitBins(firstPresent(system.binLocation, system.bin) || ''),
     system.systemBinLoc1,
     system.systemBinLoc2,
     system.systemBinLoc3,
@@ -2331,12 +2337,12 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   return {
     partNum: partNo,
     partNumber: partNo,
-    partDescription: unknownIfBlank(pricing.partDescription || firstPresent(detailSource.partDescription, detailSource.partName, firstScan.partDescription, firstScan.partName)),
-    productCategory: displayCategory(pricing.productCategory || firstPresent(detailSource.productCategory, detailSource.category, firstScan.productCategory, firstScan.category)),
-    productGroup: unknownIfBlank(pricing.productGroup || firstPresent(detailSource.productGroup, firstScan.productGroup)),
-    partSubGroup: unknownIfBlank(pricing.partSubGroup || firstPresent(detailSource.partSubGroup, detailSource.productSubGroup, firstScan.partSubGroup, firstScan.productSubGroup)),
-    model: pricing.model || firstPresent(detailSource.model, firstScan.model) || '',
-    year: pricing.year || firstPresent(detailSource.manufacturingYear, detailSource.year, firstScan.manufacturingYear, firstScan.year) || '',
+    partDescription: hasCatalogue ? unknownIfBlank(pricing.partDescription || catalogue.partDescription || catalogue.partName || '') : MASTER_NOT_FOUND_LABEL,
+    productCategory: displayCategory(pricing.productCategory || catalogue.productCategory || catalogue.category || ''),
+    productGroup: hasCatalogue ? unknownIfBlank(pricing.productGroup || catalogue.productGroup || '') : 'UNKNOWN',
+    partSubGroup: hasCatalogue ? unknownIfBlank(pricing.partSubGroup || catalogue.partSubGroup || catalogue.productSubGroup || '') : 'UNKNOWN',
+    model: hasCatalogue ? (pricing.model || catalogue.model || '') : '',
+    year: hasCatalogue ? (pricing.year || catalogue.manufacturingYear || catalogue.year || '') : '',
     mrp,
     scanUPIMRP: valueSummary.scanUPIMRP,
     currentCatalogueMRP: pricing.mrp,
@@ -2348,7 +2354,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     finalInventoryValue: pricing.actualStockValue,
     priceChangeCount: valueSummary.priceChangeCount,
     pricePeriod: valueSummary.pricePeriod,
-    latestMrpEffectiveDate: masterPriceDateText(catalogue || detailSource),
+    latestMrpEffectiveDate: masterPriceDateText(catalogue),
     dlc,
     openingStock: systemQty,
     physicalQty,
@@ -2391,10 +2397,10 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     varianceValueOnMrp,
     varianceOnMrp: varianceValueOnMrp,
     varianceOnDlc: pricing.varianceStockValue,
-    reservedQty: reservedQtyValue(system) || reservedQtyValue(detailSource),
+    reservedQty: reservedQtyValue(system) || reservedQtyValue(catalogue),
     action,
     inventoryRiskStatus: status,
-    actionRemarks: inventoryRiskAction(status),
+    actionRemarks: hasCatalogue ? inventoryRiskAction(status) : MASTER_NOT_FOUND_LABEL,
     scanCount: scans.length,
     scanTypeAction: scanTypes.join(', ') || action,
     scanDetails: scanDetailsForPartwise(scans),
@@ -2411,7 +2417,8 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     userWiseScanSummary,
     deviceAuditTrail,
     lastScanTime: group.lastScanTime || '',
-    status
+    status,
+    masterStatus: hasCatalogue ? 'MASTER FOUND' : 'MASTER NOT FOUND'
   };
 }
 
@@ -2767,22 +2774,9 @@ function categoryVarianceColumns() {
 
 async function masterMapsForScans(scans = []) {
   const partNumbers = Array.from(new Set(scans.map((scan) => normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)).filter(Boolean)));
-  const catalogueMasters = partNumbers.length ? await MasterCatalogue.find({ normalizedPartNumber: { $in: partNumbers } }).lean() : [];
-  let masters = catalogueMasters.map(cataloguePayload);
-  const catalogueFound = new Set(masters.map((master) => masterPartNumber(master)).filter(Boolean));
-  const legacyPartNumbers = partNumbers.filter((partNo) => !catalogueFound.has(partNo));
-  if (legacyPartNumbers.length) {
-    masters = masters.concat(await MasterPart.find({
-      $or: [
-        { normalizedPartNumber: { $in: legacyPartNumbers } },
-        { partNo: { $in: legacyPartNumbers } },
-        { partNumber: { $in: legacyPartNumbers } }
-      ]
-    }).lean());
-  }
-
   const masterByDealer = new Map();
   const masterByPart = new Map();
+  const masters = partNumbers.length ? await getPricesFromPartMaster(partNumbers) : new Map();
   masters.forEach((master) => {
     const partNo = masterPartNumber(master);
     const dealerCode = cleanText(master.dealerCode).toUpperCase();
@@ -2935,28 +2929,23 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
     const dealerCode = cleanText(scan.dealerCode).toUpperCase();
     const master = masterByDealer.get(masterKey(partNo, dealerCode)) || masterByPart.get(partNo) || null;
-    if (!master) {
-      validationLog.unmatchedMasterRows += 1;
-      return;
-    }
-
-    const category = displayCategory(resolveCategoryFromMaster(master));
+    if (!master) validationLog.unmatchedMasterRows += 1;
+    const category = master ? displayCategory(resolveCategoryFromMaster(master)) : 'Uncategorized';
     const action = actionForScan(scan) || 'Inward';
     if (hasProductCategoryFilter && category !== productCategoryFilter) return;
 
     const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
-    const valueRow = scanValueRow(scan);
-    const mrp = numberValue(valueRow.valuationMRP, 0);
-    const dlc = firstPositiveNumber(master && master.dlc, master && master.dlp);
+    const mrp = master ? numberValue(master.mrp || master.currentCatalogueMRP || 0, 0) : 0;
+    const dlc = master ? firstPositiveNumber(master.dlc, master.dlp) : 0;
     if (actionFilter === 'Inventory Matched') {
-      if (master) addCategoryVarianceGroup(groupMap, category, 'Inventory Matched', 0, mrp, dlc);
+      addCategoryVarianceGroup(groupMap, category, 'Inventory Matched', 0, mrp, dlc);
       return;
     }
     if (actionFilter && action !== actionFilter) return;
 
     const varianceQty = signedVarianceQty(action, qty);
     addCategoryVarianceGroup(groupMap, category, action, varianceQty, mrp, dlc);
-    if (master && action !== 'Inventory Matched' && (!actionFilter || actionFilter === 'Inventory Matched')) {
+    if (action !== 'Inventory Matched' && (!actionFilter || actionFilter === 'Inventory Matched')) {
       addCategoryVarianceGroup(groupMap, category, 'Inventory Matched', 0, mrp, dlc);
     }
   });
@@ -3153,7 +3142,7 @@ function stockSummaryCategoryText(row = {}) {
 
 function stockSummaryRowMatchesFilters(row = {}, query = {}) {
   const category = cleanText(query.productCategory || query.category);
-  if (category && !new RegExp(escapeRegExp(category), 'i').test(row.productCategory || row.category || '')) return false;
+  if (category && !new RegExp(escapeRegExp(category), 'i').test(row.productCategory || '')) return false;
   if (query.model && !new RegExp(escapeRegExp(query.model), 'i').test(row.model || '')) return false;
   if (query.year && ![row.year, row.manufacturingYear].some((value) => new RegExp(escapeRegExp(query.year), 'i').test(value || ''))) return false;
   if (query.productGroup && !new RegExp(escapeRegExp(query.productGroup), 'i').test(row.productGroup || '')) return false;
@@ -3179,11 +3168,7 @@ function emptyStockSummaryCategory(category) {
 }
 
 function stockSummaryDlcRate(row = {}) {
-  const rate = firstPositiveNumber(row.dlc, row.dlp);
-  if (rate > 0) return rate;
-  const qty = stockSummarySystemQty(row);
-  const directValue = firstPositiveNumber(row.dmsStockValue, row.systemValueOnDlc, row.systemDlcValue, row.stockValueDlc, row.stockValue);
-  return qty > 0 && directValue > 0 ? money(directValue / qty) : 0;
+  return firstPositiveNumber(row.currentCatalogueDLC, row.dlc);
 }
 
 function stockSummarySystemQty(row = {}) {
@@ -3195,31 +3180,25 @@ function stockSummaryPhysicalQty(row = {}) {
 }
 
 function stockSummaryDmsValue(row = {}) {
-  const value = firstPositiveNumber(row.dmsStockValue, row.systemValueOnDlc, row.systemDlcValue, row.stockValueDlc, row.stockValue);
-  if (value > 0) return value;
   const dlc = stockSummaryDlcRate(row);
   const qty = stockSummarySystemQty(row);
   return dlc > 0 ? money(qty * dlc) : 0;
 }
 
 function stockSummaryActualValue(row = {}) {
-  const value = firstPositiveNumber(row.actualStockValue, row.physicalValueOnDlc, row.physicalDlcValue);
-  if (value > 0) return value;
   const dlc = stockSummaryDlcRate(row);
   const qty = stockSummaryPhysicalQty(row);
   return dlc > 0 ? money(qty * dlc) : 0;
 }
 
 function stockSummaryVarianceValue(row = {}) {
-  const value = firstNonZeroNumber(row.varianceStockValue, row.varianceOnDlc, row.differenceDlcValue);
-  if (value !== 0) return value;
   const dlc = stockSummaryDlcRate(row);
   if (!(dlc > 0)) return 0;
   return money((stockSummaryPhysicalQty(row) - stockSummarySystemQty(row)) * dlc);
 }
 
 function stockSummaryCategory(row = {}) {
-  return displayCategory(row.productCategory || row.category || '');
+  return displayCategory(row.productCategory || '');
 }
 
 function addStockSummaryMatrixValues(total, row = {}) {
@@ -4194,7 +4173,7 @@ router.get('/pdf', auth.requireAuth, async (req, res) => {
       const body = data.finalRows.slice(0, 80).map((row) => [
         row.partNumber || row.partNo,
         row.partDescription || row.partName,
-        displayCategory(row.productCategory || row.category || ''),
+        displayCategory(row.productCategory || ''),
         row.mrp ?? '',
         row.dlc ?? '',
         row.pricingStatus || '',

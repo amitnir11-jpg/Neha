@@ -3154,7 +3154,7 @@
         <td>${escapeHtml(dateTime(scan.timestamp))}</td>
         <td>${partLink(scan.partNumber || scan.part)}</td>
         <td>${escapeHtml(scan.partDescription || scan.partName)}</td>
-        <td>${escapeHtml(scan.productCategory || scan.category || 'Uncategorized')}</td>
+        <td>${escapeHtml(scan.productCategory || 'Uncategorized')}</td>
         <td>${escapeHtml(money(rowMrp))}</td>
         <td>${escapeHtml(money(scan.currentCatalogueDLC ?? 0))}</td>
         <td>${escapeHtml(scan.productGroup || '')}</td>
@@ -5572,7 +5572,7 @@
       <tr>
         <td>${partLink(row.partNumber || row.partNo)}</td>
         <td>${escapeHtml(row.partDescription || row.partName || '')}</td>
-        <td>${escapeHtml(row.productCategory || row.category || 'Uncategorized')}</td>
+        <td>${escapeHtml(row.productCategory || 'Uncategorized')}</td>
         <td>${escapeHtml(row.dmsStock || 0)}</td>
         <td>${escapeHtml(row.actualStock ?? row.physicalStock ?? 0)}</td>
         <td>${escapeHtml(row.variance ?? row.netDifference ?? 0)}</td>

@@ -821,13 +821,14 @@ function dashboardRecentUniqueStages(filter = {}, mode = 'real') {
 
 async function dashboardRecentRows(filter = {}, limit = 12) {
   const cappedLimit = Math.max(0, Math.min(Number(limit || 12) || 12, 100));
-  const rows = await Inventory.aggregate([
-    ...dashboardRecentUniqueStages(filter, 'real'),
-    { $sort: { __dashboardEventAt: -1, _id: -1 } },
-    { $limit: cappedLimit || 12 }
-  ]).allowDiskUse(true);
-  const masterLookup = await masterLookupForScans(rows);
-  return rows.map((record) => publicScanWithMaster(record, masterLookup));
+  const recentFilter = applyRecentScanMode({ ...filter }, 'real');
+  const rows = await Inventory.find(recentFilter)
+    .sort({ timestamp: -1, createdAt: -1, _id: -1 })
+    .limit(cappedLimit || 12)
+    .lean();
+  const scans = uniqueReportScans(rows.map((record) => publicScan(record)));
+  const masterLookup = await masterLookupForScans(scans);
+  return scans.map((record) => publicScanWithMaster(record, masterLookup));
 }
 
 async function dashboardStats(filter) {
@@ -1110,8 +1111,8 @@ function publicScan(scan = {}) {
     normalizedPartNumber: scan.normalizedPartNumber || partNumber,
     partName: scan.partName || '',
     partDescription: scan.partDescription || scan.partName || '',
-    category: canonicalizePartCategory(scan.productCategory || scan.category || ''),
-    productCategory: canonicalizePartCategory(scan.productCategory || scan.category || ''),
+    category: canonicalizePartCategory(scan.productCategory || ''),
+    productCategory: canonicalizePartCategory(scan.productCategory || ''),
     productGroup: scan.productGroup || '',
     partSubGroup: scan.partSubGroup || '',
     qty,
@@ -1190,15 +1191,15 @@ function publicScanWithMaster(record = {}, masterLookup = {}) {
   const masterCategory = resolveCategoryFromMaster(master);
   return {
     ...scan,
-    partName: scan.partName || master.partName || master.partDescription || '',
-    partDescription: scan.partDescription || master.partDescription || master.partName || '',
+    partName: master.partName || master.partDescription || scan.partName || scan.partDescription || '',
+    partDescription: master.partDescription || master.partName || scan.partDescription || scan.partName || '',
     category: masterCategory,
     productCategory: masterCategory,
-    productGroup: scan.productGroup || master.productGroup || '',
-    partSubGroup: scan.partSubGroup || master.partSubGroup || master.productSubGroup || '',
-    model: scan.model || master.model || '',
-    year: scan.year || master.year || master.manufacturingYear || '',
-    manufacturingYear: scan.manufacturingYear || master.manufacturingYear || master.year || '',
+    productGroup: master.productGroup || master.partGroup || '',
+    partSubGroup: master.partSubGroup || master.productSubGroup || '',
+    model: master.model || '',
+    year: master.year || master.manufacturingYear || '',
+    manufacturingYear: master.manufacturingYear || master.year || '',
     currentCatalogueMRP: masterMrp,
     displayMRP: masterMrp,
     mrp: masterMrp,

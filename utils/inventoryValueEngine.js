@@ -379,7 +379,7 @@ function reportRowFromScan(scan = {}, catalogueData = {}) {
     // Part Identification
     partNumber: row.partNumber || scan.partNumber || '',
     partDescription: scan.partDescription || scan.partName || '',
-    productCategory: scan.productCategory || scan.category || '',
+    productCategory: scan.productCategory || '',
     
     // Quantity Breakdown
     totalQty: row.qty,
