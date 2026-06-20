@@ -1035,10 +1035,27 @@ function createModel(config) {
     }
 
     static async deleteMany(filter = {}) {
+      const where = predicateSql(filter);
+      if (where.supported) {
+        const deletedCount = await prisma.$executeRaw(Prisma.sql`DELETE FROM ${Prisma.raw(quoteIdent(tableName))} WHERE ${where.sql}`);
+        return { deletedCount: Number(deletedCount) || 0 };
+      }
+
       const rows = await this.find(filter).select('_id').lean();
       if (!rows.length) return { deletedCount: 0 };
-      await this.__delegate.deleteMany({ where: { id: { in: rows.map((row) => row._id) } } });
-      return { deletedCount: rows.length };
+
+      const ids = rows.map((row) => row._id).filter(Boolean);
+      const batchSize = 1000;
+      let deletedCount = 0;
+
+      for (let index = 0; index < ids.length; index += batchSize) {
+        const batch = ids.slice(index, index + batchSize);
+        if (!batch.length) continue;
+        const result = await this.__delegate.deleteMany({ where: { id: { in: batch } } });
+        deletedCount += Number(result?.count ?? result?.deletedCount ?? batch.length) || 0;
+      }
+
+      return { deletedCount };
     }
 
     static async deleteOne(filter = {}) {
