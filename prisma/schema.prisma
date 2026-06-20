@@ -980,6 +980,16 @@ model Scan {
 
   @@index([dealerCode])
   @@index([partNumber])
+  @@index([normalizedPartNumber])
+  @@index([upiNo])
+  @@index([binLocation])
+  @@index([scanType])
+  @@index([scanStatus])
+  @@index([status])
+  @@index([createdAt])
+  @@index([dealerCode, partNumber])
+  @@index([dealerCode, scanType, createdAt])
+  @@index([dealerCode, scanStatus, createdAt])
   @@map("scans")
 }
 

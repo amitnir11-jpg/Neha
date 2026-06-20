@@ -11,7 +11,10 @@ const { formatDateLikeFields, parseIstFilterDate } = require('../utils/time');
 const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
 const { reportTotals, signedScanQuantity } = require('../utils/reportTotals');
-const { canonicalizePartCategory } = require('../utils/categoryResolver');
+const categoryResolver = require('../utils/categoryResolver');
+const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
+  ? categoryResolver.canonicalizePartCategory
+  : (value, options = {}) => String(value || '').trim() || options.uncategorized || 'Uncategorized';
 
 const autoTable = autoTableModule.default || autoTableModule;
 

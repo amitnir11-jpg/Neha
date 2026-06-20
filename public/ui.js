@@ -134,6 +134,8 @@
     dashboardFallbackTimer: null,
     dashboardRefreshTimer: null,
     dashboardLoadPromise: null,
+    dashboardLoadRequestId: 0,
+    dashboardAbortController: null,
     dashboardLoaded: false,
     dashboardLastLoadedAt: 0,
     scanRefreshTimer: null,
@@ -145,6 +147,8 @@
     recentRealtimeScanIds: new Set(),
     dashboardProductGroupRows: [],
     dashboardProductGroupLoadPromise: null,
+    dashboardProductGroupLoadRequestId: 0,
+    dashboardProductGroupAbortController: null,
     dashboardProductGroupLoadedAt: 0,
     selectedProductGroupSummary: null,
     productGroupDetailRows: [],
@@ -2105,9 +2109,8 @@
     const scans = Array.isArray(payload.insertedRecords) ? payload.insertedRecords : [];
     scans.slice(-20).forEach((scan) => handleNewScan(scan).catch(() => undefined));
     const jobs = [loadSyncStatus(), loadDevices()];
-    if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
+    queueDashboardRefresh(300);
     if ($('#scan')?.classList.contains('active')) jobs.push(loadScanHistory());
-    if (!scans.length && !jobs.some((job) => job === state.dashboardLoadPromise)) jobs.push(loadDashboard({ force: true }), loadScanHistory());
     await Promise.all(jobs);
   }
 
@@ -2875,20 +2878,35 @@
 
   async function loadDashboardProductGroupSummary(options = {}) {
     const force = options.force === true;
-    if (state.dashboardProductGroupLoadPromise) return state.dashboardProductGroupLoadPromise;
+    if (state.dashboardProductGroupLoadPromise && !force) return state.dashboardProductGroupLoadPromise;
     if (!force && state.dashboardProductGroupLoadedAt && Date.now() - state.dashboardProductGroupLoadedAt < 5000) return state.dashboardProductGroupRows;
+    if (state.dashboardProductGroupAbortController) state.dashboardProductGroupAbortController.abort();
+    const requestId = (state.dashboardProductGroupLoadRequestId || 0) + 1;
+    state.dashboardProductGroupLoadRequestId = requestId;
+    const controller = new AbortController();
+    state.dashboardProductGroupAbortController = controller;
     state.dashboardProductGroupLoadPromise = (async () => {
-      const query = dashboardQueryString();
-      const data = await api(`/api/scans/dashboard/product-group-summary${query ? `?${query}` : ''}`);
-      state.dashboardProductGroupRows = Array.isArray(data.rows) ? data.rows : [];
-      state.dashboardProductGroupLoadedAt = Date.now();
-      renderProductGroupSummary();
-      return state.dashboardProductGroupRows;
+      try {
+        const signal = options.signal || controller.signal;
+        const query = dashboardQueryString();
+        const data = await api(`/api/scans/dashboard/product-group-summary${query ? `?${query}` : ''}`, { signal });
+        if (state.dashboardProductGroupLoadRequestId !== requestId) return state.dashboardProductGroupRows;
+        state.dashboardProductGroupRows = Array.isArray(data.rows) ? data.rows : [];
+        state.dashboardProductGroupLoadedAt = Date.now();
+        renderProductGroupSummary();
+        return state.dashboardProductGroupRows;
+      } catch (error) {
+        if (error && error.name === 'AbortError') return state.dashboardProductGroupRows;
+        throw error;
+      }
     })();
     try {
       return await state.dashboardProductGroupLoadPromise;
     } finally {
-      state.dashboardProductGroupLoadPromise = null;
+      if (state.dashboardProductGroupLoadRequestId === requestId) {
+        state.dashboardProductGroupLoadPromise = null;
+        state.dashboardProductGroupAbortController = null;
+      }
     }
   }
 
@@ -3006,57 +3024,79 @@
 
   async function loadDashboard(options = {}) {
     const force = options.force === true;
-    if (state.dashboardLoadPromise) return state.dashboardLoadPromise;
+    if (state.dashboardLoadPromise && !force) return state.dashboardLoadPromise;
     if (!force && state.dashboardLoaded && Date.now() - state.dashboardLastLoadedAt < 1500) return null;
+    clearTimeout(state.dashboardRefreshTimer);
+    state.dashboardRefreshTimer = null;
+    if (state.dashboardAbortController) state.dashboardAbortController.abort();
+    const requestId = (state.dashboardLoadRequestId || 0) + 1;
+    state.dashboardLoadRequestId = requestId;
+    const controller = new AbortController();
+    state.dashboardAbortController = controller;
     if (!state.dashboardLoaded) setDashboardLoading(true);
     state.dashboardLoadPromise = (async () => {
-      const query = dashboardQueryString();
-      const data = await api(`/api/scans/dashboard${query ? `?${query}` : ''}`);
-      if (data.activeAudit && data.activeAudit.dealerCode) {
-        state.activeAudit = data.activeAudit;
-        updateActiveAuditUi();
-      }
-      const stats = data.stats || {};
-      updateDashboardCards(stats);
       try {
-        let recent = data.recent || data.records || data.scans || [];
-        if ((!Array.isArray(recent) || !recent.length) && Number(stats.totalScanRecords || stats.totalScannedQuantity || stats.totalScannedValue || 0) > 0) {
-          try {
-            const fallback = await api(`/api/scans/live?limit=12${query ? `&${query}` : ''}`);
-            recent = fallback.records || fallback.scans || recent;
-            if (!Array.isArray(recent) || !recent.length) {
-              const secondFallback = await api('/api/scans/recent?limit=12');
-              recent = secondFallback.records || secondFallback.scans || recent;
+        const query = dashboardQueryString();
+        const data = await api(`/api/scans/dashboard${query ? `?${query}` : ''}`, { signal: controller.signal });
+        if (state.dashboardLoadRequestId !== requestId) return null;
+        if (data.activeAudit && data.activeAudit.dealerCode) {
+          state.activeAudit = data.activeAudit;
+          updateActiveAuditUi();
+        }
+        const stats = data.stats || {};
+        updateDashboardCards(stats);
+        try {
+          let recent = data.recent || data.records || data.scans || [];
+          if ((!Array.isArray(recent) || !recent.length) && Number(stats.totalScanRecords || stats.totalScannedQuantity || stats.totalScannedValue || 0) > 0) {
+            try {
+              const fallback = await api(`/api/scans/live?limit=12${query ? `&${query}` : ''}`, { signal: controller.signal });
+              recent = fallback.records || fallback.scans || recent;
+              if (!Array.isArray(recent) || !recent.length) {
+                const secondFallback = await api('/api/scans/recent?limit=12', { signal: controller.signal });
+                recent = secondFallback.records || secondFallback.scans || recent;
+              }
+            } catch (fallbackError) {
+              if (fallbackError && fallbackError.name !== 'AbortError') {
+                console.warn('[DASHBOARD] fallback recent load failed', fallbackError.message);
+              }
             }
-          } catch (fallbackError) {
-            console.warn('[DASHBOARD] fallback recent load failed', fallbackError.message);
+          }
+          const rows = renderScanStream(Array.isArray(recent) ? recent : [], { skipActiveAuditFilter: true });
+          if (!rows.length && Array.isArray(recent) && recent.length) {
+            console.warn('[DASHBOARD] server returned recent scans but none rendered', {
+              dealerCode: data.dealerCode || '',
+              auditId: data.auditId || '',
+              recentCount: recent.length
+            });
+          }
+        } catch (error) {
+          if (error && error.name !== 'AbortError') {
+            console.warn('[DASHBOARD] recent stream load failed', error.message);
+            renderScanStream([]);
           }
         }
-        const rows = renderScanStream(Array.isArray(recent) ? recent : [], { skipActiveAuditFilter: true });
-        if (!rows.length && Array.isArray(recent) && recent.length) {
-          console.warn('[DASHBOARD] server returned recent scans but none rendered', {
-            dealerCode: data.dealerCode || '',
-            auditId: data.auditId || '',
-            recentCount: recent.length
-          });
-        }
+        state.dashboardLoaded = true;
+        state.dashboardLastLoadedAt = Date.now();
+        loadDashboardProductGroupSummary({ force, signal: controller.signal }).catch((error) => {
+          if (error && error.name === 'AbortError') return;
+          if (state.dashboardLoadRequestId !== requestId) return;
+          const body = $('#productGroupSummaryRows');
+          if (body) body.innerHTML = `<tr><td colspan="7" class="muted">${escapeHtml(error.message)}</td></tr>`;
+        });
+        return data;
       } catch (error) {
-        console.warn('[DASHBOARD] recent stream load failed', error.message);
-        renderScanStream([]);
+        if (error && error.name === 'AbortError') return null;
+        throw error;
       }
-      state.dashboardLoaded = true;
-      state.dashboardLastLoadedAt = Date.now();
-      loadDashboardProductGroupSummary({ force }).catch((error) => {
-        const body = $('#productGroupSummaryRows');
-        if (body) body.innerHTML = `<tr><td colspan="7" class="muted">${escapeHtml(error.message)}</td></tr>`;
-      });
-      return data;
     })();
     try {
       return await state.dashboardLoadPromise;
     } finally {
-      state.dashboardLoadPromise = null;
-      setDashboardLoading(false);
+      if (state.dashboardLoadRequestId === requestId) {
+        state.dashboardLoadPromise = null;
+        state.dashboardAbortController = null;
+        setDashboardLoading(false);
+      }
     }
   }
 
@@ -3228,8 +3268,8 @@
     if (!window.confirm('Repair WEB/server-saved pending scan records to synced?')) return;
     const data = await api('/api/scans/repair-sync-status', { method: 'POST', body: {} });
     toast(data.message || 'Sync status repaired');
+    queueDashboardRefresh(250);
     await Promise.all([
-      loadDashboard(),
       loadScanHistory(),
       loadSyncStatus()
     ]);
@@ -3379,7 +3419,7 @@
     state.scanRefreshQueued = false;
     try {
       const jobs = [];
-      if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
+      queueDashboardRefresh(250);
       if ($('#scan')?.classList.contains('active')) jobs.push(loadScanHistory());
       if ($('#syncCenter')?.classList.contains('active')) jobs.push(loadSyncStatus());
       return await Promise.all(jobs)
@@ -4291,6 +4331,8 @@
   }
 
   function queueDashboardRefresh(delay = 1200) {
+    state.dashboardLastLoadedAt = 0;
+    state.dashboardProductGroupLoadedAt = 0;
     clearTimeout(state.dashboardRefreshTimer);
     state.dashboardRefreshTimer = setTimeout(() => {
       if (document.hidden || !document.body.classList.contains('dashboard-view-active')) return;
@@ -6504,9 +6546,9 @@
     await Promise.all([
       loadBinTransferParts(activeBinTransferForm()).catch(() => null),
       loadBinTransferHistory().catch(() => null),
-      loadScanHistory().catch(() => null),
-      loadDashboard().catch(() => null)
+      loadScanHistory().catch(() => null)
     ]);
+    queueDashboardRefresh(300);
     await loadBinLabelBins(criteria.dealerCode).catch(() => null);
     clearBinLabelSelection('Select updated bin(s), then click Show Parts.');
   }
@@ -7606,7 +7648,8 @@
   }
 
   async function refreshAfterDelete() {
-    await Promise.all([loadDashboard(), loadScanHistory(), loadDealers(), loadCategories(), loadSyncStatus()].map((job) => job.catch ? job : Promise.resolve(job)));
+    queueDashboardRefresh(250);
+    await Promise.all([loadScanHistory(), loadDealers(), loadCategories(), loadSyncStatus()].map((job) => job.catch ? job : Promise.resolve(job)));
   }
 
   async function saveEditedScan(event) {
@@ -7640,7 +7683,8 @@
       addScanToStream(data.scan);
       queueRealtimeReportRefresh('scan details update');
     }
-    await Promise.all([loadDashboard(), loadScanHistory()]);
+    queueDashboardRefresh(250);
+    await loadScanHistory();
     if (state.reportHasRun && activeReportType()) {
       await loadReport({ forceRefresh: true, showLoading: false });
     }
@@ -10216,13 +10260,13 @@
       state.activeAudit = audit;
       updateActiveAuditUi();
       loadBins().catch(console.warn);
-      loadDashboard({ force: true }).catch(console.warn);
+      queueDashboardRefresh(250);
     });
     function handleInactiveAuditEvent() {
       state.activeAudit = null;
       updateActiveAuditUi();
       loadBins().catch(console.warn);
-      loadDashboard({ force: true }).catch(console.warn);
+      queueDashboardRefresh(250);
       loadDevices().catch(console.warn);
       loadDealers({ force: true }).catch(console.warn);
     }
@@ -10231,7 +10275,7 @@
     socket.on('audit:reopened', () => {
       loadActiveAudit({ silent: true, allowMissing: true }).catch(console.warn);
       loadDealers({ force: true }).catch(console.warn);
-      loadDashboard({ force: true }).catch(console.warn);
+      queueDashboardRefresh(250);
     });
     socket.on('sync:started', () => {
       setHeaderSyncStatus('Syncing', true);
@@ -10278,7 +10322,7 @@
       if ($('#reports')?.classList.contains('active')) jobs.push(loadCategories());
       if ($('#master')?.classList.contains('active')) jobs.push(loadPartSearchFilters());
       if ($('#master')?.classList.contains('active')) jobs.push(loadCatalogueRequiredColumns());
-      if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
+      queueDashboardRefresh(400);
       if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) jobs.push(loadParts(state.masterSearch.page || 1));
       if (jobs.length) Promise.all(jobs).catch(console.warn);
     });

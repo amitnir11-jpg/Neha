@@ -132,3 +132,14 @@ Priority fields for auto-filtering and query optimization:
 - No evidence was found that the app uses MongoDB in the live code path.
 - I did not delete any live business feature before writing this report.
 - Any file not clearly safe should stay in review until confirmed.
+
+## Follow-Up Cleanup Completed
+
+- Removed the confirmed dead template generator script:
+  - `scripts/generate-parts-refresh-template.js`
+- Removed its generated output file:
+  - `Parts Inventory Refresh Template.csv`
+- Added abortable, latest-request-wins dashboard loading in `public/ui.js`.
+- Switched several high-frequency dashboard refresh paths to debounced refresh queues.
+- Added new `scans` indexes in Prisma and a matching migration for dealer, part, bin, status, and timestamp filters.
+- Hardened Bin Wise / category resolution so the report route does not fail if the category helper is partially loaded.

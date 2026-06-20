@@ -24,7 +24,26 @@ const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('.
 const { applyCacheHeaders, getCachedReport, getCachedResponse } = require('../utils/reportCache');
 const { assertDlcReconciliation, calculateStockValuation, stockValuationTotals } = require('../utils/stockValuation');
 const { resolvePartPricing } = require('../utils/partPricing');
-const { canonicalizePartCategory, resolveCategoryFromMaster, categoryCountMap } = require('../utils/categoryResolver');
+const categoryResolver = require('../utils/categoryResolver');
+const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
+  ? categoryResolver.canonicalizePartCategory
+  : (value, options = {}) => {
+      const text = normalizedCleanText(value).replace(/\s+/g, ' ').trim();
+      return text || options.uncategorized || 'Uncategorized';
+    };
+const resolveCategoryFromMaster = typeof categoryResolver.resolveCategoryFromMaster === 'function'
+  ? categoryResolver.resolveCategoryFromMaster
+  : (master = {}, options = {}) => canonicalizePartCategory(master.productCategory || master.category || master.partCategory || master.categories || '', options);
+const categoryCountMap = typeof categoryResolver.categoryCountMap === 'function'
+  ? categoryResolver.categoryCountMap
+  : (rows = [], key = 'productCategory', options = {}) => {
+      const counts = new Map();
+      (Array.isArray(rows) ? rows : []).forEach((row) => {
+        const label = canonicalizePartCategory(row && row[key], options);
+        counts.set(label, (counts.get(label) || 0) + 1);
+      });
+      return counts;
+    };
 const {
   getPricesFromPartMaster,
   scanWithPartMasterPrice
