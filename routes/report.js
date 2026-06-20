@@ -6,7 +6,6 @@ const autoTableModule = require('jspdf-autotable');
 const Inventory = require('../models/Inventory');
 const MasterPart = require('../models/MasterPart');
 const MasterCatalogue = require('../models/MasterCatalogue');
-const PartPriceHistory = require('../models/PartPriceHistory');
 const DealerStock = require('../models/DealerStock');
 const Dealer = require('../models/Dealer');
 const Audit = require('../models/Audit');
@@ -19,20 +18,23 @@ const { firstNonZeroNumber, firstPositiveNumber, normalizePartNumber: normalizeP
 const { cataloguePayload } = require('../utils/catalogue');
 const { formatDateLikeFields, formatIstDateTime, isDateLikeKey } = require('../utils/time');
 const { auditStockStatus, calculateInventoryValue, decorateScanValue, scanValueRow, validateReportValueSource } = require('../utils/inventoryValueEngine');
-const { latestCurrentPriceFromRows } = require('../utils/priceHistory');
 const { getActiveAudit } = require('../utils/audit');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
 const { getCachedReport } = require('../utils/reportCache');
 const { assertDlcReconciliation, calculateStockValuation, stockValuationTotals } = require('../utils/stockValuation');
 const { resolvePartPricing } = require('../utils/partPricing');
+const {
+  getPricesFromPartMaster,
+  scanWithPartMasterPrice
+} = require('../utils/partMasterPrice');
 
 const router = express.Router();
 const autoTable = autoTableModule.default || autoTableModule;
 const REPORT_SCAN_SELECT = [
   'uniqueScanId scanId syncKey clientScanId clientSyncKey qrFingerprint rawUpiHash',
   'part partNumber normalizedPartNumber partName partDescription model year manufacturingYear category productCategory productGroup productType partGroup partSubGroup gstCategory superceededBy',
-  'qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue finalMRP defaultMRP dlc',
+  'qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue finalMRP defaultMRP currentCatalogueMRP currentCatalogueDLC dlc',
   'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin regdNo jobCardNo isFitted fittedQty fittedLocation status type scanType',
   'upiId upiNo dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi',
   'deviceId deviceName userId loginId staffName userName role timestamp scanTime createdAt serverReceivedAt',
@@ -162,26 +164,27 @@ function stockSummaryRemarks(value = 0) {
 
 function rowValueSummary(scans = [], catalogue = {}, priceHistories = []) {
   const summary = calculateInventoryValue(scans);
+  const masterMrp = Number(catalogue && (catalogue.mrp || catalogue.currentCatalogueMRP) || 0);
   return {
-    currentCatalogueMRP: Number(catalogue && catalogue.mrp || 0),
+    currentCatalogueMRP: masterMrp,
     totalQty: summary.totalQty,
-    scanUPIMRP: scanUpiMrpDisplay(summary.rows),
-    averageScannedMRP: summary.averageScannedMRP,
-    minScannedMRP: summary.minScannedMRP,
-    maxScannedMRP: summary.maxScannedMRP,
-    totalScanValue: summary.totalScanValue,
-    totalManualValue: summary.totalManualValue,
+    scanUPIMRP: '',
+    averageScannedMRP: masterMrp,
+    minScannedMRP: masterMrp,
+    maxScannedMRP: masterMrp,
+    totalScanValue: 0,
+    totalManualValue: 0,
     finalInventoryValue: summary.finalInventoryValue,
-    scannedQty: summary.scannedQty,
-    manualQty: summary.manualQty,
-    priceChangeCount: summary.priceChangeCount,
-    pricePeriod: pricePeriodDisplay(scans, priceHistories, summary.rows)
+    scannedQty: 0,
+    manualQty: 0,
+    priceChangeCount: 0,
+    pricePeriod: masterMrp > 0 ? 'PART MASTER CURRENT' : ''
   };
 }
 
 function averageMasterMRP(catalogue = {}, priceHistories = []) {
   const values = [];
-  const catalogueMrp = Number(catalogue && catalogue.mrp || catalogue.currentCatalogueMRP || catalogue.currentCatalogueMrp || 0);
+  const catalogueMrp = Number(catalogue && (catalogue.mrp || catalogue.currentCatalogueMRP) || 0);
   if (catalogueMrp > 0) values.push(catalogueMrp);
   (Array.isArray(priceHistories) ? priceHistories : []).forEach((row) => {
     const mrp = Number(row && row.mrp || 0);
@@ -194,7 +197,11 @@ function averageMasterMRP(catalogue = {}, priceHistories = []) {
 }
 
 function valuationRateForDisplay(summary = {}) {
-  return Number(summary.averageScannedMRP || summary.minScannedMRP || summary.maxScannedMRP || 0);
+  return Number(summary.currentCatalogueMRP || summary.averageScannedMRP || summary.minScannedMRP || summary.maxScannedMRP || 0);
+}
+
+function masterPriceDateText(price = {}) {
+  return formatDate(price && (price.uploadedAt || price.updatedAt || price.createdAt));
 }
 
 function latestPriceForReport(priceHistories = [], asOf = new Date()) {
@@ -203,7 +210,7 @@ function latestPriceForReport(priceHistories = [], asOf = new Date()) {
 
 function finalMrpForReport(valueSummary = {}, detailSource = {}, priceHistories = [], scans = []) {
   const scanFinalMrps = (Array.isArray(scans) ? scans : [])
-    .map((scan) => firstPositiveNumber(scan.finalMRP, scan.finalMrp, scan.valuationMRP, scan.mrp))
+    .map((scan) => firstPositiveNumber(scan.finalMRP, scan.finalMrp, scan.valuationMRP, scan.currentCatalogueMRP))
     .filter((mrp) => mrp > 0);
   if (scanFinalMrps.length) return scanFinalMrps[scanFinalMrps.length - 1];
   const latestPrice = latestPriceForReport(priceHistories);
@@ -211,9 +218,9 @@ function finalMrpForReport(valueSummary = {}, detailSource = {}, priceHistories 
     latestPrice && latestPrice.mrp,
     valueSummary.averageScannedMRP,
     valueSummary.currentCatalogueMRP,
-    detailSource.mrp,
     detailSource.currentCatalogueMRP,
-    detailSource.currentCatalogueMrp
+    detailSource.finalMRP,
+    detailSource.valuationMRP
   );
 }
 
@@ -749,7 +756,8 @@ async function buildLegacyReportData(query = {}) {
       scan.binLocation = scan.binLocation || scan.bin || master.bin || master.binLocation;
       scan = Object.assign(scan, decorateScanValue(scan));
       scan.currentCatalogueMRP = Number(master.mrp || 0);
-      scan.dlc = scan.dlc || master.dlc;
+      scan.currentCatalogueDLC = firstPositiveNumber(master.dlc, master.dlp);
+      scan.dlc = scan.currentCatalogueDLC;
       scan.dealerCode = scan.dealerCode || master.dealerCode;
     }
 
@@ -1540,7 +1548,7 @@ function masterQty(master = {}) {
 
 function enrichScan(scan = {}, master = {}) {
   master = master || {};
-  scan = decorateScanValue(scan);
+  scan = scanWithPartMasterPrice(decorateScanValue(scan), master && master.partNumber ? master : null);
   const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
   const hasMaster = Boolean(master && (master.partNo || master.partNumber || master.normalizedPartNumber));
   const binLocation = scan.binLocation || scan.bin || master.binLocation || master.bin || '';
@@ -1573,7 +1581,7 @@ function enrichScan(scan = {}, master = {}) {
     valuationSource: scan.valuationSource || '',
     finalInventoryValue: Number(scan.finalInventoryValue || 0),
     currentCatalogueMRP: Number(master.mrp || 0),
-    dlc: firstPositiveNumber(master.dlc, master.dlp, scan.dlc, scan.dlp),
+    dlc: firstPositiveNumber(master.dlc, master.dlp),
     productGroup: hasMaster ? master.productGroup || scan.productGroup || '' : scan.productGroup || '',
     partSubGroup: hasMaster ? master.partSubGroup || scan.partSubGroup || '' : scan.partSubGroup || '',
     qty,
@@ -1810,13 +1818,9 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
   const auditedQty = physicalQty;
   const diffQty = auditedQty - dmsQty;
   const valueSummary = rowValueSummary(group.scans, master);
-  const latestPrice = latestPriceForReport(priceHistories);
   const pricing = resolvePartPricing({
-    partNumber: partNo,
-    catalogue: master,
-    master,
-    stock: first,
-    priceHistories,
+    partNumber: group.partNo,
+    partMasterPrice: master && master.masterFound ? master : null,
     actualQty: auditedQty,
     dmsQty
   });
@@ -1854,7 +1858,7 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     totalManualValue: valueSummary.totalManualValue,
     finalInventoryValue: pricing.actualStockValue,
     pricePeriod: valueSummary.pricePeriod,
-    latestMrpEffectiveDate: latestPrice ? formatDate(latestPrice.effectiveFrom) : '',
+    latestMrpEffectiveDate: masterPriceDateText(master),
     dlc,
     productGroup: pricing.productGroup || (hasMaster ? master.productGroup || '' : first.productGroup || ''),
     partSubGroup: pricing.partSubGroup || (hasMaster ? master.partSubGroup || '' : first.partSubGroup || ''),
@@ -1915,6 +1919,10 @@ function buildAuditRow(group, master = {}, priceHistories = []) {
     pricingSource: pricing.pricingSource,
     pricingWarnings: pricing.pricingWarnings,
     warnings: pricing.warnings,
+    missingMrp: pricing.missingMrp,
+    missingDlc: pricing.missingDlc,
+    hasValidMrp: pricing.hasValidMrp,
+    hasValidDlc: pricing.hasValidDlc,
     inventoryRiskStatus: status,
     actionRemarks,
     action: actionRemarks,
@@ -2067,23 +2075,10 @@ async function buildReportData(query = {}) {
   rawScans = await enrichScanUsers(rawScans);
   const realScansForLookup = rawScans.filter((scan) => !/^SYNC/i.test(normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)));
   const partNumbers = Array.from(new Set(realScansForLookup.map((scan) => normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)).filter(Boolean)));
-  const [catalogueMasters, priceHistoryRows] = partNumbers.length ? await Promise.all([
-    MasterCatalogue.find({ normalizedPartNumber: { $in: partNumbers } }).lean(),
-    PartPriceHistory.find({ normalizedPartNumber: { $in: partNumbers } }).sort({ normalizedPartNumber: 1, isCurrentPrice: -1, effectiveFrom: -1 }).lean()
-  ]) : [[], []];
-  const priceHistoryByPart = new Map();
-  priceHistoryRows.forEach((row) => {
-    const partNo = normalizePartNumber(row.normalizedPartNumber || row.partNumber);
-    if (!partNo) return;
-    const rowsForPart = priceHistoryByPart.get(partNo) || [];
-    rowsForPart.push(row);
-    priceHistoryByPart.set(partNo, rowsForPart);
-  });
-  let masters = catalogueMasters.map(cataloguePayload);
-  const catalogueFound = new Set(masters.map((master) => masterPartNumber(master)).filter(Boolean));
-  const legacyPartNumbers = partNumbers.filter((partNo) => !catalogueFound.has(partNo));
-  const masterFilter = legacyPartNumbers.length ? { $or: [{ normalizedPartNumber: { $in: legacyPartNumbers } }, { partNo: { $in: legacyPartNumbers } }, { partNumber: { $in: legacyPartNumbers } }] } : { _id: null };
-  masters = masters.concat(await MasterPart.find(masterFilter).lean());
+  const priceByPart = partNumbers.length
+    ? await getPricesFromPartMaster(partNumbers, query.dealerCode)
+    : new Map();
+  const masters = Array.from(priceByPart.values());
   const masterByDealer = new Map();
   const masterByPart = new Map();
   masters.forEach((master) => {
@@ -2096,10 +2091,12 @@ async function buildReportData(query = {}) {
     const partNo = masterPartNumber(stock);
     if (!partNo) return;
     const dealerCode = cleanText(stock.dealerCode || query.dealerCode).toUpperCase();
+    const currentPrice = priceByPart.get(partNo) || null;
     const merged = {
-      ...(masterByPart.get(partNo) || {}),
       ...stock,
-      dlc: firstPositiveNumber(stock.dlp, stock.dlc),
+      ...(currentPrice || {}),
+      mrp: currentPrice ? currentPrice.mrp : 0,
+      dlc: currentPrice ? currentPrice.dlc : 0,
       dmsStock: firstPositiveNumber(stock.dmsStock, stock.systemQty),
       systemQty: firstPositiveNumber(stock.systemQty, stock.dmsStock)
     };
@@ -2129,8 +2126,7 @@ async function buildReportData(query = {}) {
   });
   const allFinalRows = Array.from(groupMap.values()).map((group) => buildAuditRow(
     group,
-    masterByDealer.get(masterKey(group.partNo, group.dealerCode)) || masterByPart.get(group.partNo) || {},
-    priceHistoryByPart.get(group.partNo) || []
+    masterByDealer.get(masterKey(group.partNo, group.dealerCode)) || masterByPart.get(group.partNo) || {}
   )).sort((a, b) => sortText(a.partNo, b.partNo));
   const finalRows = applyVarianceFilter(allFinalRows, query.varianceType).filter((row) => row.physicalQty > 0);
 
@@ -2239,7 +2235,6 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const hasSystemStock = Boolean(system && (system.partNo || system.partNumber || system.normalizedPartNumber));
   const detailSource = hasCatalogue ? catalogue : (hasSystemStock ? system : firstScan);
   const valueSummary = rowValueSummary(scans, detailSource, priceHistories);
-  const latestPrice = latestPriceForReport(priceHistories);
   const auditTypes = new Set(['AUDIT']);
   const userSummary = new Map();
   const breakdown = scans.reduce((total, scan) => {
@@ -2276,10 +2271,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const systemQty = hasSystemStock ? systemQtyValue(system) : 0;
   const pricing = resolvePartPricing({
     partNumber: partNo,
-    catalogue,
-    master: system,
-    stock: firstScan,
-    priceHistories,
+    partMasterPrice: catalogue || null,
     actualQty: auditedQty,
     dmsQty: systemQty
   });
@@ -2342,7 +2334,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     finalInventoryValue: pricing.actualStockValue,
     priceChangeCount: valueSummary.priceChangeCount,
     pricePeriod: valueSummary.pricePeriod,
-    latestMrpEffectiveDate: latestPrice ? formatDate(latestPrice.effectiveFrom) : '',
+    latestMrpEffectiveDate: masterPriceDateText(catalogue || detailSource),
     dlc,
     openingStock: systemQty,
     physicalQty,
@@ -2366,6 +2358,10 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     pricingSource: pricing.pricingSource,
     pricingWarnings: pricing.pricingWarnings,
     warnings: pricing.warnings,
+    missingMrp: pricing.missingMrp,
+    missingDlc: pricing.missingDlc,
+    hasValidMrp: pricing.hasValidMrp,
+    hasValidDlc: pricing.hasValidDlc,
     actualStockValue: pricing.actualStockValue,
     dmsStockValue: pricing.dmsStockValue,
     varianceStockValue: pricing.varianceStockValue,
@@ -2597,18 +2593,12 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   }
 
   const allParts = Array.from(partSet).filter(Boolean);
-  const [catalogueRows, priceHistoryRows] = allParts.length ? await Promise.all([
-    MasterCatalogue.find({ normalizedPartNumber: { $in: allParts } }).lean(),
-    PartPriceHistory.find({ normalizedPartNumber: { $in: allParts } }).sort({ normalizedPartNumber: 1, isCurrentPrice: -1, effectiveFrom: -1 }).lean()
-  ]) : [[], []];
-  const catalogueByPart = new Map(catalogueRows.map((row) => [masterPartNumber(row), cataloguePayload(row)]).filter(([partNo]) => partNo));
-  const priceHistoryByPart = new Map();
-  priceHistoryRows.forEach((row) => {
-    const partNo = normalizePartNumber(row.normalizedPartNumber || row.partNumber);
-    if (!partNo) return;
-    const rowsForPart = priceHistoryByPart.get(partNo) || [];
-    rowsForPart.push(row);
-    priceHistoryByPart.set(partNo, rowsForPart);
+  const priceByPart = allParts.length
+    ? await getPricesFromPartMaster(allParts, query.dealerCode)
+    : new Map();
+  groups.forEach((group) => {
+    const price = priceByPart.get(group.partNo) || null;
+    group.scans = group.scans.map((scan) => scanWithPartMasterPrice(scan, price));
   });
   const systemByPart = new Map();
   systemParts.forEach((part) => {
@@ -2626,9 +2616,9 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     });
   });
 
-  const groupedRows = Array.from(groups.values()).map((group) => partwiseRowFrom(group.partNo, group, catalogueByPart.get(group.partNo), systemByPart.get(group.partNo), priceHistoryByPart.get(group.partNo) || []));
+  const groupedRows = Array.from(groups.values()).map((group) => partwiseRowFrom(group.partNo, group, priceByPart.get(group.partNo), systemByPart.get(group.partNo)));
   const zeroScanRows = includeFullMaster
-    ? allParts.filter((partNo) => !scannedParts.includes(partNo)).map((partNo) => partwiseRowFrom(partNo, { partNo, scans: [], physicalQty: 0 }, catalogueByPart.get(partNo), systemByPart.get(partNo), priceHistoryByPart.get(partNo) || []))
+    ? allParts.filter((partNo) => !scannedParts.includes(partNo)).map((partNo) => partwiseRowFrom(partNo, { partNo, scans: [], physicalQty: 0 }, priceByPart.get(partNo), systemByPart.get(partNo)))
     : [];
   const rows = applyPartwiseFilters(groupedRows.concat(zeroScanRows), query)
     .filter((row) => row.status !== 'MASTER NOT FOUND')
@@ -2943,7 +2933,7 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
     const valueRow = scanValueRow(scan);
     const mrp = numberValue(valueRow.valuationMRP, 0);
-    const dlc = firstPositiveNumber(master && master.dlc, scan.dlc);
+    const dlc = firstPositiveNumber(master && master.dlc, master && master.dlp);
     if (actionFilter === 'Inventory Matched') {
       if (master) addCategoryVarianceGroup(groupMap, category, 'Inventory Matched', 0, mrp, dlc);
       return;

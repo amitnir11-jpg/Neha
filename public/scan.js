@@ -844,24 +844,28 @@
     const fitted = state.mode === 'FITTED';
     const binWrap = byId('manualBinWrap');
     const mrpWrap = byId('manualMrpWrap');
+    const dlcWrap = byId('manualDlcWrap');
     const qtyWrap = byId('manualQtyWrap');
     const regWrap = byId('manualRegWrap');
     const jobWrap = byId('manualJobWrap');
     const qtyInput = byId('manualQty');
     const mrpInput = byId('manualMrp');
+    const dlcInput = byId('manualDlc');
     const binInput = byId('manualBinLocation');
     const regInput = byId('manualRegdNo');
     const jobInput = byId('manualJobCardNo');
 
     binWrap.classList.toggle('hidden', !info.requiresBin);
     mrpWrap.classList.toggle('hidden', verification);
+    if (dlcWrap) dlcWrap.classList.toggle('hidden', verification);
     qtyWrap.classList.toggle('hidden', verification);
     regWrap.classList.toggle('hidden', !fitted);
     jobWrap.classList.toggle('hidden', !fitted);
 
     binInput.required = info.requiresBin;
     qtyInput.required = !verification;
-    mrpInput.required = !verification;
+    mrpInput.required = false;
+    if (dlcInput) dlcInput.required = false;
     regInput.required = fitted;
     jobInput.required = fitted;
   }
@@ -1295,7 +1299,7 @@
     setSelectedCamera(preferredCameraId(devices));
   }
 
-  function createScanRecord({ rawText = '', manual = false, partNumber = '', qty = 1, mrp = '', binLocation = '', regdNo = '', jobCardNo = '' } = {}) {
+  function createScanRecord({ rawText = '', manual = false, partNumber = '', qty = 1, binLocation = '', regdNo = '', jobCardNo = '' } = {}) {
     const timestamp = nowIso();
     const scanType = currentScanType();
     const part = normalizeText(partNumber || parsePartCandidate(rawText));
@@ -1318,9 +1322,11 @@
       part: part,
       qty: scanType === 'VERIFICATION' ? 1 : Number(qty || 1) || 1,
       quantity: scanType === 'VERIFICATION' ? 1 : Number(qty || 1) || 1,
-      mrp: manual && Number(mrp) > 0 ? Number(mrp) : undefined,
-      manualMRP: manual && Number(mrp) > 0 ? Number(mrp) : undefined,
-      mrpProvided: manual && Number(mrp) > 0,
+      mrp: undefined,
+      dlc: undefined,
+      manualMRP: undefined,
+      mrpProvided: false,
+      dlcProvided: false,
       binLocation: upper(binLocation),
       bin: upper(binLocation),
       regdNo: upper(regdNo),
@@ -1368,7 +1374,7 @@
     const status = rowStatus(row);
     const qty = rowQty(row);
     const bin = rowBin(row);
-    const mrp = Number(row.mrp ?? row.manualMRP ?? row.scanMRP ?? 0);
+    const mrp = Number(row.currentCatalogueMRP ?? row.displayMRP ?? row.valuationMRP ?? row.mrp ?? 0);
     const errorText = clean(row.syncError || row.errorMessage || row.reason || '');
     const statusText = status === 'synced'
       ? 'Synced to server'
@@ -2112,6 +2118,9 @@
         if (Number(part.mrp || 0) > 0 && !byId('manualMrpWrap').classList.contains('hidden')) {
           byId('manualMrp').value = String(part.mrp);
         }
+        if (Number(part.dlc || 0) > 0 && byId('manualDlc') && !byId('manualDlcWrap')?.classList.contains('hidden')) {
+          byId('manualDlc').value = String(part.dlc);
+        }
         byId('manualPartNumber').focus();
         container.innerHTML = '';
       });
@@ -2139,6 +2148,14 @@
           const data = await api(`/api/mobile/master-search?${params.toString()}`);
           const parts = Array.isArray(data.parts) ? data.parts : Array.isArray(data.suggestions) ? data.suggestions : [];
           updateManualSuggestionList(parts);
+          const exact = parts.find((part) => upper(part.partNumber || part.partNo || part.part || '') === q);
+          if (exact) {
+            byId('manualMrp').value = Number(exact.mrp || 0) > 0 ? String(exact.mrp) : '';
+            if (byId('manualDlc')) byId('manualDlc').value = Number(exact.dlc || 0) > 0 ? String(exact.dlc) : '';
+          } else {
+            byId('manualMrp').value = '';
+            if (byId('manualDlc')) byId('manualDlc').value = '';
+          }
         } catch (_) {
           updateManualSuggestionList([]);
         }
@@ -2161,6 +2178,7 @@
     byId('manualPartNumber').value = upper(autoPartNumber || parsePartCandidate(rawText));
     byId('manualQty').value = '1';
     byId('manualMrp').value = '';
+    if (byId('manualDlc')) byId('manualDlc').value = '';
     byId('manualBinLocation').value = requiresBin() ? loadActiveBin() : '';
     byId('manualRegdNo').value = '';
     byId('manualJobCardNo').value = '';
@@ -2204,22 +2222,9 @@
     }
     const mode = currentScanType();
     const qty = Number(form.get('qty') || 1);
-    const mrp = Number(String(form.get('mrp') || '').replace(/,/g, '').trim());
     const binLocation = upper(form.get('binLocation') || '');
     const regdNo = upper(form.get('regdNo') || '');
     const jobCardNo = upper(form.get('jobCardNo') || '');
-
-    if (mode !== 'VERIFICATION' && !Number.isFinite(mrp) && !Number.isFinite(Number(form.get('mrp')))) {
-      toast('Enter a valid MRP or use a QR/barcode scan', 'error');
-      byId('manualMrp').focus();
-      return;
-    }
-
-    if (mode !== 'VERIFICATION' && Number.isFinite(mrp) && mrp <= 0) {
-      toast('MRP must be greater than zero for manual entry', 'error');
-      byId('manualMrp').focus();
-      return;
-    }
 
     if (requiresBin() && !binLocation) {
       toast('Bin location is required for this mode', 'error');
@@ -2238,7 +2243,6 @@
       manual: true,
       partNumber,
       qty: mode === 'VERIFICATION' ? 1 : qty,
-      mrp: mode === 'VERIFICATION' ? '' : mrp,
       binLocation,
       regdNo,
       jobCardNo

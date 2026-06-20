@@ -5,83 +5,44 @@
  *
  * FINAL INVENTORY VALUE CALCULATION (ONLY SOURCE OF TRUTH):
  *
- *   TOTAL INVENTORY VALUE = 
- *     SUM(UPI scanned qty × scanned UPI MRP)
- *     +
- *     SUM(manual qty × manual entered MRP)
+ *   TOTAL INVENTORY VALUE =
+ *     SUM(qty x latest Part Master MRP)
  *
  * NOT allowed:
- *   - Latest master MRP (only for catalogue/reference)
- *   - Current catalogue MRP (only for catalogue/reference)
- *   - Part master default MRP (only for catalogue/reference)
+ *   - MRP parsed from scan data
+ *   - Old user-entered scan/manual MRP as a final calculation source
  *
  * ====================================================================
- * MASTER PRICE FILE PURPOSE (REFERENCE ONLY)
+ * MASTER PRICE FILE PURPOSE
  * ====================================================================
  *
- * Master data is ONLY for:
- *   1. Part Catalogue Search
- *   2. Current Price Reference (display only)
- *   3. Price Period Mapping (when was MRP effective)
- *   4. Audit Stock Risk Status
- *   5. Historical MRP Matching
- *
- * MASTER PRICE MUST NOT directly override scanned/manual values.
+ * Master data is the final pricing source for MRP/DLC valuation. Scan data
+ * contributes the part number and quantity only.
  *
  * ====================================================================
  * UPI SCAN LOGIC
  * ====================================================================
  *
  * When UPI/QR/barcode scanned:
- *   1. Extract: part number + scanned MRP + scan datetime
- *   2. Save: scanMRP separately in valuationMRP field
- *   3. Match scanMRP with master price history for:
- *      - effectiveFrom date
- *      - effectiveTo date
- *   4. Tag stock with purchase period
- *   5. Use ONLY scanMRP for inventory valuation
- *   6. DO NOT replace with current master MRP
+ *   1. Extract the part number only for pricing purposes
+ *   2. Fetch current MRP/DLC from Part Master
+ *   3. Save and value the scan with the master prices
  *
  * ====================================================================
  * MANUAL ENTRY LOGIC
  * ====================================================================
  *
  * When user manually enters part:
- *   1. Show current master MRP by default (reference only)
- *   2. Allow user to edit MRP
- *   3. Save manualMRP separately in manualMRP field
- *   4. FINAL VALUE = manualQty × manualMRP (NOT master MRP)
+ *   1. Fetch and show current Part Master MRP/DLC
+ *   2. Ignore user-entered price fields for final valuation
+ *   3. Reject only when Part Master MRP or DLC is missing
  *
  * ====================================================================
- * VALUATION SOURCE PRIORITY (CRITICAL)
+ * VALUATION SOURCE (CRITICAL)
  * ====================================================================
  *
- * When calculating inventory value, check in this order:
- *
- *   1. Explicit Scanned MRP (UPI/QR data)
- *      → Use for scanned transactions
- *      → Source: 'UPI_SCANNED_MRP'
- *
- *   2. Parsed Raw MRP (from raw scan payload)
- *      → Extract from raw scan string if format matches
- *      → Source: 'UPI_SCANNED_MRP'
- *
- *   3. Explicit Manual MRP (if set by user)
- *      → Use for manual entry transactions
- *      → Source: 'MANUAL_ENTERED_MRP'
- *
- *   4. Stored Valuation MRP with correct source flag
- *      → Only if valuationSource is MANUAL_ENTERED_MRP or UPI_SCANNED_MRP
- *      → Use corresponding source
- *
- *   5. Fallback for manual scan detection
- *      → If manual scan detected, use mrp field
- *      → Source: 'MANUAL_ENTERED_MRP'
- *
- *   6. NO MRP FOUND
- *      → Zero value
- *      → Source: 'NO_SCANNED_OR_MANUAL_MRP'
- *      → Record warning in report
+ * Current Part Master MRP/DLC is the only allowed final price source.
+ * Missing master prices produce PART_MASTER_PRICE_MISSING and zero value.
  *
  * ====================================================================
  * REPORT VALUE CONSISTENCY RULE (CRITICAL)
@@ -94,8 +55,7 @@
  *
  * NO REPORT IS ALLOWED TO:
  *   - Recalculate inventory value independently
- *   - Use master MRP directly for inventory calculations
- *   - Use current catalogue MRP for value calculations
+ *   - Use scan/manual MRP for inventory calculations
  *   - Aggregate values differently than calculateInventoryValue()
  *
  * ====================================================================
@@ -115,6 +75,15 @@
  */
 
 const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
+const { MASTER_PRICE_SOURCE } = require('./partMasterPrice');
+
+const MASTER_VALUATION_SOURCES = new Set([
+  MASTER_PRICE_SOURCE,
+  'PART_MASTER_MRP',
+  'PART_MASTER_PRICE',
+  'MASTER_CATALOGUE_MRP',
+  'CATALOGUE_MRP_FALLBACK'
+]);
 
 function money(value) {
   return Math.round(Number(value || 0) * 100) / 100;
@@ -220,42 +189,25 @@ function explicitFinalMrp(scan = {}) {
 }
 
 function getFinalInventoryMRP(scan = {}, catalogueData = {}) {
-  const finalMrp = explicitFinalMrp(scan);
-  if (finalMrp !== undefined) {
-    const scanned = explicitScannedMrp(scan);
-    const parsed = parseRawMrp(rawScanText(scan));
-    const source = (scanned !== undefined && scanned > 0) || (parsed !== undefined && parsed > 0)
-      ? 'UPI_SCANNED_MRP'
-      : 'MANUAL_ENTERED_MRP';
-    return { mrp: money(finalMrp), source };
-  }
-
-  const scanned = explicitScannedMrp(scan);
-  if (scanned !== undefined) {
-    return { mrp: money(scanned), source: 'UPI_SCANNED_MRP' };
-  }
-
-  const parsed = parseRawMrp(rawScanText(scan));
-  if (parsed !== undefined) {
-    return { mrp: money(parsed), source: 'UPI_SCANNED_MRP' };
-  }
-
-  const manual = explicitManualMrp(scan);
-  if (manual !== undefined) {
-    return { mrp: money(manual), source: 'MANUAL_ENTERED_MRP' };
-  }
-
   const source = cleanText(scan.valuationSource || scan.priceSource).toUpperCase();
   const stored = optionalNumber(scan.valuationMRP !== undefined ? scan.valuationMRP : scan.valuationMrp);
-  if (stored !== undefined && ['MANUAL_ENTERED_MRP', 'UPI_SCANNED_MRP'].includes(source)) {
+  if (stored !== undefined && MASTER_VALUATION_SOURCES.has(source)) {
     return { mrp: money(stored), source };
   }
 
-  if (isManualScan(scan)) {
-    const manualFallback = optionalNumber(scan.mrp);
-    if (manualFallback !== undefined) {
-      return { mrp: money(manualFallback), source: 'MANUAL_ENTERED_MRP' };
-    }
+  const finalMrp = explicitFinalMrp(scan);
+  if (finalMrp !== undefined && MASTER_VALUATION_SOURCES.has(source)) {
+    return { mrp: money(finalMrp), source: source || MASTER_PRICE_SOURCE };
+  }
+
+  const explicitMasterMrp = optionalNumber(
+    scan.currentCatalogueMRP !== undefined ? scan.currentCatalogueMRP
+      : scan.currentCatalogueMrp !== undefined ? scan.currentCatalogueMrp
+        : scan.masterMRP !== undefined ? scan.masterMRP
+          : scan.masterMrp
+  );
+  if (explicitMasterMrp !== undefined) {
+    return { mrp: money(explicitMasterMrp), source: MASTER_PRICE_SOURCE };
   }
 
   const catalogue = optionalNumber(
@@ -264,20 +216,14 @@ function getFinalInventoryMRP(scan = {}, catalogueData = {}) {
         : catalogueData.mrp
   );
   if (catalogue !== undefined) {
-    return { mrp: money(catalogue), source: 'CATALOGUE_MRP_FALLBACK' };
+    return { mrp: money(catalogue), source: MASTER_PRICE_SOURCE };
   }
 
-  return { mrp: 0, source: 'NO_SCANNED_OR_MANUAL_MRP' };
+  return { mrp: 0, source: 'PART_MASTER_PRICE_MISSING' };
 }
 
 function scanValuation(scan = {}) {
-  const valuation = getFinalInventoryMRP(scan);
-  if (valuation.source === 'CATALOGUE_MRP_FALLBACK' && isManualScan(scan)) {
-    return { mrp: valuation.mrp, source: 'MANUAL_ENTERED_MRP' };
-  }
-  return valuation.source === 'CATALOGUE_MRP_FALLBACK'
-    ? { mrp: 0, source: 'NO_SCANNED_OR_MANUAL_MRP' }
-    : valuation;
+  return getFinalInventoryMRP(scan);
 }
 
 function movementType(scan = {}) {
@@ -290,8 +236,9 @@ function scanValueRow(scan = {}) {
   const qty = scanQty(scan);
   const valuation = scanValuation(scan);
   const value = money(qty * valuation.mrp);
-  const manual = valuation.source === 'MANUAL_ENTERED_MRP';
-  const scanned = valuation.source === 'UPI_SCANNED_MRP';
+  const manual = false;
+  const scanned = false;
+  const master = MASTER_VALUATION_SOURCES.has(valuation.source);
   return {
     scan,
     partNumber,
@@ -301,8 +248,10 @@ function scanValueRow(scan = {}) {
     valuationSource: valuation.source,
     scannedQty: scanned ? qty : 0,
     manualQty: manual ? qty : 0,
-    totalScanValue: scanned ? value : 0,
-    totalManualValue: manual ? value : 0,
+    masterQty: master ? qty : 0,
+    totalScanValue: 0,
+    totalManualValue: 0,
+    totalMasterValue: master ? value : 0,
     finalInventoryValue: value,
     timestamp: validDate(scan.timestamp || scan.scanTime || scan.createdAt)
   };
@@ -317,7 +266,8 @@ function calculateInventoryValue(input = [], options = {}) {
   const manualQty = rows.reduce((sum, row) => sum + row.manualQty, 0);
   const totalScanValue = money(rows.reduce((sum, row) => sum + row.totalScanValue, 0));
   const totalManualValue = money(rows.reduce((sum, row) => sum + row.totalManualValue, 0));
-  const finalInventoryValue = money(totalScanValue + totalManualValue);
+  const totalMasterValue = money(rows.reduce((sum, row) => sum + Number(row.totalMasterValue || 0), 0));
+  const finalInventoryValue = money(rows.reduce((sum, row) => sum + row.finalInventoryValue, 0));
   const mrpQty = pricedRows.reduce((sum, row) => sum + row.qty, 0);
   const averageScannedMRP = mrpQty
     ? money(pricedRows.reduce((sum, row) => sum + row.mrp * row.qty, 0) / mrpQty)
@@ -329,6 +279,7 @@ function calculateInventoryValue(input = [], options = {}) {
     manualQty,
     totalScanValue,
     totalManualValue,
+    totalMasterValue,
     finalInventoryValue,
     averageScannedMRP,
     minScannedMRP: mrps.length ? Math.min(...mrps) : 0,
@@ -348,13 +299,11 @@ function auditStockStatus({ mrp = 0, physicalQty = 0, fittedQty = 0, systemQty =
 
 function decorateScanValue(scan = {}) {
   const row = scanValueRow(scan);
-  const manual = row.valuationSource === 'MANUAL_ENTERED_MRP';
-  const scanned = row.valuationSource === 'UPI_SCANNED_MRP';
   return {
     ...scan,
     mrp: row.valuationMRP,
-    scanMRP: scanned ? row.valuationMRP : (scan.scanMRP || scan.scanMrp),
-    manualMRP: manual ? row.valuationMRP : (scan.manualMRP || scan.manualMrp),
+    scanMRP: 0,
+    manualMRP: 0,
     valuationMRP: row.valuationMRP,
     valuationSource: row.valuationSource,
     finalInventoryValue: row.finalInventoryValue
@@ -389,39 +338,26 @@ function summarizeMovementBucket(scans = [], options = {}) {
 }
 
 /**
- * Validates that report value calculation ONLY uses scan/manual MRP
- * This function ensures no master MRP override happened
+ * Validates that report value calculation uses the current Part Master price.
  * @param {Object} reportRow - Row from report with values
  * @returns {Object} Validation result with warnings
  */
 function validateReportValueSource(reportRow = {}) {
   const warnings = [];
   
-  // Check that finalInventoryValue is not using master MRP
   if (reportRow.finalInventoryValue && reportRow.finalInventoryValue > 0) {
     if (!reportRow.valuationSource) {
       warnings.push('WARNING: Missing valuationSource in report row');
     }
-    if (!['UPI_SCANNED_MRP', 'MANUAL_ENTERED_MRP'].includes(reportRow.valuationSource)) {
-      warnings.push(`WARNING: Invalid valuationSource "${reportRow.valuationSource}" - must be UPI_SCANNED_MRP or MANUAL_ENTERED_MRP`);
+    if (!MASTER_VALUATION_SOURCES.has(cleanText(reportRow.valuationSource).toUpperCase())) {
+      warnings.push(`WARNING: Invalid valuationSource "${reportRow.valuationSource}" - must be ${MASTER_PRICE_SOURCE}`);
     }
   }
-  
-  // Ensure currentCatalogueMRP is ONLY for reference, not calculation
-  if (reportRow.currentCatalogueMRP && reportRow.finalInventoryValue) {
-    const expectedValue = (reportRow.scannedQty || 0) * (reportRow.averageScannedMRP || 0);
-    const expectedManualValue = (reportRow.manualQty || 0) * (reportRow.manualMRP || 0);
-    const expectedTotal = money(expectedValue + expectedManualValue);
-    
-    if (Math.abs(reportRow.finalInventoryValue - expectedTotal) > 0.01) {
-      warnings.push(`VALUE MISMATCH: finalInventoryValue should equal scan value + manual value, not catalogue MRP`);
-    }
-  }
-  
+
   return {
     isValid: warnings.length === 0,
     warnings,
-    hasProperSource: ['UPI_SCANNED_MRP', 'MANUAL_ENTERED_MRP'].includes(reportRow.valuationSource)
+    hasProperSource: MASTER_VALUATION_SOURCES.has(cleanText(reportRow.valuationSource).toUpperCase())
   };
 }
 
@@ -495,9 +431,8 @@ function aggregateReportValues(rows = []) {
     rowsWithValidationWarnings: rows.filter(r => (r.sourceValidationWarnings || []).length > 0).length,
     
     // Source breakdown
-    scannedValueCount: rows.filter(r => r.valuationSource === 'UPI_SCANNED_MRP').length,
-    manualValueCount: rows.filter(r => r.valuationSource === 'MANUAL_ENTERED_MRP').length,
-    noValueCount: rows.filter(r => r.valuationSource === 'NO_SCANNED_OR_MANUAL_MRP').length
+    masterValueCount: rows.filter(r => MASTER_VALUATION_SOURCES.has(cleanText(r.valuationSource).toUpperCase())).length,
+    noValueCount: rows.filter(r => !MASTER_VALUATION_SOURCES.has(cleanText(r.valuationSource).toUpperCase())).length
   };
 }
 

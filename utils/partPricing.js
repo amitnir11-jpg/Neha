@@ -1,10 +1,6 @@
-const { cleanText, firstPositiveNumber, normalizePartNumber, numberValue } = require('./normalize');
-const { latestCurrentPriceFromRows } = require('./priceHistory');
+const { cleanText, numberValue } = require('./normalize');
 const { calculateStockValuation } = require('./stockValuation');
-
-function upper(value) {
-  return cleanText(value).toUpperCase();
-}
+const { priceFromPartMasterRecord } = require('./partMasterPrice');
 
 function sourceLabel(source = '') {
   switch (String(source || '').toUpperCase()) {
@@ -12,35 +8,20 @@ function sourceLabel(source = '') {
       return 'Master Catalogue';
     case 'MASTER_PART':
       return 'Part Master';
-    case 'PRICE_HISTORY':
-      return 'Price History';
-    case 'DEALER_STOCK':
-      return 'Dealer Stock';
     default:
       return cleanText(source) || 'Unknown';
   }
 }
 
 function normalizePricingRecord(record = {}, source = '') {
-  const sourceRecord = record || {};
-  const partNumber = normalizePartNumber(sourceRecord.normalizedPartNumber || sourceRecord.partNumber || sourceRecord.partNo || sourceRecord.part || '');
-  if (!partNumber) return null;
-  return {
-    source,
-    partNumber,
-    normalizedPartNumber: partNumber,
-    partDescription: upper(sourceRecord.partDescription || sourceRecord.partName || sourceRecord.description || ''),
-    productCategory: upper(sourceRecord.productCategory || sourceRecord.category || ''),
-    category: upper(sourceRecord.category || sourceRecord.productCategory || ''),
-    model: upper(sourceRecord.model || ''),
-    year: upper(sourceRecord.year || sourceRecord.manufacturingYear || ''),
-    manufacturingYear: upper(sourceRecord.manufacturingYear || sourceRecord.year || ''),
-    productGroup: upper(sourceRecord.productGroup || ''),
-    partSubGroup: upper(sourceRecord.partSubGroup || sourceRecord.productSubGroup || ''),
-    mrp: firstPositiveNumber(sourceRecord.mrp, sourceRecord.currentCatalogueMRP, sourceRecord.currentCatalogueMrp),
-    dlc: firstPositiveNumber(sourceRecord.dlc, sourceRecord.dlp),
-    dealerCode: upper(sourceRecord.dealerCode || '')
-  };
+  if (!record) return null;
+  const recordSource = record.source || source || 'MASTER_PART';
+  const normalized = priceFromPartMasterRecord({ ...record, source: recordSource }, sourceRecordDealer(record));
+  return normalized ? { ...normalized, source: recordSource } : null;
+}
+
+function sourceRecordDealer(record = {}) {
+  return record && record.dealerCode ? record.dealerCode : '';
 }
 
 function hasMetadata(record = {}) {
@@ -70,16 +51,18 @@ function pickPositiveCandidate(candidates = [], key = 'mrp') {
 function resolvePartPricing(options = {}) {
   const actualQty = numberValue(options.actualQty ?? options.actualStock ?? options.physicalQty ?? 0, 0);
   const dmsQty = numberValue(options.dmsQty ?? options.systemQty ?? options.dmsStock ?? 0, 0);
-  const asOf = options.asOf || new Date();
 
-  const catalogue = normalizePricingRecord(options.catalogue || options.catalogueRecord || null, 'MASTER_CATALOGUE');
-  const master = normalizePricingRecord(options.master || options.masterRecord || null, 'MASTER_PART');
-  const stock = normalizePricingRecord(options.stock || options.stockRecord || null, 'DEALER_STOCK');
-  const latestPriceHistory = latestCurrentPriceFromRows(Array.isArray(options.priceHistories) ? options.priceHistories : [], asOf);
-  const priceHistory = normalizePricingRecord(latestPriceHistory, 'PRICE_HISTORY');
-  const metadataRecord = [catalogue, master, stock, priceHistory].find((record) => record && hasMetadata(record))
-    || catalogue || master || stock || priceHistory || null;
-  const priceCandidates = [catalogue, master, priceHistory, stock];
+  const hasCentralPrice = Object.prototype.hasOwnProperty.call(options, 'partMasterPrice');
+  const centralPrice = normalizePricingRecord(options.partMasterPrice, options.partMasterPrice && options.partMasterPrice.source);
+  const catalogue = hasCentralPrice
+    ? centralPrice
+    : normalizePricingRecord(options.catalogue || options.catalogueRecord || null, 'MASTER_CATALOGUE');
+  const master = hasCentralPrice
+    ? null
+    : normalizePricingRecord(options.master || options.masterRecord || null, 'MASTER_PART');
+  const metadataRecord = [catalogue, master].find((record) => record && hasMetadata(record))
+    || catalogue || master || null;
+  const priceCandidates = [catalogue, master];
   const mrpPick = pickPositiveCandidate(priceCandidates, 'mrp');
   const dlcPick = pickPositiveCandidate(priceCandidates, 'dlc');
 
@@ -104,13 +87,9 @@ function resolvePartPricing(options = {}) {
   const warnings = [];
   if (!(mrpPick.value > 0)) {
     warnings.push('Missing MRP in Part Master');
-  } else if (!['MASTER_CATALOGUE', 'MASTER_PART'].includes(mrpPick.source)) {
-    warnings.push(`MRP fallback from ${sourceLabel(mrpPick.source)}`);
   }
   if (!(dlcPick.value > 0)) {
     warnings.push('Missing DLC in Part Master');
-  } else if (!['MASTER_CATALOGUE', 'MASTER_PART'].includes(dlcPick.source)) {
-    warnings.push(`DLC fallback from ${sourceLabel(dlcPick.source)}`);
   }
 
   return {

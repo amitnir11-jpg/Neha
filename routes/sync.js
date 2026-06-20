@@ -21,9 +21,15 @@ const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentit
 const masterValidation = require('../utils/masterValidation');
 const { dateDebugPayload, formatIstDateTime, validDate: validTimestamp } = require('../utils/time');
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
-const { findPricePeriod, pricePeriodPayload } = require('../utils/priceHistory');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
 const { isDatabaseReady } = require('../services/prisma');
+const {
+  MISSING_PART_MASTER_PRICE_MESSAGE,
+  getPriceFromPartMaster,
+  masterPriceMissing,
+  masterPriceScanFields,
+  priceFromPartMasterRecord
+} = require('../utils/partMasterPrice');
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
@@ -53,8 +59,8 @@ const SYNC_VERBOSE_LOGS = process.env.SYNC_VERBOSE_LOGS === 'true';
  *
  * VALIDATION:
  *   - All valuationMRP values must have corresponding valuationSource
- *   - valuationSource must be 'MANUAL_ENTERED_MRP', 'UPI_SCANNED_MRP', or 'CATALOGUE_MRP_FALLBACK'
- *   - If valuationMRP = 0, valuationSource must be 'NO_SCANNED_OR_MANUAL_MRP'
+ *   - valuationSource must come from Part Master pricing
+ *   - If valuationMRP = 0, Part Master pricing is missing and sync should fail
  *
  * ====================================================================
  */
@@ -66,6 +72,10 @@ function clean(value) {
 
 function upper(value) {
   return clean(value).toUpperCase();
+}
+
+async function getMasterPrice(partNumber, dealerCode = '', master = null) {
+  return getPriceFromPartMaster(partNumber, dealerCode);
 }
 
 function validDate(value) {
@@ -646,59 +656,17 @@ async function confirmedDuplicateUpdate(policy = {}, scan = {}, req = {}) {
   return null;
 }
 
-function valuationFields({ scan = {}, rawScanText = '', scannedMrp, mrpProvided = false, manualEntry = false, master = null } = {}) {
-  const source = normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, manualEntry ? 'manual' : 'mobile');
-  const valued = decorateScanValue({
-    rawScan: rawScanText,
-    rawScanString: rawScanText,
-    source: manualEntry ? 'manual' : source,
-    scanMode: manualEntry ? 'Manual' : source,
-    scanMRP: !manualEntry && mrpProvided ? scannedMrp : undefined,
-    manualMRP: manualEntry && mrpProvided ? scannedMrp : undefined
-  });
-  return {
-    mrp: Number(valued.valuationMRP || 0),
-    scanMRP: Number(valued.scanMRP || 0),
-    manualMRP: Number(valued.manualMRP || 0),
-    valuationMRP: Number(valued.valuationMRP || 0),
-    valuationSource: valued.valuationSource || 'NO_SCANNED_OR_MANUAL_MRP'
-  };
+function valuationFields({ masterPrice = null, master = null, qty = 0 } = {}) {
+  const price = masterPrice || priceFromPartMasterRecord(master);
+  return masterPriceScanFields(price, qty);
 }
 
-function existingHasPositiveMrp(scan = {}) {
-  return [
-    scan.finalMRP,
-    scan.finalMrp,
-    scan.valuationMRP,
-    scan.valuationMrp,
-    scan.scanMRP,
-    scan.scanMrp,
-    scan.manualMRP,
-    scan.manualMrp,
-    scan.mrp
-  ].some((value) => Number(value || 0) > 0);
-}
-
-async function backfillDuplicateMrp(existing = {}, scan = {}, { manualEntry = false } = {}) {
-  if (!existing || !existing._id || existingHasPositiveMrp(existing) || !scan.mrpProvided) return existing;
-  const scannedMrp = optionalNumber(scan.mrp);
-  if (!(Number(scannedMrp || 0) > 0)) return existing;
-  const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: true, manualEntry });
-  if (!(Number(valueFields.valuationMRP || 0) > 0)) return existing;
-  const pricePeriod = await findPricePeriod(scan.partNumber || existing.partNumber || existing.part, scan.timestamp || scan.serverReceivedAt || new Date(), valueFields.valuationMRP).catch(() => null);
+async function backfillDuplicateMrp(existing = {}, scan = {}) {
+  if (!existing || !existing._id) return existing;
+  const masterPrice = await getMasterPrice(scan.partNumber || existing.partNumber || existing.part, scan.dealerCode || existing.dealerCode, null).catch(() => null);
+  if (masterPriceMissing(masterPrice)) return existing;
   const quantity = Number(existing.quantity || existing.qty || scan.quantity || 1);
-  const update = {
-    mrp: valueFields.mrp,
-    scanMRP: valueFields.scanMRP,
-    manualMRP: valueFields.manualMRP,
-    valuationMRP: valueFields.valuationMRP,
-    valuationSource: valueFields.valuationSource,
-    finalInventoryValue: quantity * Number(valueFields.valuationMRP || 0),
-    finalMRP: valueFields.valuationMRP,
-    mrpStatus: 'AVAILABLE',
-    mrpPendingUpdatedAt: new Date(),
-    ...pricePeriodPayload(pricePeriod, valueFields.valuationMRP)
-  };
+  const update = masterPriceScanFields(masterPrice, quantity);
   await Inventory.updateOne({ _id: existing._id }, { $set: update });
   return { ...existing, ...update };
 }
@@ -825,21 +793,6 @@ function normalizeScan(item = {}) {
     ? { deviceId: item.deviceId }
     : { ...item, deviceId: item.deviceId };
   const uniqueScanId = explicitScanId || makeScanId(idSource, timestamp);
-  const itemMrpValue = firstValue(item, ['mrp', 'scanMRP', 'scanMrp', 'scannedMRP', 'scannedMrp', 'upiMRP', 'upiMrp', 'valuationMRP', 'valuationMrp', 'finalMRP', 'finalMrp']);
-  const itemMrpNumber = optionalNumber(itemMrpValue);
-  const itemMrpFlag = item.mrpProvided === true || String(item.mrpProvided).toLowerCase() === 'true';
-  const itemMrpSuppressed = item.mrpProvided === false || String(item.mrpProvided).toLowerCase() === 'false';
-  const itemMrpProvided = itemMrpFlag || (!itemMrpSuppressed && itemMrpNumber !== undefined && Number(itemMrpNumber) > 0);
-  const parsedMrpProvided = parsed.mrpProvided === true || String(parsed.mrpProvided).toLowerCase() === 'true';
-  const mrpProvided = itemMrpProvided || parsedMrpProvided;
-  const itemDlcValue = firstValue(item, ['dlc', 'manualDLC', 'manualDlc', 'manualEnteredDLC', 'manualEnteredDlc']);
-  const itemDlcNumber = optionalNumber(itemDlcValue);
-  const itemDlcFlag = item.dlcProvided === true || String(item.dlcProvided).toLowerCase() === 'true';
-  const itemDlcSuppressed = item.dlcProvided === false || String(item.dlcProvided).toLowerCase() === 'false';
-  const itemDlcProvided = itemDlcFlag || (!itemDlcSuppressed && itemDlcNumber !== undefined);
-  const parsedDlcProvided = parsed.dlcProvided === true || String(parsed.dlcProvided).toLowerCase() === 'true';
-  const dlcProvided = itemDlcProvided || parsedDlcProvided;
-
   return {
     source: item,
     serverReceivedAt,
@@ -866,10 +819,10 @@ function normalizeScan(item = {}) {
     binSelectionMode: upper(item.binSelectionMode),
     stockDeductedFromBin: upper(item.stockDeductedFromBin),
     quantity,
-    mrp: mrpProvided ? inventory.numberValue(itemMrpProvided && itemMrpNumber !== undefined ? itemMrpNumber : parsed.mrp, 0) : undefined,
-    mrpProvided,
-    dlc: dlcProvided ? inventory.numberValue(itemDlcProvided && itemDlcNumber !== undefined ? itemDlcNumber : parsed.dlc, 0) : undefined,
-    dlcProvided,
+    mrp: undefined,
+    mrpProvided: false,
+    dlc: undefined,
+    dlcProvided: false,
     scanType,
     upiId,
     upiNo,
@@ -1169,11 +1122,8 @@ async function saveNormalizedScan(scan, req) {
 
   const dealer = scan.dealerCode ? await Dealer.findOne({ dealerCode: scan.dealerCode }).lean() : null;
   const manualEntry = isManualEntry(scan);
-  const scannedMrp = scan.mrpProvided ? optionalNumber(scan.mrp) : undefined;
-  const scannedDlc = scan.dlcProvided ? optionalNumber(scan.dlc) : undefined;
-  const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: scan.mrpProvided, manualEntry, master });
-  const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(scan.partNumber, scan.timestamp || scan.serverReceivedAt, valueFields.valuationMRP) : null;
-  const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
+  const masterPrice = master ? await getMasterPrice(scan.partNumber, scan.dealerCode, master) : null;
+  const valueFields = valuationFields({ masterPrice, master, qty: scan.quantity || 1 });
 
   const errors = [];
   if (!scan.partNumber) errors.push('Part number missing');
@@ -1187,7 +1137,7 @@ async function saveNormalizedScan(scan, req) {
   if (!scan.dealerCode) errors.push('Dealer code missing');
   if (!VALID_TYPES.includes(scan.scanType)) errors.push('Invalid scan type');
   if (!scan.syncKey) errors.push('Sync key missing');
-  if (manualEntry && !(Number(scannedMrp || 0) > 0)) errors.push('MRP is mandatory for manual part entry.');
+  if (master && masterPriceMissing(masterPrice)) errors.push(MISSING_PART_MASTER_PRICE_MESSAGE);
   if (!master && manualEntry) {
     scan.manualMasterMissing = true;
   }
@@ -1255,18 +1205,11 @@ async function saveNormalizedScan(scan, req) {
   }
 
   const warnings = [];
-  if (!master) warnings.push(manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`);
+  if (!master) warnings.push(`Part not found in Master Catalogue: ${scan.partNumber}`);
   if (master && !master.activeStatus) warnings.push('Inactive part');
-  if (master && scan.mrpProvided && pricePeriod && Math.abs(Number(valueFields.valuationMRP || 0) - Number(pricePeriod.mrp || 0)) > 0.01) warnings.push('MRP mismatch against price history period');
-  if (master && scan.mrpProvided && !pricePeriod) warnings.push('No matching price history period for scanned MRP');
-  if (master && scan.dlcProvided && scannedDlc !== undefined && Math.abs(Number(scannedDlc || 0) - Number(master.dlc || 0)) > 0.01) warnings.push('DLC mismatch');
   const finalQty = Number(scan.quantity || 1);
   const finalBin = scan.binLocation;
-  const finalDlc = scannedDlc !== undefined
-    ? scannedDlc
-    : master && master.dlc !== undefined
-      ? Number(master.dlc || 0)
-      : inventory.numberValue(scan.source.dlc, 0);
+  const finalDlc = Number(valueFields.dlc || 0);
 
   // Ensure final saved scan time is server time (serverReceivedAt)
   const finalSavedTime = scan.serverReceivedAt instanceof Date && !Number.isNaN(scan.serverReceivedAt.getTime()) ? scan.serverReceivedAt : new Date();
@@ -1355,10 +1298,17 @@ async function saveNormalizedScan(scan, req) {
     manualMRP: valueFields.manualMRP,
     valuationMRP: valueFields.valuationMRP,
     valuationSource: valueFields.valuationSource,
-    finalInventoryValue: Number(finalQty || 0) * Number(valueFields.valuationMRP || 0),
+    finalInventoryValue: valueFields.finalInventoryValue,
     finalMRP: Number(valueFields.valuationMRP || 0),
-    mrpStatus: Number(valueFields.valuationMRP || 0) > 0 ? 'AVAILABLE' : 'PENDING',
-    ...pricePeriodFields,
+    defaultMRP: valueFields.defaultMRP,
+    currentCatalogueMRP: valueFields.currentCatalogueMRP,
+    mrpStatus: valueFields.mrpStatus,
+    mrpPendingUpdatedAt: valueFields.mrpPendingUpdatedAt,
+    priceHistoryId: valueFields.priceHistoryId,
+    pricePeriodFrom: valueFields.pricePeriodFrom,
+    pricePeriodTo: valueFields.pricePeriodTo,
+    pricePeriodMatched: valueFields.pricePeriodMatched,
+    pricePeriodStatus: valueFields.pricePeriodStatus,
     dlc: finalDlc,
     bin: finalBin,
     binLocation: finalBin,
@@ -1723,7 +1673,7 @@ async function pushHandler(req, res) {
           ...fittedDuplicateClauses,
           ...businessDuplicateClauses
         ]
-        }).select('uniqueScanId scanId syncKey qrFingerprint rawUpiHash globalUpiKey rawScan rawScanString rawUpi upiNo upiId dealerCode auditId syncBatchId userId loginId userName staffName binLocation bin scanType type normalizedPartNumber partNumber part regdNo jobCardNo qty quantity mrp scanMRP manualMRP valuationMRP finalMRP valuationSource timestamp scanTime createdAt').lean()
+        }).select('uniqueScanId scanId syncKey qrFingerprint rawUpiHash globalUpiKey rawScan rawScanString rawUpi upiNo upiId dealerCode auditId syncBatchId userId loginId userName staffName binLocation bin scanType type normalizedPartNumber partNumber part regdNo jobCardNo qty quantity mrp scanMRP manualMRP valuationMRP finalMRP valuationSource currentCatalogueMRP currentCatalogueDLC dlc timestamp scanTime createdAt').lean()
     ]);
     const masterByPart = new Map();
     const masterByDealer = new Map();
@@ -1847,6 +1797,7 @@ async function pushHandler(req, res) {
     for (const { index, scan } of normalized) {
       const master = masterByDealer.get(`${scan.normalizedPartNumber || scan.partNumber}::${upper(scan.dealerCode)}`) || masterByPart.get(scan.normalizedPartNumber || scan.partNumber);
       const manualEntry = isManualEntry(scan);
+      const masterPrice = master ? await getMasterPrice(scan.partNumber, scan.dealerCode, master) : null;
       logSync('row normalized', {
         rawScanReceived: scan.rawScanString || scan.partNumber || '',
         extractedPartNumber: scan.partNumber || '',
@@ -1869,8 +1820,7 @@ async function pushHandler(req, res) {
       if (!(scan.timestamp instanceof Date) || Number.isNaN(scan.timestamp.getTime())) rowErrors.push('invalid timestamp');
       if (scan.quantity === undefined || scan.quantity === null || Number.isNaN(Number(scan.quantity))) rowErrors.push('qty missing or invalid');
       if (!(Number(scan.quantity) > 0)) rowErrors.push('qty must be greater than zero');
-      const manualMrpForValidation = scan.mrpProvided ? optionalNumber(scan.mrp) : undefined;
-      if (manualEntry && !(Number(manualMrpForValidation || 0) > 0)) rowErrors.push('MRP is mandatory for manual part entry.');
+      if (master && masterPriceMissing(masterPrice)) rowErrors.push(MISSING_PART_MASTER_PRICE_MESSAGE);
       if (!master && manualEntry) {
         scan.manualMasterMissing = true;
       }
@@ -2012,20 +1962,9 @@ async function pushHandler(req, res) {
 
       const finalQty = Number(scan.quantity || 1);
       const finalBin = scan.binLocation;
-      const scannedMrp = scan.mrpProvided ? optionalNumber(scan.mrp) : undefined;
-      const scannedDlc = scan.dlcProvided ? optionalNumber(scan.dlc) : undefined;
-      const valueFields = valuationFields({ scan, rawScanText: scan.rawScanString, scannedMrp, mrpProvided: scan.mrpProvided, manualEntry, master });
-      const pricePeriod = valueFields.valuationMRP > 0 ? await findPricePeriod(scan.partNumber, scan.timestamp || scan.serverReceivedAt, valueFields.valuationMRP) : null;
-      const pricePeriodFields = pricePeriodPayload(pricePeriod, valueFields.valuationMRP);
-      const warnings = master ? [] : [manualEntry ? `Manual part saved without Master Catalogue match: ${scan.partNumber}` : `Part not found in Master Catalogue: ${scan.partNumber}`];
-      if (master && scan.mrpProvided && pricePeriod && Math.abs(Number(valueFields.valuationMRP || 0) - Number(pricePeriod.mrp || 0)) > 0.01) warnings.push('MRP mismatch against price history period');
-      if (master && scan.mrpProvided && !pricePeriod) warnings.push('No matching price history period for scanned MRP');
-      if (master && scan.dlcProvided && scannedDlc !== undefined && Math.abs(Number(scannedDlc || 0) - Number(master.dlc || 0)) > 0.01) warnings.push('DLC mismatch');
-      const finalDlc = scannedDlc !== undefined
-        ? scannedDlc
-        : master && master.dlc !== undefined
-          ? Number(master.dlc || 0)
-          : inventory.numberValue(scan.source.dlc, 0);
+      const valueFields = valuationFields({ masterPrice, master, qty: finalQty });
+      const warnings = master ? [] : [`Part not found in Master Catalogue: ${scan.partNumber}`];
+      const finalDlc = Number(valueFields.dlc || 0);
       const doc = {
         uniqueScanId: scan.uniqueScanId,
         scanId: scan.uniqueScanId,
@@ -2051,10 +1990,17 @@ async function pushHandler(req, res) {
         manualMRP: valueFields.manualMRP,
         valuationMRP: valueFields.valuationMRP,
         valuationSource: valueFields.valuationSource,
-        finalInventoryValue: finalQty * Number(valueFields.valuationMRP || 0),
+        finalInventoryValue: valueFields.finalInventoryValue,
         finalMRP: Number(valueFields.valuationMRP || 0),
-        mrpStatus: Number(valueFields.valuationMRP || 0) > 0 ? 'AVAILABLE' : 'PENDING',
-        ...pricePeriodFields,
+        defaultMRP: valueFields.defaultMRP,
+        currentCatalogueMRP: valueFields.currentCatalogueMRP,
+        mrpStatus: valueFields.mrpStatus,
+        mrpPendingUpdatedAt: valueFields.mrpPendingUpdatedAt,
+        priceHistoryId: valueFields.priceHistoryId,
+        pricePeriodFrom: valueFields.pricePeriodFrom,
+        pricePeriodTo: valueFields.pricePeriodTo,
+        pricePeriodMatched: valueFields.pricePeriodMatched,
+        pricePeriodStatus: valueFields.pricePeriodStatus,
         dlc: finalDlc,
         bin: finalBin,
         binLocation: finalBin,

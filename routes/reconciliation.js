@@ -5,9 +5,6 @@ const XLSX = require('xlsx');
 const { randomUUID } = require('crypto');
 const { jsPDF } = require('jspdf');
 const autoTableModule = require('jspdf-autotable');
-const MasterPart = require('../models/MasterPart');
-const MasterCatalogue = require('../models/MasterCatalogue');
-const PartPriceHistory = require('../models/PartPriceHistory');
 const DealerStock = require('../models/DealerStock');
 const Inventory = require('../models/Inventory');
 const Dealer = require('../models/Dealer');
@@ -19,6 +16,7 @@ const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, signedScanQuantity } = require('../utils/reportTotals');
 const { calculateStockValuation } = require('../utils/stockValuation');
 const { resolvePartPricing } = require('../utils/partPricing');
+const { getPricesFromPartMaster } = require('../utils/partMasterPrice');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
@@ -324,8 +322,6 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
   const missing = [];
   if (!columnsByKey.partNumber) missing.push('Part Number');
   if (!columnsByKey.dmsStock) missing.push('System Quantity / DMS Stock / Stock In Hand');
-  if (!columnsByKey.mrp) missing.push('MRP');
-  if (!columnsByKey.dlp) missing.push('DLC / DLP');
   if (!columnsByKey.dealerCode && !selectedDealerCode) missing.push('Dealer Code or selected dealer');
   if (!auditId) missing.push('Active Audit ID');
   if (missing.length) {
@@ -360,8 +356,8 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
     if (selectedDealerCode && fileDealerCode && selectedDealerCode !== fileDealerCode) errors.push(`Dealer code ${fileDealerCode} does not match selected dealer ${selectedDealerCode}`);
     if (!partNumber) errors.push('Part number blank');
     if (!Number.isFinite(item.dmsStock)) errors.push('DMS stock must be numeric');
-    if (!Number.isFinite(item.mrp)) errors.push('MRP must be numeric');
-    if (!Number.isFinite(item.dlp)) errors.push('DLC / DLP must be numeric');
+    if (columnsByKey.mrp && !Number.isFinite(item.mrp)) errors.push('MRP must be numeric when provided');
+    if (columnsByKey.dlp && !Number.isFinite(item.dlp)) errors.push('DLC / DLP must be numeric when provided');
     if (errors.length) {
       skippedCount += 1;
       if (errorRows.length < UPLOAD_ERROR_LIMIT) {
@@ -855,27 +851,9 @@ async function buildReconciliationReport(query = {}) {
     ...stockRows.map((row) => normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo || row.part)),
     ...scannedRows.map((row) => normalizePart(row._id || row.partNumber || row.partNo || row.part))
   ].filter(Boolean)));
-  const [masterRows, catalogueRows, priceHistoryRows] = partNumbers.length ? await Promise.all([
-    MasterPart.find({
-      $or: [
-        { normalizedPartNumber: { $in: partNumbers } },
-        { partNo: { $in: partNumbers } },
-        { partNumber: { $in: partNumbers } }
-      ]
-    }).lean(),
-    MasterCatalogue.find({ normalizedPartNumber: { $in: partNumbers } }).lean(),
-    PartPriceHistory.find({ normalizedPartNumber: { $in: partNumbers } }).sort({ normalizedPartNumber: 1, isCurrentPrice: -1, effectiveFrom: -1 }).lean()
-  ]) : [[], [], []];
-  const masterByPart = new Map(masterRows.map((row) => [normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo), row]).filter(([partNo]) => partNo));
-  const catalogueByPart = new Map(catalogueRows.map((row) => [normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo), row]).filter(([partNo]) => partNo));
-  const priceHistoryByPart = new Map();
-  priceHistoryRows.forEach((row) => {
-    const partNo = normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo);
-    if (!partNo) return;
-    const list = priceHistoryByPart.get(partNo) || [];
-    list.push(row);
-    priceHistoryByPart.set(partNo, list);
-  });
+  const priceByPart = partNumbers.length
+    ? await getPricesFromPartMaster(partNumbers, scope.dealerCode)
+    : new Map();
 
   const physicalByPart = new Map(scannedRows.map((row) => [normalizePart(row._id || row.partNumber), row]));
   const usedPhysicalKeys = new Set();
@@ -885,10 +863,7 @@ async function buildReconciliationReport(query = {}) {
     if (physical) usedPhysicalKeys.add(key);
     const pricing = resolvePartPricing({
       partNumber: key,
-      catalogue: catalogueByPart.get(key) || stock,
-      master: masterByPart.get(key) || stock,
-      stock,
-      priceHistories: priceHistoryByPart.get(key) || [],
+      partMasterPrice: priceByPart.get(key) || null,
       actualQty: physical ? Number(physical.actualStock || 0) : 0,
       dmsQty: Number(stock.dmsStock || stock.systemQty || 0)
     });
@@ -900,10 +875,7 @@ async function buildReconciliationReport(query = {}) {
     if (usedPhysicalKeys.has(key)) return null;
     const pricing = resolvePartPricing({
       partNumber: key,
-      catalogue: catalogueByPart.get(key) || physical,
-      master: masterByPart.get(key) || physical,
-      stock: physical,
-      priceHistories: priceHistoryByPart.get(key) || [],
+      partMasterPrice: priceByPart.get(key) || null,
       actualQty: Number(physical.actualStock || 0),
       dmsQty: 0
     });
@@ -1362,6 +1334,7 @@ async function uploadDealerStockHandler(req, res) {
       uploadBatchId
     }));
     const writeResult = await saveDealerStockRecords(records);
+    const previewPrices = await getPricesFromPartMaster(records.map((record) => record.partNumber), scope.dealerCode);
     await emitReconciliationChanged(req, 'dealer-stock-uploaded', {
       dealerCode: scope.dealerCode,
       auditId: scope.auditId,
@@ -1380,7 +1353,15 @@ async function uploadDealerStockHandler(req, res) {
       updatedCount: writeResult.modifiedCount || 0,
       errorRows: parsed.errorRows,
       errorRowsTruncated: Boolean(parsed.errorRowsTruncated),
-      preview: records.slice(0, 100).map(publicStock),
+      preview: records.slice(0, 100).map((record) => {
+        const price = previewPrices.get(record.partNumber) || null;
+        return publicStock(record, resolvePartPricing({
+          partNumber: record.partNumber,
+          partMasterPrice: price,
+          actualQty: 0,
+          dmsQty: record.dmsStock
+        }));
+      }),
       columns: parsed.columns,
       message: `Saved ${records.length} row(s) for ${scope.dealerCode} / ${scope.auditId}. Skipped ${parsed.skippedCount || parsed.errorRows.length} row(s).`
     });
@@ -1399,7 +1380,16 @@ async function previewDealerStockHandler(req, res) {
       DealerStock.find(query).sort({ partNumber: 1 }).limit(limit).lean(),
       DealerStock.countDocuments(query)
     ]);
-    const stock = rows.map(publicStock);
+    const priceByPart = await getPricesFromPartMaster(rows.map((row) => row.partNumber), scope.dealerCode);
+    const stock = rows.map((row) => {
+      const partNumber = normalizePart(row.normalizedPartNumber || row.partNumber);
+      return publicStock(row, resolvePartPricing({
+        partNumber,
+        partMasterPrice: priceByPart.get(partNumber) || null,
+        actualQty: 0,
+        dmsQty: Number(row.dmsStock || row.systemQty || 0)
+      }));
+    });
     return res.json({
       success: true,
       dealerCode: scope.dealerCode,

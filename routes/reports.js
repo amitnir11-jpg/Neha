@@ -345,7 +345,7 @@ function auditRow(row) {
     category: row.productCategory || row.category,
     productCategory: row.productCategory || row.category,
     bin: row.binLocation || row.bin,
-    mrp: row.mrp,
+    mrp: row.currentCatalogueMRP || row.mrp,
     scanUPIMRP: row.scanUPIMRP || '',
     currentCatalogueMRP: row.currentCatalogueMRP || 0,
     averageScannedMRP: row.averageScannedMRP || 0,
@@ -353,7 +353,7 @@ function auditRow(row) {
     priceAgeingDays: row.priceAgeingDays || 0,
     partMovement: row.partMovement || '',
     finalInventoryValue: row.actualStockValue ?? row.physicalValueOnDlc ?? row.finalInventoryValue ?? 0,
-    dlc: row.dlc,
+    dlc: row.currentCatalogueDLC || row.dlc,
     productGroup: row.productGroup,
     partSubGroup: row.partSubGroup,
     dmsQty: row.dmsQty,
@@ -394,8 +394,8 @@ function scanAuditRow(scan) {
     category: scan.productCategory || scan.category,
     productCategory: scan.productCategory || scan.category,
     bin: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin),
-    mrp: scan.mrp,
-    dlc: scan.dlc,
+    mrp: scan.currentCatalogueMRP || 0,
+    dlc: scan.currentCatalogueDLC || 0,
     productGroup: scan.productGroup,
     partSubGroup: scan.partSubGroup,
     dmsQty: scan.dmsQty || 0,
@@ -498,11 +498,11 @@ function scanRegisterInventoryRow(scan) {
     partNumber: scan.partNumber || scan.part || '',
     partDescription: scan.partDescription || scan.partName || '',
     quantity: scanQuantity(scan),
-    mrp: Number(valueRow.valuationMRP || 0),
+    mrp: Number(scan.currentCatalogueMRP || valueRow.valuationMRP || 0),
     scanUPIMRP: valueRow.valuationSource === 'UPI_SCANNED_MRP' ? Number(valueRow.valuationMRP || 0) : '',
     manualMRP: valueRow.valuationSource === 'MANUAL_ENTERED_MRP' ? Number(valueRow.valuationMRP || 0) : '',
-    dlc: Number(scan.dlc || 0),
-    finalInventoryValue: money(scanQuantity(scan) * Number(scan.dlc || 0)),
+    dlc: Number(scan.currentCatalogueDLC || 0),
+    finalInventoryValue: money(scanQuantity(scan) * Number(scan.currentCatalogueDLC || 0)),
     mrpValueReference: Number(valueRow.finalInventoryValue || 0),
     binLocation: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin || ''),
     regdNo: scan.regdNo || '',
@@ -677,7 +677,7 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
       target.scanCount += 1;
       target.totalQty += qty;
       target.totalMrpValue = money(target.totalMrpValue + Number(scanValueRow(scan).finalInventoryValue || 0));
-      target.totalDlcValue = money(target.totalDlcValue + qty * Number(scan.dlc || 0));
+      target.totalDlcValue = money(target.totalDlcValue + qty * Number(scan.currentCatalogueDLC || 0));
       const bucket = scanTypeQtyBucket(scan);
       if (bucket) target[bucket] += qty;
       const part = scan.partNumber || scan.part || '';
@@ -709,7 +709,7 @@ function selectRows(data, type) {
         partNumber: scan.partNumber || scan.part || '',
         partDescription: scan.partDescription || scan.partName || '',
         productCategory: scan.productCategory || scan.category || '',
-        mrp: scan.mrp,
+        mrp: scan.currentCatalogueMRP || 0,
         scanType: scan.scanType || scan.type || '',
         fittedQty: 0,
         fittedStatus: '',

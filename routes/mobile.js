@@ -23,6 +23,7 @@ const { formatDateLikeFields } = require('../utils/time');
 const { decorateScanValue } = require('../utils/inventoryValueEngine');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
+const { getPricesFromPartMaster, scanWithPartMasterPrice } = require('../utils/partMasterPrice');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
@@ -30,7 +31,7 @@ const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.0.5';
 const MOBILE_SCAN_SELECT = [
   'uniqueScanId scanId syncKey qrFingerprint rawUpiHash',
   'part partNumber normalizedPartNumber partName partDescription category productCategory productGroup partSubGroup model year manufacturingYear',
-  'qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue finalMRP dlc',
+  'qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue finalMRP currentCatalogueMRP currentCatalogueDLC dlc',
   'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin regdNo jobCardNo isFitted fittedQty fittedLocation status type scanType',
   'upiId upiNo dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi',
   'deviceId deviceName userId loginId staffName userName role timestamp scanTime createdAt',
@@ -178,6 +179,17 @@ function newestFirst(a = {}, b = {}) {
   return new Date(b.timestamp || b.createdAt || 0) - new Date(a.timestamp || a.createdAt || 0);
 }
 
+async function withCurrentMasterPrices(scans = [], dealerCode = '') {
+  const priceByPart = await getPricesFromPartMaster(
+    scans.map((scan) => scan.normalizedPartNumber || scan.partNumber || scan.part),
+    dealerCode
+  );
+  return scans.map((scan) => {
+    const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
+    return scanWithPartMasterPrice(scan, priceByPart.get(partNumber) || null);
+  });
+}
+
 function reportRow(scan) {
   const valued = decorateScanValue(scan);
   return {
@@ -214,7 +226,8 @@ async function scanReport(req, res, scanType) {
   try {
     const records = await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: 1, createdAt: 1 }).limit(5000).lean();
     const normalized = applyMovementCountRules(uniqueReportScans(records));
-    const rows = normalized.filter((scan) => upper(scan.scanType || scan.type || '') === scanType).sort(newestFirst).slice(0, 1000).map(reportRow);
+    const priced = await withCurrentMasterPrices(normalized, req.query.dealerCode);
+    const rows = priced.filter((scan) => upper(scan.scanType || scan.type || '') === scanType).sort(newestFirst).slice(0, 1000).map(reportRow);
     return res.json({ success: true, type: scanType.toLowerCase(), count: rows.length, rows });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -461,10 +474,8 @@ router.get('/master-search', auth.requireAuth, async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 25);
     if (!q || q.length < 2) return res.json({ success: true, count: 0, parts: [], suggestions: [] });
     const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    const dealerFilter = dealerCode ? { $or: [{ dealerCode }, { dealerCode: '' }, { dealerCode: { $exists: false } }] } : {};
     const [dealerParts, catalogueParts] = await Promise.all([
       MasterPart.find({
-        ...dealerFilter,
         $or: [
           { normalizedPartNumber: regex },
           { partNumber: regex },
@@ -483,28 +494,31 @@ router.get('/master-search', auth.requireAuth, async (req, res) => {
         ]
       }).sort({ partNumber: 1 }).limit(limit).lean()
     ]);
-    const byPart = new Map();
-    dealerParts.concat(catalogueParts).forEach((part) => {
-      const partNumber = normalizePartNumber(part.normalizedPartNumber || part.partNumber || part.partNo || part.part || '');
-      if (!partNumber || byPart.has(partNumber)) return;
-      byPart.set(partNumber, {
-        id: part._id,
-        partNumber,
-        partNo: partNumber,
-        partDescription: part.partDescription || part.partName || '',
-        partName: part.partName || part.partDescription || '',
-        productCategory: part.productCategory || part.category || '',
-        category: part.category || part.productCategory || '',
-        mrp: Number(part.mrp || 0),
-        dlc: Number(part.dlc || 0),
-        model: part.model || '',
-        year: part.year || part.manufacturingYear || '',
-        manufacturingYear: part.manufacturingYear || part.year || '',
-        binLocation: part.binLocation || part.bin || '',
-        bin: part.bin || part.binLocation || ''
-      });
-    });
-    const parts = Array.from(byPart.values()).slice(0, limit);
+    const candidates = Array.from(new Set(dealerParts.concat(catalogueParts)
+      .map((part) => normalizePartNumber(part.normalizedPartNumber || part.partNumber || part.partNo || part.part))
+      .filter(Boolean)));
+    const priceByPart = await getPricesFromPartMaster(candidates, dealerCode);
+    const parts = candidates.map((partNumber) => priceByPart.get(partNumber)).filter(Boolean)
+      .sort((a, b) => Number(b.partNumber === q) - Number(a.partNumber === q) || a.partNumber.localeCompare(b.partNumber))
+      .slice(0, limit)
+      .map((price) => ({
+        id: price.sourceRecord && price.sourceRecord._id,
+        partNumber: price.partNumber,
+        partNo: price.partNumber,
+        partDescription: price.description,
+        partName: price.description,
+        productCategory: price.category,
+        category: price.category,
+        mrp: price.mrp,
+        dlc: price.dlc,
+        model: price.model,
+        year: price.year,
+        manufacturingYear: price.manufacturingYear,
+        productGroup: price.productGroup,
+        partSubGroup: price.partSubGroup,
+        binLocation: price.binLocation,
+        bin: price.bin
+      }));
     return res.json({ success: true, count: parts.length, parts, suggestions: parts });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -599,7 +613,7 @@ router.get('/inventory', auth.optionalAuth, async (req, res) => {
       .sort({ timestamp: -1 })
       .limit(1000)
       .lean();
-    return res.json(records.map(mobileItem));
+    return res.json((await withCurrentMasterPrices(records, req.query.dealerCode)).map(mobileItem));
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -611,7 +625,8 @@ router.get('/reports/unique-upi', auth.optionalAuth, async (req, res) => {
       .sort({ timestamp: -1 })
       .limit(1000)
       .lean();
-    return res.json(applyMovementCountRules(uniqueReportScans(records)).sort(newestFirst).map(mobileItem));
+    const priced = await withCurrentMasterPrices(applyMovementCountRules(uniqueReportScans(records)), req.query.dealerCode);
+    return res.json(priced.sort(newestFirst).map(mobileItem));
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -677,7 +692,8 @@ router.get('/reports/last-scans', auth.optionalAuth, async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 100);
     const records = await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: -1, createdAt: -1 }).limit(limit).lean();
-    return res.json({ success: true, records: records.map(mobileItem) });
+    const priced = await withCurrentMasterPrices(records, req.query.dealerCode);
+    return res.json({ success: true, records: priced.map(mobileItem) });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -744,7 +760,8 @@ router.get('/reports/export-excel', auth.optionalAuth, async (req, res) => {
     let rows = [];
     if (map[type]) {
       const scans = applyMovementCountRules(uniqueReportScans(await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: 1, createdAt: 1 }).limit(5000).lean()));
-      rows = scans.filter((scan) => upper(scan.scanType || scan.type || '') === map[type]).sort(newestFirst).map(reportRow);
+      const priced = await withCurrentMasterPrices(scans, req.query.dealerCode);
+      rows = priced.filter((scan) => upper(scan.scanType || scan.type || '') === map[type]).sort(newestFirst).map(reportRow);
     } else if (type === 'verification') {
       rows = (await VerificationLog.find({ ...dealerFilter(req.query), scanType: { $ne: 'VERIFICATION' } }).sort({ time: -1 }).limit(5000).lean()).map((row) => ({
         time: row.time,
@@ -778,14 +795,17 @@ router.get('/reports/export-excel', auth.optionalAuth, async (req, res) => {
 
 router.get('/reports/bin-wise', auth.optionalAuth, async (req, res) => {
   try {
-    const scans = applyMovementCountRules(uniqueReportScans(await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: 1, createdAt: 1 }).limit(5000).lean()));
+    const scans = await withCurrentMasterPrices(
+      applyMovementCountRules(uniqueReportScans(await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: 1, createdAt: 1 }).limit(5000).lean())),
+      req.query.dealerCode
+    );
     const groups = new Map();
     scans.forEach((scan) => {
       const key = [
         scan.dealerCode || '',
         scan.binLocation || scan.bin || '',
         scan.partNumber || scan.part || '',
-        scan.mrp || '',
+        scan.currentCatalogueMRP || '',
         scan.scanType || scan.type || '',
         scan.deviceId || ''
       ].join('|');
@@ -796,7 +816,7 @@ router.get('/reports/bin-wise', auth.optionalAuth, async (req, res) => {
         partDescription: scan.partDescription || scan.partName || '',
         productCategory: scan.productCategory || scan.category || '',
         qty: 0,
-        mrp: Number(scan.mrp || 0),
+        mrp: Number(scan.currentCatalogueMRP || 0),
         scanType: scan.scanType || scan.type || '',
         lastScanTime: scan.timestamp || scan.createdAt || '',
         deviceId: scan.deviceId || ''

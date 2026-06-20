@@ -1,8 +1,6 @@
-const MasterPart = require('../models/MasterPart');
-const MasterCatalogue = require('../models/MasterCatalogue');
 const RejectedScan = require('../models/RejectedScan');
 const { normalizePartNumber } = require('./normalize');
-const { findCataloguePart, cataloguePayload } = require('./catalogue');
+const { getPriceFromPartMaster } = require('./partMasterPrice');
 
 function clean(value) {
   return String(value || '').trim();
@@ -77,20 +75,8 @@ function notInMasterClause() {
 async function findMasterPart(partNumber, dealerCode = '') {
   const normalizedPartNumber = normalizePartNumber(partNumber);
   if (!normalizedPartNumber) return null;
-  const catalogue = await findCataloguePart(normalizedPartNumber);
-  if (catalogue) return cataloguePayload(catalogue);
-  const code = normalizeDealerCode(dealerCode);
-  if (code) {
-    const dealerMaster = await MasterPart.findOne({ normalizedPartNumber, dealerCode: code }).lean();
-    if (dealerMaster) return dealerMaster;
-  }
-  return MasterPart.findOne({
-    $or: [
-      { normalizedPartNumber },
-      { partNo: normalizedPartNumber },
-      { partNumber: normalizedPartNumber }
-    ]
-  }).lean();
+  const price = await getPriceFromPartMaster(normalizedPartNumber, dealerCode);
+  return price ? price.masterRecord || price : null;
 }
 
 async function validatePartAgainstMaster({ partNumber, dealerCode, rawScannedValue = '', logger = console }) {

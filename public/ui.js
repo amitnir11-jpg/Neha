@@ -2712,7 +2712,7 @@
         <td>${escapeHtml(compactDateTime(scan.timestamp))}</td>
         <td>${partLink(scan.partNumber || scan.part)}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
-        <td>${escapeHtml(money(scan.mrp || 0))}</td>
+        <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? 0))}</td>
         <td>${escapeHtml(scan.scanType || scan.type)}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin)}</td>
         <td>${escapeHtml(scan.dealerCode || '')}</td>
@@ -3017,8 +3017,8 @@
     form.elements.scanId.value = scanId;
     form.elements.partNumber.value = scan.partNumber || scan.part || scan.normalizedPartNumber || '';
     form.elements.quantity.value = scanQuantity(scan, 1);
-    form.elements.mrp.value = scan.displayMRP ?? scan.manualMRP ?? scan.valuationMRP ?? scan.mrp ?? scan.currentCatalogueMRP ?? 0;
-    form.elements.dlc.value = scan.dlc ?? 0;
+    form.elements.mrp.value = scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.valuationMRP ?? 0;
+    form.elements.dlc.value = scan.currentCatalogueDLC ?? 0;
     form.elements.binLocation.value = scan.binLocation || scan.bin || '';
     form.elements.scanType.value = scanType;
     form.elements.binLocation.disabled = scanType === 'FITTED';
@@ -3036,7 +3036,7 @@
 
   function scanHistoryRow(scan = {}) {
     const id = scan.scanId || scan.uniqueScanId || scan._id || '';
-    const rowMrp = scan.displayMRP || scan.mrp || scan.currentCatalogueMRP || 0;
+    const rowMrp = scan.displayMRP || scan.currentCatalogueMRP || 0;
     const totalQty = scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1);
     const canEditDetails = canEditScanDetails(scan);
     const editOption = canEditDetails ? '<option value="edit-qty">Edit Quantity</option><option value="edit">Edit Part Details</option>' : '';
@@ -3052,7 +3052,7 @@
         <td>${escapeHtml(scan.partDescription || scan.partName)}</td>
         <td>${escapeHtml(scan.productCategory || scan.category || '')}</td>
         <td>${escapeHtml(money(rowMrp))}</td>
-        <td>${escapeHtml(money(scan.dlc))}</td>
+        <td>${escapeHtml(money(scan.currentCatalogueDLC ?? 0))}</td>
         <td>${escapeHtml(scan.productGroup || '')}</td>
         <td>${escapeHtml(scan.model || '')}</td>
         <td>${escapeHtml(scan.manufacturingYear || scan.year || '')}</td>
@@ -3399,12 +3399,6 @@
           setTimeout(() => $('#barcodeRaw')?.focus(), 900);
         }
       }
-      return;
-    }
-    if (!isBarcodeForm && !(Number(normalized.mrp || 0) > 0)) {
-      playScanTone('error');
-      toast('MRP is mandatory for manual part entry.', 'error');
-      $('[name="mrp"]', form)?.focus();
       return;
     }
     if (!isBarcodeForm && !payload.rawScan && !payload.rawScanString && !payload.rawBarcode && !payload.rawScanValue && !payload.barcode && !payload.barcodeValue && !payload.scanValue && !payload.scanText) {
@@ -7318,15 +7312,11 @@
     const message = $('#scanEditMessage');
     const scanId = String(form.elements.scanId.value || '').trim();
     const quantity = Number(form.elements.quantity.value);
-    const mrp = Number(form.elements.mrp.value);
-    const dlc = Number(form.elements.dlc.value);
     const scanType = String(form.elements.scanType.value || '').trim().toUpperCase();
     const binLocation = scanType === 'FITTED' ? '' : cleanDealerCode(form.elements.binLocation.value || '');
     if (!scanId) throw new Error('Scan record not found');
     if (!String(form.elements.partNumber.value || '').trim()) throw new Error('Part number is required');
     if (!(quantity > 0)) throw new Error('Quantity must be greater than zero');
-    if (!Number.isFinite(mrp) || mrp < 0) throw new Error('MRP must be zero or greater');
-    if (!Number.isFinite(dlc) || dlc < 0) throw new Error('DLC must be zero or greater');
     if (['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType) && !binLocation) throw new Error('Bin location is required');
     if (message) {
       message.className = 'form-message loading';
@@ -7337,8 +7327,6 @@
       body: {
         partNumber: normalizePartText(form.elements.partNumber.value),
         quantity,
-        mrp,
-        dlc,
         binLocation,
         deviceId: ensureDeviceId()
       }
