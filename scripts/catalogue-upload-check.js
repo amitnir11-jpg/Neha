@@ -4,7 +4,7 @@ const ExcelJS = require('exceljs');
 const MasterCatalogue = require('../models/MasterCatalogue');
 const MasterPart = require('../models/MasterPart');
 const PartPriceHistory = require('../models/PartPriceHistory');
-const { CATALOGUE_COLUMNS, failureFilePath, importCatalogue, parseCatalogueUpload } = require('../utils/catalogueUpload');
+const { CATALOGUE_COLUMNS, createCatalogueTemplateWorkbook, failureFilePath, importCatalogue, parseCatalogueUpload } = require('../utils/catalogueUpload');
 const { findCataloguePart } = require('../utils/catalogue');
 
 const catalogue = new Map([
@@ -50,42 +50,108 @@ PartPriceHistory.deleteMany = async () => {
 };
 
 async function fullMasterBuffer() {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('Full Master');
-  sheet.addRow(CATALOGUE_COLUMNS.map((column) => `  ${column.header}  `));
+  const workbook = await createCatalogueTemplateWorkbook();
+  const sheet = workbook.getWorksheet('Part Master Template');
   for (let index = 1; index <= 5000; index += 1) {
-    sheet.addRow([
-      `PART-${String(index).padStart(5, '0')}`,
-      `Part description ${index}`,
-      index % 2 ? 'Y' : 'N',
-      'FILTERS',
-      'ENGINE',
-      `MODEL ${index % 10}`,
-      'SPARE',
-      '',
-      'GROUP A',
-      'SUBGROUP A',
-      '18%',
-      index % 2 ? 'NO' : 'YES',
-      100 + index,
-      70 + index
-    ]);
+    sheet.addRow({
+      partNumber: `PART-${String(index).padStart(5, '0')}`,
+      partDescription: `Part description ${index}`,
+      activeFlag: index % 2 ? 'Y' : 'N',
+      productCategory: 'FILTERS',
+      productGroup: 'ENGINE',
+      partSubGroup: 'SUBGROUP A',
+      model: `MODEL ${index % 10}`,
+      manufacturingYear: '2024',
+      productType: 'SPARE',
+      mrp: 100 + index,
+      dlc: 70 + index
+    });
   }
-  sheet.addRow(['PART-00001', 'Duplicate row', 'Y', 'FILTERS', 'ENGINE', 'MODEL', 'SPARE', '', 'GROUP A', 'SUBGROUP A', '18%', 'NO', 100, 70]);
-  sheet.addRow(['', 'Missing part', 'Y', 'FILTERS', 'ENGINE', 'MODEL', 'SPARE', '', 'GROUP A', 'SUBGROUP A', '18%', 'NO', 100, 70]);
-  sheet.addRow(['PART-MISSING-DESC', '', 'Y', 'FILTERS', 'ENGINE', 'MODEL', 'SPARE', '', 'GROUP A', 'SUBGROUP A', '18%', 'NO', 100, 70]);
-  sheet.addRow(['PART-BAD-MRP', 'Bad MRP', 'Y', 'FILTERS', 'ENGINE', 'MODEL', 'SPARE', '', 'GROUP A', 'SUBGROUP A', '18%', 'NO', 'ABC', 70]);
-  sheet.addRow(['PART-BAD-DLC', 'Bad DLC', 'Y', 'FILTERS', 'ENGINE', 'MODEL', 'SPARE', '', 'GROUP A', 'SUBGROUP A', '18%', 'NO', 100, 'XYZ']);
+  sheet.addRow({
+    partNumber: 'PART-00001',
+    partDescription: 'Duplicate row',
+    activeFlag: 'Y',
+    productCategory: 'FILTERS',
+    productGroup: 'ENGINE',
+    partSubGroup: 'SUBGROUP A',
+    model: 'MODEL 1',
+    manufacturingYear: '2024',
+    productType: 'SPARE',
+    mrp: 100,
+    dlc: 70
+  });
+  sheet.addRow({
+    partDescription: 'Missing part',
+    activeFlag: 'Y',
+    productCategory: 'FILTERS',
+    productGroup: 'ENGINE',
+    partSubGroup: 'SUBGROUP A',
+    model: 'MODEL 1',
+    manufacturingYear: '2024',
+    productType: 'SPARE',
+    mrp: 100,
+    dlc: 70
+  });
+  sheet.addRow({
+    partNumber: 'PART-MISSING-DESC',
+    activeFlag: 'Y',
+    productCategory: 'FILTERS',
+    productGroup: 'ENGINE',
+    partSubGroup: 'SUBGROUP A',
+    model: 'MODEL 1',
+    manufacturingYear: '2024',
+    productType: 'SPARE',
+    mrp: 100,
+    dlc: 70
+  });
+  sheet.addRow({
+    partNumber: 'PART-BAD-MRP',
+    partDescription: 'Bad MRP',
+    activeFlag: 'Y',
+    productCategory: 'FILTERS',
+    productGroup: 'ENGINE',
+    partSubGroup: 'SUBGROUP A',
+    model: 'MODEL 1',
+    manufacturingYear: '2024',
+    productType: 'SPARE',
+    mrp: 'ABC',
+    dlc: 70
+  });
+  sheet.addRow({
+    partNumber: 'PART-BAD-DLC',
+    partDescription: 'Bad DLC',
+    activeFlag: 'Y',
+    productCategory: 'FILTERS',
+    productGroup: 'ENGINE',
+    partSubGroup: 'SUBGROUP A',
+    model: 'MODEL 1',
+    manufacturingYear: '2024',
+    productType: 'SPARE',
+    mrp: 100,
+    dlc: 'XYZ'
+  });
   sheet.addRow([]);
-  sheet.addRow(['PART-LAST', 'Last valid row', 'Y', 'FILTERS', 'ENGINE', 'MODEL', 'SPARE', '', 'GROUP A', 'SUBGROUP A', '18%', 'NO', 125, 75]);
+  sheet.addRow({
+    partNumber: 'PART-LAST',
+    partDescription: 'Last valid row',
+    activeFlag: 'Y',
+    productCategory: 'FILTERS',
+    productGroup: 'ENGINE',
+    partSubGroup: 'SUBGROUP A',
+    model: 'MODEL 9',
+    manufacturingYear: '2024',
+    productType: 'SPARE',
+    mrp: 125,
+    dlc: 75
+  });
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
 async function incompleteMasterBuffer() {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('Incomplete');
-  sheet.addRow(['Part Number', 'Part Description', 'MRP', 'DLC']);
-  sheet.addRow(['P1', 'Part 1', 10, 5]);
+  sheet.addRow(['Part Number', 'Part Description', 'MRP']);
+  sheet.addRow(['P1', 'Part 1', 10]);
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
@@ -113,7 +179,7 @@ async function run() {
       updated: result.updatedRowsCount,
       current: result.currentMasterRecordCount
     },
-    { total: 5007, imported: 5001, failed: 4, duplicates: 1, skipped: 1, missingMandatory: 2, inserted: 5000, updated: 1, current: 5001 }
+    { total: 5007, imported: 5001, failed: 4, duplicates: 1, skipped: 1, missingMandatory: 4, inserted: 5000, updated: 1, current: 5001 }
   );
 
   const failedWorkbookPath = failureFilePath(result.failureDownloadId);
@@ -131,14 +197,14 @@ async function run() {
   assert.equal(saved.mrp, 101);
   assert.equal(saved.dlc, 71);
   assert.equal(saved.activeFlag, 'Y');
-  assert.equal(saved.splitFlag, 'NO');
+  assert.equal(saved.splitFlag, '');
 
   MasterCatalogue.findOne = () => ({ lean: () => Promise.resolve(saved) });
   MasterPart.findOne = () => ({ lean: () => Promise.resolve(null) });
   const lookup = await findCataloguePart('PART-00001');
   assert.deepEqual(
     { mrp: lookup.mrp, dlc: lookup.dlc, category: lookup.productCategory, productGroup: lookup.productGroup },
-    { mrp: 101, dlc: 71, category: 'FILTERS', productGroup: 'ENGINE' }
+    { mrp: 101, dlc: 71, category: 'Filters', productGroup: 'ENGINE' }
   );
 
   const recordsBeforeBlockedReplace = catalogue.size;
@@ -149,7 +215,7 @@ async function run() {
   const incompleteBuffer = await incompleteMasterBuffer();
   await assert.rejects(
     () => parseCatalogueUpload({ originalname: 'incomplete.xlsx', size: incompleteBuffer.length, buffer: incompleteBuffer }),
-    (error) => error.statusCode === 400 && error.missingColumns.includes('Active Flag') && error.missingColumns.includes('Split Flag')
+    (error) => error.statusCode === 400 && error.missingColumns.includes('DLP')
   );
 
   fs.unlinkSync(failedWorkbookPath);

@@ -1167,6 +1167,74 @@ body:not(.dashboard-view-active) .topbar {
   align-items: end;
 }
 
+.catalogue-upload-layout {
+  align-items: start;
+}
+
+.catalogue-upload-form {
+  min-width: 0;
+}
+
+.catalogue-columns-reference {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8f9fc;
+  padding: 12px;
+}
+
+.catalogue-columns-reference > summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: var(--primary-dark);
+  list-style: none;
+}
+
+.catalogue-columns-reference > summary::-webkit-details-marker {
+  display: none;
+}
+
+.catalogue-columns-wrap {
+  margin-top: 10px;
+  overflow-x: auto;
+}
+
+.catalogue-columns-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.catalogue-columns-table th,
+.catalogue-columns-table td {
+  border-bottom: 1px solid #e2e6ef;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.catalogue-columns-table thead th {
+  background: #eef0f5;
+  border-bottom: 2px solid #d0d5dd;
+}
+
+.catalogue-required-yes {
+  color: #c24132;
+  font-weight: 700;
+}
+
+.catalogue-required-no {
+  color: #667085;
+}
+
+.catalogue-columns-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .master-form .form-action {
   align-self: end;
   min-width: min(160px, 100%);

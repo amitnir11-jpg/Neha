@@ -11,6 +11,8 @@ const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../ut
 const {
   MAX_UPLOAD_BYTES,
   appendUploadLog,
+  catalogueFieldReference,
+  createCatalogueTemplateWorkbook,
   failureFilePath,
   importCatalogue
 } = require('../utils/catalogueUpload');
@@ -85,6 +87,27 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, uploadCatalogueFile,
     return res.json({ success: true, ...result });
   } catch (error) {
     return uploadErrorResponse(res, error, req.file && req.file.originalname);
+  }
+});
+
+router.get('/required-columns', auth.requireAuth, (_req, res) => {
+  return res.json({
+    success: true,
+    columns: catalogueFieldReference(),
+    message: 'Download the template first, then keep the first row as headers. The template uses the latest accepted master format.'
+  });
+});
+
+router.get('/template', auth.requireAuth, auth.requireAdmin, async (_req, res) => {
+  try {
+    const workbook = await createCatalogueTemplateWorkbook();
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="Part_Master_Catalogue_Template.xlsx"');
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    console.error('Catalogue template generation failed:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 

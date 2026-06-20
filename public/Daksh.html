@@ -652,8 +652,43 @@
         <div class="master-tab-panels">
           <section id="partMasterTab" class="master-tab-panel active" role="tabpanel">
             <section class="card">
-              <div class="card-head"><h2>Master Catalogue</h2><div class="actions"><span id="partMasterRecordCount" class="muted">Part master records: 0</span><span id="uploadStats" class="muted"></span><button id="downloadCatalogueFailedRowsBtn" class="btn light admin-only" type="button" hidden>Download Failed Rows</button><button id="deleteCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete Old Catalogue</button></div></div>
-              <form id="partUploadForm" class="inline-form"><input name="file" type="file" accept=".xlsx,.xls,.csv" required><button class="btn primary admin-only" type="submit">Upload Master Catalogue</button><button id="deleteReuploadCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete & Reupload Catalogue</button></form>
+              <div class="card-head">
+                <h2>Master Catalogue</h2>
+                <div class="actions">
+                  <button id="downloadCatalogueTemplateBtn" class="btn light admin-only" type="button">Download Template</button>
+                  <span id="partMasterRecordCount" class="muted">Part master records: 0</span>
+                  <span id="uploadStats" class="muted"></span>
+                  <button id="downloadCatalogueFailedRowsBtn" class="btn light admin-only" type="button" hidden>Download Failed Rows</button>
+                  <button id="deleteCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete Old Catalogue</button>
+                </div>
+              </div>
+              <div class="two-col catalogue-upload-layout">
+                <form id="partUploadForm" class="inline-form catalogue-upload-form">
+                  <input name="file" type="file" accept=".xlsx,.xls,.csv" required>
+                  <button class="btn primary admin-only" type="submit">Upload Master Catalogue</button>
+                  <button id="deleteReuploadCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete & Reupload Catalogue</button>
+                </form>
+                <details class="catalogue-columns-reference" open>
+                  <summary>Required Excel / CSV Columns for Part Master Upload</summary>
+                  <div class="catalogue-columns-wrap">
+                    <table class="catalogue-columns-table">
+                      <thead>
+                        <tr>
+                          <th>Column Name</th>
+                          <th>Accepted Headers</th>
+                          <th>Required</th>
+                          <th>Description</th>
+                        </tr>
+                      </thead>
+                      <tbody id="catalogueRequiredColumnsBody">
+                        <tr><td colspan="4" class="muted">Loading...</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <p class="catalogue-columns-note">Download the template first, then keep the first row as headers. The template uses the latest accepted master format.</p>
+                </details>
+              </div>
+              <div id="catalogueUploadMessage" class="form-message" hidden></div>
             </section>
 
             <section class="card">

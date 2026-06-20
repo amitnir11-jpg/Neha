@@ -20,23 +20,126 @@ const FAILURE_DIR = path.resolve(__dirname, '..', 'logs', 'catalogue-upload-fail
 const UPLOAD_LOG = path.resolve(__dirname, '..', 'logs', 'catalogue-upload.log');
 
 const CATALOGUE_COLUMNS = [
-  { header: 'Part Number', key: 'partNumber' },
-  { header: 'Part Description', key: 'partDescription' },
-  { header: 'Active Flag', key: 'activeFlag' },
-  { header: 'Product Category', key: 'productCategory' },
-  { header: 'Product Group', key: 'productGroup' },
-  { header: 'Model', key: 'model' },
-  { header: 'Product Type', key: 'productType' },
-  { header: 'Superceeded By', key: 'superceededBy' },
-  { header: 'Part Group', key: 'partGroup' },
-  { header: 'Part SubGroup', key: 'partSubGroup' },
-  { header: 'GST Category', key: 'gstCategory' },
-  { header: 'Split Flag', key: 'splitFlag' },
-  { header: 'MRP', key: 'mrp' },
-  { header: 'DLC', key: 'dlc' }
+  {
+    header: 'Part Number',
+    key: 'partNumber',
+    aliases: ['Part No', 'Part No.', 'PartNumber', 'Part No #', 'Item Code', 'Material Code'],
+    mandatory: true,
+    description: 'Unique part number used for master lookup and scan matching.'
+  },
+  {
+    header: 'Part Description',
+    key: 'partDescription',
+    aliases: ['Part Name', 'Description', 'Part Desc', 'Part Name / Description'],
+    mandatory: true,
+    description: 'Display description for the part.'
+  },
+  {
+    header: 'Active Flag',
+    key: 'activeFlag',
+    aliases: ['Active', 'Status'],
+    mandatory: false,
+    description: 'Optional Y/N flag. Blank rows default to active.'
+  },
+  {
+    header: 'Product Category',
+    key: 'productCategory',
+    aliases: ['Category', 'Part Category'],
+    mandatory: false,
+    description: 'Category or head used for reporting and grouping.'
+  },
+  {
+    header: 'Product Group',
+    key: 'productGroup',
+    aliases: ['Group', 'Product Group Name'],
+    mandatory: false,
+    description: 'Primary product group.'
+  },
+  {
+    header: 'Product Group SubGroup',
+    key: 'partSubGroup',
+    aliases: ['Part SubGroup', 'Part Sub Group', 'Product SubGroup', 'SubGroup'],
+    mandatory: false,
+    description: 'Product sub-group / child grouping.'
+  },
+  {
+    header: 'Model',
+    key: 'model',
+    aliases: ['Vehicle Model'],
+    mandatory: false,
+    description: 'Model reference from the catalogue.'
+  },
+  {
+    header: 'Manufacturing Year',
+    key: 'manufacturingYear',
+    aliases: ['Year', 'Gen', 'MFG Year', 'Manufacturing Year / Gen'],
+    mandatory: false,
+    description: 'Manufacturing year or generation.'
+  },
+  {
+    header: 'Product Type',
+    key: 'productType',
+    aliases: ['Type'],
+    mandatory: false,
+    description: 'Product type such as Spare Part, Accessory, etc.'
+  },
+  {
+    header: 'MRP',
+    key: 'mrp',
+    aliases: ['MRP Price', 'Price', 'Rate'],
+    mandatory: true,
+    description: 'Maximum retail price. Required for upload.'
+  },
+  {
+    header: 'DLP',
+    key: 'dlc',
+    aliases: ['DLC', 'Landed Cost'],
+    mandatory: true,
+    description: 'Dealer landed cost. The system stores this as DLC.'
+  }
 ];
 
-const COLUMN_BY_HEADER = new Map(CATALOGUE_COLUMNS.map((column) => [normalizeHeader(column.header), column]));
+const CATALOGUE_OPTIONAL_COLUMNS = [
+  {
+    header: 'Superceeded By',
+    key: 'superceededBy',
+    aliases: ['Superceded By', 'Superseeded By', 'Superseded By'],
+    mandatory: false,
+    description: 'Legacy replacement part number.'
+  },
+  {
+    header: 'Part Group',
+    key: 'partGroup',
+    aliases: ['Part Group Name'],
+    mandatory: false,
+    description: 'Legacy part group column accepted for older uploads.'
+  },
+  {
+    header: 'GST Category',
+    key: 'gstCategory',
+    aliases: ['GST', 'Tax Category'],
+    mandatory: false,
+    description: 'GST category or tax group.'
+  },
+  {
+    header: 'Split Flag',
+    key: 'splitFlag',
+    aliases: ['Split'],
+    mandatory: false,
+    description: 'Legacy split flag column.'
+  }
+];
+
+const CATALOGUE_FIELD_DEFINITIONS = [...CATALOGUE_COLUMNS, ...CATALOGUE_OPTIONAL_COLUMNS];
+const CATALOGUE_TEMPLATE_COLUMNS = CATALOGUE_COLUMNS.filter((column) => column.mandatory || column.key);
+const COLUMN_BY_HEADER = new Map();
+
+CATALOGUE_FIELD_DEFINITIONS.forEach((column) => {
+  [column.header, ...(column.aliases || [])].forEach((alias) => {
+    const normalized = normalizeHeader(alias);
+    if (!COLUMN_BY_HEADER.has(normalized)) COLUMN_BY_HEADER.set(normalized, column);
+  });
+});
 
 function normalizeHeader(value) {
   return cleanText(value).replace(/\s+/g, ' ').toUpperCase();
@@ -92,20 +195,26 @@ function buildParsedRows(headers, rawRows, sourceSheetName = '') {
       index,
       originalHeader,
       normalizedHeader: normalizeHeader(originalHeader),
-      key: expected ? expected.key : ''
+      key: expected ? expected.key : '',
+      mandatory: expected ? Boolean(expected.mandatory) : false
     };
   });
-  const presentHeaders = new Set(columns.filter((column) => column.key).map((column) => column.normalizedHeader));
-  const duplicateHeaders = Array.from(presentHeaders).filter((header) => columns.filter((column) => column.normalizedHeader === header).length > 1);
-  if (duplicateHeaders.length) {
-    const duplicateNames = duplicateHeaders.map((header) => COLUMN_BY_HEADER.get(header).header);
+  const mappedColumns = columns.filter((column) => column.key);
+  const columnsByKey = new Map();
+  mappedColumns.forEach((column) => {
+    if (!columnsByKey.has(column.key)) columnsByKey.set(column.key, []);
+    columnsByKey.get(column.key).push(column);
+  });
+  const duplicateColumns = Array.from(columnsByKey.values()).filter((items) => items.length > 1);
+  if (duplicateColumns.length) {
+    const duplicateNames = Array.from(new Set(duplicateColumns.flatMap((items) => items.map((item) => item.originalHeader || item.key))));
     const error = new Error(`Duplicate catalogue columns: ${duplicateNames.join(', ')}`);
     error.statusCode = 400;
     error.duplicateColumns = duplicateNames;
     throw error;
   }
-  const missingColumns = CATALOGUE_COLUMNS
-    .filter((column) => !presentHeaders.has(normalizeHeader(column.header)))
+  const missingColumns = CATALOGUE_FIELD_DEFINITIONS
+    .filter((column) => column.mandatory && !columnsByKey.has(column.key))
     .map((column) => column.header);
   if (missingColumns.length) {
     const error = new Error(`Missing catalogue columns: ${missingColumns.join(', ')}`);
@@ -201,9 +310,12 @@ async function parseCatalogueUpload(file) {
   return parseXlsx(file.buffer);
 }
 
-function parseNumeric(value, fieldName) {
+function parseNumeric(value, fieldName, { required = false } = {}) {
   const text = cleanText(value);
-  if (!text) return { value: 0 };
+  if (!text) {
+    if (required) return { error: `${fieldName} is mandatory` };
+    return { value: 0 };
+  }
   const normalized = text.replace(/,/g, '');
   const number = Number(normalized);
   if (!Number.isFinite(number)) return { error: `${fieldName} must be numeric` };
@@ -239,11 +351,11 @@ function validateCatalogueRows(parsed, sourceFileName = '') {
     const errors = [];
     if (!partNumber) errors.push('Part Number is mandatory');
     if (!partDescription) errors.push('Part Description is mandatory');
-    if (errors.length) missingMandatoryFieldsCount += 1;
-    const mrp = parseNumeric(row.values.mrp, 'MRP');
-    const dlc = parseNumeric(row.values.dlc, 'DLC');
+    const mrp = parseNumeric(row.values.mrp, 'MRP', { required: true });
+    const dlc = parseNumeric(row.values.dlc, 'DLP', { required: true });
     if (mrp.error) errors.push(mrp.error);
     if (dlc.error) errors.push(dlc.error);
+    if (!partNumber || !partDescription || mrp.error || dlc.error) missingMandatoryFieldsCount += 1;
     if (errors.length) {
       failedRows.push({ ...row, status: 'FAILED', reason: errors.join('; ') });
       return;
@@ -261,15 +373,16 @@ function validateCatalogueRows(parsed, sourceFileName = '') {
       partNumber,
       normalizedPartNumber: partNumber,
       partDescription,
-      activeFlag: upper(row.values.activeFlag),
+      activeFlag: upper(row.values.activeFlag) || 'Y',
       activeStatus: activeStatus(row.values.activeFlag),
       productCategory: upper(row.values.productCategory),
       productGroup: upper(row.values.productGroup),
+      partSubGroup: upper(row.values.partSubGroup),
       model: upper(row.values.model),
+      manufacturingYear: upper(row.values.manufacturingYear),
       productType: upper(row.values.productType),
       superceededBy: upper(row.values.superceededBy),
       partGroup: upper(row.values.partGroup),
-      partSubGroup: upper(row.values.partSubGroup),
       gstCategory: upper(row.values.gstCategory),
       splitFlag: upper(row.values.splitFlag),
       mrp: mrp.value,
@@ -372,6 +485,69 @@ async function cleanupFailureFiles() {
   } catch (error) {
     console.warn('Catalogue failed-row cleanup skipped:', error.message);
   }
+}
+
+function catalogueFieldReference() {
+  return CATALOGUE_FIELD_DEFINITIONS.map((column) => ({
+    field: column.key,
+    label: column.header,
+    aliases: [column.header, ...(column.aliases || [])],
+    mandatory: Boolean(column.mandatory),
+    description: column.description || ''
+  }));
+}
+
+function templateWidth(column) {
+  return Math.max(14, Math.min(34, (column.header || '').length + 4));
+}
+
+function styleTemplateHeader(row) {
+  row.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
+  row.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+}
+
+async function createCatalogueTemplateWorkbook() {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Daksh Inventory v2';
+  workbook.created = new Date();
+  workbook.modified = new Date();
+
+  const templateSheet = workbook.addWorksheet('Part Master Template');
+  templateSheet.columns = CATALOGUE_TEMPLATE_COLUMNS.map((column) => ({
+    header: column.header,
+    key: column.key,
+    width: templateWidth(column)
+  }));
+  templateSheet.views = [{ state: 'frozen', ySplit: 1 }];
+  templateSheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: templateSheet.columnCount } };
+  styleTemplateHeader(templateSheet.getRow(1));
+  templateSheet.getRow(1).height = 22;
+
+  const referenceSheet = workbook.addWorksheet('Required Fields');
+  referenceSheet.columns = [
+    { header: 'Column Name', key: 'label', width: 28 },
+    { header: 'Required', key: 'mandatory', width: 12 },
+    { header: 'Accepted Headers', key: 'aliases', width: 54 },
+    { header: 'Description', key: 'description', width: 60 }
+  ];
+  catalogueFieldReference().forEach((column) => {
+    referenceSheet.addRow({
+      label: column.label,
+      mandatory: column.mandatory ? 'Yes' : 'No',
+      aliases: column.aliases.join(', '),
+      description: column.description
+    });
+  });
+  styleTemplateHeader(referenceSheet.getRow(1));
+  referenceSheet.getRow(1).height = 22;
+  referenceSheet.views = [{ state: 'frozen', ySplit: 1 }];
+  referenceSheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, referenceSheet.rowCount), column: referenceSheet.columnCount } };
+  referenceSheet.eachRow((row, rowNumber) => {
+    if (rowNumber > 1) row.alignment = { vertical: 'top', wrapText: true };
+  });
+
+  return workbook;
 }
 
 async function createFailedRowsWorkbook(validation, nonImportedRows) {
@@ -544,9 +720,14 @@ async function importCatalogue(file, options = {}) {
 module.exports = {
   BULK_CHUNK_SIZE,
   CATALOGUE_COLUMNS,
+  CATALOGUE_OPTIONAL_COLUMNS,
+  CATALOGUE_FIELD_DEFINITIONS,
+  CATALOGUE_TEMPLATE_COLUMNS,
   MAX_UPLOAD_BYTES,
   appendUploadLog,
   cleanupFailureFiles,
+  catalogueFieldReference,
+  createCatalogueTemplateWorkbook,
   failureFilePath,
   importCatalogue,
   parseCatalogueUpload,

@@ -2550,6 +2550,25 @@
     refreshReportSubGroupOptions();
   }
 
+  async function loadCatalogueRequiredColumns() {
+    const body = $('#catalogueRequiredColumnsBody');
+    if (!body) return;
+    try {
+      const data = await api('/api/master-catalogue/required-columns');
+      const columns = data.columns || [];
+      body.innerHTML = columns.map((col) => `
+        <tr>
+          <td>${escapeHtml(col.label || col.field || '')}</td>
+          <td style="font-family: monospace; font-size: 11px;">${escapeHtml((col.aliases || []).join(', '))}</td>
+          <td>${col.mandatory ? '<span class="catalogue-required-yes">Yes</span>' : '<span class="catalogue-required-no">No</span>'}</td>
+          <td>${escapeHtml(col.description || '')}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="4" class="muted">No required columns configured</td></tr>';
+    } catch (error) {
+      body.innerHTML = `<tr><td colspan="4" class="muted">${escapeHtml(error.message || 'Failed to load column reference')}</td></tr>`;
+    }
+  }
+
   async function connectDevice() {
     if (!isMobileClient()) return;
     if (!state.serverInfo) await loadHealth();
@@ -5721,13 +5740,27 @@
     triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'Master_Part_Search_Result.csv');
   }
 
+  function setCatalogueUploadMessage(message = '', variant = 'success') {
+    const node = $('#catalogueUploadMessage');
+    if (!node) return;
+    if (!message) {
+      node.hidden = true;
+      node.className = 'form-message';
+      node.textContent = '';
+      return;
+    }
+    node.hidden = false;
+    node.className = `form-message ${variant || 'success'}`;
+    node.textContent = message;
+  }
+
   function updateCatalogueUploadStats(data = {}) {
     state.catalogueFailureDownloadId = String(data.failureDownloadId || '');
     const failedRowsButton = $('#downloadCatalogueFailedRowsBtn');
     if (failedRowsButton) failedRowsButton.hidden = !state.catalogueFailureDownloadId;
     const currentCount = Number(data.currentMasterRecordCount ?? data.masterCatalogueCount ?? data.uniquePartsCount ?? data.importedCount ?? 0);
     setPartMasterRecordCount(currentCount);
-    $('#uploadStats').textContent = [
+    const summary = [
       `Total rows ${wholeNumber(data.totalRowsCount ?? data.totalRowsUploaded ?? data.uploadedRowsCount ?? 0)}`,
       `Imported ${wholeNumber(data.importedRowsCount ?? data.importedCount ?? 0)}`,
       `Failed ${wholeNumber(data.failedRowsCount ?? data.skippedInvalidRowsCount ?? 0)}`,
@@ -5739,6 +5772,23 @@
       `Current records ${wholeNumber(currentCount)}`,
       `Price history ${wholeNumber(data.priceHistoryRowsCount ?? 0)}`
     ].join(' | ');
+    $('#uploadStats').textContent = summary;
+    const imported = Number(data.importedRowsCount ?? data.importedCount ?? 0);
+    const failed = Number(data.failedRowsCount ?? data.skippedInvalidRowsCount ?? 0);
+    const duplicates = Number(data.duplicateRowsCount ?? data.duplicateSkippedRows ?? 0);
+    if (data.totalRowsCount || imported || failed || duplicates || currentCount) {
+      const variant = failed ? 'warning' : 'success';
+      setCatalogueUploadMessage([
+        `Uploaded ${wholeNumber(imported)} part${imported === 1 ? '' : 's'}`,
+        `Failed ${wholeNumber(failed)}`,
+        `Duplicates ${wholeNumber(duplicates)}`,
+        `Current master records ${wholeNumber(currentCount)}`
+      ].join(' | '), variant);
+    } else if (data.message) {
+      setCatalogueUploadMessage(data.message, data.success === false ? 'error' : 'warning');
+    } else {
+      setCatalogueUploadMessage('', 'success');
+    }
   }
 
   function downloadCatalogueFailedRows() {
@@ -8657,6 +8707,7 @@
     }
     if (viewId === 'master') {
       loadPartSearchFilters().catch((error) => toast(error.message, 'error'));
+      loadCatalogueRequiredColumns().catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'validator') {
       loadMasterScanValidator().catch((error) => toast(error.message, 'error'));
@@ -9375,9 +9426,11 @@
         if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
       } catch (error) {
         if (error.data) updateCatalogueUploadStats(error.data);
+        if (error.message) setCatalogueUploadMessage(error.message, 'error');
         toast(error.message, 'error');
       }
     });
+    $('#downloadCatalogueTemplateBtn')?.addEventListener('click', () => downloadGet('/api/master-catalogue/template', 'Part_Master_Catalogue_Template.xlsx').catch((error) => toast(error.message, 'error')));
     $('#deleteCatalogueBtn')?.addEventListener('click', async () => {
       if (!window.confirm('Are you sure you want to delete old catalogue? Scan and audit data will not be deleted.')) return;
       const data = await api('/api/master-catalogue', { method: 'DELETE', body: {} });
@@ -9385,6 +9438,7 @@
       setPartMasterRecordCount(data.currentMasterRecordCount || 0);
       state.catalogueFailureDownloadId = '';
       if ($('#downloadCatalogueFailedRowsBtn')) $('#downloadCatalogueFailedRowsBtn').hidden = true;
+      setCatalogueUploadMessage(`Deleted old rows ${data.deletedOldRowsCount || 0} | Deleted price history ${data.deletedPriceHistoryRowsCount || 0}`, 'warning');
       clearPartSearch('Old catalogue deleted. Scan and audit data was not deleted.');
     });
     $('#downloadCatalogueFailedRowsBtn')?.addEventListener('click', () => downloadCatalogueFailedRows().catch((error) => toast(error.message, 'error')));
@@ -9400,6 +9454,7 @@
         if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
       } catch (error) {
         if (error.data) updateCatalogueUploadStats(error.data);
+        if (error.message) setCatalogueUploadMessage(error.message, 'error');
         toast(error.message, 'error');
       }
     });
@@ -9908,6 +9963,7 @@
       if ($('#scan')?.classList.contains('active')) jobs.push(loadBins());
       if ($('#reports')?.classList.contains('active')) jobs.push(loadCategories());
       if ($('#master')?.classList.contains('active')) jobs.push(loadPartSearchFilters());
+      if ($('#master')?.classList.contains('active')) jobs.push(loadCatalogueRequiredColumns());
       if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
       if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) jobs.push(loadParts(state.masterSearch.page || 1));
       if (jobs.length) Promise.all(jobs).catch(console.warn);
