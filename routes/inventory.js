@@ -26,6 +26,7 @@ const { canonicalizePartCategory, resolveCategoryFromMaster } = require('../util
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { reportTotals } = require('../utils/reportTotals');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
+const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
 const {
   MASTER_PRICE_SOURCE,
   MISSING_PART_MASTER_PRICE_MESSAGE,
@@ -74,6 +75,19 @@ const realtimeDashboardTimers = new Map();
 
 function scanDebug(...args) {
   if (SCAN_VERBOSE_LOGS) void args;
+}
+
+async function sendCachedJson(res, namespace, query, builder, options = {}) {
+  const result = await getCachedResponse(namespace, query, builder, options);
+  applyCacheHeaders(res, result);
+  return res.json(result.data);
+}
+
+function invalidateInventoryCaches(scope = {}, extraTags = []) {
+  invalidateCache({
+    tags: Array.from(new Set(['scan', 'report', 'dashboard', 'price', ...[].concat(extraTags || []).map((tag) => String(tag || '').trim()).filter(Boolean)])),
+    scope
+  });
 }
 
 function clean(value) {
@@ -1408,6 +1422,7 @@ async function addManualQuantity(existing = {}, input = {}, req) {
   }
 
   const publicRow = publicScan(updated);
+  invalidateInventoryCaches(scanDashboardScope(publicRow), ['price']);
   if (req.io && !alreadyApplied) {
     req.io.emit('scan:saved', publicRow);
     req.io.emit('inventory:update', { reason: 'manual-quantity-added', scan: publicRow, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: now });
@@ -1608,6 +1623,7 @@ async function emitScanUpdate(req, savedScan) {
   if (!io) return;
   const plainScan = publicScan(savedScan.toObject ? savedScan.toObject() : savedScan);
   const dashboardFilter = scanDashboardScope(plainScan);
+  invalidateInventoryCaches(dashboardFilter);
   io.emit('scan:new', plainScan);
   io.emit('scan:saved', plainScan);
   io.emit('scanner:activity', {
@@ -1660,6 +1676,7 @@ function queueRealtimeDashboardUpdate(io, dashboardFilter = {}, plainScan = {}) 
 async function cleanupTestScans(req, res) {
   try {
     const result = await Inventory.deleteMany(testScanClause());
+    invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
     req.io.emit('stats:update');
     res.json({ success: true, deletedCount: result.deletedCount || 0 });
@@ -1792,6 +1809,7 @@ async function updateManualMrp(req, res) {
     }).catch(() => undefined);
 
     const publicRow = publicScan(updated);
+    invalidateInventoryCaches(scanDashboardScope(publicRow), ['price']);
     if (req.io) {
       req.io.emit('mrp:updated', publicRow);
       req.io.emit('scan:saved', publicRow);
@@ -1929,6 +1947,7 @@ async function updateScanDetails(req, res) {
     }).catch(() => undefined);
 
     const publicRow = publicScan(updated);
+    invalidateInventoryCaches(scanDashboardScope(publicRow), ['price']);
     if (req.io) {
       req.io.emit('scan:saved', publicRow);
       req.io.emit('inventory:update', { reason: 'scan-details-update', scan: publicRow, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: now });
@@ -3125,7 +3144,10 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
       }
     }
 
-    if (saved.length) await emitScanUpdate(req, saved[saved.length - 1]);
+    if (saved.length) {
+      saved.forEach((scan) => invalidateInventoryCaches(scanDashboardScope(scan)));
+      await emitScanUpdate(req, saved[saved.length - 1]);
+    }
 
     const [pending, totalSynced] = await Promise.all([
       Inventory.countDocuments({ synced: false }),
@@ -3290,10 +3312,12 @@ router.get('/dashboard/product-group-summary/export', auth.requireAuth, async (r
 
 router.get('/dashboard/product-group-summary', auth.requireAuth, async (req, res) => {
   try {
-    const { filter } = await activeDashboardScope(req.query);
-    const rows = await dashboardProductGroupSummary({ limit: 100, q: req.query.q || '', filter });
-    const reconciliation = filter.dealerCode ? await require('./report').validateValuationReports(filter) : null;
-    return res.json({ success: true, rows, reconciliation });
+    return await sendCachedJson(res, 'dashboard', { ...req.query, view: 'product-group-summary' }, async (normalizedQuery) => {
+      const { filter } = await activeDashboardScope(normalizedQuery);
+      const rows = await dashboardProductGroupSummary({ limit: 100, q: normalizedQuery.q || '', filter });
+      const reconciliation = filter.dealerCode ? await require('./report').validateValuationReports(filter) : null;
+      return { success: true, rows, reconciliation };
+    });
   } catch (error) {
     return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
   }
@@ -3347,7 +3371,8 @@ router.get('/dashboard/product-group-summary/details', auth.requireAuth, async (
 
 router.get('/dashboard', auth.requireAuth, async (req, res) => {
   try {
-    const { filter, activeAudit } = await activeDashboardScope(req.query);
+    return await sendCachedJson(res, 'dashboard', { ...req.query, view: 'dashboard' }, async (normalizedQuery) => {
+      const { filter, activeAudit } = await activeDashboardScope(normalizedQuery);
     const [stats, recent] = await Promise.all([
       dashboardStats(filter),
       dashboardRecentRows(filter, 12)
@@ -3361,7 +3386,7 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
     const recentMasterLookup = await masterLookupForScans(recent);
     stampDashboardScope(stats, filter);
 
-    res.json({
+    return {
       success: true,
       activeAudit,
       dealerCode: filter.dealerCode || '',
@@ -3369,6 +3394,7 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
       stats,
       reconciliation,
       recent: recent.map((record) => publicScanWithMaster(record, recentMasterLookup))
+    };
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
@@ -3377,10 +3403,12 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
 
 router.get('/recent', auth.requireAuth, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit || 10), 100);
-    const { filter } = await activeDashboardScope(req.query);
-    const scans = await dashboardRecentRows(filter, limit);
-    res.json({ success: true, records: scans, scans });
+    return await sendCachedJson(res, 'dashboard', { ...req.query, view: 'recent' }, async (normalizedQuery) => {
+      const limit = Math.min(Number(normalizedQuery.limit || 10), 100);
+      const { filter } = await activeDashboardScope(normalizedQuery);
+      const scans = await dashboardRecentRows(filter, limit);
+      return { success: true, records: scans, scans };
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -3388,13 +3416,16 @@ router.get('/recent', auth.requireAuth, async (req, res) => {
 
 router.get('/live', auth.optionalAuth, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit || 50), 200);
-    const records = await Inventory.find(applyTestScanMode({}, req.query.testScanMode || 'real'))
-      .sort({ timestamp: -1, createdAt: -1 })
-      .limit(limit)
-      .lean();
-    const masterLookup = await masterLookupForScans(records);
-    res.json({ success: true, records: records.map((record) => publicScanWithMaster(record, masterLookup)) });
+    return await sendCachedJson(res, 'dashboard', { ...req.query, view: 'live' }, async (normalizedQuery) => {
+      const limit = Math.min(Number(normalizedQuery.limit || 50), 200);
+      const { filter } = await activeDashboardScope(normalizedQuery);
+      const records = await Inventory.find(applyTestScanMode({ ...filter }, normalizedQuery.testScanMode || 'real'))
+        .sort({ timestamp: -1, createdAt: -1 })
+        .limit(limit)
+        .lean();
+      const masterLookup = await masterLookupForScans(records);
+      return { success: true, records: records.map((record) => publicScanWithMaster(record, masterLookup)) };
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -3413,6 +3444,7 @@ router.post('/repair-sync-status', auth.requireAuth, auth.requireAdmin, async (r
       $set: { syncStatus: 'synced', synced: true, isSynced: true, syncError: '' }
     });
     const count = result.modifiedCount || result.nModified || 0;
+    invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     if (req.io) {
       req.io.emit('scan:saved');
       req.io.emit('stats:update');
@@ -3437,6 +3469,7 @@ router.post('/deduplicate', auth.requireAuth, auth.requireAdmin, async (req, res
     ]);
     const deleteIds = duplicates.flatMap((item) => item.ids.slice(1));
     const result = deleteIds.length ? await Inventory.deleteMany({ _id: { $in: deleteIds } }) : { deletedCount: 0 };
+    invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
     req.io.emit('stats:update');
     res.json({ success: true, duplicateGroups: duplicates.length, deletedCount: result.deletedCount });
@@ -3469,6 +3502,7 @@ router.post('/move-not-in-master-to-rejected', auth.requireAuth, auth.requireAdm
       }
     }
     const deleteResult = movedIds.length ? await Inventory.deleteMany({ _id: { $in: movedIds } }) : { deletedCount: 0 };
+    invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
     req.io.emit('scan:saved');
     req.io.emit('stats:update');
@@ -3520,6 +3554,7 @@ router.post('/delete-selected', auth.requireAuth, auth.requireAdmin, async (req,
       })));
     }
     const result = await Inventory.deleteMany({ _id: { $in: ids } });
+    invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
     req.io.emit('stats:update');
     res.json({ success: true, deletedCount: result.deletedCount });
@@ -3570,6 +3605,7 @@ router.post('/delete-all', auth.requireAuth, auth.requireAdmin, async (req, res)
     if (scope === 'dealer' || scope === 'date') {
       duplicateLogsDeleted = (await DuplicateScanLog.deleteMany(filter)).deletedCount || 0;
     }
+    invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
     req.io.emit('stats:update');
     res.json({ success: true, deletedCount: result.deletedCount, duplicateLogsDeleted });

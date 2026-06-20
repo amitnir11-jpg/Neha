@@ -17,6 +17,7 @@ const { applyMovementCountRules, signedScanQuantity } = require('../utils/report
 const { calculateStockValuation } = require('../utils/stockValuation');
 const { resolvePartPricing } = require('../utils/partPricing');
 const { getPricesFromPartMaster } = require('../utils/partMasterPrice');
+const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
@@ -506,6 +507,10 @@ function requireScope(scope, res) {
 async function emitReconciliationChanged(req, reason, payload = {}) {
   const io = req.io || req.app.get('io');
   if (!io) return;
+  invalidateCache({
+    tags: ['reconciliation', 'stock', 'report', 'dashboard'],
+    scope: { dealerCode: payload.dealerCode || '', auditId: payload.auditId || '' }
+  });
   io.emit('dealer-stock:update', { reason, ...payload, at: new Date() });
   io.emit('reports:update', { reason, ...payload, at: new Date() });
 }
@@ -840,92 +845,106 @@ async function buildReconciliationReport(query = {}) {
   if (!scope.auditId) {
     return { scope, summary: {}, rows: [], stockCount: 0, message: 'Active Audit ID is required for reconciliation report' };
   }
-  const filters = compactParams(query);
-  const stockQuery = { dealerCode: scope.dealerCode, auditId: scope.auditId };
-  const [stockRows, scannedRows] = await Promise.all([
-    DealerStock.find(stockQuery).sort({ partNumber: 1 }).lean(),
-    physicalRows(scope, filters)
-  ]);
+  const cacheQuery = { ...compactParams(query), dealerCode: scope.dealerCode, auditId: scope.auditId };
+  const cached = await getCachedResponse('reconciliation-report', cacheQuery, async (normalizedQuery) => {
+    const filters = compactParams(normalizedQuery);
+    const stockQuery = { dealerCode: scope.dealerCode, auditId: scope.auditId };
+    const [stockRows, scannedRows] = await Promise.all([
+      DealerStock.find(stockQuery).sort({ partNumber: 1 }).lean(),
+      physicalRows(scope, filters)
+    ]);
 
-  const partNumbers = Array.from(new Set([
-    ...stockRows.map((row) => normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo || row.part)),
-    ...scannedRows.map((row) => normalizePart(row._id || row.partNumber || row.partNo || row.part))
-  ].filter(Boolean)));
-  const priceByPart = partNumbers.length
-    ? await getPricesFromPartMaster(partNumbers, scope.dealerCode)
-    : new Map();
+    const partNumbers = Array.from(new Set([
+      ...stockRows.map((row) => normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo || row.part)),
+      ...scannedRows.map((row) => normalizePart(row._id || row.partNumber || row.partNo || row.part))
+    ].filter(Boolean)));
+    const priceByPart = partNumbers.length
+      ? await getPricesFromPartMaster(partNumbers, scope.dealerCode)
+      : new Map();
 
-  const physicalByPart = new Map(scannedRows.map((row) => [normalizePart(row._id || row.partNumber), row]));
-  const usedPhysicalKeys = new Set();
-  const stockRowsWithPricing = stockRows.map((stock) => {
-    const key = normalizePart(stock.normalizedPartNumber || stock.partNumber);
-    const physical = physicalByPart.get(key);
-    if (physical) usedPhysicalKeys.add(key);
-    const pricing = resolvePartPricing({
-      partNumber: key,
-      partMasterPrice: priceByPart.get(key) || null,
-      actualQty: physical ? Number(physical.actualStock || 0) : 0,
-      dmsQty: Number(stock.dmsStock || stock.systemQty || 0)
+    const physicalByPart = new Map(scannedRows.map((row) => [normalizePart(row._id || row.partNumber), row]));
+    const usedPhysicalKeys = new Set();
+    const stockRowsWithPricing = stockRows.map((stock) => {
+      const key = normalizePart(stock.normalizedPartNumber || stock.partNumber);
+      const physical = physicalByPart.get(key);
+      if (physical) usedPhysicalKeys.add(key);
+      const pricing = resolvePartPricing({
+        partNumber: key,
+        partMasterPrice: priceByPart.get(key) || null,
+        actualQty: physical ? Number(physical.actualStock || 0) : 0,
+        dmsQty: Number(stock.dmsStock || stock.systemQty || 0)
+      });
+      return reportRowFromStock(stock, physical, pricing);
     });
-    return reportRowFromStock(stock, physical, pricing);
-  });
 
-  const physicalOnlyRows = scannedRows.map((physical) => {
-    const key = normalizePart(physical._id || physical.partNumber);
-    if (usedPhysicalKeys.has(key)) return null;
-    const pricing = resolvePartPricing({
-      partNumber: key,
-      partMasterPrice: priceByPart.get(key) || null,
-      actualQty: Number(physical.actualStock || 0),
-      dmsQty: 0
+    const physicalOnlyRows = scannedRows.map((physical) => {
+      const key = normalizePart(physical._id || physical.partNumber);
+      if (usedPhysicalKeys.has(key)) return null;
+      const pricing = resolvePartPricing({
+        partNumber: key,
+        partMasterPrice: priceByPart.get(key) || null,
+        actualQty: Number(physical.actualStock || 0),
+        dmsQty: 0
+      });
+      return reportRowFromPhysical(physical, pricing);
     });
-    return reportRowFromPhysical(physical, pricing);
-  });
-  const rows = stockRowsWithPricing.concat(physicalOnlyRows.filter(Boolean));
+    const rows = stockRowsWithPricing.concat(physicalOnlyRows.filter(Boolean));
 
-  const filteredRows = rows.filter((row) => stockFilter(row, filters));
-  filteredRows.sort((a, b) => String(a.partNumber || '').localeCompare(String(b.partNumber || ''), undefined, { numeric: true, sensitivity: 'base' }));
-  const stockOnlyRows = filteredRows.filter((row) => !row.notInDms);
-  const totalInventoryValue = money(stockRowsWithPricing.reduce((sum, row) => sum + Number(row.stockValue || 0), 0));
-  const summary = {
-    dealerCode: scope.dealerCode,
-    auditId: scope.auditId,
-    totalPartsUploaded: stockRows.length,
-    totalDmsStockQty: stockRows.reduce((sum, row) => sum + Number(row.dmsStock || row.systemQty || 0), 0),
-    totalActualScannedQty: filteredRows.reduce((sum, row) => sum + Number(row.actualStock || 0), 0),
-    totalMatchedParts: stockOnlyRows.filter((row) => row.status === 'Matched').length,
-    totalShortageParts: stockOnlyRows.filter((row) => row.status === 'Shortage').length,
-    totalExcessParts: filteredRows.filter((row) => Number(row.variance || 0) > 0).length,
-    totalFastMovingParts: stockOnlyRows.filter((row) => row.movementStatus === 'Fast Moving').length,
-    totalSlowMovingParts: stockOnlyRows.filter((row) => row.movementStatus === 'Slow Moving').length,
-    totalDeadStockParts: stockOnlyRows.filter((row) => row.movementStatus === 'Dead Stock').length,
-    totalInventoryValue,
-    actualStockValueDLC: money(filteredRows.reduce((sum, row) => sum + Number(row.actualStockValue || 0), 0)),
-    dmsStockValueDLC: money(filteredRows.reduce((sum, row) => sum + Number(row.dmsStockValue || 0), 0)),
-    actualStockValueMRP: money(filteredRows.reduce((sum, row) => sum + Number(row.actualMrpValue || 0), 0)),
-    dmsStockValueMRP: money(filteredRows.reduce((sum, row) => sum + Number(row.dmsMrpValue || 0), 0)),
-    valuationBasis: 'DLC',
-    totalShortageValue: money(filteredRows.reduce((sum, row) => sum + Number(row.shortageValue || 0), 0)),
-    totalExcessValue: money(filteredRows.reduce((sum, row) => sum + Number(row.excessValue || 0), 0)),
-    totalScannedButNotInDms: filteredRows.filter((row) => row.notInDms).length,
-    dmsStock: stockRows.reduce((sum, row) => sum + Number(row.dmsStock || row.systemQty || 0), 0),
-    physicalStock: filteredRows.reduce((sum, row) => sum + Number(row.actualStock || 0), 0),
-    actualStock: filteredRows.reduce((sum, row) => sum + Number(row.actualStock || 0), 0),
-    excess: filteredRows.reduce((sum, row) => sum + Number(row.excessQty || row.excess || 0), 0),
-    short: filteredRows.reduce((sum, row) => sum + Number(row.shortageQty || row.short || 0), 0),
-    netDifference: filteredRows.reduce((sum, row) => sum + Number(row.variance || 0), 0),
-    varianceMrp: money(filteredRows.reduce((sum, row) => sum + Number(row.varianceMrp || 0), 0)),
-    varianceDlc: money(filteredRows.reduce((sum, row) => sum + Number(row.varianceDlc || 0), 0)),
-    mismatchCount: filteredRows.filter((row) => Number(row.variance || 0) !== 0).length
-  };
+    const filteredRows = rows.filter((row) => stockFilter(row, filters));
+    filteredRows.sort((a, b) => String(a.partNumber || '').localeCompare(String(b.partNumber || ''), undefined, { numeric: true, sensitivity: 'base' }));
+    const stockOnlyRows = filteredRows.filter((row) => !row.notInDms);
+    const totalInventoryValue = money(stockRowsWithPricing.reduce((sum, row) => sum + Number(row.stockValue || 0), 0));
+    const summary = {
+      dealerCode: scope.dealerCode,
+      auditId: scope.auditId,
+      totalPartsUploaded: stockRows.length,
+      totalDmsStockQty: stockRows.reduce((sum, row) => sum + Number(row.dmsStock || row.systemQty || 0), 0),
+      totalActualScannedQty: filteredRows.reduce((sum, row) => sum + Number(row.actualStock || 0), 0),
+      totalMatchedParts: stockOnlyRows.filter((row) => row.status === 'Matched').length,
+      totalShortageParts: stockOnlyRows.filter((row) => row.status === 'Shortage').length,
+      totalExcessParts: filteredRows.filter((row) => Number(row.variance || 0) > 0).length,
+      totalFastMovingParts: stockOnlyRows.filter((row) => row.movementStatus === 'Fast Moving').length,
+      totalSlowMovingParts: stockOnlyRows.filter((row) => row.movementStatus === 'Slow Moving').length,
+      totalDeadStockParts: stockOnlyRows.filter((row) => row.movementStatus === 'Dead Stock').length,
+      totalInventoryValue,
+      actualStockValueDLC: money(filteredRows.reduce((sum, row) => sum + Number(row.actualStockValue || 0), 0)),
+      dmsStockValueDLC: money(filteredRows.reduce((sum, row) => sum + Number(row.dmsStockValue || 0), 0)),
+      actualStockValueMRP: money(filteredRows.reduce((sum, row) => sum + Number(row.actualMrpValue || 0), 0)),
+      dmsStockValueMRP: money(filteredRows.reduce((sum, row) => sum + Number(row.dmsMrpValue || 0), 0)),
+      valuationBasis: 'DLC',
+      totalShortageValue: money(filteredRows.reduce((sum, row) => sum + Number(row.shortageValue || 0), 0)),
+      totalExcessValue: money(filteredRows.reduce((sum, row) => sum + Number(row.excessValue || 0), 0)),
+      totalScannedButNotInDms: filteredRows.filter((row) => row.notInDms).length,
+      dmsStock: stockRows.reduce((sum, row) => sum + Number(row.dmsStock || row.systemQty || 0), 0),
+      physicalStock: filteredRows.reduce((sum, row) => sum + Number(row.actualStock || 0), 0),
+      actualStock: filteredRows.reduce((sum, row) => sum + Number(row.actualStock || 0), 0),
+      excess: filteredRows.reduce((sum, row) => sum + Number(row.excessQty || row.excess || 0), 0),
+      short: filteredRows.reduce((sum, row) => sum + Number(row.shortageQty || row.short || 0), 0),
+      netDifference: filteredRows.reduce((sum, row) => sum + Number(row.variance || 0), 0),
+      varianceMrp: money(filteredRows.reduce((sum, row) => sum + Number(row.varianceMrp || 0), 0)),
+      varianceDlc: money(filteredRows.reduce((sum, row) => sum + Number(row.varianceDlc || 0), 0)),
+      mismatchCount: filteredRows.filter((row) => Number(row.variance || 0) !== 0).length
+    };
+
+    return {
+      scope,
+      summary,
+      rows: filteredRows,
+      mismatchRecords: filteredRows.filter((row) => Number(row.variance || 0) !== 0),
+      stockCount: stockRows.length,
+      message: stockRows.length ? '' : 'No dealer DMS stock uploaded for selected dealer/audit'
+    };
+  }, {
+    scope,
+    tags: ['reconciliation', 'stock', 'scan', 'master', 'catalogue', 'dealer', 'audit']
+  });
 
   return {
-    scope,
-    summary,
-    rows: filteredRows,
-    mismatchRecords: filteredRows.filter((row) => Number(row.variance || 0) !== 0),
-    stockCount: stockRows.length,
-    message: stockRows.length ? '' : 'No dealer DMS stock uploaded for selected dealer/audit'
+    ...cached.data,
+    cacheStatus: cached.cacheStatus,
+    cacheVersion: cached.cacheVersion,
+    dataVersion: cached.dataVersion,
+    generatedFromCache: cached.cacheHit
   };
 }
 
@@ -1063,25 +1082,39 @@ async function buildMovementAnalysisReport(query = {}) {
   delete baseQuery.fastSlowDead;
   delete baseQuery.fastSlowDeadStatus;
   const report = await buildReconciliationReport(baseQuery);
-  const filters = compactParams(query);
-  const rows = (report.rows || [])
-    .filter((row) => !row.notInDms)
-    .map(movementAnalysisRow)
-    .filter((row) => movementAnalysisFilter(row, filters))
-    .sort((a, b) => String(a.movementStatus || '').localeCompare(String(b.movementStatus || '')) || String(a.partNumber || '').localeCompare(String(b.partNumber || ''), undefined, { numeric: true, sensitivity: 'base' }));
-  const sections = movementAnalysisSections(rows);
-  const summary = movementAnalysisSummary(rows, report.summary || {});
+  const scope = report.scope || { dealerCode: upper(baseQuery.dealerCode), auditId: clean(baseQuery.auditId) };
+  const cacheQuery = { ...compactParams(query), dealerCode: scope.dealerCode, auditId: scope.auditId };
+  const cached = await getCachedResponse('movement-analysis-report', cacheQuery, async (normalizedQuery) => {
+    const filters = compactParams(normalizedQuery);
+    const rows = (report.rows || [])
+      .filter((row) => !row.notInDms)
+      .map(movementAnalysisRow)
+      .filter((row) => movementAnalysisFilter(row, filters))
+      .sort((a, b) => String(a.movementStatus || '').localeCompare(String(b.movementStatus || '')) || String(a.partNumber || '').localeCompare(String(b.partNumber || ''), undefined, { numeric: true, sensitivity: 'base' }));
+    const sections = movementAnalysisSections(rows);
+    const summary = movementAnalysisSummary(rows, report.summary || {});
+    return {
+      scope,
+      dealerCode: scope.dealerCode,
+      auditId: scope.auditId,
+      filters,
+      summary,
+      sections,
+      columns: movementAnalysisColumns().map(({ header, key }) => ({ header, key })),
+      rows,
+      stockCount: report.stockCount,
+      message: rows.length ? '' : (report.message || 'No movement analysis data found for selected filter')
+    };
+  }, {
+    scope,
+    tags: ['reconciliation', 'stock', 'scan', 'master', 'catalogue', 'dealer', 'audit']
+  });
   return {
-    scope: report.scope,
-    dealerCode: report.scope.dealerCode,
-    auditId: report.scope.auditId,
-    filters,
-    summary,
-    sections,
-    columns: movementAnalysisColumns().map(({ header, key }) => ({ header, key })),
-    rows,
-    stockCount: report.stockCount,
-    message: rows.length ? '' : (report.message || 'No movement analysis data found for selected filter')
+    ...cached.data,
+    cacheStatus: cached.cacheStatus,
+    cacheVersion: cached.cacheVersion,
+    dataVersion: cached.dataVersion,
+    generatedFromCache: cached.cacheHit
   };
 }
 
@@ -1223,84 +1256,136 @@ function addMovementAnalysisSummarySheet(workbook, summary = {}) {
 
 async function sendReportExport(res, report, format, reportType = 'dealer') {
   const rows = selectReportRows(report.rows || [], reportType);
+  const scope = {
+    dealerCode: report.summary && report.summary.dealerCode ? report.summary.dealerCode : report.scope?.dealerCode || '',
+    auditId: report.summary && report.summary.auditId ? report.summary.auditId : report.scope?.auditId || ''
+  };
   if (format === 'excel' || format === 'xlsx') {
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'Daksh Inventory';
-    addSummarySheet(workbook, report.summary || {});
-    addSheet(workbook, reportType === 'full' ? 'Dealer Report' : `${reportType || 'dealer'} report`, reportColumns(), rows);
-    if (reportType === 'full') {
-      addSheet(workbook, 'Shortage Report', reportColumns(), selectReportRows(report.rows, 'shortage'));
-      addSheet(workbook, 'Excess Report', reportColumns(), selectReportRows(report.rows, 'excess'));
-      addSheet(workbook, 'Dead Stock Report', reportColumns(), selectReportRows(report.rows, 'dead'));
-      addSheet(workbook, 'Scanned Not In DMS', reportColumns(), selectReportRows(report.rows, 'scanned-not-in-dms'));
-      addSheet(workbook, 'Bin Wise Report', reportColumns(), selectReportRows(report.rows, 'bin'));
-      addSheet(workbook, 'Movement Wise Report', reportColumns(), selectReportRows(report.rows, 'movement'));
-    }
-    const buffer = await workbook.xlsx.writeBuffer();
+    const cached = await getCachedResponse('reconciliation-download', {
+      reportType,
+      format: 'excel',
+      dealerCode: scope.dealerCode,
+      auditId: scope.auditId
+    }, async () => {
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Daksh Inventory';
+      addSummarySheet(workbook, report.summary || {});
+      addSheet(workbook, reportType === 'full' ? 'Dealer Report' : `${reportType || 'dealer'} report`, reportColumns(), rows);
+      if (reportType === 'full') {
+        addSheet(workbook, 'Shortage Report', reportColumns(), selectReportRows(report.rows, 'shortage'));
+        addSheet(workbook, 'Excess Report', reportColumns(), selectReportRows(report.rows, 'excess'));
+        addSheet(workbook, 'Dead Stock Report', reportColumns(), selectReportRows(report.rows, 'dead'));
+        addSheet(workbook, 'Scanned Not In DMS', reportColumns(), selectReportRows(report.rows, 'scanned-not-in-dms'));
+        addSheet(workbook, 'Bin Wise Report', reportColumns(), selectReportRows(report.rows, 'bin'));
+        addSheet(workbook, 'Movement Wise Report', reportColumns(), selectReportRows(report.rows, 'movement'));
+      }
+      return Buffer.from(await workbook.xlsx.writeBuffer());
+    }, {
+      scope,
+      tags: ['reconciliation', 'stock', 'scan', 'master', 'catalogue', 'dealer', 'audit']
+    });
+    applyCacheHeaders(res, cached);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="Daksh_Reconciliation_${reportType || 'dealer'}.xlsx"`);
-    return res.send(Buffer.from(buffer));
+    return res.send(cached.data);
   }
   if (format === 'pdf') {
-    const doc = new jsPDF({ orientation: 'landscape' });
-    doc.setFontSize(14);
-    doc.text('DAKSH INVENTORY SYSTEM - Dealer Reconciliation', 14, 15);
-    doc.setFontSize(9);
-    doc.text(`Dealer: ${report.summary.dealerCode || '-'} | Audit: ${report.summary.auditId || '-'} | Report: ${reportType || 'dealer'}`, 14, 21);
-    const columns = reportColumns();
-    autoTable(doc, {
-      startY: 28,
-      head: [columns.map((column) => column.header)],
-      body: rows.slice(0, 1000).map((row) => columns.map((column) => row[column.key] ?? '')),
-      styles: { fontSize: 7, cellPadding: 1.6 },
-      headStyles: { fillColor: [21, 58, 91] }
+    const cached = await getCachedResponse('reconciliation-download', {
+      reportType,
+      format: 'pdf',
+      dealerCode: scope.dealerCode,
+      auditId: scope.auditId
+    }, async () => {
+      const doc = new jsPDF({ orientation: 'landscape' });
+      doc.setFontSize(14);
+      doc.text('DAKSH INVENTORY SYSTEM - Dealer Reconciliation', 14, 15);
+      doc.setFontSize(9);
+      doc.text(`Dealer: ${report.summary.dealerCode || '-'} | Audit: ${report.summary.auditId || '-'} | Report: ${reportType || 'dealer'}`, 14, 21);
+      const columns = reportColumns();
+      autoTable(doc, {
+        startY: 28,
+        head: [columns.map((column) => column.header)],
+        body: rows.slice(0, 1000).map((row) => columns.map((column) => row[column.key] ?? '')),
+        styles: { fontSize: 7, cellPadding: 1.6 },
+        headStyles: { fillColor: [21, 58, 91] }
+      });
+      return Buffer.from(doc.output('arraybuffer'));
+    }, {
+      scope,
+      tags: ['reconciliation', 'stock', 'scan', 'master', 'catalogue', 'dealer', 'audit']
     });
-    const pdf = Buffer.from(doc.output('arraybuffer'));
+    applyCacheHeaders(res, cached);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Daksh_Reconciliation_${reportType || 'dealer'}.pdf"`);
-    return res.send(pdf);
+    return res.send(cached.data);
   }
   return null;
 }
 
 async function sendMovementAnalysisExport(res, analysis, format) {
   const rows = analysis.rows || [];
+  const scope = {
+    dealerCode: analysis.summary && analysis.summary.dealerCode ? analysis.summary.dealerCode : analysis.dealerCode || '',
+    auditId: analysis.summary && analysis.summary.auditId ? analysis.summary.auditId : analysis.auditId || ''
+  };
   if (format === 'excel' || format === 'xlsx') {
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'Daksh Inventory';
-    addMovementAnalysisSummarySheet(workbook, analysis.summary || {});
-    addSheet(workbook, 'Movement Analysis', movementAnalysisColumns(), rows);
-    const movementTypeFilter = clean((analysis.filters && (analysis.filters.movementType || analysis.filters.fastSlowDead)) || '');
-    if (!movementTypeFilter) {
-      addSheet(workbook, 'Fast Moving Parts', movementAnalysisColumns(), analysis.sections.fastMoving || []);
-      addSheet(workbook, 'Slow Moving Parts', movementAnalysisColumns(), analysis.sections.slowMoving || []);
-      addSheet(workbook, 'Dead Stock Parts', movementAnalysisColumns(), analysis.sections.deadStock || []);
-      addSheet(workbook, 'Critical Shortage', movementAnalysisColumns(), analysis.sections.criticalShortage || []);
-      addSheet(workbook, 'Excess Stock Parts', movementAnalysisColumns(), analysis.sections.excessStock || []);
-    }
-    const buffer = await workbook.xlsx.writeBuffer();
+    const cached = await getCachedResponse('movement-analysis-download', {
+      reportType: 'movement-analysis',
+      format: 'excel',
+      dealerCode: scope.dealerCode,
+      auditId: scope.auditId
+    }, async () => {
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Daksh Inventory';
+      addMovementAnalysisSummarySheet(workbook, analysis.summary || {});
+      addSheet(workbook, 'Movement Analysis', movementAnalysisColumns(), rows);
+      const movementTypeFilter = clean((analysis.filters && (analysis.filters.movementType || analysis.filters.fastSlowDead)) || '');
+      if (!movementTypeFilter) {
+        addSheet(workbook, 'Fast Moving Parts', movementAnalysisColumns(), analysis.sections.fastMoving || []);
+        addSheet(workbook, 'Slow Moving Parts', movementAnalysisColumns(), analysis.sections.slowMoving || []);
+        addSheet(workbook, 'Dead Stock Parts', movementAnalysisColumns(), analysis.sections.deadStock || []);
+        addSheet(workbook, 'Critical Shortage', movementAnalysisColumns(), analysis.sections.criticalShortage || []);
+        addSheet(workbook, 'Excess Stock Parts', movementAnalysisColumns(), analysis.sections.excessStock || []);
+      }
+      return Buffer.from(await workbook.xlsx.writeBuffer());
+    }, {
+      scope,
+      tags: ['reconciliation', 'stock', 'scan', 'master', 'catalogue', 'dealer', 'audit']
+    });
+    applyCacheHeaders(res, cached);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Movement_Analysis_Report.xlsx"');
-    return res.send(Buffer.from(buffer));
+    return res.send(cached.data);
   }
   if (format === 'pdf') {
-    const doc = new jsPDF({ orientation: 'landscape' });
-    doc.setFontSize(14);
-    doc.text('DAKSH INVENTORY SYSTEM - Movement Analysis Report', 14, 15);
-    doc.setFontSize(9);
-    doc.text(`Dealer: ${analysis.summary.dealerCode || '-'} | Audit: ${analysis.summary.auditId || '-'} | Rows: ${rows.length}`, 14, 21);
-    const columns = movementAnalysisColumns();
-    autoTable(doc, {
-      startY: 28,
-      head: [columns.map((column) => column.header)],
-      body: rows.slice(0, 1000).map((row) => columns.map((column) => row[column.key] ?? '')),
-      styles: { fontSize: 6.6, cellPadding: 1.2 },
-      headStyles: { fillColor: [21, 58, 91] }
+    const cached = await getCachedResponse('movement-analysis-download', {
+      reportType: 'movement-analysis',
+      format: 'pdf',
+      dealerCode: scope.dealerCode,
+      auditId: scope.auditId
+    }, async () => {
+      const doc = new jsPDF({ orientation: 'landscape' });
+      doc.setFontSize(14);
+      doc.text('DAKSH INVENTORY SYSTEM - Movement Analysis Report', 14, 15);
+      doc.setFontSize(9);
+      doc.text(`Dealer: ${analysis.summary.dealerCode || '-'} | Audit: ${analysis.summary.auditId || '-'} | Rows: ${rows.length}`, 14, 21);
+      const columns = movementAnalysisColumns();
+      autoTable(doc, {
+        startY: 28,
+        head: [columns.map((column) => column.header)],
+        body: rows.slice(0, 1000).map((row) => columns.map((column) => row[column.key] ?? '')),
+        styles: { fontSize: 6.6, cellPadding: 1.2 },
+        headStyles: { fillColor: [21, 58, 91] }
+      });
+      return Buffer.from(doc.output('arraybuffer'));
+    }, {
+      scope,
+      tags: ['reconciliation', 'stock', 'scan', 'master', 'catalogue', 'dealer', 'audit']
     });
-    const pdf = Buffer.from(doc.output('arraybuffer'));
+    applyCacheHeaders(res, cached);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Movement_Analysis_Report.pdf"');
-    return res.send(pdf);
+    return res.send(cached.data);
   }
   return null;
 }

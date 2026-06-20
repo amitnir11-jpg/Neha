@@ -2997,8 +2997,12 @@
         let recent = data.recent || data.records || data.scans || [];
         if ((!Array.isArray(recent) || !recent.length) && Number(stats.totalScanRecords || stats.totalScannedQuantity || stats.totalScannedValue || 0) > 0) {
           try {
-            const fallback = await api('/api/scans/recent?limit=12');
+            const fallback = await api(`/api/scans/live?limit=12${query ? `&${query}` : ''}`);
             recent = fallback.records || fallback.scans || recent;
+            if (!Array.isArray(recent) || !recent.length) {
+              const secondFallback = await api('/api/scans/recent?limit=12');
+              recent = secondFallback.records || secondFallback.scans || recent;
+            }
           } catch (fallbackError) {
             console.warn('[DASHBOARD] fallback recent load failed', fallbackError.message);
           }
@@ -9809,6 +9813,7 @@
     });
     socket.on('dealer-stock:update', (payload = {}) => {
       state.lastRealtimeAt = Date.now();
+      markReportsStale('dealer stock update');
       if (activeReconDealer() && (!payload.dealerCode || cleanDealerCode(payload.dealerCode) === activeReconDealer())) {
         loadDealerStockPreview().catch(() => undefined);
         queueReconciliationRefresh('dealer stock update');
@@ -9898,10 +9903,12 @@
     socket.on('dealers:update', () => loadDealers({ force: true }).catch(console.warn));
     socket.on('master:update', () => {
       state.reportFilterDropdownsLoadedAt = 0;
+      markReportsStale('master update');
       const jobs = [];
       if ($('#scan')?.classList.contains('active')) jobs.push(loadBins());
       if ($('#reports')?.classList.contains('active')) jobs.push(loadCategories());
       if ($('#master')?.classList.contains('active')) jobs.push(loadPartSearchFilters());
+      if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
       if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) jobs.push(loadParts(state.masterSearch.page || 1));
       if (jobs.length) Promise.all(jobs).catch(console.warn);
     });

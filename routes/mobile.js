@@ -23,7 +23,8 @@ const { formatDateLikeFields } = require('../utils/time');
 const { decorateScanValue } = require('../utils/inventoryValueEngine');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
-const { getPricesFromPartMaster, scanWithPartMasterPrice } = require('../utils/partMasterPrice');
+const { getPriceFromPartMaster, getPricesFromPartMaster, scanWithPartMasterPrice } = require('../utils/partMasterPrice');
+const { applyCacheHeaders, getCachedResponse } = require('../utils/safeCache');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
@@ -52,6 +53,12 @@ function cleanUsername(value) {
 
 function isBcryptHash(value) {
   return /^\$2[aby]\$\d{2}\$/.test(String(value || ''));
+}
+
+async function sendCachedJson(res, namespace, query, builder, options = {}) {
+  const result = await getCachedResponse(namespace, query, builder, options);
+  applyCacheHeaders(res, result);
+  return res.json(result.data);
 }
 
 function userIsActive(user) {
@@ -469,57 +476,59 @@ router.get('/sync-status', auth.requireAuth, async (req, res) => {
 
 router.get('/master-search', auth.requireAuth, async (req, res) => {
   try {
-    const q = upper(req.query.q || req.query.partNumber || req.query.part || '');
-    const dealerCode = upper(req.query.dealerCode || '');
-    const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 25);
-    if (!q || q.length < 2) return res.json({ success: true, count: 0, parts: [], suggestions: [] });
-    const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    const [dealerParts, catalogueParts] = await Promise.all([
-      MasterPart.find({
-        $or: [
-          { normalizedPartNumber: regex },
-          { partNumber: regex },
-          { partNo: regex },
-          { partDescription: regex },
-          { partName: regex }
-        ]
-      }).sort({ dealerCode: -1, partNumber: 1 }).limit(limit).lean(),
-      MasterCatalogue.find({
-        $or: [
-          { normalizedPartNumber: regex },
-          { partNumber: regex },
-          { partNo: regex },
-          { partDescription: regex },
-          { partName: regex }
-        ]
-      }).sort({ partNumber: 1 }).limit(limit).lean()
-    ]);
-    const candidates = Array.from(new Set(dealerParts.concat(catalogueParts)
-      .map((part) => normalizePartNumber(part.normalizedPartNumber || part.partNumber || part.partNo || part.part))
-      .filter(Boolean)));
-    const priceByPart = await getPricesFromPartMaster(candidates, dealerCode);
-    const parts = candidates.map((partNumber) => priceByPart.get(partNumber)).filter(Boolean)
-      .sort((a, b) => Number(b.partNumber === q) - Number(a.partNumber === q) || a.partNumber.localeCompare(b.partNumber))
-      .slice(0, limit)
-      .map((price) => ({
-        id: price.sourceRecord && price.sourceRecord._id,
-        partNumber: price.partNumber,
-        partNo: price.partNumber,
-        partDescription: price.description,
-        partName: price.description,
-        productCategory: price.category,
-        category: price.category,
-        mrp: price.mrp,
-        dlc: price.dlc,
-        model: price.model,
-        year: price.year,
-        manufacturingYear: price.manufacturingYear,
-        productGroup: price.productGroup,
-        partSubGroup: price.partSubGroup,
-        binLocation: price.binLocation,
-        bin: price.bin
-      }));
-    return res.json({ success: true, count: parts.length, parts, suggestions: parts });
+    return await sendCachedJson(res, 'search', req.query, async (normalizedQuery) => {
+      const q = upper(normalizedQuery.q || normalizedQuery.partNumber || normalizedQuery.part || '');
+      const dealerCode = upper(normalizedQuery.dealerCode || '');
+      const limit = Math.min(Math.max(Number(normalizedQuery.limit || 10), 1), 25);
+      if (!q || q.length < 2) return { success: true, count: 0, parts: [], suggestions: [] };
+      const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const [dealerParts, catalogueParts] = await Promise.all([
+        MasterPart.find({
+          $or: [
+            { normalizedPartNumber: regex },
+            { partNumber: regex },
+            { partNo: regex },
+            { partDescription: regex },
+            { partName: regex }
+          ]
+        }).sort({ dealerCode: -1, partNumber: 1 }).limit(limit).lean(),
+        MasterCatalogue.find({
+          $or: [
+            { normalizedPartNumber: regex },
+            { partNumber: regex },
+            { partNo: regex },
+            { partDescription: regex },
+            { partName: regex }
+          ]
+        }).sort({ partNumber: 1 }).limit(limit).lean()
+      ]);
+      const candidates = Array.from(new Set(dealerParts.concat(catalogueParts)
+        .map((part) => normalizePartNumber(part.normalizedPartNumber || part.partNumber || part.partNo || part.part))
+        .filter(Boolean)));
+      const priceByPart = await getPricesFromPartMaster(candidates, dealerCode);
+      const parts = candidates.map((partNumber) => priceByPart.get(partNumber)).filter(Boolean)
+        .sort((a, b) => Number(b.partNumber === q) - Number(a.partNumber === q) || a.partNumber.localeCompare(b.partNumber))
+        .slice(0, limit)
+        .map((price) => ({
+          id: price.sourceRecord && price.sourceRecord._id,
+          partNumber: price.partNumber,
+          partNo: price.partNumber,
+          partDescription: price.description,
+          partName: price.description,
+          productCategory: price.category,
+          category: price.category,
+          mrp: price.mrp,
+          dlc: price.dlc,
+          model: price.model,
+          year: price.year,
+          manufacturingYear: price.manufacturingYear,
+          productGroup: price.productGroup,
+          partSubGroup: price.partSubGroup,
+          binLocation: price.binLocation,
+          bin: price.bin
+        }));
+      return { success: true, count: parts.length, parts, suggestions: parts };
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -527,25 +536,26 @@ router.get('/master-search', auth.requireAuth, async (req, res) => {
 
 router.get('/validate-part', auth.optionalAuth, async (req, res) => {
   try {
-    const partNumber = normalizePartNumber(req.query.partNumber || req.query.part || '');
-    const dealerCode = clean(req.query.dealerCode || '').toUpperCase();
-    if (!partNumber) return res.status(400).json({ success: false, found: false, message: 'Part number is required' });
-    const [catalogue, dealerMaster, anyMaster] = await Promise.all([
-      MasterCatalogue.findOne({ normalizedPartNumber: partNumber }).lean(),
-      dealerCode ? MasterPart.findOne({
-        $or: [{ normalizedPartNumber: partNumber }, { partNo: partNumber }, { partNumber }],
-        dealerCode
-      }).lean() : null,
-      MasterPart.findOne({ $or: [{ normalizedPartNumber: partNumber }, { partNo: partNumber }, { partNumber }] }).lean()
-    ]);
-    const master = catalogue || dealerMaster || anyMaster;
-    return res.json({
-      success: true,
-      found: Boolean(master),
-      partNumber,
-      dealerCode,
-      partDescription: master ? master.partDescription || master.partName || '' : '',
-      productCategory: master ? master.productCategory || master.category || '' : ''
+    return await sendCachedJson(res, 'lookup', req.query, async (normalizedQuery) => {
+      const partNumber = normalizePartNumber(normalizedQuery.partNumber || normalizedQuery.part || '');
+      const dealerCode = clean(normalizedQuery.dealerCode || '').toUpperCase();
+      if (!partNumber) return { success: false, found: false, message: 'Part number is required' };
+      const price = await getPriceFromPartMaster(partNumber, dealerCode).catch(() => null);
+      const master = price && (price.masterRecord || price.sourceRecord) ? price : null;
+      return {
+        success: true,
+        found: Boolean(master),
+        partNumber,
+        dealerCode,
+        partDescription: master ? master.description || master.partDescription || master.partName || '' : '',
+        productCategory: master ? master.category || master.productCategory || '' : '',
+        mrp: master ? Number(master.mrp || 0) : 0,
+        dlc: master ? Number(master.dlc || 0) : 0,
+        category: master ? master.category || master.productCategory || '' : '',
+        model: master ? master.model || '' : '',
+        productGroup: master ? master.productGroup || '' : '',
+        partSubGroup: master ? master.partSubGroup || '' : ''
+      };
     });
   } catch (error) {
     return res.status(500).json({ success: false, found: false, message: error.message });

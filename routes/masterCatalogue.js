@@ -7,6 +7,7 @@ const Inventory = require('../models/Inventory');
 const auth = require('./auth');
 const { cleanText, normalizePartNumber } = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
+const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
 const {
   MAX_UPLOAD_BYTES,
   appendUploadLog,
@@ -44,6 +45,19 @@ function prepareLongUpload(req, res) {
   if (typeof res.setTimeout === 'function') res.setTimeout(0);
 }
 
+async function sendCachedJson(res, namespace, query, builder, options = {}) {
+  const result = await getCachedResponse(namespace, query, builder, options);
+  applyCacheHeaders(res, result);
+  return res.json(result.data);
+}
+
+function invalidateCatalogueCaches(scope = {}) {
+  invalidateCache({
+    tags: ['catalogue', 'master', 'search', 'report', 'dashboard', 'dealer', 'bin', 'audit'],
+    scope
+  });
+}
+
 async function uploadErrorResponse(res, error, sourceFileName = '') {
   console.error('Master catalogue upload failed:', error);
   await appendUploadLog({
@@ -67,6 +81,7 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, uploadCatalogueFile,
   try {
     const result = await importCatalogue(req.file);
     req.io?.emit('master:update');
+    invalidateCatalogueCaches();
     return res.json({ success: true, ...result });
   } catch (error) {
     return uploadErrorResponse(res, error, req.file && req.file.originalname);
@@ -88,6 +103,7 @@ router.delete('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
       PartPriceHistory.deleteMany({})
     ]);
     req.io?.emit('master:update');
+    invalidateCatalogueCaches();
     return res.json({
       success: true,
       deletedOldRowsCount: result.deletedCount || 0,
@@ -112,6 +128,7 @@ router.post('/delete-and-reupload', auth.requireAuth, auth.requireAdmin, uploadC
       });
     }
     req.io?.emit('master:update');
+    invalidateCatalogueCaches();
     return res.json({ success: true, ...result });
   } catch (error) {
     return uploadErrorResponse(res, error, req.file && req.file.originalname);
@@ -120,32 +137,34 @@ router.post('/delete-and-reupload', auth.requireAuth, auth.requireAdmin, uploadC
 
 router.get('/search', auth.requireAuth, async (req, res) => {
   try {
-    const q = cleanText(req.query.q);
-    const page = Math.max(Number(req.query.page || 1), 1);
-    const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 50);
-    const skip = (page - 1) * limit;
-    const normalized = normalizePartNumber(q);
-    const safeText = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const safePart = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const filter = q ? {
-      $or: [
-        { partNumber: { $regex: safePart, $options: 'i' } },
-        { normalizedPartNumber: { $regex: safePart, $options: 'i' } },
-        { partDescription: { $regex: safeText, $options: 'i' } },
-        { productCategory: { $regex: safeText, $options: 'i' } },
-        { model: { $regex: safeText, $options: 'i' } },
-        { year: { $regex: safeText, $options: 'i' } },
-        { manufacturingYear: { $regex: safeText, $options: 'i' } },
-        { productGroup: { $regex: safeText, $options: 'i' } },
-        { partSubGroup: { $regex: safeText, $options: 'i' } },
-        { dlc: Number.isFinite(Number(q)) ? Number(q) : -1 }
-      ]
-    } : { _id: null };
-    const [total, records] = await Promise.all([
-      MasterCatalogue.countDocuments(filter),
-      MasterCatalogue.find(filter).sort({ partNumber: 1 }).skip(skip).limit(limit).lean()
-    ]);
-    return res.json({ success: true, records, parts: records.map(cataloguePayload), page, limit, total, totalPages: Math.ceil(total / limit) });
+    return await sendCachedJson(res, 'search', req.query, async (normalizedQuery) => {
+      const q = cleanText(normalizedQuery.q);
+      const page = Math.max(Number(normalizedQuery.page || 1), 1);
+      const limit = Math.min(Math.max(Number(normalizedQuery.limit || 50), 1), 50);
+      const skip = (page - 1) * limit;
+      const normalized = normalizePartNumber(q);
+      const safeText = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const safePart = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const filter = q ? {
+        $or: [
+          { partNumber: { $regex: safePart, $options: 'i' } },
+          { normalizedPartNumber: { $regex: safePart, $options: 'i' } },
+          { partDescription: { $regex: safeText, $options: 'i' } },
+          { productCategory: { $regex: safeText, $options: 'i' } },
+          { model: { $regex: safeText, $options: 'i' } },
+          { year: { $regex: safeText, $options: 'i' } },
+          { manufacturingYear: { $regex: safeText, $options: 'i' } },
+          { productGroup: { $regex: safeText, $options: 'i' } },
+          { partSubGroup: { $regex: safeText, $options: 'i' } },
+          { dlc: Number.isFinite(Number(q)) ? Number(q) : -1 }
+        ]
+      } : { _id: null };
+      const [total, records] = await Promise.all([
+        MasterCatalogue.countDocuments(filter),
+        MasterCatalogue.find(filter).sort({ partNumber: 1 }).skip(skip).limit(limit).lean()
+      ]);
+      return { success: true, records, parts: records.map(cataloguePayload), page, limit, total, totalPages: Math.ceil(total / limit) };
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -153,12 +172,14 @@ router.get('/search', auth.requireAuth, async (req, res) => {
 
 router.get('/unmatched-parts', auth.requireAuth, async (req, res) => {
   try {
-    const rows = await Inventory.aggregate([
-      { $match: { ...nonVerificationScanClause(), $or: [{ masterMatch: false }, { isMasterMatched: false }, { warnings: /Part not found in Master Catalogue|Not Found in Master/i }] } },
-      { $group: { _id: '$normalizedPartNumber', partNumber: { $first: '$partNumber' }, scanCount: { $sum: 1 }, lastScanTime: { $max: '$timestamp' } } },
-      { $sort: { lastScanTime: -1 } }
-    ]);
-    return res.json({ success: true, rows: rows.map((row) => ({ partNumber: row.partNumber || row._id, scanCount: row.scanCount, lastScanTime: row.lastScanTime })) });
+    return await sendCachedJson(res, 'search', req.query, async () => {
+      const rows = await Inventory.aggregate([
+        { $match: { ...nonVerificationScanClause(), $or: [{ masterMatch: false }, { isMasterMatched: false }, { warnings: /Part not found in Master Catalogue|Not Found in Master/i }] } },
+        { $group: { _id: '$normalizedPartNumber', partNumber: { $first: '$partNumber' }, scanCount: { $sum: 1 }, lastScanTime: { $max: '$timestamp' } } },
+        { $sort: { lastScanTime: -1 } }
+      ]);
+      return { success: true, rows: rows.map((row) => ({ partNumber: row.partNumber || row._id, scanCount: row.scanCount, lastScanTime: row.lastScanTime })) };
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

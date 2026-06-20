@@ -13,11 +13,28 @@ const auth = require('./auth');
 const { auditWorkflowStatus, closeOtherActiveAudits, multiAuditEnabled, publicAudit, syncDealerWithAudit } = require('../utils/audit');
 const normalizer = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
+const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 const DEALER_LIST_CACHE_MS = 30000;
 let dealerListCache = { expiresAt: 0, dealers: [] };
+
+function invalidateMasterCaches(scope = {}, tags = ['master', 'catalogue', 'search', 'report', 'dashboard', 'dealer', 'bin', 'audit']) {
+  dealerListCache = { expiresAt: 0, dealers: [] };
+  invalidateCache({ tags, scope });
+}
+
+async function cachedMasterResponse(res, namespace, query, builder, options = {}) {
+  const result = await getCachedResponse(namespace, query, builder, options);
+  applyCacheHeaders(res, result);
+  return result;
+}
+
+async function sendCachedJson(res, namespace, query, builder, options = {}) {
+  const result = await cachedMasterResponse(res, namespace, query, builder, options);
+  return res.json(result.data);
+}
 
 function normalizeHeader(value) {
   return normalizer.cleanText(value).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -548,6 +565,7 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, upload.single('file'
     const cleared = (await MasterPart.deleteMany({})).deletedCount || 0;
     const result = await importParts(parts);
     req.io.emit('master:update');
+    invalidateMasterCaches();
     res.json({ success: true, imported: result.successCount, clearedMasterRows: cleared, ...result });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -595,6 +613,7 @@ router.post('/parts/upload', auth.requireAuth, auth.requireAdmin, upload.single(
     const cleared = (await MasterPart.deleteMany({})).deletedCount || 0;
     const result = await importParts(parts);
     req.io.emit('master:update');
+    invalidateMasterCaches();
     res.json({ success: true, clearedMasterRows: cleared, ...result });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -643,6 +662,7 @@ router.post('/parts', auth.requireAuth, auth.requireAdmin, async (req, res) => {
     if (!part) return res.status(400).json({ success: false, message: 'Part number is required' });
     const result = await importParts([part]);
     req.io.emit('master:update');
+    invalidateMasterCaches();
     res.json({ success: true, part, ...result });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -651,62 +671,64 @@ router.post('/parts', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 
 router.get('/parts/suggest', auth.requireAuth, async (req, res) => {
   try {
-    const q = String(req.query.q || '').trim();
-    const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const safePartQ = normalizePartNumber(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const limit = Math.min(Number(req.query.limit || 12), 30);
-    const startsWith = new RegExp(`^${safeQ}`, 'i');
-    const contains = new RegExp(safeQ, 'i');
-    const partContains = new RegExp(safePartQ, 'i');
-    const filter = q
-      ? {
-          $or: [
-            { partNo: partContains },
-            { partNumber: partContains },
-            { normalizedPartNumber: partContains },
-            { partName: contains },
-            { partDescription: contains },
-            { model: contains },
-            { manufacturingYear: contains },
-            { year: contains },
-            { category: contains },
-            { productCategory: contains }
-          ]
-        }
-      : {};
-    if (req.query.dealerCode || req.query.activeDealerId) filter.dealerCode = normalizePart(req.query.dealerCode || req.query.activeDealerId);
-    const catalogueParts = await MasterCatalogue.find(q ? {
-      $or: [
-        { partNumber: partContains },
-        { normalizedPartNumber: partContains },
-        { partDescription: contains },
-        { model: contains },
-        { manufacturingYear: contains },
-        { year: contains },
-        { productCategory: contains },
-        { productGroup: contains }
-      ]
-    } : {})
-      .sort({ partNumber: 1 })
-      .limit(limit * 3)
-      .lean();
-    const parts = catalogueParts.length ? catalogueParts.map(cataloguePayload) : await MasterPart.find(filter)
-      .select('partNo partNumber normalizedPartNumber partName partDescription model year manufacturingYear bin binLocation category productCategory mrp dlc dealerCode openingStockQty quantity qty activeStatus')
-      .sort({ partNo: 1 })
-      .limit(limit * 3)
-      .lean();
-    const formatted = parts
-      .map(publicSuggestion)
-      .sort((a, b) => {
-        const aPart = String(a.partNumber || '');
-        const bPart = String(b.partNumber || '');
-        const aStarts = startsWith.test(aPart);
-        const bStarts = startsWith.test(bPart);
-        if (aStarts !== bStarts) return aStarts ? -1 : 1;
-        return aPart.localeCompare(bPart);
-      })
-      .slice(0, limit);
-    res.json({ success: true, suggestions: formatted, parts: formatted });
+    return await sendCachedJson(res, 'search', req.query, async (normalizedQuery) => {
+      const q = String(normalizedQuery.q || '').trim();
+      const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const safePartQ = normalizePartNumber(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const limit = Math.min(Number(normalizedQuery.limit || 12), 30);
+      const startsWith = new RegExp(`^${safeQ}`, 'i');
+      const contains = new RegExp(safeQ, 'i');
+      const partContains = new RegExp(safePartQ, 'i');
+      const filter = q
+        ? {
+            $or: [
+              { partNo: partContains },
+              { partNumber: partContains },
+              { normalizedPartNumber: partContains },
+              { partName: contains },
+              { partDescription: contains },
+              { model: contains },
+              { manufacturingYear: contains },
+              { year: contains },
+              { category: contains },
+              { productCategory: contains }
+            ]
+          }
+        : {};
+      if (normalizedQuery.dealerCode || normalizedQuery.activeDealerId) filter.dealerCode = normalizePart(normalizedQuery.dealerCode || normalizedQuery.activeDealerId);
+      const catalogueParts = await MasterCatalogue.find(q ? {
+        $or: [
+          { partNumber: partContains },
+          { normalizedPartNumber: partContains },
+          { partDescription: contains },
+          { model: contains },
+          { manufacturingYear: contains },
+          { year: contains },
+          { productCategory: contains },
+          { productGroup: contains }
+        ]
+      } : {})
+        .sort({ partNumber: 1 })
+        .limit(limit * 3)
+        .lean();
+      const parts = catalogueParts.length ? catalogueParts.map(cataloguePayload) : await MasterPart.find(filter)
+        .select('partNo partNumber normalizedPartNumber partName partDescription model year manufacturingYear bin binLocation category productCategory mrp dlc dealerCode openingStockQty quantity qty activeStatus')
+        .sort({ partNo: 1 })
+        .limit(limit * 3)
+        .lean();
+      const formatted = parts
+        .map(publicSuggestion)
+        .sort((a, b) => {
+          const aPart = String(a.partNumber || '');
+          const bPart = String(b.partNumber || '');
+          const aStarts = startsWith.test(aPart);
+          const bStarts = startsWith.test(bPart);
+          if (aStarts !== bStarts) return aStarts ? -1 : 1;
+          return aPart.localeCompare(bPart);
+        })
+        .slice(0, limit);
+      return { success: true, suggestions: formatted, parts: formatted };
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -714,34 +736,36 @@ router.get('/parts/suggest', auth.requireAuth, async (req, res) => {
 
 router.get('/suggestions', auth.requireAuth, async (req, res) => {
   try {
-    const query = cleanQueryText(req.query.query || req.query.q);
-    const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 50);
-    const safeText = escapeRegExp(query);
-    const safePart = escapeRegExp(normalizePartNumber(query));
-    const filter = query ? {
-      $or: [
-        { partNumber: { $regex: safePart, $options: 'i' } },
-        { normalizedPartNumber: { $regex: safePart, $options: 'i' } },
-        { partDescription: { $regex: safeText, $options: 'i' } }
-      ]
-    } : {};
-    const rows = await MasterCatalogue.find(filter)
-      .sort({ partNumber: 1 })
-      .limit(limit * 3)
-      .lean();
-    const startsWith = new RegExp(`^${safePart}`, 'i');
-    const suggestions = rows
-      .map(cataloguePayload)
-      .sort((a, b) => {
-        const aPart = String(a.partNumber || '');
-        const bPart = String(b.partNumber || '');
-        const aStarts = startsWith.test(aPart);
-        const bStarts = startsWith.test(bPart);
-        if (aStarts !== bStarts) return aStarts ? -1 : 1;
-        return aPart.localeCompare(bPart, undefined, { numeric: true });
-      })
-      .slice(0, limit);
-    res.json({ success: true, suggestions, parts: suggestions });
+    return await sendCachedJson(res, 'search', req.query, async (normalizedQuery) => {
+      const query = cleanQueryText(normalizedQuery.query || normalizedQuery.q);
+      const limit = Math.min(Math.max(Number(normalizedQuery.limit || 20), 1), 50);
+      const safeText = escapeRegExp(query);
+      const safePart = escapeRegExp(normalizePartNumber(query));
+      const filter = query ? {
+        $or: [
+          { partNumber: { $regex: safePart, $options: 'i' } },
+          { normalizedPartNumber: { $regex: safePart, $options: 'i' } },
+          { partDescription: { $regex: safeText, $options: 'i' } }
+        ]
+      } : {};
+      const rows = await MasterCatalogue.find(filter)
+        .sort({ partNumber: 1 })
+        .limit(limit * 3)
+        .lean();
+      const startsWith = new RegExp(`^${safePart}`, 'i');
+      const suggestions = rows
+        .map(cataloguePayload)
+        .sort((a, b) => {
+          const aPart = String(a.partNumber || '');
+          const bPart = String(b.partNumber || '');
+          const aStarts = startsWith.test(aPart);
+          const bStarts = startsWith.test(bPart);
+          if (aStarts !== bStarts) return aStarts ? -1 : 1;
+          return aPart.localeCompare(bPart, undefined, { numeric: true });
+        })
+        .slice(0, limit);
+      return { success: true, suggestions, parts: suggestions };
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -749,58 +773,60 @@ router.get('/suggestions', auth.requireAuth, async (req, res) => {
 
 router.get('/filters', auth.requireAuth, async (req, res) => {
   try {
-    const [
-      catalogueCategories,
-      catalogueGroups,
-      catalogueSubGroups,
-      inventoryCategories,
-      inventoryProductCategories,
-      inventoryGroups,
-      inventorySubGroups,
-      masterCategories,
-      masterProductCategories,
-      models,
-      years,
-      groupPairs,
-      totalParts
-    ] = await Promise.all([
-      MasterCatalogue.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
-      MasterCatalogue.distinct('productGroup', { productGroup: { $nin: [null, ''] } }),
-      MasterCatalogue.distinct('partSubGroup', { partSubGroup: { $nin: [null, ''] } }),
-      Inventory.distinct('category', { category: { $nin: [null, ''] } }),
-      Inventory.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
-      Inventory.distinct('productGroup', { productGroup: { $nin: [null, ''] } }),
-      Inventory.distinct('partSubGroup', { partSubGroup: { $nin: [null, ''] } }),
-      MasterPart.distinct('category', { category: { $nin: [null, ''] } }),
-      MasterPart.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
-      MasterCatalogue.distinct('model', { model: { $nin: [null, ''] } }),
-      MasterCatalogue.distinct('year', { year: { $nin: [null, ''] } }),
-      MasterCatalogue.find({ productGroup: { $nin: [null, ''] } }).select('productGroup partSubGroup').lean(),
-      MasterCatalogue.countDocuments({})
-    ]);
-    const cleanList = (items) => Array.from(new Set(items.map((item) => String(item || '').trim()).filter(Boolean)))
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    const groupSubGroups = {};
-    groupPairs.forEach((row) => {
-      const group = String(row.productGroup || '').trim();
-      const subGroup = String(row.partSubGroup || '').trim();
-      if (!group || !subGroup) return;
-      groupSubGroups[group] = groupSubGroups[group] || [];
-      if (!groupSubGroups[group].includes(subGroup)) groupSubGroups[group].push(subGroup);
-    });
-    Object.keys(groupSubGroups).forEach((group) => {
-      groupSubGroups[group] = cleanList(groupSubGroups[group]);
-    });
-    res.json({
-      success: true,
-      categories: cleanList([].concat(catalogueCategories, inventoryCategories, inventoryProductCategories, masterCategories, masterProductCategories).map(normalizeCategory)),
-      groups: cleanList([].concat(catalogueGroups, inventoryGroups)),
-      subGroups: cleanList([].concat(catalogueSubGroups, inventorySubGroups)),
-      groupSubGroups,
-      models: cleanList(models),
-      years: cleanList(years),
-      totalParts,
-      masterCatalogueCount: totalParts
+    return await sendCachedJson(res, 'lookup', req.query, async () => {
+      const [
+        catalogueCategories,
+        catalogueGroups,
+        catalogueSubGroups,
+        inventoryCategories,
+        inventoryProductCategories,
+        inventoryGroups,
+        inventorySubGroups,
+        masterCategories,
+        masterProductCategories,
+        models,
+        years,
+        groupPairs,
+        totalParts
+      ] = await Promise.all([
+        MasterCatalogue.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
+        MasterCatalogue.distinct('productGroup', { productGroup: { $nin: [null, ''] } }),
+        MasterCatalogue.distinct('partSubGroup', { partSubGroup: { $nin: [null, ''] } }),
+        Inventory.distinct('category', { category: { $nin: [null, ''] } }),
+        Inventory.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
+        Inventory.distinct('productGroup', { productGroup: { $nin: [null, ''] } }),
+        Inventory.distinct('partSubGroup', { partSubGroup: { $nin: [null, ''] } }),
+        MasterPart.distinct('category', { category: { $nin: [null, ''] } }),
+        MasterPart.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
+        MasterCatalogue.distinct('model', { model: { $nin: [null, ''] } }),
+        MasterCatalogue.distinct('year', { year: { $nin: [null, ''] } }),
+        MasterCatalogue.find({ productGroup: { $nin: [null, ''] } }).select('productGroup partSubGroup').lean(),
+        MasterCatalogue.countDocuments({})
+      ]);
+      const cleanList = (items) => Array.from(new Set(items.map((item) => String(item || '').trim()).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const groupSubGroups = {};
+      groupPairs.forEach((row) => {
+        const group = String(row.productGroup || '').trim();
+        const subGroup = String(row.partSubGroup || '').trim();
+        if (!group || !subGroup) return;
+        groupSubGroups[group] = groupSubGroups[group] || [];
+        if (!groupSubGroups[group].includes(subGroup)) groupSubGroups[group].push(subGroup);
+      });
+      Object.keys(groupSubGroups).forEach((group) => {
+        groupSubGroups[group] = cleanList(groupSubGroups[group]);
+      });
+      return {
+        success: true,
+        categories: cleanList([].concat(catalogueCategories, inventoryCategories, inventoryProductCategories, masterCategories, masterProductCategories).map(normalizeCategory)),
+        groups: cleanList([].concat(catalogueGroups, inventoryGroups)),
+        subGroups: cleanList([].concat(catalogueSubGroups, inventorySubGroups)),
+        groupSubGroups,
+        models: cleanList(models),
+        years: cleanList(years),
+        totalParts,
+        masterCatalogueCount: totalParts
+      };
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -867,16 +893,18 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
 
 router.get('/categories', auth.requireAuth, async (req, res) => {
   try {
-    const [categories, productCategories, catalogueCategories, inventoryCategories, inventoryProductCategories] = await Promise.all([
-      MasterPart.distinct('category', { category: { $nin: [null, ''] } }),
-      MasterPart.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
-      MasterCatalogue.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
-      Inventory.distinct('category', { category: { $nin: [null, ''] } }),
-      Inventory.distinct('productCategory', { productCategory: { $nin: [null, ''] } })
-    ]);
-    const cleanCategories = Array.from(new Set([].concat(categories, productCategories, catalogueCategories, inventoryCategories, inventoryProductCategories).map(normalizeCategory).filter(Boolean)))
-      .sort((a, b) => a.localeCompare(b));
-    res.json({ success: true, categories: cleanCategories });
+    return await sendCachedJson(res, 'lookup', req.query, async () => {
+      const [categories, productCategories, catalogueCategories, inventoryCategories, inventoryProductCategories] = await Promise.all([
+        MasterPart.distinct('category', { category: { $nin: [null, ''] } }),
+        MasterPart.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
+        MasterCatalogue.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
+        Inventory.distinct('category', { category: { $nin: [null, ''] } }),
+        Inventory.distinct('productCategory', { productCategory: { $nin: [null, ''] } })
+      ]);
+      const cleanCategories = Array.from(new Set([].concat(categories, productCategories, catalogueCategories, inventoryCategories, inventoryProductCategories).map(normalizeCategory).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b));
+      return { success: true, categories: cleanCategories };
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -884,11 +912,13 @@ router.get('/categories', auth.requireAuth, async (req, res) => {
 
 router.get('/parts/categories', auth.requireAuth, async (req, res) => {
   try {
-    const categories = await MasterPart.distinct('category', { category: { $nin: [null, ''] } });
-    const productCategories = await MasterPart.distinct('productCategory', { productCategory: { $nin: [null, ''] } });
-    const cleanCategories = Array.from(new Set(categories.concat(productCategories).map(normalizeCategory).filter(Boolean)))
-      .sort((a, b) => a.localeCompare(b));
-    res.json({ success: true, categories: cleanCategories });
+    return await sendCachedJson(res, 'lookup', req.query, async () => {
+      const categories = await MasterPart.distinct('category', { category: { $nin: [null, ''] } });
+      const productCategories = await MasterPart.distinct('productCategory', { productCategory: { $nin: [null, ''] } });
+      const cleanCategories = Array.from(new Set(categories.concat(productCategories).map(normalizeCategory).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b));
+      return { success: true, categories: cleanCategories };
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -955,6 +985,7 @@ router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) =>
     const dealer = await syncDealerWithAudit(audit);
     if (req.io && !isClosed) req.io.emit('audit:active', publicAudit(audit));
     req.io.emit('dealers:update');
+    invalidateMasterCaches();
     res.json({ success: true, dealer, audit, activeAudit: isClosed ? null : publicAudit(audit) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -978,6 +1009,7 @@ router.delete('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async
     }
 
     req.io.emit('dealers:update');
+    invalidateMasterCaches();
     res.json({
       success: true,
       dealerCode,
@@ -1051,6 +1083,7 @@ router.post('/bins', auth.requireAuth, auth.requireAdmin, async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
     req.io.emit('master:update');
+    invalidateMasterCaches();
     res.json({ success: true, bin });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1066,6 +1099,7 @@ router.delete('/bins/dealer/:dealerCode', auth.requireAuth, auth.requireAdmin, a
       MasterPart.updateMany({ dealerCode }, { $set: { bin: '', binLocation: '' } })
     ]);
     req.io.emit('master:update', { dealerCode, scope: 'bins' });
+    invalidateMasterCaches({ dealerCode });
     res.json({ success: true, dealerCode, deletedCount: result.deletedCount || 0, masterUpdated: masterUpdate.modifiedCount || 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1087,6 +1121,7 @@ router.post('/bins/delete-selected', auth.requireAuth, auth.requireAdmin, async 
       )
     ]);
     req.io.emit('master:update', { dealerCode, scope: 'bins' });
+    invalidateMasterCaches({ dealerCode });
     res.json({ success: true, dealerCode, deletedCount: result.deletedCount || 0, masterUpdated: masterUpdate.modifiedCount || 0, binCodes: uniqueBinCodes });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1107,6 +1142,7 @@ router.delete('/bins/:binCode', auth.requireAuth, auth.requireAdmin, async (req,
       )
     ]);
     req.io.emit('master:update', { dealerCode, scope: 'bins' });
+    invalidateMasterCaches({ dealerCode });
     res.json({ success: true, dealerCode, binCode, deletedCount: result.deletedCount || 0, masterUpdated: masterUpdate.modifiedCount || 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1159,6 +1195,7 @@ router.post('/bins/bulk-sequence', auth.requireAuth, auth.requireAdmin, async (r
     }
 
     req.io.emit('master:update');
+    invalidateMasterCaches();
     res.json({
       success: true,
       createdCount: newBins.length,
@@ -1203,6 +1240,7 @@ router.post('/bins/merge', auth.requireAuth, auth.requireAdmin, async (req, res)
     ]);
 
     req.io.emit('master:update');
+    invalidateMasterCaches();
     req.io.emit('stats:update');
 
     res.json({
@@ -1217,17 +1255,19 @@ router.post('/bins/merge', auth.requireAuth, auth.requireAdmin, async (req, res)
 
 router.get('/search', auth.requireAuth, async (req, res) => {
   try {
-    const page = Math.max(Number(req.query.page || 1), 1);
-    const limit = Math.min(Math.max(Number(req.query.limit || 25), 1), 100);
-    const skip = (page - 1) * limit;
-    const filter = advancedMasterFilter(req.query);
+    return await sendCachedJson(res, 'search', req.query, async (normalizedQuery) => {
+      const page = Math.max(Number(normalizedQuery.page || 1), 1);
+      const limit = Math.min(Math.max(Number(normalizedQuery.limit || 25), 1), 100);
+      const skip = (page - 1) * limit;
+      const filter = advancedMasterFilter(normalizedQuery);
 
-    const [total, parts] = await Promise.all([
-      MasterCatalogue.countDocuments(filter),
-      MasterCatalogue.find(filter).sort({ partNumber: 1 }).skip(skip).limit(limit).lean()
-    ]);
-    const formatted = parts.map(cataloguePayload);
-    res.json({ success: true, parts: formatted, page, limit, total, totalPages: Math.ceil(total / limit) });
+      const [total, parts] = await Promise.all([
+        MasterCatalogue.countDocuments(filter),
+        MasterCatalogue.find(filter).sort({ partNumber: 1 }).skip(skip).limit(limit).lean()
+      ]);
+      const formatted = parts.map(cataloguePayload);
+      return { success: true, parts: formatted, page, limit, total, totalPages: Math.ceil(total / limit) };
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1235,26 +1275,28 @@ router.get('/search', auth.requireAuth, async (req, res) => {
 
 router.get('/parts/search', auth.requireAuth, async (req, res) => {
   try {
-    const q = String(req.query.q || '').trim();
-    const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const limit = Math.min(Number(req.query.limit || 50), 100);
-    const filter = q
-      ? {
-          $or: [
-            { partNo: { $regex: safeQ, $options: 'i' } },
-            { partName: { $regex: safeQ, $options: 'i' } },
-            { partDescription: { $regex: safeQ, $options: 'i' } },
-            { bin: { $regex: safeQ, $options: 'i' } },
-            { category: { $regex: safeQ, $options: 'i' } },
-            { productCategory: { $regex: safeQ, $options: 'i' } }
-          ]
-        }
-      : {};
-    if (req.query.dealerCode || req.query.activeDealerId) filter.dealerCode = normalizePart(req.query.dealerCode || req.query.activeDealerId);
+    return await sendCachedJson(res, 'search', req.query, async (normalizedQuery) => {
+      const q = String(normalizedQuery.q || '').trim();
+      const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const limit = Math.min(Number(normalizedQuery.limit || 50), 100);
+      const filter = q
+        ? {
+            $or: [
+              { partNo: { $regex: safeQ, $options: 'i' } },
+              { partName: { $regex: safeQ, $options: 'i' } },
+              { partDescription: { $regex: safeQ, $options: 'i' } },
+              { bin: { $regex: safeQ, $options: 'i' } },
+              { category: { $regex: safeQ, $options: 'i' } },
+              { productCategory: { $regex: safeQ, $options: 'i' } }
+            ]
+          }
+        : {};
+      if (normalizedQuery.dealerCode || normalizedQuery.activeDealerId) filter.dealerCode = normalizePart(normalizedQuery.dealerCode || normalizedQuery.activeDealerId);
 
-    const parts = await MasterPart.find(filter).sort({ partNo: 1 }).limit(limit).lean();
-    const formattedParts = parts.map(formatPart);
-    res.json({ success: true, parts: formattedParts });
+      const parts = await MasterPart.find(filter).sort({ partNo: 1 }).limit(limit).lean();
+      const formattedParts = parts.map(formatPart);
+      return { success: true, parts: formattedParts };
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1484,6 +1526,7 @@ router.post('/scan-validator/normalize-master', auth.requireAuth, auth.requireAd
     });
     if (operations.length) await MasterPart.bulkWrite(operations, { ordered: false });
     req.io.emit('master:update');
+    invalidateMasterCaches();
     res.json({ success: true, updatedCount: operations.length });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1519,6 +1562,7 @@ router.post('/scan-validator/normalize-scans', auth.requireAuth, auth.requireAdm
     });
     if (operations.length) await Inventory.bulkWrite(operations, { ordered: false });
     req.io.emit('scan:saved');
+    invalidateMasterCaches({}, ['scan', 'report', 'dashboard']);
     res.json({ success: true, updatedCount: operations.length });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

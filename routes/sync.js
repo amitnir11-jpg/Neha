@@ -24,6 +24,7 @@ const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
 const { isDatabaseReady } = require('../services/prisma');
+const { invalidateCache } = require('../utils/safeCache');
 const {
   MISSING_PART_MASTER_PRICE_MESSAGE,
   getPriceFromPartMaster,
@@ -542,6 +543,15 @@ function publicScanRow(scan = {}) {
   return inventory.publicScan ? inventory.publicScan(scan) : scan;
 }
 
+function invalidateScanCaches(scan = {}, extraTags = []) {
+  const dealerCode = upper(scan.dealerCode || '');
+  const auditId = clean(scan.auditId || '');
+  invalidateCache({
+    tags: Array.from(new Set(['scan', 'report', 'dashboard', ...[].concat(extraTags || []).map((tag) => clean(tag)).filter(Boolean)])),
+    scope: dealerCode || auditId ? { dealerCode, auditId } : {}
+  });
+}
+
 function manualDuplicatePayload(existing = {}, requestedQty = 1) {
   if (typeof inventory.manualDuplicatePayload === 'function') {
     return inventory.manualDuplicatePayload(existing, requestedQty);
@@ -575,6 +585,7 @@ async function addFittedQuantity(existing = {}, scan = {}, req = {}) {
   }, { new: true }).lean();
   const publicRow = publicScanRow(updated || existing);
   const io = req.io || (req.app && typeof req.app.get === 'function' ? req.app.get('io') : null);
+  invalidateScanCaches(publicRow);
   if (io) {
     io.emit('scan:saved', publicRow);
     io.emit('inventory:update', { reason: 'fitted-quantity-added', scan: publicRow, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: new Date() });
@@ -1379,6 +1390,7 @@ async function saveNormalizedScan(scan, req) {
 
   logSync('DB insert success', { id: doc._id, deviceId: doc.deviceId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, syncKey: doc.syncKey });
   logSync('saved valid scan', { id: doc._id, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'mobile' });
+  invalidateScanCaches(doc);
   await emitEnterpriseRealtime(req.io || req.app.get('io'), [doc]);
   return { status: 'synced', scan: doc, error: '' };
 }

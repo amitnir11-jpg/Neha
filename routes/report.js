@@ -21,7 +21,7 @@ const { auditStockStatus, calculateInventoryValue, decorateScanValue, scanValueR
 const { getActiveAudit } = require('../utils/audit');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
-const { getCachedReport } = require('../utils/reportCache');
+const { applyCacheHeaders, getCachedReport, getCachedResponse } = require('../utils/reportCache');
 const { assertDlcReconciliation, calculateStockValuation, stockValuationTotals } = require('../utils/stockValuation');
 const { resolvePartPricing } = require('../utils/partPricing');
 const { canonicalizePartCategory, resolveCategoryFromMaster, categoryCountMap } = require('../utils/categoryResolver');
@@ -46,6 +46,15 @@ const REPORT_SCAN_SELECT = [
 async function cachedReport(namespace, query, builder) {
   const result = await getCachedReport(namespace, query, builder);
   return result.data;
+}
+
+async function sendCachedDownload(res, namespace, query, builder, options = {}) {
+  const result = await getCachedResponse(namespace, query, builder, options);
+  applyCacheHeaders(res, result);
+  if (options.contentType) res.setHeader('Content-Type', options.contentType);
+  if (options.contentDisposition) res.setHeader('Content-Disposition', options.contentDisposition);
+  const output = result.data;
+  return res.send(Buffer.isBuffer(output) ? output : Buffer.from(output));
 }
 
 async function resolveReportAuditQuery(query = {}) {
@@ -692,14 +701,22 @@ function selectedReportColumns(columns = [], query = {}) {
 }
 
 async function sendSelectedColumnsWorkbook(res, filename, sheetName, columns, rows, query = {}) {
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Daksh Inventory v2';
-  workbook.created = new Date();
-  addSheet(workbook, sheetName.slice(0, 31), selectedReportColumns(columns, query), rows);
-  const buffer = await workbook.xlsx.writeBuffer();
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\.xlsx$/i, '')}.xlsx"`);
-  return res.send(Buffer.from(buffer));
+  return sendCachedDownload(res, 'report-download', {
+    ...query,
+    downloadType: 'selected-columns',
+    filename: filename.replace(/\.xlsx$/i, ''),
+    sheetName: sheetName.slice(0, 31),
+    selectedColumns: requestedReportColumnKeys(query).join('|')
+  }, async () => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Daksh Inventory v2';
+    workbook.created = new Date();
+    addSheet(workbook, sheetName.slice(0, 31), selectedReportColumns(columns, query), rows);
+    return Buffer.from(await workbook.xlsx.writeBuffer());
+  }, {
+    contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    contentDisposition: `attachment; filename="${filename.replace(/\.xlsx$/i, '')}.xlsx"`
+  });
 }
 
 async function buildLegacyReportData(query = {}) {
@@ -3757,15 +3774,21 @@ function addMovementWiseStockAnalysisSheet(workbook, data = {}) {
   return sheet;
 }
 
-async function sendMovementWiseStockAnalysisWorkbook(res, data = {}) {
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Daksh Inventory v2';
-  workbook.created = new Date();
-  addMovementWiseStockAnalysisSheet(workbook, data);
-  const buffer = await workbook.xlsx.writeBuffer();
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', 'attachment; filename="Movement_Wise_Stock_Analysis_Report.xlsx"');
-  return res.send(Buffer.from(buffer));
+async function sendMovementWiseStockAnalysisWorkbook(res, data = {}, query = {}) {
+  return sendCachedDownload(res, 'report-download', {
+    ...query,
+    reportType: 'movement_wise_stock_analysis',
+    downloadType: 'xlsx'
+  }, async () => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Daksh Inventory v2';
+    workbook.created = new Date();
+    addMovementWiseStockAnalysisSheet(workbook, data);
+    return Buffer.from(await workbook.xlsx.writeBuffer());
+  }, {
+    contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    contentDisposition: 'attachment; filename="Movement_Wise_Stock_Analysis_Report.xlsx"'
+  });
 }
 
 router.get('/movement_wise_stock_analysis', auth.requireAuth, async (req, res) => {
@@ -3774,7 +3797,7 @@ router.get('/movement_wise_stock_analysis', auth.requireAuth, async (req, res) =
     const data = await reconciliationRoute.buildMovementAnalysisReport(reportQuery);
     const reconciliation = await validateValuationReports(reportQuery);
     const columns = movementWiseStockAnalysisColumns();
-    if (req.query.format === 'excel') return sendMovementWiseStockAnalysisWorkbook(res, data);
+    if (req.query.format === 'excel') return sendMovementWiseStockAnalysisWorkbook(res, data, reportQuery);
     return res.json({
       success: true,
       type: 'movement_wise_stock_analysis',
@@ -3798,14 +3821,19 @@ router.get('/stock-summary', auth.requireAuth, async (req, res) => {
     const data = await cachedBuildStockSummaryReport(reportQuery);
     const reconciliation = await validateValuationReports(reportQuery, { stockSummary: data });
     if (req.query.format === 'excel') {
-      const workbook = new ExcelJS.Workbook();
-      workbook.creator = 'Daksh Inventory v2';
-      workbook.created = new Date();
-      addStockSummarySheet(workbook, data);
-      const buffer = await workbook.xlsx.writeBuffer();
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', 'attachment; filename="Stock_Summary.xlsx"');
-      return res.send(Buffer.from(buffer));
+      return sendCachedDownload(res, 'report-download', {
+        reportType: 'stock-summary',
+        downloadType: 'excel'
+      }, async () => {
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'Daksh Inventory v2';
+        workbook.created = new Date();
+        addStockSummarySheet(workbook, data);
+        return Buffer.from(await workbook.xlsx.writeBuffer());
+      }, {
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        contentDisposition: 'attachment; filename="Stock_Summary.xlsx"'
+      });
     }
     return res.json({
       success: true,
@@ -3832,22 +3860,30 @@ router.get('/category-wise-variance-summary', auth.requireAuth, async (req, res)
     if (req.query.format === 'excel') {
       if (hasRequestedReportColumns(req.query)) {
         const exportRows = data.rows.concat([{ productCategory: 'Grand Total', action: '', ...data.grandTotal, rowType: 'grandTotal' }]);
-        return sendSelectedColumnsWorkbook(res, 'Category_Wise_Variance_Summary.xlsx', 'Category Wise Variance Summary', categoryVarianceColumns(), exportRows, req.query);
+        return sendSelectedColumnsWorkbook(res, 'Category_Wise_Variance_Summary.xlsx', 'Category Wise Variance Summary', categoryVarianceColumns(), exportRows, reportQuery);
       }
-      const workbook = new ExcelJS.Workbook();
-      workbook.creator = 'Daksh Inventory v2';
-      workbook.created = new Date();
-      addCategoryWiseVarianceSheet(workbook, data);
-      const buffer = await workbook.xlsx.writeBuffer();
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', 'attachment; filename="Category_Wise_Variance_Summary.xlsx"');
-      return res.send(Buffer.from(buffer));
+      return sendCachedDownload(res, 'report-download', {
+        reportType: 'category-wise-variance-summary',
+        downloadType: 'excel'
+      }, async () => {
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'Daksh Inventory v2';
+        workbook.created = new Date();
+        addCategoryWiseVarianceSheet(workbook, data);
+        return Buffer.from(await workbook.xlsx.writeBuffer());
+      }, {
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        contentDisposition: 'attachment; filename="Category_Wise_Variance_Summary.xlsx"'
+      });
     }
     if (req.query.format === 'pdf') {
-      const pdf = buildCategoryWiseVariancePdfBuffer(data);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'attachment; filename="Category_Wise_Variance_Summary.pdf"');
-      return res.send(pdf);
+      return sendCachedDownload(res, 'report-download', {
+        reportType: 'category-wise-variance-summary',
+        downloadType: 'pdf'
+      }, async () => buildCategoryWiseVariancePdfBuffer(data), {
+        contentType: 'application/pdf',
+        contentDisposition: 'attachment; filename="Category_Wise_Variance_Summary.pdf"'
+      });
     }
     return res.json({
       success: true,
@@ -3876,20 +3912,28 @@ router.get('/partwise-inventory-audit', auth.requireAuth, async (req, res) => {
       if (hasRequestedReportColumns(reportQuery)) {
         return sendSelectedColumnsWorkbook(res, 'Partwise_Inventory_Audit_Report.xlsx', 'Partwise Inventory Audit', data.columns, data.rows, reportQuery);
       }
-      const workbook = new ExcelJS.Workbook();
-      workbook.creator = 'Daksh Inventory v2';
-      workbook.created = new Date();
-      addPartwiseInventoryAuditSheet(workbook, data);
-      const buffer = await workbook.xlsx.writeBuffer();
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', 'attachment; filename="Partwise_Inventory_Audit_Report.xlsx"');
-      return res.send(Buffer.from(buffer));
+      return sendCachedDownload(res, 'report-download', {
+        reportType: 'partwise-inventory-audit',
+        downloadType: 'excel'
+      }, async () => {
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'Daksh Inventory v2';
+        workbook.created = new Date();
+        addPartwiseInventoryAuditSheet(workbook, data);
+        return Buffer.from(await workbook.xlsx.writeBuffer());
+      }, {
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        contentDisposition: 'attachment; filename="Partwise_Inventory_Audit_Report.xlsx"'
+      });
     }
     if (req.query.format === 'pdf') {
-      const pdf = buildPartwiseInventoryAuditPdfBuffer(data);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'attachment; filename="Partwise_Inventory_Audit_Report.pdf"');
-      return res.send(pdf);
+      return sendCachedDownload(res, 'report-download', {
+        reportType: 'partwise-inventory-audit',
+        downloadType: 'pdf'
+      }, async () => buildPartwiseInventoryAuditPdfBuffer(data), {
+        contentType: 'application/pdf',
+        contentDisposition: 'attachment; filename="Partwise_Inventory_Audit_Report.pdf"'
+      });
     }
     return res.json({
       success: true,
@@ -3923,10 +3967,14 @@ async function handlePartwiseVarianceReport(req, res, varianceType, title, type 
       return sendSelectedColumnsWorkbook(res, `${fileBase}.xlsx`, title, data.columns, data.rows, reportQuery);
     }
     if (req.query.format === 'pdf') {
-      const pdf = buildPartwiseInventoryAuditPdfBuffer({ ...data, summary: { ...data.summary, title } });
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${fileBase}.pdf"`);
-      return res.send(pdf);
+      return sendCachedDownload(res, 'report-download', {
+        reportType: type || varianceType,
+        downloadType: 'pdf',
+        title
+      }, async () => buildPartwiseInventoryAuditPdfBuffer({ ...data, summary: { ...data.summary, title } }), {
+        contentType: 'application/pdf',
+        contentDisposition: `attachment; filename="${fileBase}.pdf"`
+      });
     }
     return res.json({
       success: true,
@@ -4099,11 +4147,16 @@ router.get('/parts-inventory-refresh-template', auth.requireAuth, async (req, re
 router.get('/full', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
-    const { workbook } = await createWorkbook(reportQuery);
-    const buffer = await workbook.xlsx.writeBuffer();
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Inventory_Full_Report.xlsx"');
-    res.send(Buffer.from(buffer));
+    return sendCachedDownload(res, 'report-download', {
+      reportType: 'full',
+      downloadType: 'excel'
+    }, async () => {
+      const { workbook } = await createWorkbook(reportQuery);
+      return Buffer.from(await workbook.xlsx.writeBuffer());
+    }, {
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      contentDisposition: 'attachment; filename="Daksh_Inventory_Full_Report.xlsx"'
+    });
   } catch (error) {
     res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
   }
@@ -4113,9 +4166,13 @@ router.get('/full.csv', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
     const data = await cachedBuildReportData(reportQuery);
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Inventory_Full_Report.csv"');
-    res.send(finalReportCsv(data.finalRows || []));
+    return sendCachedDownload(res, 'report-download', {
+      reportType: 'full',
+      downloadType: 'csv'
+    }, async () => finalReportCsv(data.finalRows || []), {
+      contentType: 'text/csv; charset=utf-8',
+      contentDisposition: 'attachment; filename="Daksh_Inventory_Full_Report.csv"'
+    });
   } catch (error) {
     res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
   }
@@ -4125,41 +4182,46 @@ router.get('/pdf', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
     const data = await cachedBuildReportData(reportQuery);
-    const doc = new jsPDF({ orientation: 'landscape' });
-    doc.setFontSize(15);
-    doc.text('Daksh Inventory v2 - Inventory Audit Report', 14, 15);
-    doc.setFontSize(9);
-    doc.text(`Generated: ${formatIstDateTime(new Date())}`, 14, 22);
-    const body = data.finalRows.slice(0, 80).map((row) => [
-      row.partNumber || row.partNo,
-      row.partDescription || row.partName,
-      displayCategory(row.productCategory || row.category || ''),
-      row.mrp ?? '',
-      row.dlc ?? '',
-      row.pricingStatus || '',
-      row.pricingSource || '',
-      row.latestMrpEffectiveDate || '',
-      row.systemQty,
-      row.physicalQty,
-      row.fittedQty || 0,
-      row.varianceQty ?? row.differenceQty ?? 0,
-      row.physicalValueOnMrp ?? row.physicalMrpValue ?? 0,
-      row.systemValueOnMrp ?? row.systemMrpValue ?? 0,
-      row.varianceValueOnMrp ?? row.varianceOnMrp ?? row.differenceMrpValue ?? 0,
-      row.inventoryRiskStatus || row.status,
-      row.actionRemarks || row.action || ''
-    ]);
-    autoTable(doc, {
-      head: [['Part Number', 'Part Description', 'Product Category', 'MRP', 'DLC', 'Pricing Status', 'Pricing Source', 'Latest MRP Effective Date', 'System Qty', 'Physical Qty', 'Fitted Qty', 'Variance Qty', 'Physical Value on MRP', 'System Value on MRP', 'Variance Value on MRP', 'Inventory Risk Status', 'Action / Remarks']],
-      body,
-      startY: 28,
-      styles: { fontSize: 7, cellPadding: 2 },
-      headStyles: { fillColor: [21, 58, 91] }
+    return sendCachedDownload(res, 'report-download', {
+      reportType: 'full',
+      downloadType: 'pdf'
+    }, async () => {
+      const doc = new jsPDF({ orientation: 'landscape' });
+      doc.setFontSize(15);
+      doc.text('Daksh Inventory v2 - Inventory Audit Report', 14, 15);
+      doc.setFontSize(9);
+      doc.text(`Generated: ${formatIstDateTime(new Date())}`, 14, 22);
+      const body = data.finalRows.slice(0, 80).map((row) => [
+        row.partNumber || row.partNo,
+        row.partDescription || row.partName,
+        displayCategory(row.productCategory || row.category || ''),
+        row.mrp ?? '',
+        row.dlc ?? '',
+        row.pricingStatus || '',
+        row.pricingSource || '',
+        row.latestMrpEffectiveDate || '',
+        row.systemQty,
+        row.physicalQty,
+        row.fittedQty || 0,
+        row.varianceQty ?? row.differenceQty ?? 0,
+        row.physicalValueOnMrp ?? row.physicalMrpValue ?? 0,
+        row.systemValueOnMrp ?? row.systemMrpValue ?? 0,
+        row.varianceValueOnMrp ?? row.varianceOnMrp ?? row.differenceMrpValue ?? 0,
+        row.inventoryRiskStatus || row.status,
+        row.actionRemarks || row.action || ''
+      ]);
+      autoTable(doc, {
+        head: [['Part Number', 'Part Description', 'Product Category', 'MRP', 'DLC', 'Pricing Status', 'Pricing Source', 'Latest MRP Effective Date', 'System Qty', 'Physical Qty', 'Fitted Qty', 'Variance Qty', 'Physical Value on MRP', 'System Value on MRP', 'Variance Value on MRP', 'Inventory Risk Status', 'Action / Remarks']],
+        body,
+        startY: 28,
+        styles: { fontSize: 7, cellPadding: 2 },
+        headStyles: { fillColor: [21, 58, 91] }
+      });
+      return Buffer.from(doc.output('arraybuffer'));
+    }, {
+      contentType: 'application/pdf',
+      contentDisposition: 'attachment; filename="Daksh_Inventory_Report.pdf"'
     });
-    const pdf = Buffer.from(doc.output('arraybuffer'));
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Inventory_Report.pdf"');
-    res.send(pdf);
   } catch (error) {
     res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
   }
