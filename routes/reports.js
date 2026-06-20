@@ -61,6 +61,7 @@ function duplicateReportFilter(query = {}) {
   if (query.dealerCode) filter.dealerCode = upper(query.dealerCode);
   if (query.auditId) filter.auditId = clean(query.auditId);
   if (query.partNumber) filter.partNumber = { $regex: clean(query.partNumber), $options: 'i' };
+  if (query.upiCode || query.upiNo || query.upiId) filter.upiCode = { $regex: clean(query.upiCode || query.upiNo || query.upiId), $options: 'i' };
   if (query.scanType) filter.scanType = upper(query.scanType) === 'VERIFICATION' ? '__NO_VERIFICATION_TRANSACTIONS__' : upper(query.scanType);
   else filter.scanType = { $ne: 'VERIFICATION' };
   if (query.bin || query.binLocation) filter.binLocation = regex(query.bin || query.binLocation);
@@ -86,32 +87,60 @@ function requireDealerSelection(res) {
 
 async function duplicateReportRows(query = {}) {
   const rows = await DuplicateScanLog.find(duplicateReportFilter(query)).sort({ timestamp: -1, createdAt: -1 }).limit(5000).lean();
-  return rows.map((row) => ({
-    time: row.timestamp || row.createdAt,
-    dealerCode: row.dealerCode || '',
-    dealerName: row.dealerName || '',
-    duplicateRawBarcodeUpi: row.rawBarcode || row.rawQR || row.rawUpi || row.rawScan || '',
-    partNumber: row.partNumber || '',
-    scanType: row.scanType || '',
-    binLocation: row.binLocation || '',
-    deviceId: row.deviceId || '',
-    deviceName: row.deviceName || '',
-    userId: row.userId || row.loginId || '',
-    userName: row.userName || row.duplicateScannedBy || '',
-    firstScannedBy: row.firstScannedBy || '',
-    firstScanTime: row.firstScanTime || '',
-    firstDevice: row.firstDeviceName || row.firstDeviceId || '',
-    firstBin: row.firstBin || '',
-    duplicateScannedBy: row.duplicateScannedBy || row.userName || '',
-    duplicateScanTime: row.duplicateScanTime || row.timestamp || row.createdAt,
-    duplicateDevice: row.duplicateDeviceName || row.duplicateDeviceId || row.deviceName || row.deviceId || '',
-    duplicateDeviceName: row.duplicateDeviceName || '',
-    duplicateDeviceId: row.duplicateDeviceId || '',
-    duplicateBin: row.duplicateBin || row.binLocation || '',
-    existingScanId: row.existingScanId || '',
-    reason: row.reason || 'Duplicate QR/UPI',
-    rawScan: row.rawScan || ''
-  }));
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const upiCode = clean(row.upiCode || row.upiNo || row.rawBarcode || row.rawQR || row.rawUpi || row.rawScan || row.rawScanString);
+    const key = [upper(row.dealerCode || ''), clean(row.auditId || ''), upiCode || clean(row.partNumber || ''), clean(row.scanType || '')].join('|');
+    const duplicateTime = row.duplicateScanTime || row.lastDuplicateTime || row.timestamp || row.createdAt;
+    const next = grouped.get(key) || {
+      time: duplicateTime,
+      scanTime: duplicateTime,
+      lastDuplicateTime: duplicateTime,
+      duplicateCount: 0,
+      dealerCode: row.dealerCode || '',
+      dealerName: row.dealerName || '',
+      upiCode,
+      partNumber: row.partNumber || '',
+      scanMode: row.scanType || '',
+      binLocation: row.binLocation || '',
+      deviceId: row.deviceId || '',
+      deviceName: row.deviceName || '',
+      userId: row.userId || row.loginId || '',
+      userName: row.userName || row.duplicateScannedBy || '',
+      existingStatus: row.existingStatus || row.scanStatus || row.status || row.syncStatus || '',
+      reason: row.reason || 'Duplicate UPI',
+      firstScannedBy: row.firstScannedBy || '',
+      firstScanTime: row.firstScanTime || '',
+      firstDevice: row.firstDeviceName || row.firstDeviceId || '',
+      firstBin: row.firstBin || '',
+      duplicateScannedBy: row.duplicateScannedBy || row.userName || '',
+      duplicateDevice: row.duplicateDeviceName || row.duplicateDeviceId || row.deviceName || row.deviceId || '',
+      duplicateDeviceName: row.duplicateDeviceName || '',
+      duplicateDeviceId: row.duplicateDeviceId || '',
+      duplicateBin: row.duplicateBin || row.binLocation || '',
+      existingScanId: row.existingScanId || '',
+      rawScan: row.rawScan || ''
+    };
+    next.duplicateCount += Number(row.duplicateCount || 1) || 1;
+    if (!next.scanTime || new Date(duplicateTime) < new Date(next.scanTime)) next.scanTime = duplicateTime;
+    if (!next.time || new Date(duplicateTime) < new Date(next.time)) next.time = duplicateTime;
+    if (!next.lastDuplicateTime || new Date(duplicateTime) > new Date(next.lastDuplicateTime)) next.lastDuplicateTime = duplicateTime;
+    next.userName = row.duplicateScannedBy || row.userName || row.userId || next.userName;
+    next.deviceName = row.duplicateDeviceName || row.deviceName || row.duplicateDevice || next.deviceName;
+    next.deviceId = row.duplicateDeviceId || row.deviceId || row.duplicateDevice || next.deviceId;
+    next.scanMode = row.scanType || next.scanMode;
+    next.existingStatus = row.existingStatus || next.existingStatus;
+    grouped.set(key, next);
+  });
+  return Array.from(grouped.values())
+    .sort((a, b) => new Date(b.lastDuplicateTime || b.scanTime || 0) - new Date(a.lastDuplicateTime || a.scanTime || 0))
+    .map((row) => ({
+      ...row,
+      duplicateRawBarcodeUpi: row.upiCode || row.rawScan || '',
+      duplicateScanTime: row.scanTime || row.time,
+      duplicateCount: Number(row.duplicateCount || 0),
+      lastDuplicateTime: row.lastDuplicateTime || row.scanTime || row.time
+    }));
 }
 
 function rejectedReportFilter(query = {}) {
@@ -325,18 +354,16 @@ const DEVICE_COLUMNS = [
 ];
 
 const DUPLICATE_COLUMNS = [
-  { header: 'DUPLICATE TIME', key: 'duplicateScanTime', width: 22 },
-  { header: 'DUPLICATE RAW QR / UPI', key: 'duplicateRawBarcodeUpi', width: 34 },
+  { header: 'SCAN TIME', key: 'scanTime', width: 22 },
+  { header: 'UPI', key: 'upiCode', width: 28 },
   { header: 'PART NUMBER', key: 'partNumber', width: 18 },
-  { header: 'FIRST SCANNED BY', key: 'firstScannedBy', width: 22 },
-  { header: 'FIRST SCAN TIME', key: 'firstScanTime', width: 22 },
-  { header: 'FIRST DEVICE', key: 'firstDevice', width: 24 },
-  { header: 'FIRST BIN', key: 'firstBin', width: 16 },
-  { header: 'DUPLICATE SCANNED BY', key: 'duplicateScannedBy', width: 24 },
-  { header: 'DUPLICATE DEVICE', key: 'duplicateDevice', width: 24 },
-  { header: 'DUPLICATE BIN', key: 'duplicateBin', width: 16 },
-  { header: 'SCAN TYPE', key: 'scanType', width: 16 },
   { header: 'DEALER CODE', key: 'dealerCode', width: 16 },
+  { header: 'USER', key: 'userName', width: 22 },
+  { header: 'DEVICE', key: 'deviceName', width: 24 },
+  { header: 'SCAN MODE', key: 'scanMode', width: 16 },
+  { header: 'EXISTING STATUS', key: 'existingStatus', width: 18 },
+  { header: 'DUPLICATE COUNT', key: 'duplicateCount', width: 16 },
+  { header: 'LAST DUPLICATE TIME', key: 'lastDuplicateTime', width: 22 },
   { header: 'REASON', key: 'reason', width: 24 }
 ];
 
@@ -528,9 +555,9 @@ function scanRegisterInventoryRow(scan) {
 
 function scanRegisterDuplicateRow(row) {
   return {
-    scanTime: row.duplicateScanTime || row.time,
+    scanTime: row.scanTime || row.duplicateScanTime || row.time,
     scanStatus: 'Duplicate',
-    scanType: row.scanType || '',
+    scanType: row.scanMode || row.scanType || '',
     dealerCode: row.dealerCode || '',
     dealerName: row.dealerName || '',
     partNumber: row.partNumber || '',
@@ -542,14 +569,18 @@ function scanRegisterDuplicateRow(row) {
     finalInventoryValue: '',
     binLocation: row.duplicateBin || row.binLocation || '',
     fittedStatus: 'Not Fitted',
-    rawQrUpi: row.duplicateRawBarcodeUpi || row.rawScan || '',
-    userName: row.duplicateScannedBy || row.userName || row.userId || '',
-    deviceName: row.duplicateDeviceName || row.deviceName || row.duplicateDevice || '',
-    deviceId: row.duplicateDeviceId || row.deviceId || row.duplicateDevice || '',
+    rawQrUpi: row.duplicateRawBarcodeUpi || row.upiCode || row.rawScan || '',
+    upiCode: row.upiCode || '',
+    userName: row.userName || row.duplicateScannedBy || row.userId || '',
+    deviceName: row.deviceName || row.duplicateDeviceName || row.duplicateDevice || '',
+    deviceId: row.deviceId || row.duplicateDeviceId || row.duplicateDevice || '',
     entryMode: registerEntryMode(row),
     syncStatus: 'duplicate',
     duplicateStatus: 'Duplicate',
-    remarks: row.reason || 'Duplicate QR/UPI'
+    existingStatus: row.existingStatus || '',
+    duplicateCount: Number(row.duplicateCount || 0),
+    lastDuplicateTime: row.lastDuplicateTime || row.scanTime || row.time,
+    remarks: row.reason || 'Duplicate UPI'
   };
 }
 

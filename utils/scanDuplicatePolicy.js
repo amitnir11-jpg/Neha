@@ -81,23 +81,28 @@ function globalUpiKey(input = {}) {
   return scope ? createHash('sha256').update(scope).digest('hex') : '';
 }
 
-function globalUpiDuplicateFilter(input = {}) {
-  if (scanType(input) === 'VERIFICATION') return null;
-  const key = clean(input.globalUpiKey || globalUpiKey(input));
+function activeUpiDuplicateFilter(input = {}) {
   const upi = canonicalUpiValue(input);
-  if (!key && !upi) return null;
   const dealerCode = scanDealerCode(input);
   const auditId = scanAuditId(input);
+  const globalKey = clean(input.globalUpiKey || globalUpiKey(input));
+  if (!upi && !globalKey) return null;
   const terms = [];
-  if (key) terms.push({ globalUpiKey: key });
-  if (upi) terms.push({ upiNo: upi }, { upiId: upi });
+  if (upi) terms.push({ upiCode: upi }, { upiNo: upi }, { upiId: upi });
+  if (globalKey) terms.push({ globalUpiKey: globalKey });
   const filter = {
-    ...countedScanClause(),
-    $or: terms
+    activeInventory: { $ne: false },
+    $and: [{ $or: [{ movementType: 'INWARD' }, { scanType: 'INWARD' }, { type: 'INWARD' }] }],
+    $or: terms.length ? terms : [{ upiCode: '__NO_UPI__' }]
   };
   if (dealerCode) filter.dealerCode = dealerCode;
   if (auditId) filter.auditId = auditId;
   return filter;
+}
+
+function globalUpiDuplicateFilter(input = {}) {
+  if (scanType(input) !== 'INWARD') return null;
+  return activeUpiDuplicateFilter(input);
 }
 
 function duplicateUpiMessage(existing = {}) {
@@ -173,25 +178,13 @@ function identityDuplicateFilter(input = {}) {
   const auditId = scanAuditId(input);
   const type = scanType(input);
   if (type === 'VERIFICATION') return null;
-  const raw = rawScanText(input);
-  const upi = upper(input.upiNo || input.upiId || input.upiID || '');
   const id = scanIdentityId(input);
   const syncKey = scanSyncKey(input);
-  const hash = clean(input.rawUpiHash || rawUpiHash(input));
-  const qrFingerprint = clean(input.qrFingerprint);
   const terms = [];
   if (id) terms.push({ uniqueScanId: id }, { scanId: id }, { clientScanId: id });
   if (syncKey) terms.push({ syncKey }, { clientSyncKey: syncKey });
-  if (hash) terms.push({ rawUpiHash: hash });
-  if (qrFingerprint) terms.push({ qrFingerprint });
-  if (raw) terms.push({ rawScan: raw }, { rawScanString: raw }, { rawBarcode: raw }, { rawQR: raw }, { rawUpi: raw });
-  if (upi) terms.push({ upiNo: upi }, { upiId: upi });
   if (!terms.length) return null;
-  const filter = {
-    ...countedScanClause(),
-    $and: [{ $or: scanTypeClauses(type) }],
-    $or: terms
-  };
+  const filter = { $or: terms };
   if (dealerCode) filter.dealerCode = dealerCode;
   if (auditId) filter.auditId = auditId;
   return filter;
@@ -201,6 +194,7 @@ module.exports = {
   COUNTED_SCAN_STATUSES,
   EXCLUDED_SYNC_STATUSES,
   DUPLICATE_PART_MESSAGE,
+  activeUpiDuplicateFilter,
   businessDuplicateFilter,
   businessDuplicateKey,
   canonicalUpiValue,

@@ -519,13 +519,18 @@ model DuplicateScanLog {
   uniqueScanId         String?
   scanId               String?
   globalUpiKey         String?
+  upiCode              String?
   qrFingerprint        String?
   upiNo                String?
   rawUpiHash           String?
   bin                  String?
   binLocation          String?
   scanType             String?
+  movementType         String?
   type                 String?
+  existingStatus       String?
+  duplicateCount       Int?      @default(1)
+  lastDuplicateTime    DateTime?
   syncStatus           String?
   scanStatus           String?
   status               String?
@@ -547,6 +552,9 @@ model DuplicateScanLog {
 
   @@index([dealerCode])
   @@index([auditId])
+  @@index([upiCode])
+  @@index([movementType])
+  @@index([scanStatus])
   @@index([timestamp])
   @@map("duplicatescanlogs")
 }
@@ -561,13 +569,17 @@ model FailedScan {
   uniqueScanId         String?
   scanId               String?
   globalUpiKey         String?
+  upiCode              String?
   qrFingerprint        String?
   upiNo                String?
   rawUpiHash           String?
   bin                  String?
   binLocation          String?
   scanType             String?
+  movementType         String?
   type                 String?
+  activeInventory      Boolean?  @default(false)
+  remainingQty         Float?    @default(0)
   syncStatus           String?
   scanStatus           String?
   status               String?
@@ -601,12 +613,14 @@ model Inventory {
   uniqueScanId         String?
   scanId               String?
   globalUpiKey         String?
+  upiCode              String?
   qrFingerprint        String?
   upiNo                String?
   rawUpiHash           String?
   bin                  String?
   binLocation          String?
   scanType             String?
+  movementType         String?
   type                 String?
   syncStatus           String?
   scanStatus           String?
@@ -624,6 +638,8 @@ model Inventory {
   scanTime             DateTime?
   time                 DateTime?
   dateTime             DateTime?
+  activeInventory      Boolean?  @default(false)
+  remainingQty         Float?    @default(0)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -631,6 +647,7 @@ model Inventory {
   @@index([partNumber])
   @@index([normalizedPartNumber])
   @@index([upiNo])
+  @@index([upiCode])
   @@index([binLocation])
   @@index([createdAt])
   @@index([dealerCode, auditId, timestamp])
@@ -638,6 +655,9 @@ model Inventory {
   @@index([dealerCode, auditId, scanType, timestamp])
   @@index([dealerCode, partNumber])
   @@index([dealerCode, upiNo])
+  @@index([dealerCode, auditId, upiCode])
+  @@index([dealerCode, auditId, movementType])
+  @@index([dealerCode, auditId, activeInventory])
   @@index([dealerCode, binLocation])
   @@index([dealerCode, scanStatus, createdAt])
   @@index([syncStatus])
@@ -659,13 +679,17 @@ model MasterCatalogue {
   uniqueScanId         String?
   scanId               String?
   globalUpiKey         String?
+  upiCode              String?
   qrFingerprint        String?
   upiNo                String?
   rawUpiHash           String?
   bin                  String?
   binLocation          String?
   scanType             String?
+  movementType         String?
   type                 String?
+  activeInventory      Boolean?  @default(false)
+  remainingQty         Float?    @default(0)
   syncStatus           String?
   scanStatus           String?
   status               String?
@@ -952,12 +976,14 @@ model Scan {
   uniqueScanId         String?
   scanId               String?
   globalUpiKey         String?
+  upiCode              String?
   qrFingerprint        String?
   upiNo                String?
   rawUpiHash           String?
   bin                  String?
   binLocation          String?
   scanType             String?
+  movementType         String?
   type                 String?
   syncStatus           String?
   scanStatus           String?
@@ -975,6 +1001,8 @@ model Scan {
   scanTime             DateTime?
   time                 DateTime?
   dateTime             DateTime?
+  activeInventory      Boolean?  @default(false)
+  remainingQty         Float?    @default(0)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -982,6 +1010,7 @@ model Scan {
   @@index([partNumber])
   @@index([normalizedPartNumber])
   @@index([upiNo])
+  @@index([upiCode])
   @@index([binLocation])
   @@index([scanType])
   @@index([scanStatus])
@@ -990,6 +1019,9 @@ model Scan {
   @@index([dealerCode, partNumber])
   @@index([dealerCode, scanType, createdAt])
   @@index([dealerCode, scanStatus, createdAt])
+  @@index([dealerCode, auditId, upiCode])
+  @@index([dealerCode, auditId, movementType])
+  @@index([dealerCode, auditId, activeInventory])
   @@map("scans")
 }
 

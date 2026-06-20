@@ -33,8 +33,8 @@ const MOBILE_SCAN_SELECT = [
   'uniqueScanId scanId syncKey qrFingerprint rawUpiHash',
   'part partNumber normalizedPartNumber partName partDescription category productCategory productGroup partSubGroup model year manufacturingYear',
   'qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue finalMRP currentCatalogueMRP currentCatalogueDLC dlc',
-  'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin regdNo jobCardNo isFitted fittedQty fittedLocation status type scanType',
-  'upiId upiNo dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi',
+  'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin regdNo jobCardNo isFitted fittedQty fittedLocation status type scanType movementType activeInventory remainingQty',
+  'upiId upiNo upiCode dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi',
   'deviceId deviceName userId loginId staffName userName role timestamp scanTime createdAt',
   'syncStatus synced isSynced scanStatus source scanMode warnings remarks masterFound masterMatch isMasterMatched'
 ].join(' ');
@@ -270,7 +270,11 @@ function mobileItem(scan) {
     userId: scan.userId || scan.loginId || '',
     userName: scan.userName || scan.staffName || scan.loginId || '',
     role: scan.role || '',
+    upiCode: scan.upiCode || scan.upiNo || scan.upiId || '',
     scanType: scan.scanType || scan.type || 'INWARD',
+    movementType: scan.movementType || scan.scanType || scan.type || 'INWARD',
+    activeInventory: scan.activeInventory !== undefined ? Boolean(scan.activeInventory) : (scan.scanType || scan.type) === 'INWARD',
+    remainingQty: Number(scan.remainingQty !== undefined ? scan.remainingQty : Number(scan.qty || scan.quantity || 0)),
     source: scan.source || '',
     rawUpi: scan.rawUpi || scan.rawScan || scan.rawScanString || '',
     rawScan: scan.rawScan || scan.rawScanString || scan.rawUpi || '',

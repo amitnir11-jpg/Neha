@@ -2,6 +2,7 @@ const { createModel } = require('./prismaModel');
 const { cleanText, normalizePartNumber } = require('../utils/normalize');
 const { canonicalizePartCategory } = require('../utils/categoryResolver');
 const { globalUpiKey, rawUpiHash } = require('../utils/scanDuplicatePolicy');
+const { activeInventoryValue, movementTypeValue, remainingQtyValue, upiCodeValue } = require('../utils/inventoryMovementState');
 
 function trim(value) {
   return String(value || '').trim();
@@ -146,7 +147,8 @@ function prepareInventory(data) {
     ['productCategory', 'category'],
     ['manufacturingYear', 'year'],
     ['timestamp', 'scanTime'],
-    ['upiNo', 'upiId']
+    ['upiNo', 'upiId'],
+    ['upiCode', 'upiNo']
   ]);
   if (!data.uniqueScanId) data.uniqueScanId = data.scanId || cryptoRandom();
   if (!data.scanId) data.scanId = data.uniqueScanId;
@@ -184,6 +186,10 @@ function prepareInventory(data) {
   data.masterMatch = Boolean(data.masterMatch || data.isMasterMatched);
   data.isMasterMatched = Boolean(data.isMasterMatched || data.masterMatch);
   data.masterFound = Boolean(data.masterFound || data.masterMatch || data.isMasterMatched);
+  data.movementType = movementTypeValue(data);
+  data.upiCode = upiCodeValue(data);
+  data.remainingQty = remainingQtyValue(data);
+  data.activeInventory = activeInventoryValue(data);
   if (!data.timestamp) data.timestamp = new Date();
   if (!data.scanTime) data.scanTime = data.timestamp;
   if (!data.serverReceivedAt) data.serverReceivedAt = new Date();
@@ -223,13 +229,17 @@ function model(name, delegate, tableName, extra = {}) {
 }
 
 const inventoryIndexes = [
-  [{ globalUpiKey: 1 }, { name: 'global_upi_key_unique', unique: true, partialFilterExpression: { globalUpiKey: { $type: 'string', $gt: '' } } }],
-  [{ dealerCode: 1, auditId: 1, upiNo: 1 }, { name: 'dealer_audit_upi_unique', unique: true, partialFilterExpression: { dealerCode: { $type: 'string', $gt: '' }, auditId: { $type: 'string', $gt: '' }, upiNo: { $type: 'string', $gt: '' }, scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] }, syncStatus: 'synced' } }],
+  [{ upiCode: 1 }, { name: 'inventory_upi_code_idx' }],
+  [{ globalUpiKey: 1 }, { name: 'inventory_global_upi_key_idx' }],
+  [{ dealerCode: 1, auditId: 1, upiCode: 1, movementType: 1, activeInventory: 1 }, { name: 'inventory_active_upi_lookup_idx' }],
+  [{ dealerCode: 1, auditId: 1, upiNo: 1 }, { name: 'inventory_upi_scope_lookup_idx' }],
   [{ dealerCode: 1, auditId: 1, partNumber: 1 }, { name: 'scan_part_scope_lookup' }],
   [{ dealerCode: 1, auditId: 1, timestamp: -1, createdAt: -1 }, { name: 'scan_history_scope_time' }]
 ];
 
 const scanIndexes = [
+  [{ upiCode: 1 }, { name: 'scan_upi_code_idx' }],
+  [{ dealerCode: 1, auditId: 1, upiCode: 1, movementType: 1, activeInventory: 1 }, { name: 'scan_active_upi_lookup_idx' }],
   [{ dealerCode: 1, auditId: 1, partNumber: 1 }, { name: 'scan_part_scope_lookup' }]
 ];
 

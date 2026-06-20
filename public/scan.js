@@ -717,6 +717,23 @@
     return clean(row.syncStatus || row.status || 'pending').toLowerCase();
   }
 
+  function rowMovementType(row = {}) {
+    return upper(row.movementType || row.scanType || row.type || state.mode);
+  }
+
+  function rowUpiCode(row = {}) {
+    return upper(row.upiCode || row.upiNo || row.upiId || extractUpiIdFromText(row) || '');
+  }
+
+  function rowBlocksDuplicate(row = {}) {
+    const status = rowStatus(row);
+    if (row.serverDuplicateState === 'free') return false;
+    if (['duplicate', 'failed-duplicate', 'deleted', 'rejected'].includes(status)) return false;
+    if (row.activeInventory === false) return false;
+    if (Number(row.remainingQty ?? row.qty ?? row.quantity ?? 0) <= 0) return false;
+    return rowMovementType(row) === 'INWARD';
+  }
+
   function rowPart(row = {}) {
     return clean(row.partNumber || row.normalizedPartNumber || parsePartCandidate(row.rawScanString || row.rawScan || '') || row.rawScanString || row.rawScan || '-');
   }
@@ -741,11 +758,12 @@
   }
 
   function localDuplicateForRecord(record = {}) {
-    const key = scanIdentityKey(record);
+    const key = rowUpiCode(record) || extractUpiIdFromText(record) || scanIdentityKey(record);
     if (!key) return null;
     return sessionRows().find((row) => {
+      if (!rowBlocksDuplicate(row)) return false;
       if (clean(row.scanId || row.uniqueScanId) === clean(record.scanId || record.uniqueScanId)) return false;
-      return scanIdentityKey(row) === key;
+      return rowUpiCode(row) === key || scanIdentityKey(row) === scanIdentityKey(record);
     }) || null;
   }
 
@@ -1346,6 +1364,7 @@
       dealerCode: activeDealerCode(),
       dealerName: activeDealerName(),
       auditId: activeAuditId(),
+      upiCode: extractUpiIdFromText({ rawScanString: rawText, rawScan: rawText }) || '',
       deviceId: deviceId(),
       deviceName: clean(state.session?.deviceName || DEFAULT_DEVICE_NAME),
       userId: clean(state.session?.user?.id || ''),
@@ -1355,6 +1374,9 @@
       role: clean(state.session?.user?.role || state.session?.role || ''),
       scanType,
       type: scanType,
+      movementType: scanType,
+      activeInventory: scanType === 'INWARD',
+      remainingQty: scanType === 'INWARD' ? Math.abs(Number(qty || 1) || 1) : 0,
       scanSource: sourceType,
       source: { source: sourceType, scanSource: sourceType },
       entryMode: manual ? 'manual' : 'camera',
@@ -1599,6 +1621,7 @@
       rawBarcode: row.rawBarcode || row.rawScanString || row.rawUpi || '',
       rawUpi: row.rawUpi || row.rawScanString || row.rawScan || '',
       rawQR: row.rawQR || row.rawScanString || row.rawScan || '',
+      upiCode: row.upiCode || row.upiNo || row.upiId || extractUpiIdFromText(row) || '',
       partNumber: row.partNumber || row.part || '',
       normalizedPartNumber: row.normalizedPartNumber || row.partNumber || row.part || '',
       part: row.part || row.partNumber || '',
@@ -1621,6 +1644,9 @@
       role: row.role || '',
       scanType: row.scanType || row.type || currentScanType(),
       type: row.type || row.scanType || currentScanType(),
+      movementType: row.movementType || row.scanType || row.type || currentScanType(),
+      activeInventory: row.activeInventory !== undefined ? Boolean(row.activeInventory) : (row.scanType || row.type || currentScanType()) === 'INWARD',
+      remainingQty: row.remainingQty !== undefined ? row.remainingQty : (row.scanType || row.type || currentScanType()) === 'INWARD' ? (Number(row.qty ?? row.quantity ?? 1) || 1) : 0,
       scanSource: row.scanSource || 'mobile',
       source: row.source || { source: row.scanSource || 'mobile', scanSource: row.scanSource || 'mobile' },
       entryMode: row.entryMode || 'camera',
@@ -1689,6 +1715,8 @@
       status: 'duplicate',
       syncStatus: 'duplicate',
       syncError: duplicateMessage,
+      serverDuplicateState: 'duplicate',
+      serverDuplicateCheckedAt: nowIso(),
       retryCount: Number(source.retryCount || 0),
       serverAck: existing || source
     };
@@ -1700,10 +1728,35 @@
     showDuplicateOnce(next, existing || next, duplicateMessage);
   }
 
+  async function clearStaleDuplicateMarks(record = {}) {
+    const upiCode = rowUpiCode(record);
+    if (!upiCode) return 0;
+    const dealerCode = activeDealerCode();
+    const auditId = activeAuditId();
+    const rows = await getAllRecords().catch(() => []);
+    const matchingRows = rows.filter((row) => {
+      if (rowUpiCode(row) !== upiCode) return false;
+      if (dealerCode && upper(row.dealerCode || '') !== dealerCode) return false;
+      if (auditId && clean(row.auditId || '') !== auditId) return false;
+      return true;
+    });
+    if (!matchingRows.length) return 0;
+    const checkedAt = nowIso();
+    for (const row of matchingRows) {
+      await putRecord({
+        ...row,
+        serverDuplicateState: 'free',
+        serverDuplicateCheckedAt: checkedAt
+      });
+    }
+    state.allRows = await getAllRecords().catch(() => []);
+    renderAll();
+    return matchingRows.length;
+  }
+
   async function checkBackendDuplicateBeforeSync(record = {}) {
     if (!navigator.onLine || !state.session?.token) {
-      scheduleSync();
-      return;
+      return { checkedOnline: false, duplicate: false, existing: null, message: '', cleared: 0 };
     }
     try {
       const data = await api('/api/scans/duplicate-check', {
@@ -1712,19 +1765,27 @@
         timeoutMs: 10000
       });
       const latest = await getRecord(record.scanId).catch(() => null);
-      if (!latest || !['pending', 'failed'].includes(rowStatus(latest))) return;
+      if (!latest || !['pending', 'failed'].includes(rowStatus(latest))) {
+        const existing = data?.existing || data?.scan || null;
+        const message = clean(data?.message || duplicateScanMessage(existing || latest || record));
+        const cleared = data && !data.duplicate ? await clearStaleDuplicateMarks(record).catch(() => 0) : 0;
+        return { checkedOnline: true, duplicate: Boolean(data && data.duplicate), existing, message, cleared };
+      }
       if (data && data.duplicate) {
         const existing = data.existing || data.scan || {};
-        await markDuplicateRecord(latest, existing, clean(data.message) || duplicateScanMessage(existing || latest));
-        return;
+        const message = clean(data.message) || duplicateScanMessage(existing || latest || record);
+        await markDuplicateRecord(latest, existing, message);
+        return { checkedOnline: true, duplicate: true, existing, message, cleared: 0 };
       }
+      const cleared = await clearStaleDuplicateMarks(latest || record).catch(() => 0);
+      return { checkedOnline: true, duplicate: false, existing: null, message: '', cleared };
     } catch (error) {
       if (authExpired(error)) {
         handleAuthExpired(error);
-        return;
+        return { checkedOnline: false, duplicate: false, existing: null, message: '', cleared: 0 };
       }
+      return { checkedOnline: false, duplicate: false, existing: null, message: clean(error?.message || ''), cleared: 0 };
     }
-    scheduleSync();
   }
 
   async function refreshHealth() {
@@ -2022,6 +2083,20 @@
       partNumber: partCandidate,
       binLocation: requiresBin() ? loadActiveBin() : ''
     });
+    const liveDuplicate = await checkBackendDuplicateBeforeSync(record);
+    if (liveDuplicate?.duplicate) {
+      const existing = liveDuplicate.existing || record;
+      const message = liveDuplicate.message || duplicateScanMessage(existing);
+      updateLastScan({
+        ...existing,
+        status: 'duplicate',
+        syncStatus: 'duplicate',
+        syncError: message
+      });
+      cameraState('Duplicate blocked');
+      showDuplicateOnce(record, existing, message);
+      return;
+    }
     const localDuplicate = localDuplicateForRecord(record);
     if (localDuplicate) {
       const message = duplicateScanMessage(localDuplicate);
@@ -2430,6 +2505,19 @@
       jobCardNo
     });
 
+    const liveDuplicate = await checkBackendDuplicateBeforeSync(record);
+    if (liveDuplicate?.duplicate) {
+      const existing = liveDuplicate.existing || record;
+      const message = liveDuplicate.message || duplicateScanMessage(existing);
+      updateLastScan({
+        ...existing,
+        status: 'duplicate',
+        syncStatus: 'duplicate',
+        syncError: message
+      });
+      showDuplicateOnce(record, existing, message);
+      return;
+    }
     const localDuplicate = localDuplicateForRecord(record);
     if (localDuplicate) {
       const message = duplicateScanMessage(localDuplicate);

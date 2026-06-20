@@ -26,6 +26,13 @@ const { canonicalizePartCategory, resolveCategoryFromMaster } = require('../util
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { reportTotals } = require('../utils/reportTotals');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
+const {
+  activeInventoryValue,
+  movementTypeValue,
+  recomputeUpiInventoryState,
+  remainingQtyValue,
+  upiCodeValue
+} = require('../utils/inventoryMovementState');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
 const {
   MASTER_PRICE_SOURCE,
@@ -210,22 +217,64 @@ function scanTimestamp(item = {}) {
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
+function inventoryMovementType(input = {}) {
+  return movementTypeValue(input);
+}
+
+function inventoryUpiCode(input = {}) {
+  return upiCodeValue({
+    ...input,
+    upiCode: input.upiCode || input.upiNo || input.upiId || input.upi || '',
+    upiNo: input.upiCode || input.upiNo || input.upiId || input.upi || ''
+  });
+}
+
+function inventoryActiveState(input = {}) {
+  const movementType = inventoryMovementType(input);
+  if (movementType !== 'INWARD') return false;
+  return activeInventoryValue({
+    ...input,
+    movementType,
+    scanType: input.scanType || input.type || movementType,
+    remainingQty: input.remainingQty !== undefined ? input.remainingQty : input.qty !== undefined ? input.qty : input.quantity
+  });
+}
+
+async function refreshInventoryUpiState(scan = {}) {
+  const scope = {
+    dealerCode: scan.dealerCode || '',
+    auditId: scan.auditId || '',
+    upiCode: scan.upiCode || scan.upiNo || scan.upiId || ''
+  };
+  return recomputeUpiInventoryState(Inventory, scope);
+}
+
+async function refreshInventoryUpiScopes(rows = []) {
+  const scopes = new Map();
+  rows.forEach((row) => {
+    const scope = {
+      dealerCode: row.dealerCode || '',
+      auditId: row.auditId || '',
+      upiCode: row.upiCode || row.upiNo || row.upiId || ''
+    };
+    const key = [normalizeDealerCode(scope.dealerCode), clean(scope.auditId), inventoryUpiCode(scope)].join('|');
+    if (key && key.replace(/\|/g, '')) scopes.set(key, scope);
+  });
+  for (const scope of scopes.values()) {
+    await refreshInventoryUpiState(scope).catch(() => undefined);
+  }
+}
+
 function duplicateScanFilter(uniqueScanId, qrFingerprint, dealerCode = '', rawScan = '', upiNo = '', binLocation = '', auditId = '', userKey = '', scanType = '') {
   const terms = [];
-  const raw = String(rawScan || '').trim();
-  const upi = upper(upiNo);
   const dealer = normalizeDealerCode(dealerCode);
   const audit = String(auditId || '').trim();
   const type = upper(scanType);
-  if (raw) terms.push({ rawScan: raw }, { rawScanString: raw }, { rawBarcode: raw }, { rawQR: raw }, { rawUpi: raw });
-  if (upi) terms.push({ upiNo: upi }, { upiId: upi });
-  if (qrFingerprint) terms.push({ qrFingerprint });
-  if (!terms.length && uniqueScanId) terms.push({ uniqueScanId: String(uniqueScanId).trim() }, { scanId: String(uniqueScanId).trim() });
+  const scanKey = String(uniqueScanId || '').trim();
+  if (scanKey) terms.push({ uniqueScanId: scanKey }, { scanId: scanKey }, { syncKey: scanKey });
   if (!terms.length) return null;
   const filter = {
-    scanStatus: { $in: acceptedStatuses() },
-    syncStatus: 'synced',
-    isDuplicate: { $ne: true },
+    scanStatus: { $ne: 'deleted' },
     $or: terms
   };
   if (dealer) filter.dealerCode = dealer;
@@ -240,6 +289,7 @@ function duplicateLookupPayload(input = {}) {
   const auditId = String(input.auditId || '').trim();
   const scanType = normalizeScanType(input.scanType || input.type || 'INWARD');
   const rawScan = String(input.rawScan || input.rawScanString || input.rawBarcode || input.rawQR || input.rawUpi || '').trim();
+  const upiId = String(input.upiId || input.upiNo || input.upiCode || rawScan || '').trim();
   const rawUpiHash = duplicatePolicy.rawUpiHash({
     ...input,
     partNumber,
@@ -250,6 +300,13 @@ function duplicateLookupPayload(input = {}) {
   });
   const globalUpiKey = duplicatePolicy.globalUpiKey({
     ...input,
+    rawScanString: rawScan
+  });
+  const upiCode = inventoryUpiCode({
+    ...input,
+    upiCode: input.upiCode || upiId || rawScan,
+    upiNo: input.upiNo || upiId || rawScan,
+    upiId: input.upiId || upiId || rawScan,
     rawScanString: rawScan
   });
   return {
@@ -264,39 +321,33 @@ function duplicateLookupPayload(input = {}) {
     rawScan,
     rawScanString: rawScan,
     rawUpiHash,
-    globalUpiKey
+    globalUpiKey,
+    upiCode,
+    movementType: scanType,
+    activeInventory: scanType === 'INWARD'
   };
 }
 
 async function findBackendDuplicate(input = {}, options = {}) {
   const payload = duplicateLookupPayload(input);
   if (payload.scanType === 'VERIFICATION') return null;
-  const globalFilter = duplicatePolicy.globalUpiDuplicateFilter(payload);
-  const globalDuplicate = globalFilter ? await Inventory.findOne(globalFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
-  if (globalDuplicate) {
+  const activeFilter = payload.scanType === 'INWARD' ? duplicatePolicy.activeUpiDuplicateFilter(payload) : null;
+  const activeDuplicate = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  if (activeDuplicate) {
     return {
-      existing: globalDuplicate,
+      existing: activeDuplicate,
       upiDuplicate: true,
-      reason: 'Global duplicate UPI',
-      message: duplicatePolicy.duplicateUpiMessage(globalDuplicate)
+      reason: 'Active inward duplicate UPI',
+      message: duplicatePolicy.duplicateUpiMessage(activeDuplicate)
     };
   }
   const identityFilter = duplicatePolicy.identityDuplicateFilter(payload);
-  const businessFilter = options.skipBusinessRule ? null : duplicatePolicy.businessDuplicateFilter(payload);
   const existing = identityFilter ? await Inventory.findOne(identityFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
   if (existing) {
     return {
       existing,
-      reason: 'Duplicate exact UPI/barcode or scan id',
-      message: 'Duplicate exact UPI/barcode already scanned.'
-    };
-  }
-  const businessDuplicate = businessFilter ? await Inventory.findOne(businessFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
-  if (businessDuplicate) {
-    return {
-      existing: businessDuplicate,
-      reason: duplicatePolicy.DUPLICATE_PART_MESSAGE,
-      message: duplicatePolicy.DUPLICATE_PART_MESSAGE
+      reason: 'Duplicate exact scan request',
+      message: 'Duplicate scan request already processed.'
     };
   }
   return null;
@@ -1041,6 +1092,15 @@ async function logDuplicateScan(input = {}, existing = {}, reason = 'Duplicate s
   try {
     const raw = rawIdentity(input) || rawIdentity(existing);
     const now = new Date();
+    const upiCode = inventoryUpiCode(input) || inventoryUpiCode(existing);
+    const existingStatus = String(existing.scanStatus || existing.status || existing.syncStatus || '').trim();
+    const duplicateCount = upiCode
+      ? await DuplicateScanLog.countDocuments({
+        dealerCode: normalizeDealerCode(input.dealerCode || existing.dealerCode || ''),
+        auditId: String(input.auditId || existing.auditId || '').trim(),
+        upiCode
+      })
+      : 0;
     await DuplicateScanLog.create({
       scanId: String(input.scanId || input.uniqueScanId || ''),
       uniqueScanId: String(input.uniqueScanId || input.scanId || ''),
@@ -1049,8 +1109,13 @@ async function logDuplicateScan(input = {}, existing = {}, reason = 'Duplicate s
       partNumber: normalizePartNumber(input.partNumber || input.part || existing.partNumber || existing.part || ''),
       dealerCode: normalizeDealerCode(input.dealerCode || existing.dealerCode || ''),
       auditId: String(input.auditId || existing.auditId || ''),
+      upiCode,
       binLocation: String(input.binLocation || input.bin || existing.binLocation || existing.bin || '').trim().toUpperCase(),
       scanType: upper(input.scanType || input.type || existing.scanType || existing.type || ''),
+      movementType: inventoryMovementType(input || existing),
+      existingStatus,
+      duplicateCount: duplicateCount + 1,
+      lastDuplicateTime: now,
       deviceId: String(input.deviceId || existing.deviceId || ''),
       deviceName: String(input.deviceName || existing.deviceName || ''),
       userId: String(input.userId || existing.userId || ''),
@@ -1101,8 +1166,9 @@ function publicScan(scan = {}) {
     uniqueScanId: scan.uniqueScanId || scan.scanId || String(scan._id || ''),
     qrFingerprint: scan.qrFingerprint || '',
     syncKey: scan.syncKey || '',
+    upiCode: scan.upiCode || scan.upiNo || scan.upiId || '',
     upiId: scan.upiId || '',
-    upiNo: scan.upiNo || '',
+    upiNo: scan.upiNo || scan.upiCode || scan.upiId || '',
     rawUpi: rawScan,
     rawScan,
     rawScanString: rawScan,
@@ -1146,6 +1212,9 @@ function publicScan(scan = {}) {
     userId: scan.userId || '',
     userName: scan.userName || scan.staffName || scan.loginId || '',
     role: scan.role || '',
+    movementType: scan.movementType || inventoryMovementType(scan),
+    activeInventory: scan.activeInventory !== undefined ? Boolean(scan.activeInventory) : inventoryActiveState(scan),
+    remainingQty: remainingQtyValue(scan),
     scanStatus: scan.scanStatus || (scan.scanType === 'OUTWARD' || scan.type === 'OUTWARD' ? 'OUTWARD_DONE' : 'ACCEPTED'),
     syncStatus,
     synced: syncStatus === 'synced' || scan.synced === true,
@@ -1855,21 +1924,6 @@ async function updateScanDetails(req, res) {
     }
     const masterPrice = master ? await getMasterPrice(partNumber, scan.dealerCode, master) : null;
     if (masterPriceMissing(masterPrice)) return missingMasterPriceResponse(res, partNumber);
-    if (partChanged) {
-      const duplicateFilter = duplicatePolicy.businessDuplicateFilter({
-        ...scan,
-        partNumber,
-        normalizedPartNumber: partNumber,
-        scanType
-      });
-      const duplicate = duplicateFilter
-        ? await Inventory.findOne({ ...duplicateFilter, _id: { $ne: scan._id } }).lean()
-        : null;
-      if (duplicate) {
-        return res.status(409).json({ success: false, duplicate: true, message: duplicatePolicy.DUPLICATE_PART_MESSAGE });
-      }
-    }
-
     const now = new Date();
     const priceFields = valuationFields({ masterPrice, master, qty });
     const update = {
@@ -1952,6 +2006,7 @@ async function updateScanDetails(req, res) {
 
     const publicRow = publicScan(updated);
     invalidateInventoryCaches(scanDashboardScope(publicRow), ['price']);
+    await refreshInventoryUpiState(publicRow).catch(() => undefined);
     if (req.io) {
       req.io.emit('scan:saved', publicRow);
       req.io.emit('inventory:update', { reason: 'scan-details-update', scan: publicRow, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: now });
@@ -2053,13 +2108,22 @@ async function saveScanRequest(req, res) {
       binSelectionMode = 'AUTO';
       stockDeductedFromBin = detected.binLocation;
     }
-    const upiId = extractUpiId(req.body, parsed);
-    const upiNo = upiId;
     const rawPartOnlyManualEntry = sourceLooksManual(req.body)
       && rawScanInput
       && explicitPartInput
       && normalizePartNumber(rawScanInput) === normalizePartNumber(explicitPartInput);
     const rawScanText = rawPartOnlyManualEntry ? '' : String(rawScanInput || parsed.rawScan || '');
+    const upiId = extractUpiId(req.body, parsed);
+    const upiNo = upiId;
+    const upiCode = inventoryUpiCode({
+      ...req.body,
+      upiCode: upiNo,
+      upiNo,
+      upiId,
+      rawScanString: rawScanText,
+      rawScan: rawScanText
+    });
+    const movementType = inventoryMovementType({ scanType: type, type });
     const entrySource = normalizeSource(
       firstValue(req.body, ['entryMode', 'scanMode', 'scanSource', 'source']),
       rawScanText || upiId ? 'barcode' : 'manual'
@@ -2120,7 +2184,7 @@ async function saveScanRequest(req, res) {
       userName: requestUser.userName || requestUser.staffName
     }) : '';
     const finalQrFingerprint = type === 'FITTED' ? '' : (type === 'OUTWARD' && qrFingerprint ? `OUTWARD:${qrFingerprint}` : qrFingerprint);
-    const duplicateQuery = type === 'FITTED' ? null : duplicateScanFilter(uniqueScanId, finalQrFingerprint, dealerCode, rawScanText, upiNo, binLocation, auditId, duplicateUserKey, type);
+    const duplicateQuery = duplicateScanFilter(uniqueScanId, finalQrFingerprint, dealerCode, rawScanText, upiNo, binLocation, auditId, duplicateUserKey, type);
     let existing = null;
     let duplicateReason = '';
     let duplicateMessage = '';
@@ -2141,16 +2205,10 @@ async function saveScanRequest(req, res) {
     }
     if (!existing && type === 'FITTED' && regdNo && jobCardNo) {
       existing = await Inventory.findOne(fittedIdentityFilter({ dealerCode, partNumber: part, regdNo, jobCardNo, auditId })).lean();
-    } else if (!existing && type === 'OUTWARD') {
-      existing = rawScanText ? await Inventory.findOne(outwardDoneFilter(rawScanText, dealerCode, auditId)).lean() : null;
-      if (existing) {
-        duplicateReason = 'Duplicate QR/UPI already outwarded';
-        duplicateMessage = 'This QR/UPI is already outwarded and cannot be outwarded again.';
-      }
     } else if (!existing) {
       existing = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
     }
-    if (!existing && type !== 'FITTED') {
+    if (!existing && type === 'INWARD') {
       const backendDuplicate = await findBackendDuplicate({
         ...req.body,
         uniqueScanId,
@@ -2175,10 +2233,23 @@ async function saveScanRequest(req, res) {
         upiDuplicate = Boolean(backendDuplicate.upiDuplicate);
       }
     }
-    if (existing && globalUpiKey && duplicatePolicy.globalUpiKey(existing) === globalUpiKey) {
-      upiDuplicate = true;
-      duplicateReason = 'Global duplicate UPI';
-      duplicateMessage = duplicatePolicy.duplicateUpiMessage(existing);
+    if (!upiDuplicate && existing && movementType === 'INWARD') {
+      const activeFilter = duplicatePolicy.activeUpiDuplicateFilter({
+        dealerCode,
+        auditId,
+        upiCode,
+        upiNo,
+        upiId,
+        rawScanString: rawScanText,
+        rawScan: rawScanText
+      });
+      const activeExisting = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+      if (activeExisting) {
+        existing = activeExisting;
+        upiDuplicate = true;
+        duplicateReason = 'Active inward duplicate UPI';
+        duplicateMessage = duplicatePolicy.duplicateUpiMessage(activeExisting);
+      }
     }
     if (existing) {
       if (manualBinDuplicate) {
@@ -2414,21 +2485,25 @@ async function saveScanRequest(req, res) {
       pricePeriodStatus: valueFields.pricePeriodStatus,
       dlc: valueFields.currentCatalogueDLC || valueFields.dlc || 0,
       dlc: finalDlc,
+      upiCode,
       bin: binLocation,
       binLocation,
       autoDetectedBin,
       binSelectionMode,
       regdNo,
       jobCardNo,
+      movementType,
+      activeInventory: type === 'INWARD',
+      remainingQty: type === 'INWARD' ? qty : 0,
       isFitted: type === 'FITTED',
       fittedQty: type === 'FITTED' ? qty : 0,
       fittedLocation: type === 'FITTED' ? 'VEHICLE' : '',
-      status: type === 'FITTED' ? 'FITTED_ON_VEHICLE' : '',
+      status: type === 'FITTED' ? 'FITTED_ON_VEHICLE' : type === 'DAMAGE' ? 'DAMAGE_STOCK' : '',
       stockDeductedFromBin,
       type,
       scanType: type,
       upiId,
-      upiNo,
+      upiNo: upiCode || upiNo,
       dealerCode,
       dealerName: dealer ? dealer.dealerName : String(req.body.dealerName || ''),
       auditId,
@@ -2519,7 +2594,7 @@ async function saveScanRequest(req, res) {
           duplicate: true,
           upiDuplicate,
           message: upiDuplicate ? duplicatePolicy.duplicateUpiMessage(duplicate) : duplicatePolicy.DUPLICATE_PART_MESSAGE,
-          reason: upiDuplicate ? 'Global duplicate UPI' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
+          reason: upiDuplicate ? 'Active inward duplicate UPI' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
           scan: duplicate
         });
       }
@@ -2542,6 +2617,7 @@ async function saveScanRequest(req, res) {
     scanDebug('SAVED_VALID_SCAN', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode });
     scanDebug("Matched category:", scan.category || '');
     scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
+    await refreshInventoryUpiState(scan).catch(() => undefined);
     emitScanUpdate(req, scan).catch((error) => console.warn('[MANUAL SCAN] realtime refresh failed', error.message));
     res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
   } catch (error) {
@@ -3134,8 +3210,8 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
       } catch (error) {
         if (isDuplicateKeyError(error)) {
           skipped += 1;
-          const globalFilter = duplicatePolicy.globalUpiDuplicateFilter(item);
-          const existing = globalFilter ? await Inventory.findOne(globalFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+          const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(item);
+          const existing = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
           failed.push({
             message: existing ? duplicatePolicy.duplicateUpiMessage(existing) : 'Duplicate scan skipped',
             duplicate: true,
@@ -3472,7 +3548,9 @@ router.post('/deduplicate', auth.requireAuth, auth.requireAdmin, async (req, res
       { $match: { count: { $gt: 1 } } }
     ]);
     const deleteIds = duplicates.flatMap((item) => item.ids.slice(1));
+    const deleteRows = deleteIds.length ? await Inventory.find({ _id: { $in: deleteIds } }).lean() : [];
     const result = deleteIds.length ? await Inventory.deleteMany({ _id: { $in: deleteIds } }) : { deletedCount: 0 };
+    await refreshInventoryUpiScopes(deleteRows);
     invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
     req.io.emit('stats:update');
@@ -3505,7 +3583,9 @@ router.post('/move-not-in-master-to-rejected', auth.requireAuth, auth.requireAdm
         movedIds.push(scan._id);
       }
     }
+    const deleteRows = movedIds.length ? await Inventory.find({ _id: { $in: movedIds } }).lean() : [];
     const deleteResult = movedIds.length ? await Inventory.deleteMany({ _id: { $in: movedIds } }) : { deletedCount: 0 };
+    await refreshInventoryUpiScopes(deleteRows);
     invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
     req.io.emit('scan:saved');
@@ -3558,6 +3638,7 @@ router.post('/delete-selected', auth.requireAuth, auth.requireAdmin, async (req,
       })));
     }
     const result = await Inventory.deleteMany({ _id: { $in: ids } });
+    await refreshInventoryUpiScopes(rows);
     invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
     req.io.emit('stats:update');
@@ -3604,11 +3685,13 @@ router.post('/delete-all', auth.requireAuth, auth.requireAdmin, async (req, res)
       return res.status(400).json({ success: false, message: 'Invalid delete scope' });
     }
 
+    const rows = await Inventory.find(filter).lean();
     const result = await Inventory.deleteMany(filter);
     let duplicateLogsDeleted = 0;
     if (scope === 'dealer' || scope === 'date') {
       duplicateLogsDeleted = (await DuplicateScanLog.deleteMany(filter)).deletedCount || 0;
     }
+    await refreshInventoryUpiScopes(rows);
     invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
     req.io.emit('stats:update');
