@@ -3597,34 +3597,7 @@ function addStockSummarySheet(workbook, data) {
     setFill(rowNumber, 12, 12, isTotal ? fills.total : fills.net, { bold: isTotal });
   });
 
-  const footerStart = dataStartRow + rows.length + 1;
-  const footer = data.sections.footer || {};
-  const footerRows = [
-    ['Damaged Items Value( Considered Value)', footer.damagedItemsValue || 0, 'damage'],
-    ['Manual Contribution', footer.manualContribution || '', 'normal'],
-    ['Total Short Value', footer.totalShortValue || 0, 'short'],
-    ['Total Excess Value', footer.totalExcessValue || 0, 'excess'],
-    ['Net Diff', footer.netDiff || 0, 'net'],
-    ['Undefined Items Dead Line', footer.undefinedItemsDeadline || '', 'normal'],
-    ['Damaged items dead line', footer.damagedItemsDeadline || '', 'normal']
-  ];
-  footerRows.forEach(([label, value, kind], index) => {
-    const rowNumber = footerStart + index;
-    sheet.mergeCells(rowNumber, 1, rowNumber, 4);
-    sheet.mergeCells(rowNumber, 5, rowNumber, 7);
-    sheet.mergeCells(rowNumber, 8, rowNumber, 12);
-    sheet.getCell(rowNumber, 1).value = label;
-    sheet.getCell(rowNumber, 5).value = value === '' ? '' : Number(value || 0);
-    if (value !== '') sheet.getCell(rowNumber, 5).numFmt = '0';
-    setFill(rowNumber, 1, 4, fills.green, { bold: true });
-    setFill(rowNumber, 5, 7, kind === 'damage' ? fills.excess : kind === 'net' ? fills.black : fills.meta, { bold: true });
-    setFill(rowNumber, 8, 12, fills.meta, {});
-    if (kind === 'short') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFF0000' } };
-    if (kind === 'excess') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF008000' } };
-    if (kind === 'net') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
-  });
-
-  applyRange(1, footerStart + footerRows.length - 1);
+  applyRange(1, dataStartRow + rows.length - 1);
   sheet.views = [{ showGridLines: false, topLeftCell: 'A1', activeCell: 'A1' }];
   return sheet;
 }

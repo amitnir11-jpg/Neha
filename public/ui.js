@@ -4925,7 +4925,6 @@
     const metaRows = Array.isArray(summary.metadata) && summary.metadata.length
       ? summary.metadata
       : Array.isArray(sections.metadata) ? sections.metadata : [];
-    const footer = summary.footer || sections.footer || {};
     const title = summary.title || sections.title || 'Stock Summary Report';
     const reconciliationRows = stockSummaryReconciliationRows(summary, sections);
     const reconciliationTitle = reconciliationRows.length ? 'Inventory Reconciliation Summary' : title;
@@ -4979,44 +4978,7 @@
           }).join('')}
         </tr>
       `;
-    }).join('') + `
-      <tr class="stock-summary-footer-gap-row"><td colspan="${keys.length}"></td></tr>
-      <tr class="stock-summary-footer-row stock-summary-damaged-row">
-        <td colspan="4" class="stock-summary-footer-label">Damaged Items Value( Considered Value)</td>
-        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(stockSummaryNumber(footer.damagedItemsValue || 0))}</td>
-        <td colspan="5" class="stock-summary-footer-blank"></td>
-      </tr>
-      <tr class="stock-summary-footer-row">
-        <td colspan="4" class="stock-summary-footer-label">Manual Contribution</td>
-        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(footer.manualContribution || '')}</td>
-        <td colspan="5" class="stock-summary-footer-blank"></td>
-      </tr>
-      <tr class="stock-summary-footer-row stock-summary-short-footer-row">
-        <td colspan="4" class="stock-summary-footer-label">Total Short Value</td>
-        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(stockSummaryNumber(footer.totalShortValue || 0))}</td>
-        <td colspan="5" class="stock-summary-footer-blank"></td>
-      </tr>
-      <tr class="stock-summary-footer-row stock-summary-excess-footer-row">
-        <td colspan="4" class="stock-summary-footer-label">Total Excess Value</td>
-        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(stockSummaryNumber(footer.totalExcessValue || 0))}</td>
-        <td colspan="5" class="stock-summary-footer-blank"></td>
-      </tr>
-      <tr class="stock-summary-footer-row stock-summary-net-footer-row">
-        <td colspan="4" class="stock-summary-footer-label">Net Diff</td>
-        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(stockSummaryNumber(footer.netDiff || 0))}</td>
-        <td colspan="5" class="stock-summary-footer-blank"></td>
-      </tr>
-      <tr class="stock-summary-footer-row">
-        <td colspan="4" class="stock-summary-footer-label">Undefined Items Dead Line</td>
-        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(stockSummaryMoney(footer.undefinedItemsDeadline ?? 0))}</td>
-        <td colspan="5" class="stock-summary-footer-blank"></td>
-      </tr>
-      <tr class="stock-summary-footer-row">
-        <td colspan="4" class="stock-summary-footer-label">Damaged items dead line</td>
-        <td colspan="3" class="stock-summary-footer-value">${escapeHtml(footer.damagedItemsDeadline || '')}</td>
-        <td colspan="5" class="stock-summary-footer-blank"></td>
-      </tr>
-    `;
+    }).join('');
     setText('reportCount', `${pageRows.length} shown${filteredRows.length !== pageRows.length ? ` of ${filteredRows.length}` : ''}${totalRows ? ` | ${totalRows} total` : ''}`);
     refreshReportTableLayout();
     enhanceCoreTables();
