@@ -1423,7 +1423,8 @@
   }
 
   function getSyncQueue() {
-    return readJsonStorage(scopedStorageKey(SYNC_QUEUE_KEY), []);
+    const queue = readJsonStorage(scopedStorageKey(SYNC_QUEUE_KEY), []);
+    return Array.isArray(queue) ? queue : [];
   }
 
   function saveSyncQueue(queue) {
@@ -1432,7 +1433,8 @@
   }
 
   function getSyncLog() {
-    return readJsonStorage(scopedStorageKey(SYNC_LOG_KEY), []);
+    const log = readJsonStorage(scopedStorageKey(SYNC_LOG_KEY), []);
+    return Array.isArray(log) ? log : [];
   }
 
   function addSyncLog(entry) {
@@ -2724,10 +2726,21 @@
   }
 
   function renderScanStream(scans = []) {
-    const rows = filterActiveAuditScans(mergeScanStreamRecords(scans));
-    state.scanStreamRecords = rows;
-    $('#streamRows').innerHTML = rows.length ? rows.map(scanStreamRow).join('') : '<tr><td colspan="10" class="muted">No scans yet</td></tr>';
-    enhanceCoreTables();
+    const body = $('#streamRows');
+    try {
+      const rows = filterActiveAuditScans(mergeScanStreamRecords(scans));
+      state.scanStreamRecords = rows;
+      if (body) body.innerHTML = rows.length ? rows.map(scanStreamRow).join('') : '<tr><td colspan="10" class="muted">No scans yet</td></tr>';
+      try {
+        enhanceCoreTables();
+      } catch (enhanceError) {
+        console.warn('[DASHBOARD] stream enhance failed', enhanceError.message);
+      }
+    } catch (error) {
+      console.warn('[DASHBOARD] stream render failed', error.message);
+      state.scanStreamRecords = [];
+      if (body) body.innerHTML = '<tr><td colspan="10" class="muted">No scans yet</td></tr>';
+    }
   }
 
   function groupSummaryNumber(value) {
@@ -2755,7 +2768,7 @@
     const selectedKey = state.selectedProductGroupSummary
       ? productGroupKey(state.selectedProductGroupSummary.productGroup, state.selectedProductGroupSummary.partSubGroup)
       : '';
-    const allRows = (state.dashboardProductGroupRows || []).slice().sort((a, b) => {
+    const allRows = (Array.isArray(state.dashboardProductGroupRows) ? state.dashboardProductGroupRows : []).slice().sort((a, b) => {
       const qtyA = Number(productGroupSummaryValue(a, 'totalQuantity', 'qty') || 0);
       const qtyB = Number(productGroupSummaryValue(b, 'totalQuantity', 'qty') || 0);
       return qtyB - qtyA;
@@ -2795,7 +2808,7 @@
     state.dashboardProductGroupLoadPromise = (async () => {
       const query = dashboardQueryString();
       const data = await api(`/api/scans/dashboard/product-group-summary${query ? `?${query}` : ''}`);
-      state.dashboardProductGroupRows = data.rows || [];
+      state.dashboardProductGroupRows = Array.isArray(data.rows) ? data.rows : [];
       state.dashboardProductGroupLoadedAt = Date.now();
       renderProductGroupSummary();
       return state.dashboardProductGroupRows;
@@ -2933,7 +2946,12 @@
       }
       const stats = data.stats || {};
       updateDashboardCards(stats);
-      renderScanStream(filterActiveAuditScans(data.recent || []));
+      try {
+        renderScanStream(filterActiveAuditScans(data.recent || data.records || data.scans || []));
+      } catch (error) {
+        console.warn('[DASHBOARD] recent stream load failed', error.message);
+        renderScanStream([]);
+      }
       state.dashboardLoaded = true;
       state.dashboardLastLoadedAt = Date.now();
       loadDashboardProductGroupSummary({ force }).catch((error) => {
