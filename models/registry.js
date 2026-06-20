@@ -1,5 +1,6 @@
 const { createModel } = require('./prismaModel');
 const { cleanText, normalizePartNumber } = require('../utils/normalize');
+const { canonicalizePartCategory } = require('../utils/categoryResolver');
 const { globalUpiKey, rawUpiHash } = require('../utils/scanDuplicatePolicy');
 
 function trim(value) {
@@ -83,6 +84,11 @@ function prepareMasterPart(data) {
     data.partNumber = partNo;
     data.normalizedPartNumber = partNo;
   }
+  const category = canonicalizePartCategory(data.productCategory || data.category || '');
+  if (category) {
+    data.category = category;
+    data.productCategory = category;
+  }
   if (!data.openingStockQty && (data.quantity || data.qty)) data.openingStockQty = data.quantity || data.qty;
   uppercaseFields(data, ['dealerCode']);
   if (data.activeStatus === undefined) data.activeStatus = true;
@@ -93,6 +99,11 @@ function prepareMasterCatalogue(data) {
   if (partNo) {
     data.partNumber = partNo;
     data.normalizedPartNumber = partNo;
+  }
+  const category = canonicalizePartCategory(data.productCategory || data.category || '');
+  if (category) {
+    data.category = category;
+    data.productCategory = category;
   }
   [
     'partDescription',
@@ -144,6 +155,11 @@ function prepareInventory(data) {
     data.normalizedPartNumber = partNo;
     data.partNumber = partNo;
     data.part = partNo;
+  }
+  const category = canonicalizePartCategory(data.productCategory || data.category || '');
+  if (category) {
+    data.category = category;
+    data.productCategory = category;
   }
   uppercaseFields(data, [
     'productGroup',
@@ -209,7 +225,12 @@ function model(name, delegate, tableName, extra = {}) {
 const inventoryIndexes = [
   [{ globalUpiKey: 1 }, { name: 'global_upi_key_unique', unique: true, partialFilterExpression: { globalUpiKey: { $type: 'string', $gt: '' } } }],
   [{ dealerCode: 1, auditId: 1, upiNo: 1 }, { name: 'dealer_audit_upi_unique', unique: true, partialFilterExpression: { dealerCode: { $type: 'string', $gt: '' }, auditId: { $type: 'string', $gt: '' }, upiNo: { $type: 'string', $gt: '' }, scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] }, syncStatus: 'synced' } }],
+  [{ dealerCode: 1, auditId: 1, partNumber: 1 }, { name: 'scan_part_scope_lookup' }],
   [{ dealerCode: 1, auditId: 1, timestamp: -1, createdAt: -1 }, { name: 'scan_history_scope_time' }]
+];
+
+const scanIndexes = [
+  [{ dealerCode: 1, auditId: 1, partNumber: 1 }, { name: 'scan_part_scope_lookup' }]
 ];
 
 module.exports = {
@@ -235,7 +256,7 @@ module.exports = {
   RejectedScan: model('RejectedScan', 'rejectedScan', 'rejectedscans', { prepare: prepareCommonLog }),
   ReportFilterSetting: model('ReportFilterSetting', 'reportFilterSetting', 'reportfiltersettings', { prepare: prepareCommonLog }),
   ReportSnapshot: model('ReportSnapshot', 'reportSnapshot', 'reportsnapshots', { prepare: prepareCommonLog }),
-  Scan: model('Scan', 'scan', 'scans', { prepare: prepareInventory }),
+  Scan: model('Scan', 'scan', 'scans', { prepare: prepareInventory, indexes: scanIndexes }),
   ScannerLog: model('ScannerLog', 'scannerLog', 'scannerlogs', { prepare: prepareCommonLog }),
   ScannerSession: model('ScannerSession', 'scannerSession', 'scannersessions', { prepare: prepareCommonLog }),
   Setting: model('Setting', 'setting', 'settings', { prepare: prepareCommonLog }),

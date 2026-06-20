@@ -2725,21 +2725,38 @@
     `;
   }
 
-  function renderScanStream(scans = []) {
+  function renderScanStream(scans = [], options = {}) {
     const body = $('#streamRows');
     try {
-      const rows = filterActiveAuditScans(mergeScanStreamRecords(scans));
+      const merged = mergeScanStreamRecords(scans);
+      const rows = options.skipActiveAuditFilter === true ? merged : filterActiveAuditScans(merged);
       state.scanStreamRecords = rows;
-      if (body) body.innerHTML = rows.length ? rows.map(scanStreamRow).join('') : '<tr><td colspan="10" class="muted">No scans yet</td></tr>';
+      if (body) {
+        const emptyLabel = rows.length
+          ? ''
+          : (options.skipActiveAuditFilter === true
+            ? 'No scans yet'
+            : (Array.isArray(scans) && scans.length ? 'No scans match the active dealer / audit filter' : 'No scans yet'));
+        body.innerHTML = rows.length ? rows.map(scanStreamRow).join('') : `<tr><td colspan="10" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
+      }
+      if (!rows.length && Array.isArray(merged) && merged.length && options.skipActiveAuditFilter !== true) {
+        console.warn('[DASHBOARD] stream filtered to zero rows', {
+          activeDealer: dashboardScopeDealerCode(),
+          activeAuditId: state.activeAudit && state.activeAudit.auditId ? String(state.activeAudit.auditId).trim() : '',
+          inputRows: merged.length
+        });
+      }
       try {
         enhanceCoreTables();
       } catch (enhanceError) {
         console.warn('[DASHBOARD] stream enhance failed', enhanceError.message);
       }
+      return rows;
     } catch (error) {
       console.warn('[DASHBOARD] stream render failed', error.message);
       state.scanStreamRecords = [];
       if (body) body.innerHTML = '<tr><td colspan="10" class="muted">No scans yet</td></tr>';
+      return [];
     }
   }
 
@@ -2947,7 +2964,15 @@
       const stats = data.stats || {};
       updateDashboardCards(stats);
       try {
-        renderScanStream(filterActiveAuditScans(data.recent || data.records || data.scans || []));
+        const recent = data.recent || data.records || data.scans || [];
+        const rows = renderScanStream(recent, { skipActiveAuditFilter: true });
+        if (!rows.length && Array.isArray(recent) && recent.length) {
+          console.warn('[DASHBOARD] server returned recent scans but none rendered', {
+            dealerCode: data.dealerCode || '',
+            auditId: data.auditId || '',
+            recentCount: recent.length
+          });
+        }
       } catch (error) {
         console.warn('[DASHBOARD] recent stream load failed', error.message);
         renderScanStream([]);
@@ -3068,7 +3093,7 @@
         <td>${escapeHtml(dateTime(scan.timestamp))}</td>
         <td>${partLink(scan.partNumber || scan.part)}</td>
         <td>${escapeHtml(scan.partDescription || scan.partName)}</td>
-        <td>${escapeHtml(scan.productCategory || scan.category || '')}</td>
+        <td>${escapeHtml(scan.productCategory || scan.category || 'Uncategorized')}</td>
         <td>${escapeHtml(money(rowMrp))}</td>
         <td>${escapeHtml(money(scan.currentCatalogueDLC ?? 0))}</td>
         <td>${escapeHtml(scan.productGroup || '')}</td>
@@ -5486,7 +5511,7 @@
       <tr>
         <td>${partLink(row.partNumber || row.partNo)}</td>
         <td>${escapeHtml(row.partDescription || row.partName || '')}</td>
-        <td>${escapeHtml(row.productCategory || row.category || '')}</td>
+        <td>${escapeHtml(row.productCategory || row.category || 'Uncategorized')}</td>
         <td>${escapeHtml(row.dmsStock || 0)}</td>
         <td>${escapeHtml(row.actualStock ?? row.physicalStock ?? 0)}</td>
         <td>${escapeHtml(row.variance ?? row.netDifference ?? 0)}</td>
@@ -9730,7 +9755,7 @@
       queueRealtimeReportRefresh('dashboard update');
       if (!dashboardPayloadMatchesActiveAudit(payload)) return;
       if (payload.stats && dashboardStatsMatchesActiveAudit(payload.stats)) updateDashboardCards(payload.stats);
-      if (Array.isArray(payload.recent)) renderScanStream(payload.recent);
+      if (Array.isArray(payload.recent)) renderScanStream(payload.recent, { skipActiveAuditFilter: true });
       updateScannerStatusBar({ at: new Date() });
     });
     socket.on('inventory:update', (payload = {}) => {
@@ -9738,7 +9763,7 @@
       queueRealtimeReportRefresh('inventory update');
       if (!dashboardPayloadMatchesActiveAudit(payload)) return;
       if (payload.stats && dashboardStatsMatchesActiveAudit(payload.stats)) updateDashboardCards(payload.stats);
-      if (Array.isArray(payload.recent)) renderScanStream(payload.recent);
+      if (Array.isArray(payload.recent)) renderScanStream(payload.recent, { skipActiveAuditFilter: true });
     });
     socket.on('reports:update', () => {
       state.lastRealtimeAt = Date.now();
@@ -9768,7 +9793,7 @@
     socket.on('scan:last10:update', (payload = []) => {
       state.lastRealtimeAt = Date.now();
       const scans = Array.isArray(payload) ? payload : (Array.isArray(payload.recent) ? payload.recent : []);
-      if (scans.length) renderScanStream(scans);
+      if (scans.length) renderScanStream(scans, { skipActiveAuditFilter: true });
     });
     socket.on('stats:update', (payload = {}) => {
       const stats = payload.stats || payload;

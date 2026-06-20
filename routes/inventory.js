@@ -22,6 +22,7 @@ const masterValidation = require('../utils/masterValidation');
 const { getActiveAudit, isCompletedAudit, publicAudit } = require('../utils/audit');
 const { dateDebugPayload, formatIstDateTime, parseIstFilterDate, validDate } = require('../utils/time');
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
+const { canonicalizePartCategory, resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { reportTotals } = require('../utils/reportTotals');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
@@ -1042,8 +1043,8 @@ function publicScan(scan = {}) {
     normalizedPartNumber: scan.normalizedPartNumber || partNumber,
     partName: scan.partName || '',
     partDescription: scan.partDescription || scan.partName || '',
-    category: scan.productCategory || normalizeCategory(scan.category || ''),
-    productCategory: scan.productCategory || normalizeCategory(scan.category || ''),
+    category: canonicalizePartCategory(scan.productCategory || scan.category || ''),
+    productCategory: canonicalizePartCategory(scan.productCategory || scan.category || ''),
     productGroup: scan.productGroup || '',
     partSubGroup: scan.partSubGroup || '',
     qty,
@@ -1097,6 +1098,19 @@ function publicScanWithMaster(record = {}, masterLookup = {}) {
   if (!master) {
     return {
       ...scan,
+      category: 'Uncategorized',
+      productCategory: 'Uncategorized',
+      currentCatalogueMRP: 0,
+      currentCatalogueDLC: 0,
+      displayMRP: 0,
+      mrp: 0,
+      scanMRP: 0,
+      manualMRP: 0,
+      valuationMRP: 0,
+      finalMRP: 0,
+      finalInventoryValue: 0,
+      dlc: 0,
+      valuationSource: 'PART_MASTER_PRICE_MISSING',
       _masterLookupComplete: true,
       masterFound: false,
       masterMatch: false,
@@ -1106,12 +1120,13 @@ function publicScanWithMaster(record = {}, masterLookup = {}) {
   const masterDlc = numberValue(master.dlc, 0);
   const masterMrp = numberValue(master.mrp, 0);
   const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
+  const masterCategory = resolveCategoryFromMaster(master);
   return {
     ...scan,
     partName: scan.partName || master.partName || master.partDescription || '',
     partDescription: scan.partDescription || master.partDescription || master.partName || '',
-    category: scan.category || master.productCategory || master.category || '',
-    productCategory: scan.productCategory || master.productCategory || master.category || '',
+    category: masterCategory,
+    productCategory: masterCategory,
     productGroup: scan.productGroup || master.productGroup || '',
     partSubGroup: scan.partSubGroup || master.partSubGroup || master.productSubGroup || '',
     model: scan.model || master.model || '',
@@ -1527,6 +1542,8 @@ async function repairParsedFields(records = []) {
     const masterPrice = partNumber ? await getMasterPrice(partNumber, record.dealerCode, null).catch(() => null) : null;
     if (!masterPriceMissing(masterPrice)) {
       Object.assign(patch, valuationFields({ masterPrice, qty }));
+      patch.category = masterPrice ? masterPrice.category : patch.category;
+      patch.productCategory = masterPrice ? masterPrice.category : patch.productCategory;
     }
     if (Object.keys(patch).length && record._id) operations.push({ updateOne: { filter: { _id: record._id }, update: { $set: patch } } });
   }
@@ -1806,8 +1823,8 @@ async function updateScanDetails(req, res) {
       update.model = master.model || '';
       update.year = master.manufacturingYear || master.year || '';
       update.manufacturingYear = master.manufacturingYear || master.year || '';
-      update.category = normalizeCategory(master.productCategory || master.category || '');
-      update.productCategory = normalizeCategory(master.productCategory || master.category || '');
+      update.category = resolveCategoryFromMaster(master);
+      update.productCategory = resolveCategoryFromMaster(master);
       update.productGroup = upper(master.productGroup || '');
       update.productType = upper(master.productType || '');
       update.partGroup = upper(master.partGroup || '');
@@ -2292,8 +2309,8 @@ async function saveScanRequest(req, res) {
       model: master ? master.model : String(req.body.model || ''),
       year: master ? (master.manufacturingYear || master.year) : String(req.body.manufacturingYear || req.body.year || ''),
       manufacturingYear: master ? (master.manufacturingYear || master.year) : String(req.body.manufacturingYear || req.body.year || ''),
-      category: normalizeCategory(master ? (master.productCategory || master.category) : String(req.body.productCategory || req.body.category || '')),
-      productCategory: normalizeCategory(master ? (master.productCategory || master.category) : String(req.body.productCategory || req.body.category || '')),
+      category: resolveCategoryFromMaster(master || { productCategory: req.body.productCategory || req.body.category || '' }),
+      productCategory: resolveCategoryFromMaster(master || { productCategory: req.body.productCategory || req.body.category || '' }),
       productGroup: master ? master.productGroup || '' : String(req.body.productGroup || '').toUpperCase(),
       productType: master ? master.productType || '' : String(req.body.productType || '').toUpperCase(),
       superceededBy: master ? master.superceededBy || '' : String(req.body.superceededBy || '').toUpperCase(),
@@ -2968,8 +2985,8 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           model: master && master.model ? master.model : String(item.model || ''),
           year: master && (master.manufacturingYear || master.year) ? (master.manufacturingYear || master.year) : String(item.manufacturingYear || item.year || ''),
           manufacturingYear: master && (master.manufacturingYear || master.year) ? (master.manufacturingYear || master.year) : String(item.manufacturingYear || item.year || ''),
-          category: normalizeCategory(master && (master.productCategory || master.category) ? (master.productCategory || master.category) : String(item.productCategory || item.category || '')),
-          productCategory: normalizeCategory(master && (master.productCategory || master.category) ? (master.productCategory || master.category) : String(item.productCategory || item.category || '')),
+          category: resolveCategoryFromMaster(master || { productCategory: item.productCategory || item.category || '' }),
+          productCategory: resolveCategoryFromMaster(master || { productCategory: item.productCategory || item.category || '' }),
           productGroup: master ? master.productGroup || '' : String(item.productGroup || '').toUpperCase(),
           productType: master ? master.productType || '' : String(item.productType || '').toUpperCase(),
           superceededBy: master ? master.superceededBy || '' : String(item.superceededBy || '').toUpperCase(),

@@ -21,6 +21,7 @@ const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentit
 const masterValidation = require('../utils/masterValidation');
 const { dateDebugPayload, formatIstDateTime, validDate: validTimestamp } = require('../utils/time');
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
+const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
 const { isDatabaseReady } = require('../services/prisma');
 const {
@@ -1287,8 +1288,8 @@ async function saveNormalizedScan(scan, req) {
     model: master && master.model ? master.model : clean(scan.source.model),
     year: master && (master.manufacturingYear || master.year) ? (master.manufacturingYear || master.year) : clean(scan.source.manufacturingYear || scan.source.year),
     manufacturingYear: master && (master.manufacturingYear || master.year) ? (master.manufacturingYear || master.year) : clean(scan.source.manufacturingYear || scan.source.year),
-    category: normalizeCategory(master && (master.productCategory || master.category) ? (master.productCategory || master.category) : clean(scan.source.productCategory || scan.source.category)),
-    productCategory: normalizeCategory(master && (master.productCategory || master.category) ? (master.productCategory || master.category) : clean(scan.source.productCategory || scan.source.category)),
+    category: resolveCategoryFromMaster(master || { productCategory: scan.source.productCategory || scan.source.category || '' }),
+    productCategory: resolveCategoryFromMaster(master || { productCategory: scan.source.productCategory || scan.source.category || '' }),
     productGroup: master ? master.productGroup || '' : clean(scan.source.productGroup).toUpperCase(),
     partSubGroup: master ? master.partSubGroup || '' : clean(scan.source.partSubGroup || scan.source.productSubGroup).toUpperCase(),
     qty: finalQty,
@@ -1979,8 +1980,8 @@ async function pushHandler(req, res) {
         model: master && master.model ? master.model : clean(scan.source.model),
         year: master && (master.manufacturingYear || master.year) ? (master.manufacturingYear || master.year) : clean(scan.source.manufacturingYear || scan.source.year),
         manufacturingYear: master && (master.manufacturingYear || master.year) ? (master.manufacturingYear || master.year) : clean(scan.source.manufacturingYear || scan.source.year),
-        category: normalizeCategory(master && (master.productCategory || master.category) ? (master.productCategory || master.category) : scan.category || clean(scan.source.productCategory || scan.source.category)),
-        productCategory: normalizeCategory(master && (master.productCategory || master.category) ? (master.productCategory || master.category) : scan.category || clean(scan.source.productCategory || scan.source.category)),
+        category: resolveCategoryFromMaster(master || { productCategory: scan.category || scan.source.productCategory || scan.source.category || '' }),
+        productCategory: resolveCategoryFromMaster(master || { productCategory: scan.category || scan.source.productCategory || scan.source.category || '' }),
         productGroup: master ? master.productGroup || '' : clean(scan.source.productGroup).toUpperCase(),
         partSubGroup: master ? master.partSubGroup || '' : clean(scan.source.partSubGroup || scan.source.productSubGroup).toUpperCase(),
         qty: finalQty,

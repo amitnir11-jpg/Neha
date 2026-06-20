@@ -3,6 +3,7 @@ const MasterPart = require('../models/MasterPart');
 const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
 const { applyProductGroup } = require('./productGroupClassifier');
 const { decorateScanValue } = require('./inventoryValueEngine');
+const { resolveCategoryFromMaster } = require('./categoryResolver');
 
 function upper(value) {
   return cleanText(value).toUpperCase();
@@ -14,7 +15,7 @@ function cataloguePartNumber(record = {}) {
 
 function cataloguePayload(record = {}) {
   const year = upper(record.year || record.manufacturingYear || '');
-  const category = upper(record.productCategory || record.category || '');
+  const category = resolveCategoryFromMaster(record);
   const description = upper(record.partDescription || record.partName || '');
   const grouping = applyProductGroup({ ...record, partDescription: description, productCategory: category }, { force: false });
   return {

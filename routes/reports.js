@@ -342,8 +342,8 @@ function auditRow(row) {
     partDescription: row.partDescription || row.partName,
     model: row.model,
     manufacturingYear: row.manufacturingYear || row.year,
-    category: row.productCategory || row.category,
-    productCategory: row.productCategory || row.category,
+    category: canonicalizePartCategory(row.productCategory || row.category || ''),
+    productCategory: canonicalizePartCategory(row.productCategory || row.category || ''),
     bin: row.binLocation || row.bin,
     mrp: row.currentCatalogueMRP || row.mrp,
     scanUPIMRP: row.scanUPIMRP || '',
@@ -391,8 +391,8 @@ function scanAuditRow(scan) {
     partDescription: scan.partDescription || scan.partName,
     model: scan.model,
     manufacturingYear: scan.manufacturingYear || scan.year,
-    category: scan.productCategory || scan.category,
-    productCategory: scan.productCategory || scan.category,
+    category: canonicalizePartCategory(scan.productCategory || scan.category || ''),
+    productCategory: canonicalizePartCategory(scan.productCategory || scan.category || ''),
     bin: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin),
     mrp: scan.currentCatalogueMRP || 0,
     dlc: scan.currentCatalogueDLC || 0,
@@ -708,7 +708,7 @@ function selectRows(data, type) {
         bin: scan.binLocation || scan.bin || 'UNKNOWN',
         partNumber: scan.partNumber || scan.part || '',
         partDescription: scan.partDescription || scan.partName || '',
-        productCategory: scan.productCategory || scan.category || '',
+        productCategory: canonicalizePartCategory(scan.productCategory || scan.category || ''),
         mrp: scan.currentCatalogueMRP || 0,
         scanType: scan.scanType || scan.type || '',
         fittedQty: 0,
@@ -728,7 +728,7 @@ function selectRows(data, type) {
         target.physicalBinQty = target.qty;
         target.actualAuditQty = target.qty;
         if (!target.partDescription) target.partDescription = scan.partDescription || scan.partName || '';
-        if (!target.productCategory) target.productCategory = scan.productCategory || scan.category || '';
+        if (!target.productCategory) target.productCategory = canonicalizePartCategory(scan.productCategory || scan.category || '');
         if (!target.deviceId) target.deviceId = scan.deviceId || '';
         if ((scan.scanType || scan.type) === 'FITTED') target.fittedQty += Number(scan.fittedQty || scan.qty || scan.quantity || 0);
         target.fittedStatus = target.fittedQty > 0 ? 'Fitted' : 'Not Fitted';

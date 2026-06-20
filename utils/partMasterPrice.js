@@ -2,6 +2,7 @@ const MasterCatalogue = require('../models/MasterCatalogue');
 const MasterPart = require('../models/MasterPart');
 const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
 const { applyProductGroup } = require('./productGroupClassifier');
+const { resolveCategoryFromMaster } = require('./categoryResolver');
 
 const MASTER_PRICE_SOURCE = 'PART_MASTER_MRP_DLC';
 const MISSING_PART_MASTER_PRICE_MESSAGE = 'MRP/DLC missing in Part Master. Please update Part Master first.';
@@ -75,7 +76,7 @@ function asPriceRecord(record = {}, source = 'MASTER_PART', dealerCode = '') {
   const partNumber = normalizePartNumber(record.normalizedPartNumber || record.partNumber || record.partNo || record.part || '');
   if (!partNumber) return null;
   const description = upper(record.partDescription || record.partName || record.description || '');
-  const category = upper(record.productCategory || record.category || '');
+  const category = resolveCategoryFromMaster(record);
   const grouping = applyProductGroup({ ...record, partDescription: description, productCategory: category }, { force: false });
   const normalizedDealer = normalizeDealerCode(dealerCode);
   const rowDealer = normalizeDealerCode(record.dealerCode || '');

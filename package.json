@@ -10,8 +10,9 @@
     "prisma:migrate": "prisma migrate deploy",
     "start:api": "node server.js",
     "start:web": "node scripts/web-server.js",
-    "test": "node scripts/master-price-logic-check.js && node scripts/stock-valuation-check.js && node scripts/duplicate-upi-check.js",
+    "test": "node scripts/master-price-logic-check.js && node scripts/stock-valuation-check.js && node scripts/category-alignment-check.js && node scripts/duplicate-upi-check.js",
     "test:catalogue-upload": "node scripts/catalogue-upload-check.js",
+    "backfill:scan-categories": "node scripts/backfill-scan-categories.js",
     "start": "node scripts/railway-start.js"
   },
   "keywords": [
