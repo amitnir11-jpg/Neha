@@ -6,6 +6,7 @@ const MasterPart = require('../models/MasterPart');
 const PartPriceHistory = require('../models/PartPriceHistory');
 const { CATALOGUE_COLUMNS, createCatalogueTemplateWorkbook, failureFilePath, importCatalogue, parseCatalogueUpload } = require('../utils/catalogueUpload');
 const { findCataloguePart } = require('../utils/catalogue');
+const { normalizePartNumber } = require('../utils/normalize');
 
 const catalogue = new Map([
   ['PART00001', { normalizedPartNumber: 'PART00001', partNumber: 'PART00001', partDescription: 'OLD DESCRIPTION' }]
@@ -177,14 +178,22 @@ async function run() {
       duplicates: result.duplicateRowsCount,
       blankRows: result.blankRowsCount,
       missingMandatory: result.missingMandatoryFieldsCount,
+      accountingGap: result.accountingGapCount,
       inserted: result.insertedRowsCount,
       updated: result.updatedRowsCount,
       current: result.currentMasterRecordCount,
       finalCount: result.finalMasterRecordCount,
       mismatch: result.rowCountMismatch
     },
-    { fileRows: 5007, total: 5007, imported: 5001, saved: 5001, failed: 4, duplicates: 1, blankRows: 1, missingMandatory: 4, inserted: 5000, updated: 1, current: 5001, finalCount: 5001, mismatch: true }
+    { fileRows: 5007, total: 5007, imported: 5001, saved: 5001, failed: 5, duplicates: 1, blankRows: 1, missingMandatory: 3, accountingGap: 0, inserted: 5000, updated: 1, current: 5001, finalCount: 5001, mismatch: true }
   );
+  assert.deepEqual(result.failureReasons, {
+    'Missing Part Number': 1,
+    'Blank mandatory fields': 2,
+    'Invalid MRP/DLC': 2,
+    'Duplicate conflict': 1
+  });
+  assert.equal(normalizePartNumber('  part\u200b-00001  '), 'PART00001');
 
   const failedWorkbookPath = failureFilePath(result.failureDownloadId);
   assert.ok(fs.existsSync(failedWorkbookPath));

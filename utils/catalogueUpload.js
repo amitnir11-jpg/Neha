@@ -332,6 +332,18 @@ function upper(value) {
   return cleanText(value).toUpperCase();
 }
 
+function canonicalCatalogueFailureReason(reason) {
+  const text = cleanText(reason);
+  if (!text) return 'Unknown failure';
+  const normalized = text.toUpperCase();
+  if (normalized.startsWith('DATABASE INSERT ERROR') || normalized.startsWith('DATABASE IMPORT FAILED')) return 'Database insert error';
+  if (normalized.startsWith('MISSING PART NUMBER') || normalized.startsWith('PART NUMBER IS MANDATORY')) return 'Missing Part Number';
+  if (normalized.startsWith('BLANK MANDATORY FIELDS') || normalized.startsWith('BLANK ROW')) return 'Blank mandatory fields';
+  if (normalized.startsWith('INVALID MRP/DLC')) return 'Invalid MRP/DLC';
+  if (normalized.startsWith('DUPLICATE CONFLICT') || normalized.startsWith('DUPLICATE PART NUMBER')) return 'Duplicate conflict';
+  return text;
+}
+
 function betterCatalogueRow(existing = null, candidate = null) {
   if (!existing) return { winner: candidate, loser: null };
   if (!candidate) return { winner: existing, loser: null };
@@ -643,29 +655,45 @@ function summaryFrom(validation, successfulRows, persistenceFailures, existingSe
   const databaseFailedRows = persistenceFailures.map(({ row, reason }) => ({
     ...row,
     status: 'FAILED',
-    reason: `Database import failed: ${reason}`
+    reason: 'Database insert error',
+    databaseError: reason
   }));
-  const failedRows = validation.failedRows.concat(databaseFailedRows);
   const importedRowsCount = successfulRows.length;
   const insertedRowsCount = successfulRows.filter((row) => !existingSet.has(row.mapped.normalizedPartNumber)).length;
   const updatedRowsCount = importedRowsCount - insertedRowsCount;
   const fileRowsCount = validation.rows.length;
   const duplicateRowsCount = validation.duplicateRows.length;
   const skippedRowsCount = validation.skippedRows.length;
-  const nonImportedRows = failedRows.concat(validation.duplicateRows, validation.skippedRows);
+  const validationFailedRows = validation.failedRows.concat(validation.skippedRows);
+  const failedRows = validationFailedRows.concat(databaseFailedRows);
+  const nonImportedRows = failedRows.concat(validation.duplicateRows);
+  const failureReasons = failureReasonCounts(nonImportedRows);
+  const missingPartNumberCount = Number(failureReasons['Missing Part Number'] || 0);
+  const blankMandatoryFieldsCount = Number(failureReasons['Blank mandatory fields'] || 0);
+  const invalidMrpDlcCount = Number(failureReasons['Invalid MRP/DLC'] || 0);
+  const duplicateConflictCount = Number(failureReasons['Duplicate conflict'] || 0);
+  const databaseInsertErrorCount = Number(failureReasons['Database insert error'] || 0);
+  const missingMandatoryFieldsCount = missingPartNumberCount + blankMandatoryFieldsCount;
+  const accountedRowsCount = importedRowsCount + duplicateRowsCount + failedRows.length;
+  const accountingGapCount = fileRowsCount - accountedRowsCount;
   return {
     fileRowsCount,
     totalRowsCount: fileRowsCount,
     importedRowsCount,
     savedRowsCount: importedRowsCount,
-    failedRowsCount: validation.failedRows.length,
+    failedRowsCount: failedRows.length,
     duplicateRowsCount,
     duplicateMergedRowsCount: duplicateRowsCount,
     skippedRowsCount,
     blankRowsCount: skippedRowsCount,
     insertedRowsCount,
     updatedRowsCount,
-    missingMandatoryFieldsCount: validation.missingMandatoryFieldsCount,
+    missingMandatoryFieldsCount,
+    missingPartNumberCount,
+    blankMandatoryFieldsCount,
+    invalidMrpDlcCount,
+    duplicateConflictCount,
+    databaseInsertErrorCount,
     priceHistoryRowsCount,
     priceHistoryFailedRowsCount,
     currentMasterRecordCount,
@@ -677,16 +705,19 @@ function summaryFrom(validation, successfulRows, persistenceFailures, existingSe
     uniquePartsCount: importedRowsCount,
     updatedDuplicateCount: updatedRowsCount,
     duplicateSkippedRows: duplicateRowsCount,
-    skippedInvalidRowsCount: failedRows.length + skippedRowsCount,
+    skippedInvalidRowsCount: nonImportedRows.length,
     nonImportedRows,
     nonImportedRowsCount: nonImportedRows.length,
+    failureReasons,
+    accountedRowsCount,
+    accountingGapCount,
     rowCountMismatch: fileRowsCount !== importedRowsCount
   };
 }
 
 function failureReasonCounts(rows = []) {
   return rows.reduce((counts, row) => {
-    const reason = cleanText(row.reason) || 'Unknown failure';
+    const reason = canonicalCatalogueFailureReason(row.reason);
     counts[reason] = (counts[reason] || 0) + 1;
     return counts;
   }, {});
@@ -696,7 +727,7 @@ async function importCatalogue(file, options = {}) {
   const sourceFileName = cleanText(file && file.originalname);
   const parsed = await parseCatalogueUpload(file);
   const validation = validateCatalogueRows(parsed, sourceFileName);
-  const validationIssueCount = validation.failedRows.length + validation.duplicateRows.length;
+  const validationIssueCount = validation.failedRows.length + validation.duplicateRows.length + validation.skippedRows.length;
   if (options.rejectOnValidationIssues && validationIssueCount) {
     const currentMasterRecordCount = await MasterCatalogue.countDocuments({});
     const summary = summaryFrom(validation, [], [], new Set(), 0, 0, currentMasterRecordCount);

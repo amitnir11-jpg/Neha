@@ -422,6 +422,7 @@ body:not(.dashboard-view-active) .topbar {
 .form-message {
   min-height: 22px;
   font-weight: 800;
+  white-space: pre-line;
 }
 
 .form-message.error {
@@ -430,6 +431,10 @@ body:not(.dashboard-view-active) .topbar {
 
 .form-message.success {
   color: var(--green);
+}
+
+.form-message.warning {
+  color: var(--amber);
 }
 
 .pill {

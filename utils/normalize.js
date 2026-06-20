@@ -1,6 +1,6 @@
 function cleanText(value) {
   let text = String(value === undefined || value === null ? '' : value)
-    .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   while (text.length > 1 && text.startsWith('"') && text.endsWith('"')) {
@@ -12,7 +12,7 @@ function cleanText(value) {
 function normalizePartNumber(value) {
   return cleanText(value)
     .toUpperCase()
-    .replace(/[\s*\-\u0000-\u001F\u007F-\u009F\u200B-\u200D\uFEFF]/g, '');
+    .replace(/[\s*\-\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '');
 }
 
 function normalizeCategory(value) {
