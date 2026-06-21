@@ -229,6 +229,12 @@ function model(name, delegate, tableName, extra = {}) {
 }
 
 const inventoryIndexes = [
+  [{ partNumber: 1 }, { name: 'inventory_part_number_idx' }],
+  [{ dealerCode: 1 }, { name: 'inventory_dealer_code_idx' }],
+  [{ auditId: 1 }, { name: 'inventory_audit_id_idx' }],
+  [{ activeInventory: 1 }, { name: 'inventory_active_inventory_idx' }],
+  [{ deletedAt: 1 }, { name: 'inventory_deleted_at_idx' }],
+  [{ scanStatus: 1 }, { name: 'inventory_scan_status_idx' }],
   [{ upiCode: 1 }, { name: 'inventory_upi_code_idx' }],
   [{ globalUpiKey: 1 }, { name: 'inventory_global_upi_key_idx' }],
   [{ dealerCode: 1, auditId: 1, upiCode: 1, movementType: 1, activeInventory: 1 }, { name: 'inventory_active_upi_lookup_idx' }],
@@ -238,6 +244,12 @@ const inventoryIndexes = [
 ];
 
 const scanIndexes = [
+  [{ partNumber: 1 }, { name: 'scan_part_number_idx' }],
+  [{ dealerCode: 1 }, { name: 'scan_dealer_code_idx' }],
+  [{ auditId: 1 }, { name: 'scan_audit_id_idx' }],
+  [{ activeInventory: 1 }, { name: 'scan_active_inventory_idx' }],
+  [{ deletedAt: 1 }, { name: 'scan_deleted_at_idx' }],
+  [{ scanStatus: 1 }, { name: 'scan_scan_status_idx' }],
   [{ upiCode: 1 }, { name: 'scan_upi_code_idx' }],
   [{ dealerCode: 1, auditId: 1, upiCode: 1, movementType: 1, activeInventory: 1 }, { name: 'scan_active_upi_lookup_idx' }],
   [{ dealerCode: 1, auditId: 1, partNumber: 1 }, { name: 'scan_part_scope_lookup' }]

@@ -93,6 +93,47 @@ class ScanRecord {
     );
   }
 
+  factory ScanRecord.fromServerMap(Map<String, dynamic> map) {
+    final rawValue = _string(map['rawScanString'] ??
+        map['rawScan'] ??
+        map['rawBarcode'] ??
+        map['rawQR'] ??
+        map['rawUpi'] ??
+        map['rawScannedValue'] ??
+        map['rawScanValue']);
+    final serverStatus = _serverStatus(map);
+    final timestamp = _dateTime(map['timestamp'] ??
+        map['scanTime'] ??
+        map['time'] ??
+        map['dateTime'] ??
+        map['createdAt']);
+    return ScanRecord(
+      localId: _string(map['scanId'] ??
+          map['uniqueScanId'] ??
+          map['clientScanId'] ??
+          map['localId'] ??
+          rawValue),
+      rawValue: rawValue,
+      partNumber: _string(map['partNumber'] ??
+          map['part'] ??
+          map['normalizedPartNumber'] ??
+          map['extractedPartNumber'] ??
+          map['partNo']),
+      quantity: _int(map['qty'] ?? map['quantity'] ?? map['count'], 1),
+      binLocation: _string(map['binLocation'] ?? map['bin'] ?? ''),
+      scanType: _string(map['scanType'] ?? map['type'] ?? 'INWARD'),
+      dealerCode: _string(map['dealerCode'] ?? map['dealer'] ?? ''),
+      userId: _string(map['userId'] ?? map['loginId'] ?? ''),
+      userName: _string(map['userName'] ?? map['staffName'] ?? map['scannedBy'] ?? ''),
+      deviceId: _string(map['deviceId'] ?? map['deviceName'] ?? ''),
+      createdAt: timestamp,
+      status: serverStatus,
+      source: _string(map['source'] ?? map['scanMode'] ?? map['entryMode'] ?? 'mobile'),
+      serverSyncId: _string(map['syncKey'] ?? map['scanId'] ?? map['uniqueScanId'] ?? ''),
+      errorMessage: _string(map['reason'] ?? ''),
+    );
+  }
+
   Map<String, dynamic> toApiPayload() => {
         'localId': localId,
         'mobileScanId': localId,
@@ -126,4 +167,33 @@ class ScanRecord {
             source == 'manual' ? 'Mobile Manual Entry' : 'Mobile Scanner',
         'syncStatus': status.toLowerCase(),
       };
+}
+
+String _string(Object? value) => value == null ? '' : value.toString().trim();
+
+int _int(Object? value, int fallback) => int.tryParse(_string(value)) ?? fallback;
+
+DateTime _dateTime(Object? value) =>
+    DateTime.tryParse(_string(value)) ?? DateTime.now();
+
+String _serverStatus(Map<String, dynamic> map) {
+  final syncStatus = _string(map['syncStatus']).toLowerCase();
+  if (syncStatus == 'failed') return 'Failed';
+  if (syncStatus == 'pending') return 'Pending';
+  if (syncStatus == 'duplicate') return 'Duplicate';
+  if (syncStatus == 'rejected') return 'Rejected';
+  if (syncStatus == 'synced' || syncStatus == 'accepted') return 'Synced';
+
+  final scanStatus = _string(map['scanStatus']).toLowerCase();
+  if (scanStatus == 'duplicate') return 'Duplicate';
+  if (scanStatus.contains('reject')) return 'Rejected';
+  if (scanStatus.contains('fail')) return 'Failed';
+  if (scanStatus == 'accepted' ||
+      scanStatus == 'outward_done' ||
+      scanStatus == 'supervisor_approved') {
+    return 'Synced';
+  }
+
+  if (map['synced'] == true || map['isSynced'] == true) return 'Synced';
+  return 'Synced';
 }

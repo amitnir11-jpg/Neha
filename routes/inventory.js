@@ -47,6 +47,7 @@ const {
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
 const BIN_REQUIRED_MESSAGE = 'Please enter/select bin location first.';
+const INVALID_PART_MESSAGE = masterValidation.INVALID_PART_MESSAGE || 'Invalid part number - not found in master catalogue';
 const NO_OUTWARD_STOCK_MESSAGE = 'Part not available in inward stock.';
 const VERIFICATION_FOUND_MESSAGE = 'Part Found';
 const VERIFICATION_NOT_FOUND_MESSAGE = 'Part Not Found';
@@ -124,8 +125,7 @@ function nonVerificationScanClause() {
 }
 
 function applyTransactionScanFilter(filter = {}) {
-  filter.$and = (filter.$and || []).concat([nonVerificationScanClause()]);
-  return filter;
+  return applyTestScanMode(filter, 'real');
 }
 
 function normalizeCategory(value) {
@@ -715,11 +715,7 @@ function applyTestScanMode(filter = {}, mode = 'real') {
 }
 
 function applyRecentScanMode(filter = {}, mode = 'real') {
-  const selected = String(mode || 'real').trim().toLowerCase();
-  const clauses = [nonVerificationScanClause()];
-  if (selected !== 'all') clauses.push(selected === 'test' ? testScanClause() : { $nor: testScanClause().$or });
-  filter.$and = (filter.$and || []).concat(clauses);
-  return filter;
+  return applyTestScanMode(filter, mode);
 }
 
 async function activeDashboardScope(query = {}) {
@@ -1762,7 +1758,7 @@ async function validateScan(payload, master) {
   const warnings = [];
 
   if (!master) {
-    warnings.push(`Part not found in Master Catalogue: ${payload.part || payload.partNumber || ''}`);
+    warnings.push(INVALID_PART_MESSAGE);
   } else {
     if (!master.activeStatus) warnings.push('Inactive part');
   }
@@ -1774,10 +1770,9 @@ async function validateScan(payload, master) {
   return warnings;
 }
 
-async function logValidationFailure(payload = {}, reason = 'Not Found In Master', timestamp = new Date()) {
+async function logValidationFailure(payload = {}, reason = INVALID_PART_MESSAGE, timestamp = new Date()) {
   try {
     if (upper(payload.scanType || payload.type || '') === 'VERIFICATION') return;
-    if (!masterValidation.isManualRejectedSource(payload)) return;
     const now = timestamp instanceof Date && !Number.isNaN(timestamp.getTime()) ? timestamp : new Date();
     const rawScannedValue = String(payload.rawScan || payload.rawScanString || payload.rawUpi || payload.upiNo || payload.upiId || '').trim();
     const dealerCode = normalizeDealerCode(payload.dealerCode || payload.dealer || '');
@@ -1809,7 +1804,7 @@ async function logValidationFailure(payload = {}, reason = 'Not Found In Master'
       scanType: upper(payload.scanType || payload.type || ''),
       source: normalizeSource(payload.source, 'manual'),
       binLocation: String(payload.binLocation || payload.bin || '').trim().toUpperCase(),
-      reason,
+      reason: reason || INVALID_PART_MESSAGE,
       repeatCount: 1,
       time: now
     });
@@ -1920,7 +1915,7 @@ async function updateScanDetails(req, res) {
     const partChanged = partNumber !== oldPartNumber;
     const master = await findMasterPart(partNumber, scan.dealerCode);
     if (partChanged && !master) {
-      return res.status(400).json({ success: false, message: `Part number not found in master: ${partNumber}` });
+      return res.status(400).json({ success: false, message: INVALID_PART_MESSAGE });
     }
     const masterPrice = master ? await getMasterPrice(partNumber, scan.dealerCode, master) : null;
     if (masterPriceMissing(masterPrice)) return missingMasterPriceResponse(res, partNumber);
@@ -2379,8 +2374,8 @@ async function saveScanRequest(req, res) {
         source: entrySource,
         defaultScanMode: manualEntryMode ? 'Manual' : 'Barcode/Web Scan',
         originalScanId: uniqueScanId
-      }, 'Part not found in master', timestamp).catch(() => undefined);
-      return res.status(400).json({ success: false, message: `Part number not found in master: ${part}` });
+      }, INVALID_PART_MESSAGE, timestamp).catch(() => undefined);
+      return res.status(400).json({ success: false, message: INVALID_PART_MESSAGE });
     }
 
     if (!part) {
@@ -2959,7 +2954,7 @@ router.post('/process', auth.optionalAuth, processScanRequest);
 router.post('/process-scan', auth.optionalAuth, processScanRequest);
 router.post('/scan', auth.optionalAuth, processScanRequest);
 router.post('/manual', auth.optionalAuth, processScanRequest);
-router.post('/', auth.optionalAuth, saveScanRequest);
+router.post('/', auth.optionalAuth, processScanRequest);
 router.patch('/:scanId/details', auth.requireAuth, updateScanDetails);
 router.patch('/:scanId/mrp', auth.requireAuth, updateManualMrp);
 router.post('/sync', auth.optionalAuth, async (req, res) => {
@@ -3115,7 +3110,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
         if (!dealerCode) warnings.push('Dealer code missing');
         if (dealerCode && !dealer) warnings.push('Valid dealer code is required');
         if (!VALID_TYPES.includes(type)) warnings.push('Invalid scan type');
-        if (!master) warnings.push(`Part number not found in master: ${part}`);
+        if (!master) warnings.push(INVALID_PART_MESSAGE);
         if (master && !master.activeStatus) warnings.push('Inactive part');
 
         if (!part || !isValidPartNumber(part) || (['INWARD', 'DAMAGE'].includes(type) && !finalBinLocation) || !dealerCode || !dealer || !VALID_TYPES.includes(type) || !master) {

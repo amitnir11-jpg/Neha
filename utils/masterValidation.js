@@ -2,6 +2,8 @@ const RejectedScan = require('../models/RejectedScan');
 const { normalizePartNumber } = require('./normalize');
 const { getPriceFromPartMaster } = require('./partMasterPrice');
 
+const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
+
 function clean(value) {
   return String(value || '').trim();
 }
@@ -91,12 +93,11 @@ async function validatePartAgainstMaster({ partNumber, dealerCode, rawScannedVal
     valid: Boolean(master),
     master,
     extractedPartNumber,
-    reason: master ? '' : 'Part not found in master'
+    reason: master ? '' : INVALID_PART_MESSAGE
   };
 }
 
 async function saveRejectedScan(input = {}) {
-  if (!isManualRejectedSource(input)) return null;
   const extractedPartNumber = normalizePartNumber(input.extractedPartNumber || input.partNumber || input.part || input.normalizedPartNumber || '');
   const originalScanId = clean(input.originalScanId || input.scanId || input.uniqueScanId || input.syncKey || '');
   const doc = {
@@ -114,7 +115,7 @@ async function saveRejectedScan(input = {}) {
     rawScannedValue: clean(input.rawScannedValue || input.rawScan || input.rawScanString || input.rawUpi || input.upiNo || input.upiId || ''),
     extractedPartNumber,
     binLocation: upper(input.binLocation || input.bin || ''),
-    reason: input.reason || 'Part not found in master',
+    reason: input.reason || INVALID_PART_MESSAGE,
     status: 'REJECTED',
     syncStatus: 'rejected',
     originalScanId,
@@ -129,13 +130,6 @@ async function saveRejectedScan(input = {}) {
 }
 
 async function rejectNotInMasterScan(input = {}, logger = console) {
-  if (!isManualRejectedSource(input)) {
-    if (logger && logger.log) logger.log('REJECTED_NOT_IN_MASTER_SKIPPED_NON_MANUAL', {
-      partNumber: input.extractedPartNumber || input.partNumber || input.part,
-      source: input.source || input.scanSource || input.scanMode || input.entryMode || input.defaultScanMode || ''
-    });
-    return null;
-  }
   if (logger && logger.log) logger.log('REJECTED_NOT_IN_MASTER', {
     partNumber: input.extractedPartNumber || input.partNumber || input.part,
     dealerCode: input.dealerCode,
@@ -153,5 +147,6 @@ module.exports = {
   notInMasterClause,
   normalizeDealerCode,
   scanMode,
-  isManualRejectedSource
+  isManualRejectedSource,
+  INVALID_PART_MESSAGE
 };

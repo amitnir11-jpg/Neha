@@ -279,7 +279,7 @@
   const SIDEBAR_MIN_WIDTH = 90;
   const SIDEBAR_MAX_WIDTH = 260;
   const SIDEBAR_WIDE_WIDTH = 132;
-  const CURRENT_DATA_VERSION = '2026-05-12-real-scans-only';
+  const CURRENT_DATA_VERSION = '2026-06-21-invalid-scan-validation';
   if (storageGet(DATA_VERSION_KEY) !== CURRENT_DATA_VERSION) {
     bootLog('local data version refresh', {
       from: storageGet(DATA_VERSION_KEY) || '',
@@ -293,7 +293,8 @@
     'user-dealer-wise': 'User & Dealer Wise Report',
     'raw-upi': 'Raw UPI Report',
     'scan-register': 'Scan Register Report',
-    'wrong-not-found-master': 'Rejected Report',
+    'invalid-scan-report': 'Invalid Scan Report',
+    'wrong-not-found-master': 'Invalid Scan Report',
     'stock-summary': 'Stock Summary',
     short: 'Short Report',
     excess: 'Excess Report',
@@ -315,7 +316,8 @@
     'bin-stock': 'bin_wise_report_layout',
     'bin-wise': 'bin_wise_report_layout',
     'category-wise-variance-summary': 'category_variance_report_layout',
-    'wrong-not-found-master': 'wrong_not_found_master_report_layout'
+    'invalid-scan-report': 'invalid_scan_report_layout',
+    'wrong-not-found-master': 'invalid_scan_report_layout'
   };
   const VIEW_TITLES = {
     dashboard: 'Dashboard',
@@ -564,12 +566,42 @@
     return `<a class="${escapeHtml(classes)}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(label)}" data-external="${external ? 'true' : 'false'}">${escapeHtml(text)}</a>`;
   }
 
-  function partLink(partNumber, className = 'table-link') {
+  function partActionButtonHtml(kind, part, options = {}) {
+    const isCopy = kind === 'copy';
+    const removeMode = String(options.removeMode || options.deleteMode || '').trim().toLowerCase();
+    const disabled = !isCopy && !removeMode && !options.onRemove && !options.scanId && !options.partNumber;
+    const classes = ['part-action-btn', isCopy ? 'copy-part-btn' : 'remove-part-btn'].join(' ');
+    const attrs = [
+      'type="button"',
+      `class="${classes}"`,
+      `data-part="${escapeHtml(part)}"`,
+      `title="${escapeHtml(isCopy ? 'Copy part number' : options.removeTitle || 'Remove part number')}"`,
+      `aria-label="${escapeHtml(isCopy ? `Copy part number ${part}` : options.removeLabel || `Remove part number ${part}`)}"`
+    ];
+    if (isCopy) {
+      attrs.push(`data-copy-label="${escapeHtml(options.copyLabel || 'Part number')}"`);
+    } else {
+      if (removeMode) attrs.push(`data-delete-mode="${escapeHtml(removeMode)}"`);
+      if (options.scanId) attrs.push(`data-scan-id="${escapeHtml(options.scanId)}"`);
+      if (options.dealerCode) attrs.push(`data-dealer-code="${escapeHtml(options.dealerCode)}"`);
+      if (options.auditId) attrs.push(`data-audit-id="${escapeHtml(options.auditId)}"`);
+      if (options.confirmText) attrs.push(`data-confirm-text="${escapeHtml(options.confirmText)}"`);
+      if (options.partNumber) attrs.push(`data-part-number="${escapeHtml(options.partNumber)}"`);
+      if (disabled) {
+        attrs.push('disabled');
+        attrs.push('aria-disabled="true"');
+      }
+    }
+    return `<button ${attrs.join(' ')}>${isCopy ? '⧉' : '✕'}</button>`;
+  }
+
+  function partLink(partNumber, className = 'table-link', options = {}) {
     const part = String(partNumber || '').trim();
     if (!part) return escapeHtml(partNumber || '-');
     const link = enterpriseLink(part, dashboardHref({ view: 'master', partNumber: part }), { className, label: `Open part ${part} in a new tab` });
-    const copyButton = `<button type="button" class="copy-part-btn" data-part="${escapeHtml(part)}" title="Copy part number" aria-label="Copy part number ${escapeHtml(part)}" style="border:0;background:transparent;color:var(--link,#005db8);cursor:pointer;padding:0 0 0 4px;font-size:12px;line-height:1;vertical-align:middle;">📋</button>`;
-    return `<span class="part-link-copy-group" style="display:inline-flex;align-items:center;gap:4px;max-width:100%;vertical-align:middle;">${link}${copyButton}</span>`;
+    const copyButton = partActionButtonHtml('copy', part, options);
+    const removeButton = options.showRemove === false ? '' : partActionButtonHtml('remove', part, options);
+    return `<span class="part-link-copy-group">${link}${copyButton}${removeButton}</span>`;
   }
 
   function deviceLink(deviceId, className = 'table-link') {
@@ -2196,9 +2228,9 @@
   function statusCell(item) {
     const syncStatus = normalizedDisplaySyncStatus(item);
     if (syncStatus) return syncStatusBadge(syncStatus);
-    const warnings = (item.warnings || []).map((warning) => /unknown part saved from sync|part does not exist/i.test(warning) ? 'Not Found in Master' : warning);
+    const warnings = (item.warnings || []).map((warning) => /unknown part saved from sync|part does not exist|part not found in master|not found in master/i.test(warning) ? 'Invalid part number - not found in master catalogue' : warning);
     if (warnings.length) return `<span class="status-warn">${escapeHtml(Array.from(new Set(warnings)).join(', '))}</span>`;
-    if (item.isMasterMatched === false) return '<span class="status-warn">Not Found in Master</span>';
+    if (item.isMasterMatched === false) return '<span class="status-warn">Invalid part number - not found in master catalogue</span>';
     return `<span class="status-ok">${item.synced ? 'Synced' : 'OK'}</span>`;
   }
 
@@ -2782,7 +2814,13 @@
     return `
       <tr>
         <td>${escapeHtml(compactDateTime(scan.timestamp))}</td>
-        <td>${partLink(scan.partNumber || scan.part)}</td>
+        <td>${partLink(scan.partNumber || scan.part, 'table-link', {
+          removeMode: isAdminUser() ? 'scan' : '',
+          scanId: scan.scanId || scan.uniqueScanId || scan.localId || scan._id || '',
+          dealerCode: scan.dealerCode || '',
+          auditId: scan.auditId || '',
+          copyLabel: 'Part number'
+        })}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? 0))}</td>
         <td>${escapeHtml(scan.scanType || scan.type)}</td>
@@ -2800,7 +2838,13 @@
     return `
       <tr>
         <td>${escapeHtml(compactDateTime(scan.timestamp || scan.scanTime || scan.createdAt || ''))}</td>
-        <td>${partLink(scan.partNumber || scan.part || scan.normalizedPartNumber || '')}</td>
+        <td>${partLink(scan.partNumber || scan.part || scan.normalizedPartNumber || '', 'table-link', {
+          removeMode: isAdminUser() ? 'scan' : '',
+          scanId: scan.scanId || scan.uniqueScanId || scan.localId || scan._id || '',
+          dealerCode: scan.dealerCode || '',
+          auditId: scan.auditId || '',
+          copyLabel: 'Part number'
+        })}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.mrp ?? 0))}</td>
         <td>${escapeHtml(scan.scanType || scan.type || '-')}</td>
@@ -3243,7 +3287,13 @@
       <tr>
         <td class="select-cell"><input class="scan-history-checkbox" type="checkbox" value="${escapeHtml(id)}"></td>
         <td>${escapeHtml(dateTime(scan.timestamp))}</td>
-        <td>${partLink(partNumber || scan.rawScanString || scan.rawScan || '')}</td>
+        <td>${partLink(partNumber || scan.rawScanString || scan.rawScan || '', 'table-link', {
+          removeMode: isAdminUser() ? 'scan' : '',
+          scanId: id,
+          dealerCode: scan.dealerCode || '',
+          auditId: scan.auditId || '',
+          copyLabel: 'Part number'
+        })}</td>
         <td>${escapeHtml(partDescription)}</td>
         <td>${escapeHtml(scan.productCategory || scan.category || 'Uncategorized')}</td>
         <td>${escapeHtml(money(rowMrp))}</td>
@@ -7200,7 +7250,7 @@
           <td title="${escapeHtml(row.deviceId || '')}">${deviceLink(row.deviceId)}</td>
           <td title="${escapeHtml(row.user || '')}">${escapeHtml(row.user || '-')}</td>
           <td>${escapeHtml(row.lastScanTime ? dateTime(row.lastScanTime) : '-')}</td>
-          <td title="${escapeHtml(row.reason || 'Not Found In Master')}">${escapeHtml(row.reason || 'Not Found In Master')}</td>
+          <td title="${escapeHtml(row.reason || 'Invalid part number - not found in master catalogue')}">${escapeHtml(row.reason || 'Invalid part number - not found in master catalogue')}</td>
           <td><span class="validator-status-badge ${row.status === 'mapped' || row.status === 'corrected' ? 'matched' : row.scanCount > 1 ? 'duplicate' : 'invalid'}">${escapeHtml(row.status === 'mapped' || row.status === 'corrected' ? row.status : row.scanCount > 1 ? 'Duplicate' : 'Invalid')}</span></td>
           <td>
             <select class="app-action-dropdown validator-action-dropdown" data-index="${index}" aria-label="Validation action">
@@ -7613,6 +7663,33 @@
     await api(`/api/admin/scans/${encodeURIComponent(scanId)}`, { method: 'DELETE', body: {} });
     removeScanHistoryRecords([scan]);
     toast('Scan deleted');
+    await refreshAfterDelete();
+  }
+
+  async function deletePartScansByNumber(partNumber, options = {}) {
+    const part = normalizePartText(partNumber || '');
+    if (!part) {
+      toast('Part number is not available', 'error');
+      return;
+    }
+    const dealerCode = cleanDealerCode(options.dealerCode || currentDealerCode() || '');
+    if (!dealerCode) {
+      toast('Select a dealer first', 'error');
+      return;
+    }
+    if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
+    const payload = {
+      dealerCode,
+      parts: part,
+      deleteType: 'single-part'
+    };
+    if (options.auditId) payload.auditId = String(options.auditId).trim();
+    const data = await api('/api/admin/scans/delete-by-parts', { method: 'POST', body: payload });
+    toast(`Part deleted: ${data.deletedCount || 0} scan(s) removed`);
+    queueDashboardRefresh(250);
+    if (state.reportHasRun && activeReportType()) {
+      await loadReport({ forceRefresh: true, showLoading: false });
+    }
     await refreshAfterDelete();
   }
 
@@ -8966,7 +9043,25 @@
           toast('Part number is not available', 'error');
           return;
         }
-        copyTextValue(part, 'Part number').catch((error) => toast(error.message, 'error'));
+        copyTextValue(part, copyButton.dataset.copyLabel || 'Part number').catch((error) => toast(error.message, 'error'));
+        return;
+      }
+      const removeButton = event.target.closest('.remove-part-btn');
+      if (removeButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (removeButton.disabled) return;
+        const part = String(removeButton.dataset.part || removeButton.dataset.partNumber || '').trim();
+        const mode = String(removeButton.dataset.deleteMode || '').trim().toLowerCase();
+        const scanId = String(removeButton.dataset.scanId || '').trim();
+        if (mode === 'scan' && scanId) {
+          deleteSingleScan(scanId).catch((error) => toast(error.message, 'error'));
+          return;
+        }
+        deletePartScansByNumber(part, {
+          dealerCode: removeButton.dataset.dealerCode || currentDealerCode(),
+          auditId: removeButton.dataset.auditId || ''
+        }).catch((error) => toast(error.message, 'error'));
         return;
       }
       if (!event.target.closest('#userMenu')) setUserMenuOpen(false);

@@ -91,6 +91,10 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     _loadState().then((_) async {
       try {
         await _socket.connect(_settings);
+        void scheduleLiveRefresh([dynamic _]) {
+          unawaited(_refreshRecentScans(forceServer: true));
+        }
+
         _socket.on('sync:clockSkew', (data) {
           try {
             if (data is Map) {
@@ -125,6 +129,14 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
             }
           } catch (_) {}
         });
+        _socket.on('scan:saved', scheduleLiveRefresh);
+        _socket.on('scan:deleted', scheduleLiveRefresh);
+        _socket.on('reports:update', scheduleLiveRefresh);
+        _socket.on('sync:completed', scheduleLiveRefresh);
+        _socket.on('syncData', scheduleLiveRefresh);
+        _socket.on('scan:last10:update', scheduleLiveRefresh);
+        _socket.on('dashboard:update', scheduleLiveRefresh);
+        _socket.on('inventory:update', scheduleLiveRefresh);
       } catch (_) {}
     });
 
@@ -190,21 +202,40 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _statusColor = _online ? Colors.blue : Colors.orange;
     });
     await _refreshLocalState();
+    await _refreshRecentScans(forceServer: _online);
     if (_online) {
       await _testServer(silent: true);
       await _registerDevice();
     }
   }
 
-  Future<void> _refreshLocalState() async {
-    final rows = await _database.lastScans();
+  Future<void> _refreshLocalState({bool refreshRecent = false}) async {
     final pending = await _database.countByStatus('Pending');
     final failed = await _database.countByStatus('Failed');
     if (!mounted) return;
     setState(() {
-      _lastScans = rows;
       _pendingCount = pending;
       _failedCount = failed;
+    });
+    if (refreshRecent) {
+      await _refreshRecentScans(forceServer: true);
+    }
+  }
+
+  Future<void> _refreshRecentScans({bool forceServer = false}) async {
+    List<ScanRecord> rows = [];
+    if (_online && (_serverConnected || forceServer)) {
+      try {
+        rows = await ApiClient(_settings)
+            .recentScans(limit: 10, dealerCode: _dealerCode);
+      } catch (_) {}
+    }
+    if (!_online) {
+      rows = await _database.lastScans();
+    }
+    if (!mounted) return;
+    setState(() {
+      _lastScans = rows.take(10).toList();
     });
   }
 
@@ -271,6 +302,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       final result = await _syncService.syncPending();
       final syncedAt = DateTime.now();
       await _refreshLocalState();
+      await _refreshRecentScans(forceServer: true);
       await _registerDevice();
       if (!mounted) return;
       setState(() {
@@ -463,6 +495,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => const PendingSyncScreen()));
     await _refreshLocalState();
+    await _refreshRecentScans(forceServer: true);
   }
 
   Future<void> _openSettings() async {
@@ -479,6 +512,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     await _testServer(silent: false, force: true);
     if (_serverConnected) {
       await _refreshLocalState();
+      await _refreshRecentScans(forceServer: true);
       await _registerDevice();
     }
   }

@@ -42,6 +42,7 @@ const {
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
 const BIN_REQUIRED_MESSAGE = 'Please enter/select bin location first.';
+const INVALID_PART_MESSAGE = masterValidation.INVALID_PART_MESSAGE || 'Invalid part number - not found in master catalogue';
 const SYNC_VERBOSE_LOGS = process.env.SYNC_VERBOSE_LOGS === 'true';
 
 /**
@@ -390,14 +391,9 @@ function logSync(stage, details = {}) {
   void safeDetails;
 }
 
-async function logMasterValidationFailure(scan = {}, reason = 'Not Found In Master') {
+async function logMasterValidationFailure(scan = {}, reason = INVALID_PART_MESSAGE) {
   try {
     if (upper(scan.scanType || scan.type || '') === 'VERIFICATION') return;
-    if (!masterValidation.isManualRejectedSource({
-      ...scan,
-      source: normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, 'mobile'),
-      defaultScanMode: 'Mobile'
-    })) return;
     const now = scan.timestamp instanceof Date && !Number.isNaN(scan.timestamp.getTime()) ? scan.timestamp : new Date();
     const rawScannedValue = clean(scan.rawScanString || scan.rawScan || scan.rawUpi || scan.upiNo || scan.upiId);
     const recent = rawScannedValue ? await VerificationLog.findOne({
@@ -427,7 +423,7 @@ async function logMasterValidationFailure(scan = {}, reason = 'Not Found In Mast
       scanType: upper(scan.scanType || scan.type),
       source: normalizeSource(scan.source?.source || scan.source?.scanSource || scan.source, 'mobile'),
       binLocation: upper(scan.binLocation || scan.bin),
-      reason,
+      reason: reason || INVALID_PART_MESSAGE,
       repeatCount: 1,
       time: now
     });
@@ -1125,7 +1121,7 @@ async function saveNormalizedScan(scan, req) {
   const errors = [];
   if (!scan.partNumber) errors.push('Part number missing');
   if (scan.partNumber && !isValidPartNumber(scan.partNumber)) errors.push('Invalid part number format');
-  if (!master) errors.push(`Part not found in Master Catalogue: ${scan.partNumber || scan.rawScanString || 'unknown'}`);
+  if (!master) errors.push(INVALID_PART_MESSAGE);
   if (['INWARD', 'DAMAGE'].includes(scan.scanType) && !scan.binLocation) errors.push(BIN_REQUIRED_MESSAGE);
   if (scan.scanType === 'FITTED') {
     inventory.prepareFittedScan(scan, scan.quantity || 1);
@@ -1156,14 +1152,14 @@ async function saveNormalizedScan(scan, req) {
     }
   });
   if (errors.length) {
-    if (!master && scan.partNumber && manualEntry) {
-      await logMasterValidationFailure(scan, 'Not Found In Master');
+    if (!master && (scan.rawScanString || scan.rawScan || scan.rawUpi || scan.upiId || scan.partNumber)) {
+      await logMasterValidationFailure(scan, INVALID_PART_MESSAGE);
       await masterValidation.rejectNotInMasterScan({
         ...scan,
-        rawScannedValue: scan.rawScanString,
+        rawScannedValue: scan.rawScanString || scan.rawScan || scan.rawUpi || scan.upiId || '',
         extractedPartNumber: scan.partNumber,
         originalScanId: scan.uniqueScanId,
-        source: normalizeSource(scan.source.source || scan.source.scanSource, 'mobile'),
+        source: normalizeSource(scan.source?.source || scan.source?.scanSource || scan.source, 'mobile'),
         sourceRoute: req.originalUrl,
         defaultScanMode: 'Mobile'
       }, console);
@@ -1202,7 +1198,7 @@ async function saveNormalizedScan(scan, req) {
   }
 
   const warnings = [];
-  if (!master) warnings.push(`Part not found in Master Catalogue: ${scan.partNumber}`);
+  if (!master) warnings.push(INVALID_PART_MESSAGE);
   if (master && !master.activeStatus) warnings.push('Inactive part');
   const finalQty = Number(scan.quantity || 1);
   const finalBin = scan.binLocation;
@@ -1745,17 +1741,17 @@ async function pushHandler(req, res) {
       if (scan.quantity === undefined || scan.quantity === null || Number.isNaN(Number(scan.quantity))) rowErrors.push('qty missing or invalid');
       if (!(Number(scan.quantity) > 0)) rowErrors.push('qty must be greater than zero');
       if (master && masterPriceMissing(masterPrice)) rowErrors.push(MISSING_PART_MASTER_PRICE_MESSAGE);
-      if (!master && manualEntry) {
+      if (!master) {
         scan.manualMasterMissing = true;
       }
 
       if (rowErrors.length) {
         const isInvalidLocalRecord = rowErrors.some((reason) => /scanId missing|partNumber missing/.test(reason));
-        if (!master && scan.partNumber && manualEntry) {
-          logMasterValidationFailure(scan, 'Not Found In Master').catch(() => undefined);
+        if (!master && (scan.rawScanString || scan.rawScan || scan.rawUpi || scan.upiId || scan.partNumber)) {
+          logMasterValidationFailure(scan, INVALID_PART_MESSAGE).catch(() => undefined);
           masterValidation.rejectNotInMasterScan({
             ...scan,
-            rawScannedValue: scan.rawScanString,
+            rawScannedValue: scan.rawScanString || scan.rawScan || scan.rawUpi || scan.upiId || '',
             extractedPartNumber: scan.partNumber,
             originalScanId: scan.uniqueScanId,
             source: normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, 'mobile'),
@@ -1861,7 +1857,7 @@ async function pushHandler(req, res) {
       const finalQty = Number(scan.quantity || 1);
       const finalBin = scan.binLocation;
       const valueFields = valuationFields({ masterPrice, master, qty: finalQty });
-      const warnings = master ? [] : [`Part not found in Master Catalogue: ${scan.partNumber}`];
+      const warnings = master ? [] : [INVALID_PART_MESSAGE];
       const finalDlc = Number(valueFields.dlc || 0);
       const doc = {
         uniqueScanId: scan.uniqueScanId,

@@ -10,6 +10,7 @@ const Bin = require('../models/Bin');
 const VerificationLog = require('../models/VerificationLog');
 const User = require('../models/User');
 const auth = require('./auth');
+const masterValidation = require('../utils/masterValidation');
 const { auditWorkflowStatus, closeOtherActiveAudits, multiAuditEnabled, publicAudit, syncDealerWithAudit } = require('../utils/audit');
 const normalizer = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
@@ -18,6 +19,7 @@ const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../ut
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 const DEALER_LIST_CACHE_MS = 30000;
+const INVALID_PART_MESSAGE = masterValidation.INVALID_PART_MESSAGE || 'Invalid part number - not found in master catalogue';
 let dealerListCache = { expiresAt: 0, dealers: [] };
 
 function invalidateMasterCaches(scope = {}, tags = ['master', 'catalogue', 'search', 'report', 'dashboard', 'dealer', 'bin', 'audit']) {
@@ -361,9 +363,6 @@ function validatorTextRegex(value) {
 
 function validatorFilter(query = {}) {
   const filter = { found: false, status: { $nin: ['ignored', 'corrected', 'mapped', 'deleted'] } };
-  filter.$and = [
-    { source: 'manual' }
-  ];
   const dealerCode = normalizePart(query.dealerCode);
   if (dealerCode && dealerCode !== 'ALL') filter.dealerCode = dealerCode;
   const part = validatorTextRegex(query.partNumber);
@@ -371,11 +370,13 @@ function validatorFilter(query = {}) {
   const user = validatorTextRegex(query.user);
   const device = validatorTextRegex(query.deviceId);
   const scanType = normalizePart(query.scanType);
+  const source = validatorTextRegex(query.source);
   if (part) filter.$and = [...(filter.$and || []), { $or: [{ extractedPartNumber: part }, { partNumber: part }] }];
   if (raw) filter.rawScannedValue = raw;
   if (user) filter.$and = [...(filter.$and || []), { $or: [{ userId: user }, { loginId: user }, { scannedBy: user }, { staffName: user }] }];
   if (device) filter.deviceId = device;
   if (scanType) filter.scanType = scanType;
+  if (source) filter.source = source;
   const from = query.dateFrom ? new Date(query.dateFrom) : null;
   const to = query.dateTo ? new Date(query.dateTo) : null;
   if (from || to) {
@@ -393,7 +394,7 @@ function invalidGroupKey(row = {}) {
   return [
     normalizePart(row.extractedPartNumber || row.partNumber || row.rawScannedValue),
     normalizePart(row.dealerCode),
-    String(row.reason || 'Not Found In Master').trim().toUpperCase()
+    String(row.reason || INVALID_PART_MESSAGE).trim().toUpperCase()
   ].join('|');
 }
 
@@ -1472,7 +1473,7 @@ router.get('/scan-validator', auth.requireAuth, auth.requireAdmin, async (req, r
           deviceId: row.deviceId || '',
           user: row.staffName || row.scannedBy || row.loginId || row.userId || '',
           lastScanTime: row.time || row.createdAt || '',
-          reason: row.reason || 'Not Found In Master',
+          reason: row.reason || INVALID_PART_MESSAGE,
           status: row.status || 'invalid',
           detailIds: [],
           details: []
@@ -1650,7 +1651,7 @@ router.get('/scan-validator/missing-master/export', auth.requireAuth, auth.requi
           deviceId: row.deviceId || '',
           user: row.staffName || row.scannedBy || row.loginId || row.userId || '',
           lastScanTime: row.time || row.createdAt || '',
-          reason: row.reason || 'Not Found In Master',
+          reason: row.reason || INVALID_PART_MESSAGE,
           status: row.status || 'invalid'
         });
       }

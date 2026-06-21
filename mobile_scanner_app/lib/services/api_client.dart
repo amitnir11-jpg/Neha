@@ -271,4 +271,22 @@ class ApiClient {
     return _request(
         '/api/mobile/reports/verify-scan?${Uri(queryParameters: query).query}');
   }
+
+  Future<List<ScanRecord>> recentScans(
+      {int limit = 10, String dealerCode = ''}) async {
+    final effectiveDealerCode = dealerCode.isNotEmpty
+        ? dealerCode
+        : await settings.dealerCode;
+    final query = <String, String>{'limit': limit.toString()};
+    if (effectiveDealerCode.isNotEmpty) {
+      query['dealerCode'] = effectiveDealerCode;
+    }
+    final data = await _request(
+        '/api/mobile/reports/last-scans?${Uri(queryParameters: query).query}');
+    final rows = (data['records'] ?? data['rows'] ?? data['data'] ?? []) as List<dynamic>;
+    return rows
+        .whereType<Map>()
+        .map((row) => ScanRecord.fromServerMap(Map<String, dynamic>.from(row)))
+        .toList();
+  }
 }

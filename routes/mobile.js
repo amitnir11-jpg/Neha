@@ -29,6 +29,7 @@ const { applyCacheHeaders, getCachedResponse } = require('../utils/safeCache');
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
 const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.0.5';
+const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 const MOBILE_SCAN_SELECT = [
   'uniqueScanId scanId syncKey qrFingerprint rawUpiHash',
   'part partNumber normalizedPartNumber partName partDescription category productCategory productGroup partSubGroup model year manufacturingYear',
@@ -749,7 +750,7 @@ router.get('/reports/verification', auth.optionalAuth, async (req, res) => {
       extractedPartNumber: row.extractedPartNumber || row.partNumber || '',
       partNumber: row.partNumber || row.extractedPartNumber || '',
       binLocation: row.binLocation || '',
-      reason: row.reason || (row.found ? 'Found In Master' : 'Not Found In Master'),
+      reason: row.reason || (row.found ? 'Found In Master' : INVALID_PART_MESSAGE),
       found: row.found ? 'Found' : 'Not Found',
       deviceId: row.deviceId
     })) });
@@ -786,7 +787,7 @@ router.get('/reports/export-excel', auth.optionalAuth, async (req, res) => {
         extractedPartNumber: row.extractedPartNumber || row.partNumber || '',
         partNumber: row.partNumber || row.extractedPartNumber || '',
         binLocation: row.binLocation || '',
-        reason: row.reason || (row.found ? 'Found In Master' : 'Not Found In Master'),
+        reason: row.reason || (row.found ? 'Found In Master' : INVALID_PART_MESSAGE),
         found: row.found ? 'Found' : 'Not Found',
         deviceId: row.deviceId || ''
       }));

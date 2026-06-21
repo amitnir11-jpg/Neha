@@ -640,10 +640,12 @@ model Inventory {
   dateTime             DateTime?
   activeInventory      Boolean?  @default(false)
   remainingQty         Float?    @default(0)
+  deletedAt            DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
   @@index([dealerCode])
+  @@index([auditId])
   @@index([partNumber])
   @@index([normalizedPartNumber])
   @@index([upiNo])
@@ -659,7 +661,9 @@ model Inventory {
   @@index([dealerCode, auditId, movementType])
   @@index([dealerCode, auditId, activeInventory])
   @@index([dealerCode, binLocation])
+  @@index([activeInventory])
   @@index([dealerCode, scanStatus, createdAt])
+  @@index([deletedAt])
   @@index([syncStatus])
   @@index([scanStatus])
   @@index([globalUpiKey])
@@ -1003,10 +1007,12 @@ model Scan {
   dateTime             DateTime?
   activeInventory      Boolean?  @default(false)
   remainingQty         Float?    @default(0)
+  deletedAt            DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
   @@index([dealerCode])
+  @@index([auditId])
   @@index([partNumber])
   @@index([normalizedPartNumber])
   @@index([upiNo])
@@ -1022,6 +1028,8 @@ model Scan {
   @@index([dealerCode, auditId, upiCode])
   @@index([dealerCode, auditId, movementType])
   @@index([dealerCode, auditId, activeInventory])
+  @@index([activeInventory])
+  @@index([deletedAt])
   @@map("scans")
 }
 

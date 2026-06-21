@@ -92,6 +92,7 @@ function activeUpiDuplicateFilter(input = {}) {
   if (globalKey) terms.push({ globalUpiKey: globalKey });
   const filter = {
     activeInventory: { $ne: false },
+    deletedAt: null,
     $and: [{ $or: [{ movementType: 'INWARD' }, { scanType: 'INWARD' }, { type: 'INWARD' }] }],
     $or: terms.length ? terms : [{ upiCode: '__NO_UPI__' }]
   };

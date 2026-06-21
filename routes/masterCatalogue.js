@@ -262,7 +262,7 @@ router.get('/unmatched-parts', auth.requireAuth, async (req, res) => {
   try {
     return await sendCachedJson(res, 'search', req.query, async () => {
       const rows = await Inventory.aggregate([
-        { $match: { ...nonVerificationScanClause(), $or: [{ masterMatch: false }, { isMasterMatched: false }, { warnings: /Part not found in Master Catalogue|Not Found in Master/i }] } },
+        { $match: { ...nonVerificationScanClause(), $or: [{ masterMatch: false }, { isMasterMatched: false }, { warnings: /Invalid part number - not found in master catalogue|Part not found in Master Catalogue|Not Found in Master/i }] } },
         { $group: { _id: '$normalizedPartNumber', partNumber: { $first: '$partNumber' }, scanCount: { $sum: 1 }, lastScanTime: { $max: '$timestamp' } } },
         { $sort: { lastScanTime: -1 } }
       ]);

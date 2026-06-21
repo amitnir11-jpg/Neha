@@ -6,7 +6,7 @@ const reportModule = require('./report');
 const router = reportModule;
 const auth = require('./auth');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
-const RejectedScan = require('../models/RejectedScan');
+const VerificationLog = require('../models/VerificationLog');
 const { formatDateLikeFields, parseIstFilterDate } = require('../utils/time');
 const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
@@ -15,6 +15,8 @@ const categoryResolver = require('../utils/categoryResolver');
 const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
   ? categoryResolver.canonicalizePartCategory
   : (value, options = {}) => String(value || '').trim() || options.uncategorized || 'Uncategorized';
+
+const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 
 const autoTable = autoTableModule.default || autoTableModule;
 
@@ -145,52 +147,57 @@ async function duplicateReportRows(query = {}) {
 
 function rejectedReportFilter(query = {}) {
   const filter = {};
+  filter.found = false;
+  filter.scanType = { $ne: 'VERIFICATION' };
   if (query.dealerCode) filter.dealerCode = upper(query.dealerCode);
-  if (query.partNumber) filter.extractedPartNumber = { $regex: clean(query.partNumber), $options: 'i' };
+  if (query.partNumber) {
+    const text = clean(query.partNumber);
+    filter.$and = (filter.$and || []).concat([{
+      $or: [
+        { extractedPartNumber: { $regex: text, $options: 'i' } },
+        { partNumber: { $regex: text, $options: 'i' } },
+        { rawScannedValue: { $regex: text, $options: 'i' } }
+      ]
+    }]);
+  }
   if (query.scanType) filter.scanType = upper(query.scanType);
   if (query.bin) filter.binLocation = { $regex: clean(query.bin), $options: 'i' };
   if (query.dealerName) filter.dealerName = regex(query.dealerName);
-  applyCommonMetadataFilters(filter, query, { rawFields: ['rawScannedValue', 'rawUpi', 'rawQR', 'rawScan'] });
+  if (query.source) filter.source = regex(query.source);
+  applyCommonMetadataFilters(filter, query, { rawFields: ['rawScannedValue'] });
   if (query.fromDate || query.dateFrom || query.from || query.toDate || query.dateTo || query.to) {
-    filter.dateTime = {};
+    filter.time = {};
     const from = parseFilterDate(query.fromDate || query.dateFrom || query.from || '');
     const to = parseFilterDate(query.toDate || query.dateTo || query.to || '', true);
-    if (from && !Number.isNaN(from.getTime())) filter.dateTime.$gte = from;
-    if (to && !Number.isNaN(to.getTime())) filter.dateTime.$lte = to;
+    if (from && !Number.isNaN(from.getTime())) filter.time.$gte = from;
+    if (to && !Number.isNaN(to.getTime())) filter.time.$lte = to;
   }
   return filter;
 }
 
 async function rejectedReportRows(query = {}) {
-  const rows = await RejectedScan.find(rejectedReportFilter(query)).sort({ dateTime: -1, createdAt: -1 }).limit(5000).lean();
+  const rows = await VerificationLog.find(rejectedReportFilter(query)).sort({ time: -1, createdAt: -1 }).limit(5000).lean();
   return rows.map((row) => ({
-    dealerCode: row.dealerCode || '',
-    dealerName: row.dealerName || '',
-    scanTime: row.dateTime || row.createdAt,
-    partNumber: row.extractedPartNumber || row.partNumber || '',
-    rawQrUpi: row.rawScannedValue || row.rawUpi || row.rawQR || row.rawScan || '',
-    reason: 'Part not found in master',
-    userName: row.userName || row.loginId || '',
-    deviceName: row.deviceName || '',
-    deviceId: row.deviceId || '',
-    binLocation: row.binLocation || '',
-    entryMode: row.scanMode || '',
-    scanType: row.scanType || '',
-    syncStatus: row.syncStatus || 'rejected'
+    time: row.time || row.dateTime || row.createdAt,
+    rawScanValue: row.rawScannedValue || row.rawScan || row.rawQR || row.rawUpi || '',
+    parsedValue: row.extractedPartNumber || row.partNumber || '',
+    reason: row.reason || INVALID_PART_MESSAGE,
+    device: row.deviceName || row.deviceId || '',
+    user: row.staffName || row.scannedBy || row.loginId || row.userId || '',
+    dealer: row.dealerCode || '',
+    source: row.source || row.scanMode || row.entryMode || ''
   }));
 }
 
-const REJECTED_COLUMNS = [
-  { header: 'DEALER CODE', key: 'dealerCode', width: 16 },
-  { header: 'DEALER NAME', key: 'dealerName', width: 28 },
-  { header: 'SCAN TIME', key: 'scanTime', width: 22 },
-  { header: 'PART NUMBER', key: 'partNumber', width: 18 },
-  { header: 'RAW QR / UPI', key: 'rawQrUpi', width: 42 },
+const INVALID_SCAN_COLUMNS = [
+  { header: 'TIME', key: 'time', width: 22 },
+  { header: 'RAW SCAN VALUE', key: 'rawScanValue', width: 42 },
+  { header: 'PARSED VALUE', key: 'parsedValue', width: 18 },
   { header: 'REASON', key: 'reason', width: 28 },
-  { header: 'USER NAME', key: 'userName', width: 22 },
-  { header: 'DEVICE NAME', key: 'deviceName', width: 24 },
-  { header: 'SCAN TYPE', key: 'scanType', width: 16 },
-  { header: 'SYNC STATUS', key: 'syncStatus', width: 16 }
+  { header: 'DEVICE', key: 'device', width: 24 },
+  { header: 'USER', key: 'user', width: 22 },
+  { header: 'DEALER', key: 'dealer', width: 18 },
+  { header: 'SOURCE', key: 'source', width: 18 }
 ];
 
 function groupRows(rows, keyFn, seedFn, updateFn) {
@@ -607,7 +614,7 @@ function scanRegisterRejectedRow(row) {
     entryMode: registerEntryMode({ ...row, source: row.entryMode || 'manual' }),
     syncStatus: row.syncStatus || 'rejected',
     duplicateStatus: 'No',
-    remarks: row.reason || 'Part not found in master'
+    remarks: row.reason || INVALID_PART_MESSAGE
   };
 }
 
@@ -641,14 +648,10 @@ function registerFilterMatch(row = {}, query = {}) {
 async function scanRegisterRows(query = {}) {
   const sourceQuery = { ...stripRegisterOnlyFilters(query), ...rowReportScanWindow(query) };
   const data = await reportModule.buildReportData(sourceQuery);
-  const [duplicates, rejected] = await Promise.all([
-    duplicateReportRows(sourceQuery),
-    rejectedReportRows(sourceQuery)
-  ]);
+  const duplicates = await duplicateReportRows(sourceQuery);
   return [
     ...data.scans.map(scanRegisterInventoryRow),
-    ...duplicates.map(scanRegisterDuplicateRow),
-    ...rejected.map(scanRegisterRejectedRow)
+    ...duplicates.map(scanRegisterDuplicateRow)
   ]
     .filter((row) => registerFilterMatch(row, query))
     .sort((a, b) => new Date(b.scanTime || 0) - new Date(a.scanTime || 0));
@@ -832,7 +835,7 @@ function columnsForReport(type, rows) {
   if (type === 'user-dealer-wise') return USER_DEALER_COLUMNS;
   if (type === 'device-wise') return DEVICE_COLUMNS;
   if (type === 'duplicate-scans') return DUPLICATE_COLUMNS;
-  if (type === 'wrong-not-found-master') return REJECTED_COLUMNS;
+  if (type === 'invalid-scan-report' || type === 'wrong-not-found-master') return INVALID_SCAN_COLUMNS;
   return columnsForRows(rows);
 }
 
@@ -1056,11 +1059,9 @@ const REPORTS = {
   'bin-wise-stock': ['bin-wise-stock', 'Bin Wise Stock Report'],
   'user-dealer-wise': ['user-dealer-wise', 'User & Dealer Wise Report'],
   'scan-register': ['scan-register', 'Scan Register Report'],
-  'wrong-not-found-master': ['wrong-not-found-master', 'Rejected Report']
 };
 
 Object.entries(REPORTS).forEach(([path, [type, title]]) => {
-  if (type === 'wrong-not-found-master') return;
   router.get(`/${path}`, auth.requireAuth, (req, res) => handleReport(req, res, type, title));
   router.post(`/${path}/email`, auth.requireAuth, auth.requireAdmin, (req, res) => emailReport(req, res, type, title));
 });
@@ -1082,27 +1083,30 @@ function emailScanRegisterAlias(req, res, scanStatus = '') {
   return emailReport(req, res, 'scan-register', 'Scan Register Report');
 }
 
-router.get('/wrong-not-found-master', auth.requireAuth, async (req, res) => {
+async function handleInvalidScanReport(req, res) {
   try {
     if (!selectedDealerCode(req.query)) return requireDealerSelection(res);
     const rows = await rejectedReportRows(req.query);
-    const title = 'Rejected Report';
-    if (req.query.format === 'excel') return sendExcel(res, title, rows, 'wrong-not-found-master', req.query);
-    if (req.query.format === 'pdf') return sendPdf(res, title, rows, 'wrong-not-found-master', req.query);
+    const title = 'Invalid Scan Report';
+    if (req.query.format === 'excel') return sendExcel(res, title, rows, 'invalid-scan-report', req.query);
+    if (req.query.format === 'pdf') return sendPdf(res, title, rows, 'invalid-scan-report', req.query);
     return res.json({
       success: true,
-      type: 'wrong-not-found-master',
+      type: 'invalid-scan-report',
       title,
-      summary: { rejectedCount: rows.length },
-      columns: REJECTED_COLUMNS.map(({ header, key }) => ({ header, key })),
+      summary: { invalidCount: rows.length },
+      columns: INVALID_SCAN_COLUMNS.map(({ header, key }) => ({ header, key })),
       rows,
       totalRows: rows.length,
-      message: rows.length ? '' : 'No rejected not-in-master scans found for selected filter'
+      message: rows.length ? '' : 'No invalid scans found for selected filter'
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
-});
+}
+
+router.get('/invalid-scan-report', auth.requireAuth, handleInvalidScanReport);
+router.get('/wrong-not-found-master', auth.requireAuth, handleInvalidScanReport);
 
 router.get('/duplicate-scans', auth.requireAuth, (req, res) => handleScanRegisterAlias(req, res, 'Duplicate'));
 router.post('/duplicate-scans/email', auth.requireAuth, auth.requireAdmin, (req, res) => emailScanRegisterAlias(req, res, 'Duplicate'));
