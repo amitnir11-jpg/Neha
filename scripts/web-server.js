@@ -26,6 +26,11 @@ app.get('/config.js', (req, res) => {
   res.send(`window.DAKSH_CONFIG=${JSON.stringify({ apiBaseUrl })};`);
 });
 
+app.get('/health', (req, res) => {
+  noStore(res);
+  res.status(200).json({ status: 'ok' });
+});
+
 app.get(['/api/ready', '/api/health'], (req, res) => {
   noStore(res);
   res.json({

@@ -115,6 +115,8 @@ const IS_RENDER = DEPLOY_TARGET === 'render' ||
 const IS_RAILWAY = DEPLOY_TARGET === 'railway' ||
   Boolean(process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.RAILWAY_ENVIRONMENT_NAME);
 const DEPLOYMENT_NAME = IS_RENDER ? 'Render' : (IS_RAILWAY ? 'Railway' : (IS_PRODUCTION ? 'hosting provider' : 'local PC'));
+const ALLOW_LOCAL_DB_FALLBACK = !IS_RENDER && !IS_RAILWAY && !IS_PRODUCTION;
+const SKIP_MIGRATIONS = String(process.env.DAKSH_SKIP_MIGRATIONS || '').trim().toLowerCase() === 'true';
 const DATABASE_URL_SOURCE = databaseUrlSource();
 const MOBILE_DISCOVERY_PORT = Number(process.env.MOBILE_DISCOVERY_PORT || PORT);
 const MOBILE_DISCOVERY_REQUEST = 'DAKSH_DISCOVER_V1';
@@ -278,7 +280,7 @@ app.use((req, res, next) => {
     ''
   ).trim().replace(/\/+$/, '');
   if (!explicitPublicBaseUrl || isPlaceholderPublicUrl(explicitPublicBaseUrl) || !/^(GET|HEAD)$/i.test(req.method)) return next();
-  if (req.path.startsWith('/api/') || req.path.startsWith('/socket.io/')) return next();
+  if (req.path === '/health' || req.path.startsWith('/api/') || req.path.startsWith('/socket.io/')) return next();
   if (/\.(?:css|js|mjs|map|png|jpe?g|gif|svg|webp|ico|txt|json|woff2?|ttf|eot)$/i.test(req.path)) return next();
 
   const requestHost = req.get('x-forwarded-host') || req.get('host') || '';
@@ -332,6 +334,13 @@ app.get('/force-login', (req, res) => {
   </script>
   <p>Opening Daksh login...</p>
 </body></html>`);
+});
+
+app.get('/health', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.status(200).json({ status: 'ok' });
 });
 
 app.get('/api/health', async (req, res) => {
@@ -441,6 +450,19 @@ app.get('/api/discovery', (req, res) => {
     healthUrl: info.healthUrl,
     connectUrl: info.connectUrl,
     syncUrl: info.syncUrl
+  });
+});
+
+app.use('/api/auth', (req, res, next) => {
+  if (isDatabaseReady()) return next();
+  return res.status(503).json({
+    success: false,
+    message: databaseUnavailableMessage(),
+    serverStatus: 'online',
+    ...currentDatabasePayload(),
+    deploymentTarget: DEPLOYMENT_NAME,
+    render: IS_RENDER,
+    railway: IS_RAILWAY
   });
 });
 
@@ -773,6 +795,11 @@ async function runPostgresStartupTasks() {
 
 function runPrismaMigrations() {
   if (String(process.env.DAKSH_MIGRATIONS_COMPLETED || '').toLowerCase() === 'true') return;
+  if (SKIP_MIGRATIONS) {
+    console.log('Skipping Prisma migrations because DAKSH_SKIP_MIGRATIONS=true');
+    process.env.DAKSH_MIGRATIONS_COMPLETED = 'true';
+    return;
+  }
   const resolvedDatabase = applyResolvedDatabaseUrl();
   if (!resolvedDatabase.url) {
     throw new Error(`PostgreSQL URL is missing. Set one of: ${acceptedDatabaseEnvVars().join(', ')}.`);
@@ -812,39 +839,47 @@ async function start() {
     console.log('PostgreSQL connected successfully');
     await runPostgresStartupTasks();
     console.log('Database seed completed');
-    const activePort = await listenOnConfiguredPort(PORT);
-    app.locals.activePort = activePort;
-    fs.writeFileSync(path.join(__dirname, 'server_port.txt'), String(activePort));
-    startMobileDiscoveryServer(activePort);
-
-    let healthBroadcastTimer = null;
-    const startHealthBroadcast = () => {
-      if (healthBroadcastTimer) clearInterval(healthBroadcastTimer);
-      healthBroadcastTimer = setInterval(() => {
-        try {
-          const dbStatus = currentDatabaseStatus();
-          if (io && io.sockets && io.sockets.sockets.size > 0) {
-            io.emit('database:health', {
-              status: dbStatus === 'connected' ? 'online' : 'offline',
-              databaseStatus: dbStatus === 'connected' ? 'online' : 'offline',
-              db: dbStatus,
-              timestamp: new Date().toISOString(),
-              details: currentDatabasePayload()
-            });
-          }
-        } catch (error) {
-          console.warn('Health broadcast failed:', error.message);
-        }
-      }, 60000);
-      if (typeof healthBroadcastTimer.unref === 'function') healthBroadcastTimer.unref();
-    };
-    startHealthBroadcast();
-    console.log(`Server started successfully on port ${activePort}`);
   } catch (error) {
-    console.error('PostgreSQL startup failed. Server not started.');
-    console.error(error.stack || error.message);
-    process.exit(1);
+    if (!ALLOW_LOCAL_DB_FALLBACK) {
+      console.error('PostgreSQL startup failed. Server not started.');
+      console.error(error.stack || error.message);
+      process.exit(1);
+      return;
+    }
+    console.warn(`Starting in local fallback mode: ${error.message}`);
   }
+
+  const activePort = await listenOnConfiguredPort(PORT);
+  app.locals.activePort = activePort;
+  fs.writeFileSync(path.join(__dirname, 'server_port.txt'), String(activePort));
+  startMobileDiscoveryServer(activePort);
+
+  let healthBroadcastTimer = null;
+  const startHealthBroadcast = () => {
+    if (healthBroadcastTimer) clearInterval(healthBroadcastTimer);
+    healthBroadcastTimer = setInterval(() => {
+      try {
+        const dbStatus = currentDatabaseStatus();
+        if (io && io.sockets && io.sockets.sockets.size > 0) {
+          io.emit('database:health', {
+            status: dbStatus === 'connected' ? 'online' : 'offline',
+            databaseStatus: dbStatus === 'connected' ? 'online' : 'offline',
+            db: dbStatus,
+            timestamp: new Date().toISOString(),
+            details: currentDatabasePayload()
+          });
+        }
+      } catch (error) {
+        console.warn('Health broadcast failed:', error.message);
+      }
+    }, 60000);
+    if (typeof healthBroadcastTimer.unref === 'function') healthBroadcastTimer.unref();
+  };
+  startHealthBroadcast();
+  if (!isDatabaseReady()) {
+    console.warn('Server started without PostgreSQL. API routes will return 503 until DATABASE_URL is configured.');
+  }
+  console.log(`Server started successfully on port ${activePort}`);
 }
 
 start();
