@@ -3420,6 +3420,28 @@ tr:hover td {
   user-select: text;
 }
 
+.report-table-wrap .enterprise-link.part-link,
+.report-table-wrap .table-link.part-link {
+  display: inline !important;
+  padding: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  font-weight: inherit !important;
+  text-decoration: none !important;
+  cursor: text !important;
+  user-select: text !important;
+}
+
+.report-table-wrap .enterprise-link.part-link:hover,
+.report-table-wrap .enterprise-link.part-link:focus-visible,
+.report-table-wrap .table-link.part-link:hover,
+.report-table-wrap .table-link.part-link:focus-visible {
+  background: transparent !important;
+  color: inherit !important;
+  text-decoration: none !important;
+  box-shadow: none !important;
+}
+
 .report-table-wrap table {
   min-width: 1280px;
   width: var(--report-table-width, 100%);
@@ -5857,6 +5879,46 @@ tr:hover td,
   background: #1f2937 !important;
   color: #ffffff !important;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* Keep report and dashboard tables horizontally scrollable without trapping vertical page scroll. */
+.table-wrap,
+.dashboard-table-wrap,
+.removed-report-table-wrap,
+.report-table-wrap,
+.scan-history-wrap,
+.resizable-table-wrap,
+.master-table-wrap,
+.validator-table-wrap,
+.admin-delete-table-wrap,
+.archive-table-wrap {
+  max-height: none !important;
+  height: auto !important;
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+  overscroll-behavior: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+.dashboard-stream-wrap,
+.dashboard-summary-wrap,
+.product-group-detail-wrap {
+  max-height: none !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+.report-table-wrap {
+  min-height: 0 !important;
+}
+
+.report-table-wrap th,
+.report-table-wrap td,
+.dashboard-data-table th,
+.dashboard-data-table td,
+.scan-history-table th,
+.scan-history-table td {
+  touch-action: auto;
 }
 
 .dealer-access-select[multiple] {

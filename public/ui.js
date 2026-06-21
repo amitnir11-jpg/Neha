@@ -5315,8 +5315,10 @@
     $('#reportTabsLeft')?.addEventListener('click', () => scrollReportTabs(-1));
     $('#reportTabsRight')?.addEventListener('click', () => scrollReportTabs(1));
     scroller.addEventListener('wheel', (event) => {
-      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-      if (!delta) return;
+      const horizontalIntent = event.shiftKey || Math.abs(event.deltaX) > Math.max(6, Math.abs(event.deltaY) * 1.25);
+      if (!horizontalIntent) return;
+      const delta = event.deltaX || (event.shiftKey ? event.deltaY : 0);
+      if (Math.abs(delta) < 4) return;
       event.preventDefault();
       const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
       scroller.scrollLeft = Math.min(maxLeft, Math.max(0, scroller.scrollLeft + delta));
@@ -5461,10 +5463,10 @@
     });
     wrap.addEventListener('wheel', (event) => {
       if (event.ctrlKey) return;
-      const horizontalIntent = Math.abs(event.deltaX) >= Math.abs(event.deltaY) || event.shiftKey;
+      const horizontalIntent = event.shiftKey || Math.abs(event.deltaX) > Math.max(6, Math.abs(event.deltaY) * 1.25);
       if (!horizontalIntent) return;
       const delta = event.deltaX || (event.shiftKey ? event.deltaY : 0);
-      if (!delta) return;
+      if (Math.abs(delta) < 4) return;
       const maxLeft = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
       const nextLeft = Math.min(maxLeft, Math.max(0, wrap.scrollLeft + delta));
       if (nextLeft === wrap.scrollLeft) return;

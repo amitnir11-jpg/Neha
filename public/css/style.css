@@ -1950,8 +1950,8 @@ body[data-page="report"] .top-header {
 /* Report filter section stays fixed at top */
 body[data-page="report"] .panel:nth-of-type(2) {
   flex-shrink: 0;
-  max-height: 50vh;
-  overflow-y: auto;
+  max-height: none;
+  overflow-y: visible;
   border-bottom: 2px solid var(--line);
 }
 
@@ -1984,6 +1984,12 @@ body[data-page="report"] .table-wrap {
 
 body[data-page="report"] .table-wrap table {
   min-width: 1200px;
+}
+
+body[data-page="report"] .table-wrap {
+  max-height: none;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 body[data-page="report"] table thead {
