@@ -1841,15 +1841,37 @@
         state.partMasterCache.set(key, fields);
         return fields;
       })
-      .catch(() => {
-        state.partMasterCache.set(key, null);
-        return null;
+      .catch((error) => {
+        state.partMasterCache.delete(key);
+        throw error;
       })
       .finally(() => {
         state.partMasterLookupPromise.delete(key);
       });
     state.partMasterLookupPromise.set(key, promise);
     return promise;
+  }
+
+  async function validatePartBeforeSave(partNumber = '', dealerCode = activeDealerCode()) {
+    const normalizedPart = normalizePartCandidateValue(partNumber);
+    if (!isValidPartCandidate(normalizedPart)) {
+      throw new Error('Invalid part number format');
+    }
+    if (!state.session?.token || !navigator.onLine) {
+      return null;
+    }
+    try {
+      const masterFields = await lookupMasterFields(normalizedPart, dealerCode);
+      if (!masterFields) {
+        throw new Error('Invalid part number - not found in master catalogue');
+      }
+      return masterFields;
+    } catch (error) {
+      const status = Number(error.status || 0);
+      const retryable = !status || status >= 500 || status === 408 || status === 429 || /network|failed to fetch|timed out|timeout|offline/i.test(clean(error.message || ''));
+      if (retryable) return null;
+      throw error;
+    }
   }
 
   async function enrichStoredRecord(record = {}) {
@@ -1887,9 +1909,9 @@
       ? 'Synced to server'
       : status === 'duplicate' || status === 'failed-duplicate'
         ? (errorText || 'Duplicate rejected')
-        : status === 'failed'
+      : status === 'failed'
           ? `Sync failed${errorText ? `: ${errorText}` : ''}`
-          : 'Pending sync';
+          : 'Waiting for sync';
     byId('lastScanTitle').textContent = description || part || 'Scan captured';
     byId('lastScanMeta').textContent = [
       part ? `Part ${part}` : '',
@@ -1912,7 +1934,7 @@
     applyRecordToUi(record);
     void enrichStoredRecord(record).catch(() => undefined);
     if (!silent) {
-      toast(state.paused ? 'Saved locally' : navigator.onLine ? 'Saved locally. Sync starting...' : 'Saved locally. Will sync when online.', 'success');
+      toast(state.paused ? 'Saved locally' : navigator.onLine ? 'Saved locally. Sync will retry automatically.' : 'Saved locally. Will sync when online.', 'success');
       beep('ok');
       vibrate(40);
     }
@@ -2456,6 +2478,21 @@
       partNumber: partCandidate,
       binLocation: requiresBin() ? loadActiveBin() : ''
     });
+    try {
+      const masterFields = await validatePartBeforeSave(record.partNumber || record.part || '', record.dealerCode || activeDealerCode());
+      if (masterFields) {
+        Object.assign(record, masterFields, {
+          partNumber: normalizePartCandidateValue(record.partNumber || record.part || ''),
+          part: normalizePartCandidateValue(record.partNumber || record.part || '')
+        });
+      }
+    } catch (error) {
+      cameraState('Invalid scan - not saved');
+      toast(error.message || 'Invalid part number - not found in master catalogue', 'error');
+      beep('error');
+      vibrate([30, 30, 30]);
+      return;
+    }
     const liveDuplicate = await checkBackendDuplicateBeforeSync(record);
     if (liveDuplicate?.duplicate) {
       const existing = liveDuplicate.existing || record;
@@ -2481,10 +2518,10 @@
         beep('ok');
         vibrate(40);
       } else {
-        cameraState('Saved offline - sync pending');
+        cameraState('Saved locally');
         await saveRecord(record, { silent: true, deferSync: false });
         byId('manualRawPreview').hidden = true;
-        toast('Scan saved locally. Syncing automatically...', 'success');
+        toast('Scan saved locally. Sync will retry automatically.', 'success');
         beep('ok');
         vibrate(40);
       }
@@ -2500,8 +2537,8 @@
           await markDuplicateRecord(record, data.existing || data.scan || {}, message);
         } else if (retryable) {
           await saveRecord({ ...record, syncError: message }, { silent: true, deferSync: false });
-          cameraState('Saved offline - sync pending');
-          toast('Network/server issue. Scan saved offline and will retry.', 'warning');
+          cameraState('Saved locally');
+          toast('Scan saved locally. Sync will retry automatically.', 'warning');
           beep('ok');
           vibrate(40);
         } else {
@@ -2674,7 +2711,7 @@
           });
         }
       }
-      if (!silent) toast(retryable ? 'Network/server issue. Scans remain queued.' : error.message, retryable ? 'warning' : 'error');
+      if (!silent) toast(retryable ? 'Saved locally. Sync will retry automatically.' : error.message, retryable ? 'warning' : 'error');
     } finally {
       state.syncRunning = false;
       state.allRows = await getAllRecords().catch(() => []);
@@ -2879,6 +2916,19 @@
       regdNo,
       jobCardNo
     });
+    try {
+      const masterFields = await validatePartBeforeSave(record.partNumber || record.part || '', record.dealerCode || activeDealerCode());
+      if (masterFields) {
+        Object.assign(record, masterFields, {
+          partNumber: normalizePartCandidateValue(record.partNumber || record.part || ''),
+          part: normalizePartCandidateValue(record.partNumber || record.part || '')
+        });
+      }
+    } catch (error) {
+      toast(error.message || 'Invalid part number - not found in master catalogue', 'error');
+      byId('manualPartNumber').focus();
+      return;
+    }
 
     const liveDuplicate = await checkBackendDuplicateBeforeSync(record);
     if (liveDuplicate?.duplicate) {

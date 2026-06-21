@@ -218,6 +218,8 @@
     barcodeLastAt: 0,
     barcodeScanLocks: new Map(),
     barcodeDuplicateLocks: new Map(),
+    partMasterLookupCache: new Map(),
+    partMasterLookupPromise: new Map(),
     barcodeServerDuplicateChecks: new Map(),
     scanStreamRecords: []
   };
@@ -1839,6 +1841,60 @@
     };
   }
 
+  function partMasterLookupKey(partNumber = '', dealerCode = currentDealerCode()) {
+    return [cleanDealerCode(dealerCode || ''), normalizePartText(partNumber || '')].join('|');
+  }
+
+  function masterPartFromValidation(data = {}, fallbackPart = '') {
+    const partNumber = normalizePartText(data.partNumber || fallbackPart);
+    const mrp = optionalScanNumber(data.mrp);
+    const dlc = optionalScanNumber(data.dlc);
+    return {
+      partNumber,
+      part: partNumber,
+      partName: data.partDescription || data.partName || '',
+      partDescription: data.partDescription || data.partName || '',
+      category: data.category || data.productCategory || '',
+      productCategory: data.productCategory || data.category || '',
+      mrp,
+      dlc,
+      currentCatalogueMRP: mrp,
+      currentCatalogueDLC: dlc,
+      masterFound: true,
+      masterMatch: true,
+      isMasterMatched: true
+    };
+  }
+
+  async function validatePartAgainstMaster(partNumber = '', dealerCode = currentDealerCode()) {
+    const normalizedPart = normalizePartText(partNumber);
+    if (!validPartText(normalizedPart)) {
+      throw new Error('Invalid part number format');
+    }
+    const key = partMasterLookupKey(normalizedPart, dealerCode);
+    if (!key) return null;
+    if (state.partMasterLookupCache.has(key)) return state.partMasterLookupCache.get(key);
+    if (state.partMasterLookupPromise.has(key)) return state.partMasterLookupPromise.get(key);
+    const promise = api(`/api/mobile/validate-part?${new URLSearchParams({
+      partNumber: normalizedPart,
+      dealerCode: cleanDealerCode(dealerCode || currentDealerCode() || '')
+    }).toString()}`)
+      .then((data) => {
+        const master = data && data.found ? masterPartFromValidation(data, normalizedPart) : null;
+        state.partMasterLookupCache.set(key, master);
+        return master;
+      })
+      .catch((error) => {
+        state.partMasterLookupCache.delete(key);
+        throw error;
+      })
+      .finally(() => {
+        state.partMasterLookupPromise.delete(key);
+      });
+    state.partMasterLookupPromise.set(key, promise);
+    return promise;
+  }
+
   function optionalScanNumber(value) {
     if (value === undefined || value === null || value === '') return undefined;
     const parsed = Number(String(value).replace(/,/g, '').trim());
@@ -1914,7 +1970,7 @@
     return normalized;
   }
 
-  function enqueueScan(payload, errorMessage = 'Pending local sync') {
+  function enqueueScan(payload, errorMessage = 'Saved locally. Sync will retry automatically.') {
     const normalized = normalizeScanPayload(payload);
     if (String(normalized.scanType || normalized.type || '').toUpperCase() === 'VERIFICATION') return normalized;
     const queue = getSyncQueue();
@@ -1946,7 +2002,7 @@
       partNumber: normalized.partNumber,
       upiId: normalized.upiId,
       dealer: normalized.dealerCode,
-      status: 'queued',
+      status: 'pending',
       errorMessage
     });
     return { ...queuedRecord, queueAdded: true, queueDuplicate: false };
@@ -3648,6 +3704,41 @@
       }
       return;
     }
+    const scanPartNumber = normalizePartText(normalized.partNumber || normalized.part || '');
+    if (!validPartText(scanPartNumber)) {
+      playScanTone('error');
+      toast('Invalid part number format', 'error');
+      if (isBarcodeForm) {
+        setLivePill('barcodeReadyStatus', 'Rejected - Ready', false);
+        resetBarcodeScanFields(form, normalized, options.expectedRaw);
+        setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+      }
+      return;
+    }
+    try {
+      const masterPart = await validatePartAgainstMaster(scanPartNumber, normalized.dealerCode || currentDealerCode());
+      if (!masterPart) {
+        playScanTone('error');
+        toast('Invalid part number - not found in master catalogue', 'error');
+        if (isBarcodeForm) {
+          setLivePill('barcodeReadyStatus', 'Rejected - Ready', false);
+          resetBarcodeScanFields(form, normalized, options.expectedRaw);
+          setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+        }
+        return;
+      }
+      Object.assign(normalized, masterPart);
+      fillPart(form, masterPart);
+    } catch (error) {
+      playScanTone('error');
+      toast(error.message || 'Unable to validate part number', 'error');
+      if (isBarcodeForm) {
+        setLivePill('barcodeReadyStatus', 'Validation failed', false);
+        resetBarcodeScanFields(form, normalized, options.expectedRaw);
+        setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+      }
+      return;
+    }
     if (!isBarcodeForm && !payload.rawScan && !payload.rawScanString && !payload.rawBarcode && !payload.rawScanValue && !payload.barcode && !payload.barcodeValue && !payload.scanValue && !payload.scanText) {
       normalized.rawScan = '';
       normalized.rawScanString = '';
@@ -3706,7 +3797,7 @@
       normalized.isSynced = false;
       normalized.syncStatus = 'pending';
       normalized.localStatus = 'pending';
-      const queued = enqueueScan(normalized, 'Pending sync');
+      const queued = enqueueScan(normalized, 'Saved locally. Sync will retry automatically.');
       if (!queued.queueAdded) {
         playScanTone('duplicate');
         const existing = queued.existingLocalScan || normalized;
@@ -3727,8 +3818,8 @@
       state.barcodeLastAt = Date.now();
       resetBarcodeScanFields(form, normalized, options.expectedRaw);
       playScanTone('success');
-      setLivePill('barcodeReadyStatus', 'Pending - Syncing', true);
-      toast(`Queued ${pendingScan.partNumber || pendingScan.part || 'scan'} for sync`);
+      setLivePill('barcodeReadyStatus', 'Saved locally', true);
+      toast(`${pendingScan.partNumber || pendingScan.part || 'Scan'} saved locally. Sync will retry automatically.`);
       updateSyncBadges();
       schedulePendingSync(80);
       setTimeout(() => {
@@ -3851,7 +3942,7 @@
           resetManualScanFields(form);
         }
         playScanTone('error');
-        toast('Server unavailable. Scan saved in local pending queue.', 'error');
+        toast('Server unavailable. Scan saved locally and will retry automatically.', 'warning');
         return;
       }
       playScanTone('error');
@@ -3883,7 +3974,7 @@
       return false;
     }
     try {
-      scans.forEach((scan) => enqueueScan(scan, 'Queued from mobile sync input'));
+      scans.forEach((scan) => enqueueScan(scan, 'Imported from mobile sync input'));
     } catch (error) {
       toast(error.message, 'error');
       return false;
@@ -4004,21 +4095,22 @@
     } catch (error) {
       if (error.data) renderSyncApiResponse(error.data);
       const noActiveAudit = /no active audit/i.test(error.message || '');
+      const retryable = !noActiveAudit && (!Number(error.status) || Number(error.status) >= 500 || Number(error.status) === 408 || Number(error.status) === 429 || /network|failed to fetch|timed out|timeout|offline/i.test(String(error.message || '')));
       const failedQueue = getSyncQueue().map((item) => records.some((record) => record.syncKey === item.syncKey)
-        ? { ...item, localStatus: 'failed', retryCount: Number(item.retryCount || 0) + 1, syncError: error.message }
+        ? { ...item, localStatus: retryable ? 'pending' : 'failed', retryCount: Number(item.retryCount || 0) + 1, syncError: error.message }
         : item);
       saveSyncQueue(failedQueue);
       records.forEach((record) => addSyncLog({
         partNumber: record.partNumber || record.part,
         upiId: record.upiId,
         dealer: record.dealerCode,
-        status: 'failed',
+        status: retryable ? 'pending' : 'failed',
         errorMessage: error.message
       }));
-      setHeaderSyncStatus(noActiveAudit ? 'Pending' : 'Failed', false);
-      setDashboardSyncStatus(noActiveAudit ? 'Pending' : 'Failed', false);
+      setHeaderSyncStatus(noActiveAudit ? 'Failed' : retryable ? 'Pending' : 'Failed', false);
+      setDashboardSyncStatus(noActiveAudit ? 'Failed' : retryable ? 'Pending' : 'Failed', false);
       updateSyncBadges(noActiveAudit ? { serverStatus: 'online', databaseStatus: 'online', db: 'connected' } : { serverStatus: 'offline', databaseStatus: 'offline', db: 'disconnected' });
-      if (!options.silent) toast(error.message, 'error');
+      if (!options.silent) toast(retryable ? 'Scan saved locally. Sync will retry automatically.' : error.message, retryable ? 'warning' : 'error');
       return { success: false, message: error.message };
     } finally {
       state.syncInProgress = false;
