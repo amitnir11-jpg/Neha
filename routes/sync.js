@@ -549,7 +549,7 @@ function invalidateScanCaches(scan = {}, extraTags = []) {
   const dealerCode = upper(scan.dealerCode || '');
   const auditId = clean(scan.auditId || '');
   invalidateCache({
-    tags: Array.from(new Set(['scan', 'report', 'dashboard', ...[].concat(extraTags || []).map((tag) => clean(tag)).filter(Boolean)])),
+    tags: Array.from(new Set(['scan', 'report', 'dashboard', 'mobile', ...[].concat(extraTags || []).map((tag) => clean(tag)).filter(Boolean)])),
     scope: dealerCode || auditId ? { dealerCode, auditId } : {}
   });
 }

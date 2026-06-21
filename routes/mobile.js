@@ -21,7 +21,7 @@ const { serverInfo } = require('../utils/network');
 const { normalizePartNumber } = require('../utils/normalize');
 const { formatDateLikeFields } = require('../utils/time');
 const { decorateScanValue } = require('../utils/inventoryValueEngine');
-const { uniqueReportScans } = require('../utils/reportScanIdentity');
+const { uniqueReportScans, reportScanIdentity } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
 const { getPriceFromPartMaster, getPricesFromPartMaster, scanWithPartMasterPrice } = require('../utils/partMasterPrice');
 const { applyCacheHeaders, getCachedResponse } = require('../utils/safeCache');
@@ -172,6 +172,29 @@ function transactionFilter(query = {}) {
   return inventoryRoute.applyTransactionScanFilter(dealerFilter(query));
 }
 
+function recentScanFilter(query = {}) {
+  const filter = transactionFilter(query);
+  filter.activeInventory = { $ne: false };
+  filter.deletedAt = null;
+  filter.scanStatus = { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] };
+  filter.$and = (filter.$and || []).concat([
+    { $or: [{ movementType: 'INWARD' }, { scanType: 'INWARD' }, { type: 'INWARD' }] }
+  ]);
+  return filter;
+}
+
+function latestUniqueScans(scans = []) {
+  const seen = new Set();
+  const rows = [];
+  scans.forEach((scan) => {
+    const key = reportScanIdentity(scan);
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    rows.push(scan);
+  });
+  return rows;
+}
+
 function scanQty(scan = {}) {
   if (scan._reportSignedQty !== undefined) return signedScanQuantity(scan, 0);
   const qty = Number(scan.qty !== undefined ? scan.qty : scan.quantity || 0);
@@ -196,6 +219,19 @@ async function withCurrentMasterPrices(scans = [], dealerCode = '') {
     const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
     return scanWithPartMasterPrice(scan, priceByPart.get(partNumber) || null);
   });
+}
+
+async function buildRecentScans(query = {}) {
+  const limit = Math.min(Math.max(Number(query.limit || 10), 1), 100);
+  const fetchLimit = Math.min(Math.max(limit * 5, 50), 250);
+  const records = await Inventory.find(recentScanFilter(query))
+    .select(MOBILE_SCAN_SELECT)
+    .sort({ timestamp: -1, createdAt: -1, _id: -1 })
+    .limit(fetchLimit)
+    .lean();
+  const unique = latestUniqueScans(records).slice(0, limit);
+  const priced = await withCurrentMasterPrices(unique, query.dealerCode);
+  return priced.map(mobileItem);
 }
 
 function reportRow(scan) {
@@ -703,12 +739,19 @@ router.get('/reports/summary', auth.optionalAuth, async (req, res) => {
   }
 });
 
+router.get('/recent-scans', auth.optionalAuth, async (req, res) => {
+  try {
+    const records = await buildRecentScans(req.query);
+    return res.json({ success: true, count: records.length, records });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/reports/last-scans', auth.optionalAuth, async (req, res) => {
   try {
-    const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 100);
-    const records = await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: -1, createdAt: -1 }).limit(limit).lean();
-    const priced = await withCurrentMasterPrices(records, req.query.dealerCode);
-    return res.json({ success: true, records: priced.map(mobileItem) });
+    const records = await buildRecentScans(req.query);
+    return res.json({ success: true, count: records.length, records });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

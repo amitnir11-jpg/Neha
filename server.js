@@ -489,6 +489,7 @@ app.use('/api/bin-master', require('./routes/binMaster'));
 app.use('/api/bin-transfer', require('./routes/binTransfer'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/scans', require('./routes/inventory'));
+app.use('/api/scan', require('./routes/inventory'));
 app.use('/api/reports', reportsRouter);
 app.use('/api/report-filter-settings', require('./routes/reportFilterSettings'));
 app.use('/api/dealers', require('./routes/dealer'));

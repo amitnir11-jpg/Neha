@@ -10,6 +10,7 @@
   const BIN_KEY = 'dakshFreshActiveBin';
   const LAST_SYNC_KEY = 'dakshFreshLastSync';
   const SYNC_INTERVAL_MS = 45000;
+  const RECENT_REFRESH_INTERVAL_MS = 8000;
   const HEARTBEAT_INTERVAL_MS = 90000;
   const API_TIMEOUT_MS = 45000;
   const LOGIN_CONFIG_TIMEOUT_MS = 15000;
@@ -96,6 +97,7 @@
     syncAgain: false,
     syncTimer: null,
     syncDelayTimer: null,
+    recentRefreshTimer: null,
     heartbeatTimer: null,
     cameraTimer: null,
     autoCameraTimer: null,
@@ -111,6 +113,9 @@
     cameraStream: null,
     partMasterCache: new Map(),
     partMasterLookupPromise: new Map(),
+    liveRecentRows: null,
+    liveRecentRefreshPromise: null,
+    liveRecentRefreshToken: 0,
     lastDecodeAtByKey: new Map(),
     duplicateNoticeLocks: new Map(),
     recentCleanupTimer: null,
@@ -1052,11 +1057,28 @@
     byId('lastSyncBadge').textContent = lastSync ? `Last ${fmtTime(lastSync)}` : 'Never synced';
   }
 
+  function recentRowsForDisplay() {
+    if (state.session?.token && navigator.onLine) {
+      return Array.isArray(state.liveRecentRows) ? state.liveRecentRows.slice(0, 10) : [];
+    }
+    return sessionRows().slice(0, 10);
+  }
+
   function renderHistoryRows() {
-    const rows = sessionRows().slice(0, 10);
+    const online = Boolean(state.session?.token && navigator.onLine);
+    const hasDealer = Boolean(activeDealerCode());
+    const rows = recentRowsForDisplay();
     const body = byId('scanRows');
+    if (online && !hasDealer) {
+      body.innerHTML = '<tr><td colspan="6">Waiting for dealer context...</td></tr>';
+      return;
+    }
+    if (online && state.liveRecentRows === null) {
+      body.innerHTML = '<tr><td colspan="6">Loading live recent scans...</td></tr>';
+      return;
+    }
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="6">No scans yet</td></tr>';
+      body.innerHTML = `<tr><td colspan="6">${online ? 'No active scans on server' : 'No scans yet'}</td></tr>`;
       return;
     }
     body.innerHTML = rows.map((row) => {
@@ -1084,9 +1106,66 @@
           <td>${escapeHtml(rowMode(row))}</td>
           <td>${escapeHtml(rowBin(row) || '-')}</td>
           <td title="${title}">${escapeHtml(statusLabel)}</td>
-        </tr>
+      </tr>
       `;
     }).join('');
+  }
+
+  async function refreshLiveRecentScans({ force = false } = {}) {
+    if (!state.session?.token) {
+      state.liveRecentRows = null;
+      renderHistoryRows();
+      return [];
+    }
+    if (!activeDealerCode()) {
+      state.liveRecentRows = null;
+      renderHistoryRows();
+      return [];
+    }
+    if (!navigator.onLine) {
+      state.liveRecentRows = null;
+      renderHistoryRows();
+      return [];
+    }
+    if (!force && state.liveRecentRefreshPromise) return state.liveRecentRefreshPromise;
+    const params = new URLSearchParams({
+      dealerCode: activeDealerCode(),
+      auditId: activeAuditId(),
+      limit: '10'
+    });
+    const scopeKey = [activeDealerCode(), activeAuditId(), deviceId()].join('|');
+    const requestToken = Number(state.liveRecentRefreshToken || 0) + 1;
+    state.liveRecentRefreshToken = requestToken;
+    const promise = (async () => {
+      const data = await api(`/api/mobile/recent-scans?${params.toString()}`, {
+        timeoutMs: Math.min(API_TIMEOUT_MS, 15000)
+      });
+      if (requestToken !== Number(state.liveRecentRefreshToken || 0) || scopeKey !== [activeDealerCode(), activeAuditId(), deviceId()].join('|')) {
+        return Array.isArray(state.liveRecentRows) ? state.liveRecentRows : [];
+      }
+      const records = Array.isArray(data.records)
+        ? data.records
+        : Array.isArray(data.rows)
+          ? data.rows
+          : Array.isArray(data)
+            ? data
+            : [];
+      state.liveRecentRows = records.slice(0, 10);
+      updateLastScan(state.liveRecentRows[0] || null);
+      renderHistoryRows();
+      return state.liveRecentRows;
+    })();
+    state.liveRecentRefreshPromise = promise;
+    try {
+      return await promise;
+    } catch (error) {
+      if (authExpired(error)) handleAuthExpired(error);
+      return Array.isArray(state.liveRecentRows) ? state.liveRecentRows : [];
+    } finally {
+      if (state.liveRecentRefreshPromise === promise) {
+        state.liveRecentRefreshPromise = null;
+      }
+    }
   }
 
   function renderAll() {
@@ -1596,6 +1675,11 @@
   }
 
   function updateLastScan(row = {}) {
+    if (!row || !Object.keys(row).length) {
+      byId('lastScanTitle').textContent = 'No recent scan';
+      byId('lastScanMeta').textContent = 'Live recent scans will appear here.';
+      return;
+    }
     const part = rowPart(row);
     const description = clean(row.partDescription || row.partName || '');
     const mode = rowMode(row);
@@ -1784,6 +1868,7 @@
     await putRecord(saved);
     state.allRows = await getAllRecords();
     applyRecordToUi(saved);
+    await refreshLiveRecentScans({ force: true, reason: 'server-save' }).catch(() => undefined);
     return { response, saved };
   }
 
@@ -1840,7 +1925,7 @@
       return { checkedOnline: false, duplicate: false, existing: null, message: '', cleared: 0 };
     }
     try {
-      const data = await api('/api/scans/duplicate-check', {
+      const data = await api('/api/scan/check-duplicate', {
         method: 'POST',
         body: convertToSyncPayload(record),
         timeoutMs: 10000
@@ -1902,8 +1987,13 @@
           dealerName: data.activeAudit?.dealerName || state.session.dealerName || ''
         };
         saveSession(nextSession);
+        state.liveRecentRows = null;
+        state.liveRecentRefreshPromise = null;
+        state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
+        updateLastScan(null);
       }
       renderAll();
+      refreshLiveRecentScans({ force: true, reason: 'session-context' }).catch(() => undefined);
       return data;
     } catch (error) {
       if (authExpired(error)) {
@@ -1920,10 +2010,15 @@
     clearTimeout(state.syncDelayTimer);
     clearInterval(state.syncTimer);
     clearInterval(state.heartbeatTimer);
+    clearInterval(state.recentRefreshTimer);
     state.autoCameraTimer = null;
     state.syncDelayTimer = null;
     state.syncTimer = null;
     state.heartbeatTimer = null;
+    state.recentRefreshTimer = null;
+    state.liveRecentRows = null;
+    state.liveRecentRefreshPromise = null;
+    state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
     clearSession();
     state.allRows = [];
     state.pendingLogin = null;
@@ -1931,6 +2026,7 @@
     state.manualResumeAfterClose = false;
     state.partMasterCache.clear();
     state.partMasterLookupPromise.clear();
+    updateLastScan(null);
     updateScannerPanel();
     toast(error?.message || 'Login expired. Please sign in again.', 'error');
   }
@@ -1941,10 +2037,12 @@
     clearTimeout(state.syncDelayTimer);
     clearInterval(state.syncTimer);
     clearInterval(state.heartbeatTimer);
+    clearInterval(state.recentRefreshTimer);
     state.autoCameraTimer = null;
     state.syncDelayTimer = null;
     state.syncTimer = null;
     state.heartbeatTimer = null;
+    state.recentRefreshTimer = null;
     state.cameraRequested = false;
     state.paused = false;
     state.pendingLogin = null;
@@ -1952,8 +2050,12 @@
     state.manualResumeAfterClose = false;
     state.partMasterCache.clear();
     state.partMasterLookupPromise.clear();
+    state.liveRecentRows = null;
+    state.liveRecentRefreshPromise = null;
+    state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
     clearSession();
     state.allRows = [];
+    updateLastScan(null);
     updateScannerPanel();
     toast('Logged out', 'info');
   }
@@ -2098,6 +2200,7 @@
       }, 250);
       setTimeout(() => enableCameraFocus(video), 650);
       renderCameraListSoon();
+      refreshLiveRecentScans({ force: true, reason: 'camera-start' }).catch(() => undefined);
     } catch (error) {
       state.scanning = false;
       setCameraStarting(false);
@@ -2178,28 +2281,24 @@
       showDuplicateOnce(record, existing, message);
       return;
     }
-    const localDuplicate = localDuplicateForRecord(record);
-    if (localDuplicate) {
-      const message = duplicateScanMessage(localDuplicate);
-      updateLastScan({
-        ...localDuplicate,
-        status: 'duplicate',
-        syncStatus: 'duplicate',
-        syncError: message
-      });
-      cameraState('Duplicate blocked');
-      showDuplicateOnce(record, localDuplicate, message);
-      return;
-    }
     state.saveInFlight = true;
     clearTimeout(state.saveLockTimer);
     try {
-      cameraState('Saved locally - sync pending');
-      await saveRecord(record, { silent: true, deferSync: false });
-      byId('manualRawPreview').hidden = true;
-      toast('Scan saved locally. Syncing automatically...', 'success');
-      beep('ok');
-      vibrate(40);
+      if (navigator.onLine && state.session?.token) {
+        cameraState('Saving to server...');
+        const { response } = await saveRecordToServer(record);
+        byId('manualRawPreview').hidden = true;
+        toast(response.message || 'Scan saved to server', 'success');
+        beep('ok');
+        vibrate(40);
+      } else {
+        cameraState('Saved offline - sync pending');
+        await saveRecord(record, { silent: true, deferSync: false });
+        byId('manualRawPreview').hidden = true;
+        toast('Scan saved locally. Syncing automatically...', 'success');
+        beep('ok');
+        vibrate(40);
+      }
     } catch (error) {
       if (authExpired(error)) {
         handleAuthExpired(error);
@@ -2245,6 +2344,7 @@
     if (!state.session?.token || !navigator.onLine) return;
     const rows = sessionRows().filter((row) => ['pending', 'failed', 'failed-duplicate'].includes(rowStatus(row)));
     if (!rows.length) {
+      await refreshLiveRecentScans({ force: true, reason: 'sync-empty' }).catch(() => undefined);
       renderAll();
       return;
     }
@@ -2385,6 +2485,7 @@
     } finally {
       state.syncRunning = false;
       state.allRows = await getAllRecords().catch(() => []);
+      await refreshLiveRecentScans({ force: true, reason: 'sync' }).catch(() => undefined);
       renderAll();
       if (state.syncAgain && state.session?.token && navigator.onLine) {
         state.syncAgain = false;
@@ -2599,19 +2700,6 @@
       showDuplicateOnce(record, existing, message);
       return;
     }
-    const localDuplicate = localDuplicateForRecord(record);
-    if (localDuplicate) {
-      const message = duplicateScanMessage(localDuplicate);
-      updateLastScan({
-        ...localDuplicate,
-        status: 'duplicate',
-        syncStatus: 'duplicate',
-        syncError: message
-      });
-      showDuplicateOnce(record, localDuplicate, message);
-      return;
-    }
-
     state.saveInFlight = true;
     try {
       const { response } = await saveRecordToServer(record);
@@ -2747,6 +2835,7 @@
       renderUrlState();
       if (state.session?.token) {
         refreshHealth().catch(() => undefined);
+        refreshLiveRecentScans({ force: true, reason: 'online' }).catch(() => undefined);
         syncQueue({ silent: true }).catch(() => undefined);
         sendHeartbeat().catch(() => undefined);
       }
@@ -2758,6 +2847,7 @@
       if (document.hidden) {
         if (state.scanning) stopCamera({ preserveRequest: true });
       } else if (state.cameraRequested && !state.paused && state.session?.token) {
+        refreshLiveRecentScans({ force: true, reason: 'visible' }).catch(() => undefined);
         syncQueue({ silent: true }).catch(() => undefined);
         sendHeartbeat().catch(() => undefined);
         startCamera().catch(() => undefined);
@@ -2832,6 +2922,10 @@
 
       state.pendingLogin = null;
       saveSession(session);
+      state.liveRecentRows = null;
+      state.liveRecentRefreshPromise = null;
+      state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
+      updateLastScan(null);
       state.allRows = await getAllRecords().catch(() => []);
       byId('loginMessage').textContent = '';
       renderLoginDealers(response.dealerCode || selectedDealer || payload.dealerCode || '');
@@ -2886,16 +2980,22 @@
   function startTimers() {
     clearTimeout(state.syncDelayTimer);
     clearInterval(state.syncTimer);
+    clearInterval(state.recentRefreshTimer);
     clearInterval(state.heartbeatTimer);
     state.syncDelayTimer = null;
     state.syncTimer = setInterval(() => {
       if (document.hidden) return;
       syncQueue({ silent: true }).catch(() => undefined);
     }, SYNC_INTERVAL_MS);
+    state.recentRefreshTimer = setInterval(() => {
+      if (document.hidden) return;
+      refreshLiveRecentScans({ force: true, reason: 'poll' }).catch(() => undefined);
+    }, RECENT_REFRESH_INTERVAL_MS);
     state.heartbeatTimer = setInterval(() => {
       if (document.hidden) return;
       sendHeartbeat().catch(() => undefined);
     }, HEARTBEAT_INTERVAL_MS);
+    refreshLiveRecentScans({ force: true, reason: 'timer-start' }).catch(() => undefined);
     syncQueue({ silent: true }).catch(() => undefined);
     sendHeartbeat().catch(() => undefined);
   }

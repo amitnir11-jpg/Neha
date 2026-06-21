@@ -93,7 +93,7 @@ async function sendCachedJson(res, namespace, query, builder, options = {}) {
 
 function invalidateInventoryCaches(scope = {}, extraTags = []) {
   invalidateCache({
-    tags: Array.from(new Set(['scan', 'report', 'dashboard', 'price', ...[].concat(extraTags || []).map((tag) => String(tag || '').trim()).filter(Boolean)])),
+    tags: Array.from(new Set(['scan', 'report', 'dashboard', 'price', 'mobile', ...[].concat(extraTags || []).map((tag) => String(tag || '').trim()).filter(Boolean)])),
     scope
   });
 }
@@ -2898,7 +2898,7 @@ async function processScanRequest(req, res) {
 router.get('/verify', auth.optionalAuth, verifyPartRequest);
 router.post('/verify', auth.optionalAuth, verifyPartRequest);
 
-router.post('/duplicate-check', auth.requireAuth, async (req, res) => {
+async function duplicateCheckHandler(req, res) {
   try {
     const rawScanInput = firstValue(req.body, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText']);
     const parsed = parseRawScan(rawScanInput);
@@ -2948,7 +2948,10 @@ router.post('/duplicate-check', auth.requireAuth, async (req, res) => {
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
-});
+}
+
+router.post('/duplicate-check', auth.requireAuth, duplicateCheckHandler);
+router.post('/check-duplicate', auth.requireAuth, duplicateCheckHandler);
 
 router.post('/process', auth.optionalAuth, processScanRequest);
 router.post('/process-scan', auth.optionalAuth, processScanRequest);
