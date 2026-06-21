@@ -111,6 +111,8 @@
     nativeDetectorRunId: 0,
     nativeDetectorRunning: false,
     cameraStream: null,
+    torchSupported: false,
+    torchEnabled: false,
     partMasterCache: new Map(),
     partMasterLookupPromise: new Map(),
     liveRecentRows: null,
@@ -829,7 +831,11 @@
     }
     await deleteRecord(scanId);
     state.allRows = await getAllRecords().catch(() => []);
+    state.liveRecentRows = null;
+    state.liveRecentRefreshPromise = null;
+    state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
     renderAll();
+    refreshLiveRecentScans({ force: true, reason: 'delete' }).catch(() => undefined);
     toast(status === 'synced' ? 'Scan deleted' : 'Local scan removed', 'success');
   }
 
@@ -1233,15 +1239,15 @@
 
   function cameraConstraints(deviceId = '') {
     const video = {
-      width: { ideal: 1280, max: 1280 },
-      height: { ideal: 720, max: 720 },
-      frameRate: { ideal: 24, max: 30 },
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1920, max: 2560 },
+      height: { ideal: 1080, max: 1440 },
+      aspectRatio: { ideal: 16 / 9 },
+      frameRate: { ideal: 30, max: 60 },
       resizeMode: 'crop-and-scale'
     };
     if (deviceId) {
       video.deviceId = { exact: deviceId };
-    } else {
-      video.facingMode = { ideal: 'environment' };
     }
     return { audio: false, video };
   }
@@ -1250,7 +1256,16 @@
     state.nativeDetectorRunning = false;
     state.nativeDetectorRunId += 1;
     if (state.nativeDetectorTimer) clearTimeout(state.nativeDetectorTimer);
-    if (state.nativeDetectorFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(state.nativeDetectorFrame);
+    const video = byId('cameraPreview');
+    if (state.nativeDetectorFrame) {
+      if (video && typeof video.cancelVideoFrameCallback === 'function') {
+        try {
+          video.cancelVideoFrameCallback(state.nativeDetectorFrame);
+        } catch (_) {}
+      } else if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(state.nativeDetectorFrame);
+      }
+    }
     state.nativeDetectorTimer = null;
     state.nativeDetectorFrame = null;
   }
@@ -1287,7 +1302,9 @@
     if (!state.nativeDetectorRunning || runId !== state.nativeDetectorRunId) return;
     state.nativeDetectorTimer = setTimeout(() => {
       if (!state.nativeDetectorRunning || runId !== state.nativeDetectorRunId) return;
-      if (typeof requestAnimationFrame === 'function') {
+      if (typeof video?.requestVideoFrameCallback === 'function') {
+        state.nativeDetectorFrame = video.requestVideoFrameCallback(() => detectNativeFrame(video, runId));
+      } else if (typeof requestAnimationFrame === 'function') {
         state.nativeDetectorFrame = requestAnimationFrame(() => detectNativeFrame(video, runId));
       } else {
         detectNativeFrame(video, runId);
@@ -1309,7 +1326,7 @@
     } catch (_) {
       // Native detector support varies by browser; ZXing remains the main fallback.
     }
-    scheduleNativeDetection(video, runId, state.saveInFlight ? 260 : 90);
+    scheduleNativeDetection(video, runId, state.saveInFlight ? 260 : 60);
   }
 
   async function startNativeDetector(video) {
@@ -1324,6 +1341,9 @@
 
   function stopCamera({ preserveRequest = false } = {}) {
     stopNativeDetector();
+    state.torchSupported = false;
+    state.torchEnabled = false;
+    renderTorchButton();
     if (state.scanReader) {
       try {
         state.scanReader.stopContinuousDecode();
@@ -1416,8 +1436,8 @@
     ].filter(Boolean);
     hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
     hints.set(DecodeHintType.TRY_HARDER, true);
-    state.scanReader = new BrowserMultiFormatReader(hints, 120);
-    state.scanReader.timeBetweenDecodingAttempts = 80;
+    state.scanReader = new BrowserMultiFormatReader(hints, 60);
+    state.scanReader.timeBetweenDecodingAttempts = 60;
     return state.scanReader;
   }
 
@@ -1440,6 +1460,78 @@
       if (whiteBalanceModes.includes('continuous')) advanced.push({ whiteBalanceMode: 'continuous' });
       if (advanced.length) await track.applyConstraints({ advanced });
     } catch (_) {}
+  }
+
+  function currentCameraTrack(video = byId('cameraPreview')) {
+    return video?.srcObject?.getVideoTracks?.()[0] || null;
+  }
+
+  function renderTorchButton() {
+    const button = byId('torchBtn');
+    if (!button) return;
+    if (!state.torchSupported) {
+      button.hidden = true;
+      button.disabled = true;
+      button.textContent = 'Torch';
+      button.dataset.enabled = 'false';
+      return;
+    }
+    button.hidden = false;
+    button.disabled = false;
+    button.textContent = state.torchEnabled ? 'Torch On' : 'Torch Off';
+    button.dataset.enabled = state.torchEnabled ? 'true' : 'false';
+  }
+
+  async function applyTorchState(enabled) {
+    const track = currentCameraTrack();
+    if (!track?.getCapabilities || !track?.applyConstraints) return false;
+    const capabilities = track.getCapabilities();
+    if (!capabilities || !capabilities.torch) return false;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: Boolean(enabled) }] });
+      state.torchSupported = true;
+      state.torchEnabled = Boolean(enabled);
+      renderTorchButton();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function refreshTorchState(video = byId('cameraPreview')) {
+    const track = currentCameraTrack(video);
+    const capabilities = track?.getCapabilities ? track.getCapabilities() : null;
+    state.torchSupported = Boolean(capabilities && capabilities.torch);
+    if (!state.torchSupported) {
+      state.torchEnabled = false;
+      renderTorchButton();
+      return false;
+    }
+    renderTorchButton();
+    if (state.torchEnabled) {
+      const applied = await applyTorchState(true).catch(() => false);
+      if (!applied) {
+        state.torchEnabled = false;
+        renderTorchButton();
+      }
+    }
+    return true;
+  }
+
+  async function toggleTorch() {
+    if (!state.torchSupported) {
+      toast('Torch is not supported on this camera', 'info');
+      return;
+    }
+    const next = !state.torchEnabled;
+    const applied = await applyTorchState(next).catch(() => false);
+    if (!applied) {
+      toast('Torch control is unavailable on this device', 'warning');
+      state.torchEnabled = false;
+      renderTorchButton();
+      return;
+    }
+    toast(next ? 'Torch enabled' : 'Torch disabled', 'info');
   }
 
   function setSelectedCamera(deviceIdValue) {
@@ -1507,6 +1599,9 @@
       rawBarcode: rawText,
       rawUpi: rawText,
       rawQR: rawText,
+      rawParsedValue: rawText,
+      parsedRawScan: rawText,
+      parsedPartNumber: part,
       partNumber: part,
       normalizedPartNumber: part,
       part: part,
@@ -1542,6 +1637,7 @@
       entryMode: manual ? 'manual' : 'camera',
       entryChannel: 'web',
       appVersion: APP_VERSION,
+      scanPayloadVersion: 2,
       serverUrl: window.location.origin.replace(/\/+$/, ''),
       timestamp,
       scanTime: timestamp,
@@ -1627,6 +1723,105 @@
       masterFound: true,
       masterMatch: true,
       isMasterMatched: true
+    };
+  }
+
+  function mergeStoredRecordWithServer(record = {}, serverScan = {}, extra = {}) {
+    const rawScan = clean(
+      record.rawScanString ||
+      record.rawScan ||
+      record.rawBarcode ||
+      record.rawUpi ||
+      record.rawQR ||
+      serverScan.rawScanString ||
+      serverScan.rawScan ||
+      serverScan.rawBarcode ||
+      serverScan.rawUpi ||
+      serverScan.rawQR ||
+      ''
+    );
+    const partNumber = normalizePartCandidateValue(
+      serverScan.partNumber ||
+      serverScan.normalizedPartNumber ||
+      serverScan.part ||
+      record.partNumber ||
+      record.normalizedPartNumber ||
+      record.part ||
+      ''
+    );
+    const partDescription = clean(
+      serverScan.partDescription ||
+      serverScan.partName ||
+      serverScan.description ||
+      record.partDescription ||
+      record.partName ||
+      ''
+    );
+    const productCategory = clean(
+      serverScan.productCategory ||
+      serverScan.category ||
+      record.productCategory ||
+      record.category ||
+      ''
+    );
+    const timestamp = clean(serverScan.timestamp || serverScan.scanTime || record.timestamp || record.scanTime || nowIso());
+    const scanTime = clean(serverScan.scanTime || timestamp || record.scanTime || record.timestamp || nowIso());
+    return {
+      ...record,
+      ...serverScan,
+      ...extra,
+      scanId: clean(serverScan.scanId || serverScan.uniqueScanId || record.scanId),
+      uniqueScanId: clean(serverScan.uniqueScanId || serverScan.scanId || record.uniqueScanId || record.scanId),
+      clientScanId: record.clientScanId || record.scanId,
+      localId: record.localId || record.scanId,
+      syncKey: record.syncKey || record.scanId,
+      clientSyncKey: record.clientSyncKey || record.syncKey || record.scanId,
+      rawScanString: rawScan,
+      rawScan,
+      rawBarcode: record.rawBarcode || serverScan.rawBarcode || rawScan,
+      rawUpi: record.rawUpi || serverScan.rawUpi || rawScan,
+      rawQR: record.rawQR || serverScan.rawQR || rawScan,
+      rawParsedValue: record.rawParsedValue || rawScan,
+      parsedRawScan: record.parsedRawScan || rawScan,
+      parsedPartNumber: partNumber,
+      partNumber,
+      normalizedPartNumber: clean(serverScan.normalizedPartNumber || partNumber || record.normalizedPartNumber || record.partNumber || record.part || ''),
+      part: clean(serverScan.part || serverScan.partNumber || record.part || partNumber),
+      partName: partDescription || clean(serverScan.partName || record.partName || ''),
+      partDescription: partDescription || clean(serverScan.partDescription || record.partDescription || ''),
+      description: partDescription || clean(serverScan.description || record.description || ''),
+      productCategory,
+      category: clean(serverScan.category || serverScan.productCategory || record.category || ''),
+      qty: serverScan.qty ?? serverScan.quantity ?? record.qty,
+      quantity: serverScan.quantity ?? serverScan.qty ?? record.quantity,
+      mrp: serverScan.mrp ?? record.mrp,
+      dlc: serverScan.dlc ?? serverScan.currentCatalogueDLC ?? record.dlc,
+      currentCatalogueMRP: serverScan.currentCatalogueMRP ?? serverScan.mrp ?? record.currentCatalogueMRP ?? record.mrp,
+      currentCatalogueDLC: serverScan.currentCatalogueDLC ?? serverScan.dlc ?? record.currentCatalogueDLC ?? record.dlc,
+      valuationMRP: serverScan.valuationMRP ?? record.valuationMRP,
+      valuationSource: serverScan.valuationSource ?? record.valuationSource,
+      finalInventoryValue: serverScan.finalInventoryValue ?? record.finalInventoryValue,
+      scanType: upper(serverScan.scanType || serverScan.type || record.scanType || record.type || currentScanType()),
+      type: upper(serverScan.type || serverScan.scanType || record.type || record.scanType || currentScanType()),
+      movementType: upper(serverScan.movementType || serverScan.scanType || serverScan.type || record.movementType || record.scanType || record.type || currentScanType()),
+      activeInventory: serverScan.activeInventory !== undefined
+        ? Boolean(serverScan.activeInventory)
+        : (record.activeInventory !== undefined ? Boolean(record.activeInventory) : upper(serverScan.scanType || serverScan.type || record.scanType || record.type || currentScanType()) === 'INWARD'),
+      remainingQty: serverScan.remainingQty !== undefined
+        ? serverScan.remainingQty
+        : (record.remainingQty !== undefined ? record.remainingQty : (upper(serverScan.scanType || serverScan.type || record.scanType || record.type || currentScanType()) === 'INWARD' ? (Number(record.qty ?? record.quantity ?? 1) || 1) : 0)),
+      status: extra.status || serverScan.status || record.status || 'synced',
+      syncStatus: extra.syncStatus || serverScan.syncStatus || record.syncStatus || 'synced',
+      syncError: extra.syncError ?? serverScan.syncError ?? record.syncError ?? '',
+      retryCount: extra.retryCount ?? serverScan.retryCount ?? record.retryCount ?? 0,
+      serverAck: extra.serverAck || serverScan,
+      timestamp,
+      scanTime,
+      createdAt: record.createdAt || timestamp,
+      mobileCreatedAt: record.mobileCreatedAt || timestamp,
+      mobileReceivedTime: record.mobileReceivedTime || timestamp,
+      mobileReceivedTimeUtc: record.mobileReceivedTimeUtc || timestamp,
+      serverUrl: record.serverUrl || serverScan.serverUrl || window.location.origin.replace(/\/+$/, '')
     };
   }
 
@@ -1786,14 +1981,28 @@
       rawBarcode: row.rawBarcode || row.rawScanString || row.rawUpi || '',
       rawUpi: row.rawUpi || row.rawScanString || row.rawScan || '',
       rawQR: row.rawQR || row.rawScanString || row.rawScan || '',
+      rawParsedValue: row.rawParsedValue || row.rawScanString || row.rawScan || row.rawUpi || '',
+      parsedRawScan: row.parsedRawScan || row.rawScanString || row.rawScan || row.rawUpi || '',
+      parsedPartNumber: row.parsedPartNumber || row.partNumber || row.part || '',
       upiCode: row.upiCode || row.upiNo || row.upiId || extractUpiIdFromText(row) || '',
       partNumber: row.partNumber || row.part || '',
       normalizedPartNumber: row.normalizedPartNumber || row.partNumber || row.part || '',
       part: row.part || row.partNumber || '',
+      partName: row.partName || row.partDescription || row.part || row.partNumber || '',
+      partDescription: row.partDescription || row.partName || row.part || row.partNumber || '',
+      description: row.description || row.partDescription || row.partName || row.part || '',
+      productCategory: row.productCategory || '',
+      category: row.category || row.productCategory || '',
       qty: row.qty ?? row.quantity ?? 1,
       quantity: row.quantity ?? row.qty ?? 1,
       mrp: row.mrp,
+      dlc: row.dlc,
+      currentCatalogueMRP: row.currentCatalogueMRP ?? row.mrp,
+      currentCatalogueDLC: row.currentCatalogueDLC ?? row.dlc,
       manualMRP: row.manualMRP,
+      valuationMRP: row.valuationMRP,
+      valuationSource: row.valuationSource,
+      finalInventoryValue: row.finalInventoryValue,
       mrpProvided: row.mrpProvided,
       binLocation: row.binLocation || row.bin || '',
       bin: row.bin || row.binLocation || '',
@@ -1836,38 +2045,17 @@
       timeoutMs: API_TIMEOUT_MS
     });
     const serverScan = response.scan || (Array.isArray(response.insertedRecords) ? response.insertedRecords[0] : null) || {};
-    const serverScanId = clean(serverScan.scanId || serverScan.uniqueScanId || record.scanId);
-    const rawScan = record.rawScanString || record.rawScan || record.rawBarcode || record.rawUpi || record.rawQR
-      || serverScan.rawScanString || serverScan.rawScan || serverScan.rawBarcode || serverScan.rawUpi || serverScan.rawQR || '';
-    const saved = {
-      ...record,
-      ...serverScan,
-      scanId: serverScanId || record.scanId,
-      uniqueScanId: clean(serverScan.uniqueScanId || serverScan.scanId || record.uniqueScanId || record.scanId),
-      clientScanId: record.clientScanId || record.scanId,
-      localId: record.localId || record.scanId,
-      clientSyncKey: record.clientSyncKey || record.syncKey || record.scanId,
-      rawScanString: rawScan,
-      rawScan,
-      rawBarcode: record.rawBarcode || serverScan.rawBarcode || rawScan,
-      rawUpi: record.rawUpi || serverScan.rawUpi || rawScan,
-      rawQR: record.rawQR || serverScan.rawQR || rawScan,
-      partNumber: clean(serverScan.partNumber || serverScan.part || record.partNumber || ''),
-      normalizedPartNumber: clean(serverScan.normalizedPartNumber || serverScan.partNumber || serverScan.part || record.normalizedPartNumber || ''),
-      part: clean(serverScan.part || serverScan.partNumber || record.part || ''),
-      qty: serverScan.qty ?? serverScan.quantity ?? record.qty,
-      quantity: serverScan.quantity ?? serverScan.qty ?? record.quantity,
+    const saved = mergeStoredRecordWithServer(record, serverScan, {
       status: 'synced',
       syncStatus: 'synced',
       syncError: '',
       retryCount: Number(record.retryCount || 0),
-      serverAck: serverScan,
-      timestamp: serverScan.timestamp || serverScan.scanTime || record.timestamp,
-      mobileCreatedAt: record.mobileCreatedAt || record.timestamp
-    };
+      serverAck: serverScan
+    });
     await putRecord(saved);
     state.allRows = await getAllRecords();
     applyRecordToUi(saved);
+    void enrichStoredRecord(saved).catch(() => undefined);
     await refreshLiveRecentScans({ force: true, reason: 'server-save' }).catch(() => undefined);
     return { response, saved };
   }
@@ -2155,6 +2343,7 @@
       setCameraLive(true);
       setCameraStarting(false);
       cameraState('Camera ready');
+      await refreshTorchState(video).catch(() => undefined);
       startNativeDetector(video).catch(() => undefined);
       const reader = await readerPromise;
       if (!state.scanning) return;
@@ -2382,17 +2571,17 @@
       for (const row of batch) {
         const saved = identityValue(inserted, row);
         if (saved) {
-          await putRecord({
-            ...row,
+          const merged = mergeStoredRecordWithServer(row, saved, {
             status: 'synced',
             syncStatus: 'synced',
             syncError: '',
             retryCount: Number(row.retryCount || 0),
-            serverAck: saved,
-            timestamp: saved.timestamp || row.timestamp,
-            mobileCreatedAt: row.mobileCreatedAt || saved.timestamp || row.timestamp
+            serverAck: saved
           });
-          updateLastScan({ ...row, status: 'synced', syncStatus: 'synced' });
+          await putRecord(merged);
+          state.allRows = await getAllRecords().catch(() => []);
+          updateLastScan(merged);
+          void enrichStoredRecord(merged).catch(() => undefined);
           continue;
         }
         const duplicateMessage = identityValue(duplicateLogs, row);
@@ -2419,13 +2608,17 @@
           continue;
         }
         if (response.success) {
-          await putRecord({
-            ...row,
+          const merged = mergeStoredRecordWithServer(row, row, {
             status: 'synced',
             syncStatus: 'synced',
             syncError: '',
-            retryCount: Number(row.retryCount || 0)
+            retryCount: Number(row.retryCount || 0),
+            serverAck: row
           });
+          await putRecord(merged);
+          state.allRows = await getAllRecords().catch(() => []);
+          updateLastScan(merged);
+          void enrichStoredRecord(merged).catch(() => undefined);
         }
       }
 
@@ -2797,6 +2990,9 @@
     byId('manualBtn').addEventListener('click', () => openManualDialog({}));
     byId('syncNowBtn').addEventListener('click', () => {
       syncQueue({ silent: false }).catch((error) => toast(error.message || 'Sync failed', 'error'));
+    });
+    byId('torchBtn')?.addEventListener('click', () => {
+      toggleTorch().catch((error) => toast(error.message || 'Torch update failed', 'error'));
     });
     byId('clearSyncedBtn').addEventListener('click', () => clearSyncedRows());
     byId('refreshCamerasBtn').addEventListener('click', () => refreshCameraList().catch((error) => toast(error.message || 'Unable to refresh cameras', 'error')));
