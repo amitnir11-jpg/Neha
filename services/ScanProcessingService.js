@@ -41,10 +41,26 @@ function responseStatusFor(result = {}) {
   return 422;
 }
 
+function scanProcessLog(level, stage, details = {}) {
+  const logger = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info;
+  logger(`[SCAN_PROCESS] ${stage}`, details);
+}
+
 async function processScan(input = {}, options = {}) {
   const sync = require('../routes/sync');
   const req = requestLike(options.req || {}, input);
   const normalized = sync.normalizeScan(input);
+  scanProcessLog('info', 'incoming', {
+    route: clean(req.originalUrl || req.url || '/api/scans/process'),
+    source: clean(normalized.scanSource || input.scanSource || input.source || 'unknown'),
+    scanType: clean(normalized.scanType || normalized.type || ''),
+    partNumber: clean(normalized.partNumber || normalized.part || ''),
+    dealerCode: clean(normalized.dealerCode || ''),
+    auditId: clean(normalized.auditId || ''),
+    upiId: clean(normalized.upiId || normalized.upiNo || ''),
+    syncKey: clean(normalized.syncKey || ''),
+    scanId: clean(normalized.scanId || normalized.uniqueScanId || '')
+  });
   const result = await sync.saveNormalizedScan(normalized, req);
   const status = clean(result.status).toLowerCase();
   const success = status === 'synced' || status === 'verification';
@@ -66,6 +82,24 @@ async function processScan(input = {}, options = {}) {
     dealer: scan.dealerCode || normalized.dealerCode || '',
     errorMessage: success ? '' : message
   };
+
+  scanProcessLog(success ? 'info' : duplicate ? 'warn' : 'error', 'result', {
+    route: clean(req.originalUrl || req.url || '/api/scans/process'),
+    source: clean(normalized.scanSource || input.scanSource || input.source || 'unknown'),
+    status,
+    duplicate,
+    masterFound: scan.masterFound !== undefined ? Boolean(scan.masterFound) : undefined,
+    masterMatch: scan.isMasterMatched !== undefined
+      ? Boolean(scan.isMasterMatched)
+      : (scan.masterMatch !== undefined ? Boolean(scan.masterMatch) : undefined),
+    partNumber: clean(scan.partNumber || scan.part || normalized.partNumber || ''),
+    dealerCode: clean(scan.dealerCode || normalized.dealerCode || ''),
+    auditId: clean(scan.auditId || normalized.auditId || ''),
+    upiId: clean(scan.upiId || scan.upiNo || normalized.upiId || ''),
+    scanId: clean(scan.scanId || scan.uniqueScanId || normalized.scanId || ''),
+    syncKey: clean(scan.syncKey || normalized.syncKey || ''),
+    message
+  });
 
   return {
     success,

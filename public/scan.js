@@ -576,6 +576,14 @@
     });
   }
 
+  function isRetryableTransportError(error = {}) {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+    const status = Number(error.status || 0);
+    if ([408, 502, 503, 504].includes(status)) return true;
+    if (status) return false;
+    return /network|failed to fetch|load failed|timed?\s*out|timeout|offline|connection/i.test(clean(error.message || ''));
+  }
+
   function toast(message, type = 'info') {
     const node = byId('toast');
     if (!node) return;
@@ -735,7 +743,7 @@
   function rowBlocksDuplicate(row = {}) {
     const status = rowStatus(row);
     if (row.serverDuplicateState === 'free') return false;
-    if (['duplicate', 'failed-duplicate', 'deleted', 'rejected'].includes(status)) return false;
+    if (['duplicate', 'failed-duplicate', 'failed', 'invalid', 'deleted', 'rejected'].includes(status)) return false;
     if (row.activeInventory === false) return false;
     if (Number(row.remainingQty ?? row.qty ?? row.quantity ?? 0) <= 0) return false;
     return rowMovementType(row) === 'INWARD';
@@ -1867,9 +1875,7 @@
       }
       return masterFields;
     } catch (error) {
-      const status = Number(error.status || 0);
-      const retryable = !status || status >= 500 || status === 408 || status === 429 || /network|failed to fetch|timed out|timeout|offline/i.test(clean(error.message || ''));
-      if (retryable) return null;
+      if (isRetryableTransportError(error)) return null;
       throw error;
     }
   }
@@ -2060,8 +2066,8 @@
     };
   }
 
-  async function saveRecordToServer(record = {}) {
-    const response = await api('/api/mobile/process', {
+  async function saveRecordToServer(record = {}, options = {}) {
+    const response = await api('/api/scans/process', {
       method: 'POST',
       body: convertToSyncPayload(record),
       timeoutMs: API_TIMEOUT_MS
@@ -2078,7 +2084,9 @@
     state.allRows = await getAllRecords();
     applyRecordToUi(saved);
     void enrichStoredRecord(saved).catch(() => undefined);
-    await refreshLiveRecentScans({ force: true, reason: 'server-save' }).catch(() => undefined);
+    if (options.refreshRecent !== false) {
+      await refreshLiveRecentScans({ force: true, reason: 'server-save' }).catch(() => undefined);
+    }
     return { response, saved };
   }
 
@@ -2532,23 +2540,24 @@
         const status = Number(error.status || 0);
         const data = error.data || {};
         const message = clean(data.message || error.message || 'Unable to save scan');
-        const retryable = !status || status >= 500 || status === 408 || status === 429;
         if (status === 409 || data.duplicate) {
           await markDuplicateRecord(record, data.existing || data.scan || {}, message);
-        } else if (retryable) {
+        } else if (isRetryableTransportError(error)) {
           await saveRecord({ ...record, syncError: message }, { silent: true, deferSync: false });
           cameraState('Saved locally');
           toast('Scan saved locally. Sync will retry automatically.', 'warning');
           beep('ok');
           vibrate(40);
         } else {
+          const rejected = [400, 404, 422].includes(status)
+            || ['invalid', 'rejected'].includes(clean(data.status).toLowerCase());
           updateLastScan({
             ...record,
-            status: 'failed',
-            syncStatus: 'failed',
+            status: rejected ? 'rejected' : 'failed',
+            syncStatus: rejected ? 'rejected' : 'failed',
             syncError: message
           });
-          cameraState('Invalid scan - not saved');
+          cameraState(rejected ? 'Invalid scan - not saved' : 'Server save failed');
           toast(message, 'error');
           beep('error');
           vibrate([30, 30, 30]);
@@ -2575,143 +2584,67 @@
       return;
     }
     const batch = rows.slice(0, BATCH_SIZE);
+    if (rows.length > batch.length) state.syncAgain = true;
     state.syncRunning = true;
+    let syncedCount = 0;
+    let duplicateCount = 0;
+    let rejectedCount = 0;
+    let failedCount = 0;
+    let pendingCount = 0;
     try {
-      const response = await api('/api/mobile/sync-batch', {
-        method: 'POST',
-        body: {
-          deviceId: deviceId(),
-          deviceName: clean(state.session?.deviceName || DEFAULT_DEVICE_NAME),
-          dealerCode: activeDealerCode(),
-          dealerName: activeDealerName(),
-          appVersion: APP_VERSION,
-          serverUrl: window.location.origin.replace(/\/+$/, ''),
-          records: batch.map(convertToSyncPayload)
-        }
-      });
-
-      const logs = Array.isArray(response.logs) ? response.logs : [];
-      const inserted = new Map();
-      (response.insertedRecords || []).forEach((row) => putIdentity(inserted, row, row));
-      logs
-        .filter((log) => ['inserted', 'synced', 'success'].includes(clean(log.status).toLowerCase()))
-        .forEach((log) => putIdentity(inserted, log, log));
-      const duplicateLogs = new Map();
-      logs
-        .filter((log) => clean(log.status).toLowerCase() === 'duplicate')
-        .forEach((log) => putIdentity(duplicateLogs, log, clean(log.errorMessage || log.reason || 'Duplicate rejected')));
-      const failedLogs = new Map();
-      logs
-        .filter((log) => ['failed', 'invalid'].includes(clean(log.status).toLowerCase()))
-        .forEach((log) => putIdentity(failedLogs, log, clean(log.errorMessage || log.reason || response.message || 'Sync failed')));
-
       for (const row of batch) {
-        const saved = identityValue(inserted, row);
-        if (saved) {
-          const merged = mergeStoredRecordWithServer(row, saved, {
-            status: 'synced',
-            syncStatus: 'synced',
-            syncError: '',
-            retryCount: Number(row.retryCount || 0),
-            serverAck: saved
-          });
-          await putRecord(merged);
-          state.allRows = await getAllRecords().catch(() => []);
-          updateLastScan(merged);
-          void enrichStoredRecord(merged).catch(() => undefined);
-          continue;
-        }
-        const duplicateMessage = identityValue(duplicateLogs, row);
-        if (duplicateMessage !== undefined) {
+        try {
+          await saveRecordToServer(row, { refreshRecent: false });
+          syncedCount += 1;
+        } catch (error) {
+          if (authExpired(error)) {
+            handleAuthExpired(error);
+            return;
+          }
+          const data = error.data || {};
+          const message = clean(data.message || error.message || 'Sync failed');
+          const duplicate = Number(error.status) === 409 || data.duplicate || data.upiDuplicate;
+          if (duplicate) {
+            duplicateCount += 1;
+            await markDuplicateRecord(row, data.existing || data.scan || {}, message);
+            continue;
+          }
+          if (isRetryableTransportError(error)) {
+            pendingCount += 1;
+            await putRecord({
+              ...row,
+              status: 'pending',
+              syncStatus: 'pending',
+              syncError: message,
+              retryCount: Number(row.retryCount || 0) + 1
+            });
+            continue;
+          }
+          const rejected = [400, 404, 409, 422].includes(Number(error.status))
+            || ['invalid', 'rejected'].includes(clean(data.status).toLowerCase());
+          if (rejected) rejectedCount += 1;
+          else failedCount += 1;
           await putRecord({
             ...row,
-            status: 'duplicate',
-            syncStatus: 'duplicate',
-            syncError: duplicateMessage,
-            retryCount: Number(row.retryCount || 0)
-          });
-          if (!silent) showDuplicateOnce(row, row, duplicateMessage);
-          continue;
-        }
-        const failedMessage = identityValue(failedLogs, row);
-        if (failedMessage !== undefined) {
-          await putRecord({
-            ...row,
-            status: 'failed',
-            syncStatus: 'failed',
-            syncError: failedMessage,
+            status: rejected ? 'rejected' : 'failed',
+            syncStatus: rejected ? 'rejected' : 'failed',
+            syncError: message,
             retryCount: Number(row.retryCount || 0) + 1
           });
-          continue;
-        }
-        if (response.success) {
-          const merged = mergeStoredRecordWithServer(row, row, {
-            status: 'synced',
-            syncStatus: 'synced',
-            syncError: '',
-            retryCount: Number(row.retryCount || 0),
-            serverAck: row
-          });
-          await putRecord(merged);
-          state.allRows = await getAllRecords().catch(() => []);
-          updateLastScan(merged);
-          void enrichStoredRecord(merged).catch(() => undefined);
         }
       }
 
-      storageSet(LAST_SYNC_KEY, nowIso());
-      if (!silent) toast(response.message || 'Sync complete', 'success');
+      if (syncedCount) storageSet(LAST_SYNC_KEY, nowIso());
+      const terminalCount = syncedCount + duplicateCount + rejectedCount + failedCount;
+      if (!silent) {
+        const message = pendingCount
+          ? `${pendingCount} scan(s) remain pending until the connection is restored.`
+          : failedCount || rejectedCount
+            ? `${terminalCount} scan(s) processed: ${rejectedCount} rejected, ${failedCount} failed.`
+            : `${syncedCount} scan(s) synced${duplicateCount ? `, ${duplicateCount} duplicate(s) blocked` : ''}.`;
+        toast(message, failedCount || rejectedCount ? 'error' : pendingCount || duplicateCount ? 'warning' : 'success');
+      }
       sendHeartbeat().catch(() => undefined);
-      if (response.duplicateCount && !silent) {
-        toast(`${response.duplicateCount} duplicate scan(s) skipped`, 'warning');
-      }
-    } catch (error) {
-      if (authExpired(error)) {
-        handleAuthExpired(error);
-        return;
-      }
-      const retryable = !Number(error.status) || Number(error.status) >= 500 || Number(error.status) === 408 || Number(error.status) === 429;
-      const logs = Array.isArray(error.data?.logs) ? error.data.logs : [];
-      const failedMap = new Map();
-      logs
-        .filter((log) => ['failed', 'invalid'].includes(clean(log.status).toLowerCase()))
-        .forEach((log) => putIdentity(failedMap, log, clean(log.errorMessage || log.reason || error.message)));
-      const duplicateMap = new Map();
-      logs
-        .filter((log) => clean(log.status).toLowerCase() === 'duplicate')
-        .forEach((log) => putIdentity(duplicateMap, log, clean(log.errorMessage || log.reason || error.message)));
-
-      for (const row of batch) {
-        const duplicateMessage = identityValue(duplicateMap, row);
-        const failedMessage = identityValue(failedMap, row);
-        if (duplicateMessage !== undefined) {
-          await putRecord({
-            ...row,
-            status: 'duplicate',
-            syncStatus: 'duplicate',
-            syncError: duplicateMessage,
-            retryCount: Number(row.retryCount || 0)
-          });
-          showDuplicateOnce(row, row, duplicateMessage);
-        } else if (failedMessage !== undefined) {
-          await putRecord({
-            ...row,
-            status: retryable ? 'pending' : 'failed',
-            syncStatus: retryable ? 'pending' : 'failed',
-            syncError: failedMessage,
-            retryCount: Number(row.retryCount || 0) + 1
-          });
-        } else {
-          await putRecord({
-            ...row,
-            status: retryable ? 'pending' : 'failed',
-            syncStatus: retryable ? 'pending' : 'failed',
-            syncError: error.message,
-            retryCount: Number(row.retryCount || 0) + 1
-          });
-        }
-      }
-      if (!silent) toast(retryable ? 'Saved locally. Sync will retry automatically.' : error.message, retryable ? 'warning' : 'error');
     } finally {
       state.syncRunning = false;
       state.allRows = await getAllRecords().catch(() => []);
@@ -2957,14 +2890,20 @@
         const status = Number(error.status || 0);
         const data = error.data || {};
         const message = clean(data.message || error.message || 'Manual save failed');
-        const retryable = !status || status >= 500 || status === 408 || status === 429;
         if (status === 409 || data.duplicate) {
           await markDuplicateRecord(record, data.existing || data.scan || {}, message);
-        } else if (retryable) {
+        } else if (isRetryableTransportError(error)) {
           await saveRecord({ ...record, syncError: message }, { deferSync: false });
           closeManualDialog();
         } else {
-          updateLastScan({ ...record, status: 'failed', syncStatus: 'failed', syncError: message });
+          const rejected = [400, 404, 422].includes(status)
+            || ['invalid', 'rejected'].includes(clean(data.status).toLowerCase());
+          updateLastScan({
+            ...record,
+            status: rejected ? 'rejected' : 'failed',
+            syncStatus: rejected ? 'rejected' : 'failed',
+            syncError: message
+          });
           toast(message, 'error');
           beep('error');
           vibrate([30, 30, 30]);

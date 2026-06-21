@@ -3511,27 +3511,89 @@ router.get('/live', auth.optionalAuth, async (req, res) => {
 
 router.post('/repair-sync-status', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
-    const webFilter = {
+    const safeSourceFilter = {
       $or: [
         { deviceId: /^WEB-/i },
-        { source: { $in: ['barcode', 'manual', 'scanner', 'api'] } }
-      ],
-      syncStatus: { $ne: 'synced' }
+        { source: { $in: ['barcode', 'manual', 'scanner', 'api', 'mobile', 'qr'] } }
+      ]
     };
-    const result = await Inventory.updateMany(webFilter, {
+    const repairableSyncFilter = {
+      ...safeSourceFilter,
+      syncStatus: { $ne: 'synced' },
+      scanStatus: { $in: acceptedStatuses() },
+      $and: [masterValidation.validScanClause()]
+    };
+    const invalidLiveFilter = {
+      $or: [
+        masterValidation.notInMasterClause(),
+        { syncStatus: { $in: ['failed', 'rejected', 'duplicate'] } },
+        { scanStatus: { $in: ['FAILED', 'REJECTED', 'DUPLICATE', 'DUPLICATE_BLOCKED'] } }
+      ]
+    };
+
+    const invalidRows = await Inventory.find(invalidLiveFilter).lean();
+    const rejectedMoved = [];
+    const deletedAuditRows = [];
+    for (const scan of invalidRows) {
+      const warningText = [scan.warnings, scan.remarks]
+        .flat()
+        .filter(Boolean)
+        .join(' ');
+      const notInMaster = scan.masterFound === false
+        || scan.masterMatch === false
+        || scan.isMasterMatched === false
+        || /not\s+found\s+in\s+master|invalid\s+part/i.test(warningText);
+      if (notInMaster) {
+        await masterValidation.saveRejectedScan({
+          ...scan,
+          rawScannedValue: scan.rawScan || scan.rawScanString || scan.rawUpi || '',
+          extractedPartNumber: scan.normalizedPartNumber || scan.partNumber || scan.part || '',
+          originalScanId: scan.scanId || scan.uniqueScanId || String(scan._id),
+          originalInventoryId: scan._id,
+          sourceRoute: 'repair-sync-status:not-in-master',
+          defaultScanMode: scan.scanMode || scan.source || 'Sync',
+          reason: scan.syncError || scan.remarks || INVALID_PART_MESSAGE
+        });
+        rejectedMoved.push(scan);
+      } else {
+        deletedAuditRows.push(scan);
+      }
+    }
+    if (deletedAuditRows.length) {
+      await DeletedScanLog.insertMany(deletedAuditRows.map((scan) => ({
+        deletedBy: req.user.username || req.user.name || 'admin',
+        dealerCode: scan.dealerCode || '',
+        partNumber: scan.partNumber || scan.part || '',
+        qty: Number(scan.qty || scan.quantity || 0),
+        scanType: scan.scanType || scan.type || '',
+        reason: scan.syncError || scan.remarks || 'Repair cleanup for failed/duplicate inventory row',
+        source: 'Repair',
+        scanId: scan.scanId || scan.uniqueScanId || String(scan._id)
+      })));
+    }
+    if (invalidRows.length) {
+      await Inventory.deleteMany({ _id: { $in: invalidRows.map((row) => row._id) } });
+      await refreshInventoryUpiScopes(invalidRows);
+    }
+
+    const result = await Inventory.updateMany(repairableSyncFilter, {
       $set: { syncStatus: 'synced', synced: true, isSynced: true, syncError: '' }
     });
     const count = result.modifiedCount || result.nModified || 0;
     invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     if (req.io) {
+      req.io.emit('scan:deleted');
       req.io.emit('scan:saved');
       req.io.emit('stats:update');
     }
     res.json({
       success: true,
-      message: `Repair complete. ${count} WEB/server-saved pending records marked synced.`,
+      message: `Repair complete. ${count} valid server rows marked synced, ${rejectedMoved.length} invalid rows moved to rejected, ${deletedAuditRows.length} failed/duplicate rows removed from live inventory.`,
       matchedCount: result.matchedCount || result.n || 0,
-      modifiedCount: count
+      modifiedCount: count,
+      rejectedMovedCount: rejectedMoved.length,
+      removedInvalidCount: invalidRows.length,
+      removedFailedCount: deletedAuditRows.length
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

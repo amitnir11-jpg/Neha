@@ -785,6 +785,14 @@
     return fallback || 'Request failed';
   }
 
+  function isRetryableTransportError(error = {}) {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+    const status = Number(error.status || 0);
+    if ([408, 502, 503, 504].includes(status)) return true;
+    if (status) return false;
+    return /network|failed to fetch|load failed|timed?\s*out|timeout|offline|connection/i.test(String(error.message || ''));
+  }
+
   function isAdminUser() {
     return state.user && String(state.user.role || '').toLowerCase() === 'admin';
   }
@@ -841,20 +849,34 @@
   }
 
   async function api(path, options = {}) {
-    const headers = options.headers ? { ...options.headers } : {};
+    const { timeoutMs = 0, ...fetchOptions } = options;
+    const headers = fetchOptions.headers ? { ...fetchOptions.headers } : {};
     const requestPath = apiUrl(withActiveDealerQuery(path));
-    const requestBody = options.body ? withActiveDealerBody(options.body) : options.body;
+    const requestBody = fetchOptions.body ? withActiveDealerBody(fetchOptions.body) : fetchOptions.body;
     const isFormData = requestBody instanceof FormData;
     if (!isFormData) headers['Content-Type'] = 'application/json';
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
 
     const isMobileSyncRequest = /^\/api\/mobile\/|^\/api\/sync\//.test(path);
-
-    const response = await fetch(requestPath, {
-      ...options,
-      headers,
-      body: isFormData ? requestBody : requestBody ? JSON.stringify(requestBody) : undefined
-    });
+    let timeout = null;
+    if (Number(timeoutMs) > 0 && typeof AbortController !== 'undefined' && !fetchOptions.signal) {
+      const controller = new AbortController();
+      fetchOptions.signal = controller.signal;
+      timeout = setTimeout(() => controller.abort(), Number(timeoutMs));
+    }
+    let response;
+    try {
+      response = await fetch(requestPath, {
+        ...fetchOptions,
+        headers,
+        body: isFormData ? requestBody : requestBody ? JSON.stringify(requestBody) : undefined
+      });
+    } catch (error) {
+      if (error && error.name === 'AbortError') throw new Error('Request timed out. Check network and retry.');
+      throw error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
     const data = await parseApiResponse(response);
     if (data && data.invalidJson) {
       const error = new Error(data.message);
@@ -1668,17 +1690,11 @@
   }
 
   function localQueuedScanHistoryRecords() {
-    return getSyncQueue()
-      .filter((item) => String(item.scanType || item.type || '').toUpperCase() !== 'VERIFICATION')
-      .map((item) => normalizeQueuedHistoryScan(item))
-      .filter((scan) => activeAuditMatchesScan(scan) && scanMatchesScanHistoryFilters(scan));
+    return [];
   }
 
   function localQueuedStreamRecords() {
-    return getSyncQueue()
-      .filter((item) => String(item.scanType || item.type || '').toUpperCase() !== 'VERIFICATION')
-      .map((item) => normalizeQueuedHistoryScan(item))
-      .filter((scan) => activeAuditMatchesScan(scan));
+    return [];
   }
 
   function mergeScanHistoryRecords(serverRecords = []) {
@@ -1878,7 +1894,7 @@
     const promise = api(`/api/mobile/validate-part?${new URLSearchParams({
       partNumber: normalizedPart,
       dealerCode: cleanDealerCode(dealerCode || currentDealerCode() || '')
-    }).toString()}`)
+    }).toString()}`, { timeoutMs: 15000 })
       .then((data) => {
         const master = data && data.found ? masterPartFromValidation(data, normalizedPart) : null;
         state.partMasterLookupCache.set(key, master);
@@ -3730,14 +3746,17 @@
       Object.assign(normalized, masterPart);
       fillPart(form, masterPart);
     } catch (error) {
-      playScanTone('error');
-      toast(error.message || 'Unable to validate part number', 'error');
-      if (isBarcodeForm) {
-        setLivePill('barcodeReadyStatus', 'Validation failed', false);
-        resetBarcodeScanFields(form, normalized, options.expectedRaw);
-        setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+      if (!isRetryableTransportError(error)) {
+        playScanTone('error');
+        toast(error.message || 'Unable to validate part number', 'error');
+        if (isBarcodeForm) {
+          setLivePill('barcodeReadyStatus', 'Validation failed', false);
+          resetBarcodeScanFields(form, normalized, options.expectedRaw);
+          setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+        }
+        return;
       }
-      return;
+      addConnectionLog(`Master lookup deferred until sync: ${error.message}`, 'warning');
     }
     if (!isBarcodeForm && !payload.rawScan && !payload.rawScanString && !payload.rawBarcode && !payload.rawScanValue && !payload.barcode && !payload.barcodeValue && !payload.scanValue && !payload.scanText) {
       normalized.rawScan = '';
@@ -3793,44 +3812,10 @@
         setTimeout(() => $('#barcodeRaw')?.focus(), 700);
         return;
       }
-      normalized.synced = false;
-      normalized.isSynced = false;
-      normalized.syncStatus = 'pending';
-      normalized.localStatus = 'pending';
-      const queued = enqueueScan(normalized, 'Saved locally. Sync will retry automatically.');
-      if (!queued.queueAdded) {
-        playScanTone('duplicate');
-        const existing = queued.existingLocalScan || normalized;
-        const message = String(existing.localStatus || existing.syncStatus || '').toLowerCase() === 'pending'
-          ? `Part ${existing.partNumber || existing.part || normalized.partNumber} is already pending sync.`
-          : barcodeDuplicateMessage(existing);
-        setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
-        toast(message, 'error');
-        resetBarcodeScanFields(form, normalized, options.expectedRaw);
-        setTimeout(() => $('#barcodeRaw')?.focus(), 500);
-        return;
-      }
-      const pendingScan = normalizeQueuedHistoryScan(queued);
-      replaceVisibleBarcodeScan(pendingScan, pendingScan);
-      localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
-      lockBarcodeScan(pendingScan, 900);
-      state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
-      state.barcodeLastAt = Date.now();
-      resetBarcodeScanFields(form, normalized, options.expectedRaw);
-      playScanTone('success');
-      setLivePill('barcodeReadyStatus', 'Saved locally', true);
-      toast(`${pendingScan.partNumber || pendingScan.part || 'Scan'} saved locally. Sync will retry automatically.`);
-      updateSyncBadges();
-      schedulePendingSync(80);
-      setTimeout(() => {
-        setLivePill('barcodeReadyStatus', 'Ready for Scan', true);
-        $('#barcodeRaw')?.focus();
-      }, 450);
-      return;
     }
 
     try {
-      const data = await api('/api/scans/process', { method: 'POST', body: normalized });
+      const data = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 });
       if (data && data.scan) {
         const savedScan = data.scan || {};
         addSyncLog({
@@ -3933,16 +3918,23 @@
         }
         return;
       }
-      if (!error.status || error.status >= 500) {
-        enqueueScan(normalized, error.message || 'Server unavailable; scan saved locally');
+      if (isRetryableTransportError(error)) {
+        const queued = enqueueScan(normalized, error.message || 'Server unavailable; scan saved locally');
         if (isBarcodeForm) {
+          localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
+          lockBarcodeScan(queued, 900);
+          state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
+          state.barcodeLastAt = Date.now();
           resetBarcodeScanFields(form, normalized, options.expectedRaw);
+          setLivePill('barcodeReadyStatus', 'Saved locally', true);
           setTimeout(() => $('#barcodeRaw')?.focus(), 900);
         } else {
           resetManualScanFields(form);
         }
-        playScanTone('error');
+        playScanTone('success');
         toast('Server unavailable. Scan saved locally and will retry automatically.', 'warning');
+        updateSyncBadges();
+        schedulePendingSync(350);
         return;
       }
       playScanTone('error');
@@ -4017,101 +4009,127 @@
     setHeaderSyncStatus('Syncing', true);
     setDashboardSyncStatus('Syncing', true);
     try {
-      const outboundRecords = records.map((record) => normalizeScanPayload(applyActiveAuditToPayload({
-        ...record,
-        uniqueScanId: record.uniqueScanId || record.localId,
-        syncKey: ''
-      })));
-      const outboundKeyByLocalKey = new Map();
-      records.forEach((record, index) => outboundKeyByLocalKey.set(record.syncKey, outboundRecords[index].syncKey));
+      const outcomes = new Map();
+      const insertedRecords = [];
+      const logs = [];
+      let syncedCount = 0;
+      let duplicateCount = 0;
+      let rejectedCount = 0;
+      let failedCount = 0;
+      let pendingCount = 0;
 
-      const data = await api('/api/mobile/sync', {
-        method: 'POST',
-        body: {
-          scans: outboundRecords,
-          deviceId: ensureDeviceId(),
-          dealerCode: currentDealerCode(),
-          serverUrl: state.serverInfo ? state.serverInfo.serverUrl : ''
-        }
-      });
-
-      const completedKeys = new Set();
-      const failedByKey = new Map();
-      const duplicateLogs = [];
-      (data.logs || []).forEach((log) => {
-        addSyncLog(log);
-        if (log.syncKey && ['inserted', 'synced', 'duplicate'].includes(log.status)) completedKeys.add(log.syncKey);
-        if (log.syncKey && log.status === 'failed') failedByKey.set(log.syncKey, log.errorMessage || 'Sync failed');
-        if (log.status === 'duplicate') duplicateLogs.push(log);
-      });
-
-      const nextQueue = getSyncQueue()
-        .filter((item) => !completedKeys.has(item.syncKey) && !completedKeys.has(outboundKeyByLocalKey.get(item.syncKey)))
-        .map((item) => failedByKey.has(item.syncKey)
-          ? { ...item, localStatus: 'failed', retryCount: Number(item.retryCount || 0) + 1, syncError: failedByKey.get(item.syncKey) }
-          : failedByKey.has(outboundKeyByLocalKey.get(item.syncKey))
-            ? { ...item, localStatus: 'failed', retryCount: Number(item.retryCount || 0) + 1, syncError: failedByKey.get(outboundKeyByLocalKey.get(item.syncKey)) }
-          : item);
-      saveSyncQueue(nextQueue);
-      if (duplicateLogs.length) {
-        let handledDuplicateLog = false;
-        duplicateLogs.forEach((log) => {
-          const original = records.find((record) => (
-            record.syncKey === log.syncKey
-            || outboundKeyByLocalKey.get(record.syncKey) === log.syncKey
-            || record.localId === log.localId
-            || record.uniqueScanId === log.uniqueScanId
-            || record.upiId === log.upiId
-          ));
-          if (original) {
-            handledDuplicateLog = true;
-            handleBarcodeDuplicate(original, {
-              message: log.errorMessage || 'Duplicate UPI rejected by server',
-              scan: {
-                ...original,
-                partNumber: log.partNumber || original.partNumber || original.part,
-                upiId: log.upiId || original.upiId,
-                dealerCode: log.dealer || original.dealerCode
-              }
+      for (const record of records) {
+        const recordKey = record.syncKey || record.localId || record.uniqueScanId || record.scanId;
+        const outbound = normalizeScanPayload(applyActiveAuditToPayload({
+          ...record,
+          uniqueScanId: record.uniqueScanId || record.localId || record.scanId,
+          scanId: record.scanId || record.localId || record.uniqueScanId,
+          clientScanId: record.clientScanId || record.localId || record.scanId,
+          clientSyncKey: record.clientSyncKey || record.syncKey
+        }));
+        try {
+          const result = await api('/api/scans/process', { method: 'POST', body: outbound, timeoutMs: 20000 });
+          const saved = result.scan || outbound;
+          outcomes.set(recordKey, { remove: true });
+          syncedCount += 1;
+          insertedRecords.push(saved);
+          logs.push({
+            partNumber: saved.partNumber || saved.part || record.partNumber || record.part,
+            upiId: saved.upiId || saved.upiNo || record.upiId,
+            dealer: saved.dealerCode || record.dealerCode,
+            status: 'synced',
+            errorMessage: ''
+          });
+        } catch (error) {
+          const message = error.message || 'Scan could not be synced';
+          const duplicate = Number(error.status) === 409 || error.data?.duplicate || error.data?.upiDuplicate;
+          if (duplicate) {
+            outcomes.set(recordKey, { remove: true });
+            duplicateCount += 1;
+            logs.push({
+              partNumber: record.partNumber || record.part,
+              upiId: record.upiId,
+              dealer: record.dealerCode,
+              status: 'duplicate',
+              errorMessage: message
+            });
+            handleBarcodeDuplicate(record, error.data || { message });
+          } else if (isRetryableTransportError(error)) {
+            outcomes.set(recordKey, { status: 'pending', message });
+            pendingCount += 1;
+            logs.push({
+              partNumber: record.partNumber || record.part,
+              upiId: record.upiId,
+              dealer: record.dealerCode,
+              status: 'pending',
+              errorMessage: message
+            });
+          } else {
+            const rejected = [400, 404, 422].includes(Number(error.status))
+              || ['invalid', 'rejected'].includes(String(error.data?.status || '').toLowerCase());
+            outcomes.set(recordKey, rejected ? { remove: true } : { status: 'failed', message });
+            if (rejected) rejectedCount += 1;
+            else failedCount += 1;
+            logs.push({
+              partNumber: record.partNumber || record.part,
+              upiId: record.upiId,
+              dealer: record.dealerCode,
+              status: rejected ? 'rejected' : 'failed',
+              errorMessage: message
             });
           }
-        });
-        const message = duplicateLogs[0].errorMessage || 'Duplicate UPI rejected by server';
-        if (!handledDuplicateLog && !lockBarcodeDuplicateNotice({ syncKey: duplicateLogs[0].syncKey, upiId: duplicateLogs[0].upiId, dealerCode: duplicateLogs[0].dealer }, 3000)) {
-          playScanTone('duplicate');
-          toast(message, 'error');
         }
-        setLivePill('barcodeReadyStatus', 'Duplicate - Not Added', false);
       }
 
-      const syncTime = rememberLastSyncTime(data.completedAt || data.lastSync || data.lastSyncTime || data.lastSuccessfulSyncAt || new Date().toISOString());
-      setText('deviceLastSync', dateTime(syncTime));
-      setText('syncTotal', data.totalSynced || 0);
+      const nextQueue = getSyncQueue().flatMap((item) => {
+        const itemKey = item.syncKey || item.localId || item.uniqueScanId || item.scanId;
+        const outcome = outcomes.get(itemKey);
+        if (!outcome) return [item];
+        if (outcome.remove) return [];
+        return [{
+          ...item,
+          localStatus: outcome.status,
+          syncStatus: outcome.status,
+          retryCount: Number(item.retryCount || 0) + 1,
+          syncError: outcome.message
+        }];
+      });
+      saveSyncQueue(nextQueue);
+      logs.forEach(addSyncLog);
+
+      const syncTime = syncedCount
+        ? rememberLastSyncTime(new Date().toISOString())
+        : normalizeLastSyncValue(storageGet(scopedStorageKey(LAST_SYNC_KEY)));
+      if (syncTime) setText('deviceLastSync', dateTime(syncTime));
+      setText('syncTotal', syncedCount);
+      const data = {
+        success: failedCount === 0,
+        message: failedCount
+          ? `${failedCount} scan(s) failed. Review the exact reason in Sync Log.`
+          : rejectedCount
+            ? `${rejectedCount} invalid scan(s) rejected and removed from the pending queue.`
+          : pendingCount
+            ? `${pendingCount} scan(s) remain pending until the connection is restored.`
+            : 'Sync complete',
+        insertedRecords,
+        insertedCount: syncedCount,
+        syncedCount,
+        duplicateCount,
+        rejectedCount,
+        failedCount,
+        pendingCount,
+        logs,
+        completedAt: new Date().toISOString()
+      };
       updateSyncBadges(data);
-      setHeaderSyncStatus(getSyncQueue().length ? 'Pending' : 'Synced', !getSyncQueue().length);
-      setDashboardSyncStatus(getSyncQueue().length ? 'Pending' : 'Synced', !getSyncQueue().length);
+      const remaining = syncCounts();
+      const detail = remaining.pending ? 'Pending' : remaining.failed ? 'Failed' : 'Synced';
+      const statusOk = !remaining.pending && !remaining.failed;
+      setHeaderSyncStatus(detail, statusOk);
+      setDashboardSyncStatus(detail, statusOk);
       await refreshAfterSync(data);
+      if (!options.silent) toast(data.message, failedCount || rejectedCount ? 'error' : pendingCount ? 'warning' : 'success');
       return data;
-    } catch (error) {
-      if (error.data) renderSyncApiResponse(error.data);
-      const noActiveAudit = /no active audit/i.test(error.message || '');
-      const retryable = !noActiveAudit && (!Number(error.status) || Number(error.status) >= 500 || Number(error.status) === 408 || Number(error.status) === 429 || /network|failed to fetch|timed out|timeout|offline/i.test(String(error.message || '')));
-      const failedQueue = getSyncQueue().map((item) => records.some((record) => record.syncKey === item.syncKey)
-        ? { ...item, localStatus: retryable ? 'pending' : 'failed', retryCount: Number(item.retryCount || 0) + 1, syncError: error.message }
-        : item);
-      saveSyncQueue(failedQueue);
-      records.forEach((record) => addSyncLog({
-        partNumber: record.partNumber || record.part,
-        upiId: record.upiId,
-        dealer: record.dealerCode,
-        status: retryable ? 'pending' : 'failed',
-        errorMessage: error.message
-      }));
-      setHeaderSyncStatus(noActiveAudit ? 'Failed' : retryable ? 'Pending' : 'Failed', false);
-      setDashboardSyncStatus(noActiveAudit ? 'Failed' : retryable ? 'Pending' : 'Failed', false);
-      updateSyncBadges(noActiveAudit ? { serverStatus: 'online', databaseStatus: 'online', db: 'connected' } : { serverStatus: 'offline', databaseStatus: 'offline', db: 'disconnected' });
-      if (!options.silent) toast(retryable ? 'Scan saved locally. Sync will retry automatically.' : error.message, retryable ? 'warning' : 'error');
-      return { success: false, message: error.message };
     } finally {
       state.syncInProgress = false;
     }
