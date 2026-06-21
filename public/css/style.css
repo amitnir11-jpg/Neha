@@ -396,6 +396,82 @@ a:focus-visible,
   border-radius: 5px;
 }
 
+.part-link-copy-group,
+.part-link-static,
+.part-action-group {
+  display: inline;
+  max-width: 100%;
+  vertical-align: baseline;
+  user-select: text;
+  cursor: text;
+}
+
+.part-link-static.table-link {
+  display: inline;
+  max-width: none;
+  min-height: 0;
+  padding: 0;
+  vertical-align: baseline;
+  background: transparent;
+  text-decoration: none;
+  cursor: text;
+}
+
+.part-link-static.table-link:hover,
+.part-link-static.table-link:focus-visible {
+  background: transparent;
+  text-decoration: none;
+  box-shadow: none;
+}
+
+.part-number-selectable {
+  user-select: text;
+  cursor: text;
+}
+
+.part-action-btn {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--link);
+  font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.part-action-btn:hover {
+  background: var(--link-soft);
+  border-color: rgba(0, 93, 184, 0.14);
+  transform: translateY(-1px);
+}
+
+.part-action-btn:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--link-focus);
+}
+
+.part-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.part-action-btn.copy-part-btn {
+  color: var(--link);
+}
+
+.part-action-btn.remove-part-btn {
+  color: var(--red);
+}
+
 .enterprise-link[data-external="true"]::after,
 .table-link[data-external="true"]::after {
   content: "↗";
@@ -1942,7 +2018,8 @@ body[data-page="report"] table thead {
     border: 0;
   }
 
-  .copy-part-btn {
+  .copy-part-btn,
+  .remove-part-btn {
     display: none !important;
   }
 }

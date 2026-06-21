@@ -598,10 +598,8 @@
   function partLink(partNumber, className = 'table-link', options = {}) {
     const part = String(partNumber || '').trim();
     if (!part) return escapeHtml(partNumber || '-');
-    const link = enterpriseLink(part, dashboardHref({ view: 'master', partNumber: part }), { className, label: `Open part ${part} in a new tab` });
-    const copyButton = partActionButtonHtml('copy', part, options);
-    const removeButton = options.showRemove === false ? '' : partActionButtonHtml('remove', part, options);
-    return `<span class="part-link-copy-group">${link}${copyButton}${removeButton}</span>`;
+    const classes = ['part-link-copy-group', 'part-link-static', className].filter(Boolean).join(' ');
+    return `<span class="${escapeHtml(classes)}"><span class="part-number-selectable">${escapeHtml(part)}</span></span>`;
   }
 
   function deviceLink(deviceId, className = 'table-link') {

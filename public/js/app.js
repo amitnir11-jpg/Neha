@@ -216,13 +216,53 @@
     return `<a class="${escapeHtml(className)}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(options.label || `Open ${text} in a new tab`)}" data-external="${external ? 'true' : 'false'}">${escapeHtml(text)}</a>`;
   }
 
-  function partLink(partNumber) {
+  async function copyTextValue(value, label = 'Value') {
+    if (!value) throw new Error(`${label} is not available`);
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const input = document.createElement('input');
+    input.value = value;
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand('copy');
+    input.remove();
+  }
+
+  function partActionButtonHtml(kind, part, options = {}) {
+    const isCopy = kind === 'copy';
+    const removeMode = String(options.removeMode || options.deleteMode || '').trim().toLowerCase();
+    const disabled = !isCopy && !removeMode;
+    const classes = ['part-action-btn', isCopy ? 'copy-part-btn' : 'remove-part-btn'].join(' ');
+    const attrs = [
+      'type="button"',
+      `class="${classes}"`,
+      `data-part="${escapeHtml(part)}"`,
+      `title="${escapeHtml(isCopy ? 'Copy part number' : options.removeTitle || 'Remove part number')}"`,
+      `aria-label="${escapeHtml(isCopy ? `Copy part number ${part}` : options.removeLabel || `Remove part number ${part}`)}"`
+    ];
+    if (isCopy) {
+      attrs.push(`data-copy-label="${escapeHtml(options.copyLabel || 'Part number')}"`);
+    } else {
+      if (removeMode) attrs.push(`data-delete-mode="${escapeHtml(removeMode)}"`);
+      if (options.scanId) attrs.push(`data-scan-id="${escapeHtml(options.scanId)}"`);
+      if (options.dealerCode) attrs.push(`data-dealer-code="${escapeHtml(options.dealerCode)}"`);
+      if (options.auditId) attrs.push(`data-audit-id="${escapeHtml(options.auditId)}"`);
+      if (options.partNumber) attrs.push(`data-part-number="${escapeHtml(options.partNumber)}"`);
+      if (disabled) {
+        attrs.push('disabled');
+        attrs.push('aria-disabled="true"');
+      }
+    }
+    return `<button ${attrs.join(' ')}>${isCopy ? '⧉' : '✕'}</button>`;
+  }
+
+  function partLink(partNumber, className = 'table-link', options = {}) {
     const part = String(partNumber || '').trim();
     if (!part) return escapeHtml('-');
-    // Return plain selectable text with copy button instead of link
-    // The link will work via row click, not direct click on the part number
-    const copyBtn = `<button class="copy-part-btn" data-part="${escapeHtml(part)}" title="Copy part number" style="background: none; border: none; color: #0b5cab; cursor: pointer; padding: 2px 4px; margin-left: 4px; font-size: 12px;">📋</button>`;
-    return `<span class="part-number-selectable" style="user-select: text; cursor: text;">${escapeHtml(part)}</span>${copyBtn}`;
+    const classes = ['part-link-copy-group', 'part-link-static', className].filter(Boolean).join(' ');
+    return `<span class="${escapeHtml(classes)}"><span class="part-number-selectable">${escapeHtml(part)}</span></span>`;
   }
 
   function deviceLink(deviceId) {
@@ -744,7 +784,12 @@
       <tr>
         <td><input class="scan-checkbox" type="checkbox" value="${escapeHtml(scan._id)}"></td>
         <td>${escapeHtml(dateTime(scan.timestamp))}</td>
-        <td>${partLink(scan.part)}</td>
+        <td>${partLink(scan.part, 'table-link', {
+          removeMode: 'scan',
+          scanId: scan._id,
+          dealerCode: scan.dealerCode,
+          copyLabel: 'Part number'
+        })}</td>
         <td>${escapeHtml(scan.partDescription || scan.partName)}</td>
         <td>${escapeHtml(scan.qty)}</td>
         <td>${escapeHtml(scan.type)}</td>
@@ -765,6 +810,48 @@
         toast('Record deleted');
         await loadInventory();
       }));
+    });
+  }
+
+  function deleteScanById(scanId) {
+    if (!scanId) {
+      toast('Scan is not available', 'error');
+      return;
+    }
+    openDeleteModal('Delete Part', 'Type DELETE to remove this scan record.', async (confirmText) => {
+      await api('/api/inventory/delete-selected', { method: 'POST', body: { ids: [scanId], confirmText } });
+      toast('Scan deleted');
+      await loadInventory();
+    });
+  }
+
+  function deleteReportPartByNumber(partNumber, dealerCodeOrOptions = '') {
+    const options = typeof dealerCodeOrOptions === 'object' && dealerCodeOrOptions !== null
+      ? dealerCodeOrOptions
+      : { dealerCode: dealerCodeOrOptions };
+    const part = String(partNumber || '').trim();
+    const dealer = String(options.dealerCode || '').trim();
+    if (!part) {
+      toast('Part number is not available', 'error');
+      return;
+    }
+    if (!dealer) {
+      toast('Select a dealer first', 'error');
+      return;
+    }
+    openDeleteModal('Delete Part', `Type DELETE to remove all scan records for part ${part}.`, async (confirmText) => {
+      await api('/api/admin/scans/delete-by-parts', {
+        method: 'POST',
+        body: {
+          dealerCode: dealer,
+          parts: part,
+          deleteType: 'single-part',
+          ...(options.auditId ? { auditId: String(options.auditId).trim() } : {}),
+          confirmText
+        }
+      });
+      toast('Part deleted');
+      await loadReportPreview().catch(() => {});
     });
   }
 
@@ -887,9 +974,17 @@
     const data = await api(`/api/reports/data?${params}`);
     const body = $('#verifyTableBody');
     if (!body) return;
+    const reportDealerCode = $('#dashboardDealerFilter')?.value || '';
+    const reportAuditId = $('#dashboardAuditFilter')?.value || '';
     body.innerHTML = (data.finalRows || []).map((row) => `
       <tr>
-        <td>${escapeHtml(row.partNo)}</td>
+        <td>${partLink(row.partNo, 'table-link', {
+          removeMode: 'part',
+          dealerCode: row.dealerCode || reportDealerCode,
+          auditId: row.auditId || reportAuditId,
+          partNumber: row.partNo,
+          copyLabel: 'Part number'
+        })}</td>
         <td>${escapeHtml(row.partDescription || row.partName)}</td>
         <td>${escapeHtml(row.systemQty)}</td>
         <td>${escapeHtml(row.physicalQty)}</td>
@@ -969,6 +1064,36 @@
   }
 
   function initDashboardEvents() {
+    document.addEventListener('click', (event) => {
+      const copyButton = event.target.closest('.copy-part-btn');
+      if (copyButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const partNumber = String(copyButton.dataset.part || '').trim();
+        copyTextValue(partNumber, copyButton.dataset.copyLabel || 'Part number')
+          .then(() => toast(`Copied: ${partNumber}`, 'success'))
+          .catch((error) => toast(error.message, 'error'));
+        return;
+      }
+      const removeButton = event.target.closest('.remove-part-btn');
+      if (removeButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (removeButton.disabled) return;
+        const deleteMode = String(removeButton.dataset.deleteMode || '').toLowerCase();
+        const partNumber = String(removeButton.dataset.part || removeButton.dataset.partNumber || '').trim();
+        if (deleteMode === 'scan') {
+          deleteScanById(removeButton.dataset.scanId || '').catch((error) => toast(error.message, 'error'));
+          return;
+        }
+        deleteReportPartByNumber(partNumber, {
+          dealerCode: removeButton.dataset.dealerCode || $('#reportDealerFilter')?.value || $('#dashboardDealerFilter')?.value || '',
+          auditId: removeButton.dataset.auditId || $('#dashboardAuditFilter')?.value || ''
+        })
+          .catch((error) => toast(error.message, 'error'));
+      }
+    }, true);
+
     $$('.nav-link[data-view]').forEach((button) => {
       button.addEventListener('click', () => {
         $$('.nav-link').forEach((item) => item.classList.remove('active'));
@@ -1434,6 +1559,7 @@
 
   function renderReport(data) {
     const summary = data.summary || {};
+    const reportDealerCode = $('#reportDealerFilter')?.value || $('#dashboardDealerFilter')?.value || '';
     $('#reportSystemQty').textContent = summary.totalSystemQty || 0;
     $('#reportPhysicalQty').textContent = summary.totalPhysicalQty || 0;
     $('#reportMatched').textContent = summary.matched || 0;
@@ -1449,7 +1575,13 @@
     
     $('#reportTableBody').innerHTML = state.lastReportRows.map((row) => `
       <tr data-part-number="${escapeHtml(row.partNo ?? row.partNumber)}">
-        <td>${partLink(row.partNo ?? row.partNumber)}</td>
+        <td>${partLink(row.partNo ?? row.partNumber, 'table-link', {
+          removeMode: 'part',
+          dealerCode: row.dealerCode || reportDealerCode,
+          auditId: row.auditId || $('#dashboardAuditFilter')?.value || '',
+          partNumber: row.partNo ?? row.partNumber,
+          copyLabel: 'Part number'
+        })}</td>
         <td>${escapeHtml(row.partDescription ?? row.partName)}</td>
         <td>${escapeHtml(row.model || '')}</td>
         <td>${escapeHtml(row.manufacturingYear || row.year || '')}</td>
@@ -1513,30 +1645,12 @@
   }
   
   function initReportTableEvents() {
-    // Copy button handler
-    $$('#reportTableBody .copy-part-btn').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation(); // Prevent row click
-        const partNumber = btn.getAttribute('data-part');
-        navigator.clipboard.writeText(partNumber).then(() => {
-          const originalText = btn.textContent;
-          btn.textContent = '✓';
-          setTimeout(() => {
-            btn.textContent = originalText;
-          }, 1500);
-          toast(`Copied: ${partNumber}`, 'success');
-        }).catch(() => {
-          toast('Failed to copy part number', 'error');
-        });
-      });
-    });
-    
     // Row click handler to open part in master view
     $$('#reportTableBody tr').forEach((row) => {
       row.style.cursor = 'pointer';
       row.addEventListener('click', (e) => {
         // Don't navigate if clicking on copy button
-        if (e.target.closest('.copy-part-btn')) return;
+        if (e.target.closest('.copy-part-btn') || e.target.closest('.remove-part-btn')) return;
         // Don't navigate if selecting text
         if (window.getSelection().toString()) return;
         

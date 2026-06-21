@@ -751,10 +751,81 @@
     return clean(row.binLocation || row.bin || '');
   }
 
+  async function copyTextValue(value, label = 'Value') {
+    const text = clean(value);
+    if (!text) throw new Error(`${label} is not available`);
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const temp = document.createElement('input');
+    temp.value = text;
+    document.body.appendChild(temp);
+    temp.select();
+    document.execCommand('copy');
+    temp.remove();
+  }
+
+  function partActionButtonHtml(kind, part, options = {}) {
+    const isCopy = kind === 'copy';
+    const removeMode = String(options.removeMode || options.deleteMode || '').trim().toLowerCase();
+    const disabled = !isCopy && !removeMode;
+    const classes = ['part-action-btn', isCopy ? 'copy-part-btn' : 'remove-part-btn'].join(' ');
+    const attrs = [
+      'type="button"',
+      `class="${classes}"`,
+      `data-part="${escapeHtml(part)}"`,
+      `title="${escapeHtml(isCopy ? 'Copy part number' : options.removeTitle || 'Remove part number')}"`,
+      `aria-label="${escapeHtml(isCopy ? `Copy part number ${part}` : options.removeLabel || `Remove part number ${part}`)}"`
+    ];
+    if (isCopy) {
+      attrs.push(`data-copy-label="${escapeHtml(options.copyLabel || 'Part number')}"`);
+    } else {
+      if (removeMode) attrs.push(`data-delete-mode="${escapeHtml(removeMode)}"`);
+      if (options.scanId) attrs.push(`data-scan-id="${escapeHtml(options.scanId)}"`);
+      if (options.dealerCode) attrs.push(`data-dealer-code="${escapeHtml(options.dealerCode)}"`);
+      if (options.auditId) attrs.push(`data-audit-id="${escapeHtml(options.auditId)}"`);
+      if (options.partNumber) attrs.push(`data-part-number="${escapeHtml(options.partNumber)}"`);
+      if (options.localOnly) attrs.push('data-local-only="true"');
+      if (disabled) {
+        attrs.push('disabled');
+        attrs.push('aria-disabled="true"');
+      }
+    }
+    return `<button ${attrs.join(' ')}>${isCopy ? '⧉' : '✕'}</button>`;
+  }
+
+  function partLink(partNumber, options = {}) {
+    const part = clean(partNumber || '');
+    if (!part) return escapeHtml(partNumber || '-');
+    return `<span class="part-link-copy-group part-link-static"><span class="part-number-selectable">${escapeHtml(part)}</span></span>`;
+  }
+
   function duplicateScanMessage(existing = {}) {
     const bin = rowBin(existing) || '-';
     const part = rowPart(existing) || '-';
     return `This UPI is already scanned in Bin ${bin}, Part No ${part}`;
+  }
+
+  async function deleteHistoryRow(row = {}) {
+    const scanId = clean(row.scanId || row.uniqueScanId || row.localId || '');
+    if (!scanId) {
+      toast('Scan record is not available', 'error');
+      return;
+    }
+    const part = rowPart(row) || '-';
+    const status = rowStatus(row);
+    if (!window.confirm(`Delete part ${part}?`)) return;
+    if (status === 'synced' && state.session?.role === 'admin') {
+      await api('/api/inventory/delete-selected', {
+        method: 'POST',
+        body: { ids: [scanId], confirmText: 'DELETE' }
+      });
+    }
+    await deleteRecord(scanId);
+    state.allRows = await getAllRecords().catch(() => []);
+    renderAll();
+    toast(status === 'synced' ? 'Scan deleted' : 'Local scan removed', 'success');
   }
 
   function localDuplicateForRecord(record = {}) {
@@ -998,7 +1069,17 @@
       return `
         <tr>
           <td>${escapeHtml(time)}</td>
-          <td>${escapeHtml(rowPart(row))}</td>
+          <td>${partLink(rowPart(row), {
+            removeMode: rowStatus(row) === 'synced' ? (state.session?.role === 'admin' ? 'server' : '') : 'local',
+            scanId: row.scanId || row.uniqueScanId || row.localId || '',
+            dealerCode: row.dealerCode || activeDealerCode(),
+            auditId: row.auditId || activeAuditId(),
+            copyLabel: 'Part number',
+            localOnly: rowStatus(row) !== 'synced',
+            removeTitle: rowStatus(row) === 'synced'
+              ? 'Remove part record from server'
+              : 'Remove this local scan'
+          })}</td>
           <td>${escapeHtml(fmtNumber(rowQty(row)))}</td>
           <td>${escapeHtml(rowMode(row))}</td>
           <td>${escapeHtml(rowBin(row) || '-')}</td>
@@ -2570,6 +2651,34 @@
       void submitLogin(event);
     });
     byId('logoutBtn')?.addEventListener('click', () => logout());
+    document.addEventListener('click', (event) => {
+      const copyButton = event.target.closest('.copy-part-btn');
+      if (copyButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const part = String(copyButton.dataset.part || '').trim();
+        copyTextValue(part, copyButton.dataset.copyLabel || 'Part number')
+          .then(() => toast(`Copied: ${part}`, 'success'))
+          .catch((error) => toast(error.message, 'error'));
+        return;
+      }
+      const removeButton = event.target.closest('.remove-part-btn');
+      if (removeButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (removeButton.disabled) return;
+        const scanId = String(removeButton.dataset.scanId || '').trim();
+        const row = scanId ? sessionRows().find((item) => clean(item.scanId || item.uniqueScanId || item.localId || '') === scanId) : null;
+        deleteHistoryRow(row || {
+          scanId,
+          uniqueScanId: scanId,
+          localId: scanId,
+          partNumber: removeButton.dataset.part || '',
+          dealerCode: removeButton.dataset.dealerCode || '',
+          auditId: removeButton.dataset.auditId || ''
+        }).catch((error) => toast(error.message, 'error'));
+      }
+    }, true);
     byId('saveBinBtn').addEventListener('click', () => {
       saveBinAndStartCamera();
     });

@@ -57,6 +57,14 @@ a {
   text-decoration: none;
 }
 
+.part-link-copy-group,
+.part-link-static,
+.part-number-selectable {
+  display: inline;
+  user-select: text;
+  cursor: text;
+}
+
 .hidden {
   display: none !important;
 }
