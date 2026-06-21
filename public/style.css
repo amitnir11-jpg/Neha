@@ -3406,26 +3406,18 @@ tr:hover td {
   min-width: 0;
   max-height: calc(100vh - 260px);
   min-height: 300px;
-  height: calc(100vh - 360px);
+  height: auto;
   overflow-x: auto;
   overflow-y: auto;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
-  touch-action: pan-x pan-y;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  cursor: grab;
-}
-
-.report-table-wrap::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  display: none;
+  touch-action: auto;
+  cursor: default;
 }
 
 .report-table-wrap.report-table-panning {
-  cursor: grabbing;
-  user-select: none;
+  cursor: default;
+  user-select: text;
 }
 
 .report-table-wrap table {

@@ -261,7 +261,11 @@
   function partLink(partNumber, className = 'table-link', options = {}) {
     const part = String(partNumber || '').trim();
     if (!part) return escapeHtml('-');
-    const classes = ['part-link-copy-group', 'part-link-static', className].filter(Boolean).join(' ');
+    const extraClasses = String(className || '')
+      .split(/\s+/)
+      .map((cls) => cls.trim())
+      .filter((cls) => cls && cls !== 'table-link');
+    const classes = ['part-link-copy-group', 'part-link-static', ...extraClasses].join(' ');
     return `<span class="${escapeHtml(classes)}"><span class="part-number-selectable">${escapeHtml(part)}</span></span>`;
   }
 
@@ -1647,7 +1651,6 @@
   function initReportTableEvents() {
     // Row click handler to open part in master view
     $$('#reportTableBody tr').forEach((row) => {
-      row.style.cursor = 'pointer';
       row.addEventListener('click', (e) => {
         // Don't navigate if clicking on copy button
         if (e.target.closest('.copy-part-btn') || e.target.closest('.remove-part-btn')) return;

@@ -598,7 +598,11 @@
   function partLink(partNumber, className = 'table-link', options = {}) {
     const part = String(partNumber || '').trim();
     if (!part) return escapeHtml(partNumber || '-');
-    const classes = ['part-link-copy-group', 'part-link-static', className].filter(Boolean).join(' ');
+    const extraClasses = String(className || '')
+      .split(/\s+/)
+      .map((cls) => cls.trim())
+      .filter((cls) => cls && cls !== 'table-link');
+    const classes = ['part-link-copy-group', 'part-link-static', ...extraClasses].join(' ');
     return `<span class="${escapeHtml(classes)}"><span class="part-number-selectable">${escapeHtml(part)}</span></span>`;
   }
 
@@ -4555,7 +4559,20 @@
   }
 
   function defaultReportLayout() {
-    return { layout: 'full', width: '100%', height: 'calc(100vh - 360px)', columnWidths: {}, columnOrder: [] };
+    return { layout: 'full', width: '100%', height: 'auto', columnWidths: {}, columnOrder: [] };
+  }
+
+  function normalizeReportLayoutPrefs(prefs = {}) {
+    const normalized = { ...defaultReportLayout(), ...(prefs || {}) };
+    const height = String(normalized.height || '').trim();
+    const isCustomHeight = /^\d+(\.\d+)?px$/i.test(height);
+    const isLegacyDefault = !height || height === 'calc(100vh - 360px)';
+    if (isLegacyDefault || (!isCustomHeight && height !== 'auto')) {
+      normalized.height = normalized.layout === 'compact' ? '440px' : 'auto';
+    } else if (normalized.layout === 'compact' && !isCustomHeight) {
+      normalized.height = '440px';
+    }
+    return normalized;
   }
 
   function reportColumnPrefs() {
@@ -5310,8 +5327,8 @@
   function readReportLayoutPrefs() {
     try {
       const specific = localStorage.getItem(reportLayoutStorageKey());
-      if (specific) return { ...defaultReportLayout(), ...JSON.parse(specific) };
-      return { ...defaultReportLayout(), ...JSON.parse(localStorage.getItem(REPORT_LAYOUT_KEY) || '{}') };
+      if (specific) return normalizeReportLayoutPrefs(JSON.parse(specific));
+      return normalizeReportLayoutPrefs(JSON.parse(localStorage.getItem(REPORT_LAYOUT_KEY) || '{}'));
     } catch (error) {
       return defaultReportLayout();
     }
@@ -5330,15 +5347,15 @@
     reports.classList.add(`report-layout-${layout}`);
     $$('.report-layout-btn').forEach((button) => button.classList.toggle('active', button.dataset.reportLayout === layout));
     card.style.width = dimensions.width || (layout === 'compact' ? '72%' : layout === 'split' ? '100%' : '100%');
-    wrap.style.height = dimensions.height || (layout === 'compact' ? '440px' : 'calc(100vh - 360px)');
-    saveReportLayoutPrefs({ layout, width: card.style.width, height: wrap.style.height });
+    wrap.style.height = dimensions.height || (layout === 'compact' ? '440px' : 'auto');
+    saveReportLayoutPrefs({ layout, width: card.style.width, height: wrap.style.height || 'auto' });
     refreshReportTableLayout();
   }
 
   function resetReportLayout() {
     const prefs = readReportLayoutPrefs();
-    saveReportLayoutPrefs({ ...prefs, layout: 'full', width: '100%', height: 'calc(100vh - 360px)' });
-    applyReportLayout('full', { width: '100%', height: 'calc(100vh - 360px)' });
+    saveReportLayoutPrefs({ ...prefs, layout: 'full', width: '100%', height: 'auto' });
+    applyReportLayout('full', { width: '100%', height: 'auto' });
     if (state.reportTableRows.length || state.reportTableColumns.length) {
       renderReportTable(state.reportTableColumns, state.reportTableRows, state.reportTableTotalRows, state.reportTableGrandTotal, activeReportType());
     }
@@ -5363,7 +5380,7 @@
     saveReportLayoutPrefs({
       ...readReportLayoutPrefs(),
       width: card?.style.width || '100%',
-      height: wrap?.style.height || 'calc(100vh - 360px)',
+      height: wrap?.style.height || 'auto',
       columnWidths,
       columnOrder
     });
@@ -5454,37 +5471,6 @@
       event.preventDefault();
       wrap.scrollLeft = nextLeft;
     }, { passive: false });
-    let reportPan = null;
-    wrap.addEventListener('pointerdown', (event) => {
-      if (event.button !== 0 || event.target.closest('button, input, select, textarea, a, .report-col-resize')) return;
-      if (wrap.scrollWidth <= wrap.clientWidth) return;
-      reportPan = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        scrollLeft: wrap.scrollLeft,
-        scrollTop: wrap.scrollTop,
-        moved: false
-      };
-      wrap.classList.add('report-table-panning');
-      if (wrap.setPointerCapture) wrap.setPointerCapture(event.pointerId);
-    });
-    wrap.addEventListener('pointermove', (event) => {
-      if (!reportPan || reportPan.pointerId !== event.pointerId) return;
-      const dx = event.clientX - reportPan.startX;
-      const dy = event.clientY - reportPan.startY;
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) reportPan.moved = true;
-      wrap.scrollLeft = reportPan.scrollLeft - dx;
-      wrap.scrollTop = reportPan.scrollTop - dy;
-      event.preventDefault();
-    });
-    const stopReportPan = (event) => {
-      if (!reportPan || (event && reportPan.pointerId !== event.pointerId)) return;
-      reportPan = null;
-      wrap.classList.remove('report-table-panning');
-    };
-    wrap.addEventListener('pointerup', stopReportPan);
-    wrap.addEventListener('pointercancel', stopReportPan);
     $('#reportHead')?.addEventListener('click', (event) => {
       if (event.target.closest('.report-col-resize')) return;
       const button = event.target.closest('.report-sort-button');
