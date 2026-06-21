@@ -38,6 +38,19 @@ const MIRROR_FIELDS = [
   'dateTime'
 ];
 
+function modelMirrorFields(modelName) {
+  try {
+    const model = Prisma.dmmf.datamodel.models.find(
+      (m) => m.name.toLowerCase() === String(modelName || '').toLowerCase()
+    );
+    if (!model) return MIRROR_FIELDS;
+    const columnNames = new Set(model.fields.map((f) => f.name));
+    return MIRROR_FIELDS.filter((field) => columnNames.has(field));
+  } catch (error) {
+    return MIRROR_FIELDS;
+  }
+}
+
 const DATE_FIELDS = new Set([
   'timestamp',
   'scanTime',
@@ -128,7 +141,8 @@ function valueForMirror(data, field) {
   return String(value);
 }
 
-function buildRow(data, id) {
+function buildRow(data, id, mirrorFields) {
+  const fields = mirrorFields || MIRROR_FIELDS;
   const now = new Date();
   const clean = cleanObject({ ...data });
   const createdAt = asDate(clean.createdAt) || now;
@@ -141,7 +155,7 @@ function buildRow(data, id) {
     createdAt,
     updatedAt
   };
-  MIRROR_FIELDS.forEach((field) => {
+  fields.forEach((field) => {
     row[field] = valueForMirror(clean, field);
   });
   return row;
@@ -882,6 +896,7 @@ function createModel(config) {
   const tableName = config.tableName;
   const indexes = config.indexes || [];
   const defaults = config.defaults || {};
+  const resolvedMirrorFields = modelMirrorFields(config.name);
 
   class Model extends Document {
     constructor(data = {}) {
@@ -912,7 +927,7 @@ function createModel(config) {
       const prepared = await this.__prepare({ ...input, id, _id: id }, options);
       prepared.id = id;
       prepared._id = id;
-      const row = buildRow(prepared, id);
+      const row = buildRow(prepared, id, resolvedMirrorFields);
       const saved = await this.__delegate.upsert({
         where: { id },
         create: row,
