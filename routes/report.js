@@ -3474,7 +3474,7 @@ async function validateValuationReports(query = {}, provided = {}) {
   });
 }
 
-function addStockSummarySheet(workbook, data) {
+function addStockSummarySheet(workbook, data, options = {}) {
   const sheet = workbook.addWorksheet('Stock Summary');
   sheet.columns = [
     { width: 22 }, { width: 15 }, { width: 11 }, { width: 12 },
@@ -3482,27 +3482,38 @@ function addStockSummarySheet(workbook, data) {
     { width: 11 }, { width: 14 }, { width: 11 }, { width: 14 }
   ];
   const currencyFormat = '₹ #,##0.00;[Red]-₹ #,##0.00';
-  const fills = {
-    title: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBDD7EE' } },
-    meta: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC9C9C9' } },
-    green: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA7BF95' } },
-    dms: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6A58E' } },
-    physical: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD8C87E' } },
-    excess: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF7188AD' } },
-    short: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBFBFBF' } },
-    net: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF8FB2CC' } },
-    total: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF70A83A' } },
-    black: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } }
+  const theme = {
+    title: 'FF1F4E78',
+    titleText: 'FFFFFFFF',
+    subtitle: 'FFDCEEFF',
+    subtitleText: 'FF1F4E78',
+    sectionBlue: 'FFDCEEFF',
+    sectionGreen: 'FFD9EAD3',
+    sectionGold: 'FFF4E3B2',
+    sectionGrey: 'FFF3F5F7',
+    value: 'FFFFFFFF',
+    warningFill: 'FFFBE4D5',
+    border: 'FFD0D7DE',
+    text: 'FF1F2937',
+    success: 'FF166534',
+    warning: 'FF9A3412',
+    danger: 'FFB91C1C',
+    muted: 'FF64748B'
   };
   const border = {
-    top: { style: 'thin', color: { argb: 'FF000000' } },
-    left: { style: 'thin', color: { argb: 'FF000000' } },
-    bottom: { style: 'thin', color: { argb: 'FF000000' } },
-    right: { style: 'thin', color: { argb: 'FF000000' } }
+    top: { style: 'thin', color: { argb: theme.border } },
+    left: { style: 'thin', color: { argb: theme.border } },
+    bottom: { style: 'thin', color: { argb: theme.border } },
+    right: { style: 'thin', color: { argb: theme.border } }
   };
   const center = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  const left = { vertical: 'middle', horizontal: 'left', wrapText: true };
+  const right = { vertical: 'middle', horizontal: 'right', wrapText: true };
   const numberKeys = stockSummaryColumns().filter((column) => column.key !== 'category').map((column) => column.key);
   const currencyKeys = new Set(['dmsValue', 'physicalValue', 'excessValue', 'shortValue', 'netDifference']);
+  const canonical = options.canonicalContext || {};
+  const canonicalTotals = canonical.totals || {};
+  const generatedAt = options.generatedAt || data.summary?.generatedAt || '';
   const applyRange = (startRow, endRow, startCol = 1, endCol = 12) => {
     for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
       for (let colNumber = startCol; colNumber <= endCol; colNumber += 1) {
@@ -3516,62 +3527,118 @@ function addStockSummarySheet(workbook, data) {
     for (let colNumber = startCol; colNumber <= endCol; colNumber += 1) {
       const cell = sheet.getCell(rowNumber, colNumber);
       cell.fill = fill;
-      cell.font = { name: 'Arial', size: 10, ...font };
+      cell.font = { name: 'Calibri', size: 10, color: { argb: theme.text }, ...font };
     }
   };
   const setNumber = (rowNumber, colNumber, value, isCurrency = false) => {
     const cell = sheet.getCell(rowNumber, colNumber);
     cell.value = Number(value || 0);
     cell.numFmt = isCurrency ? currencyFormat : '#,##0';
+    cell.alignment = isCurrency ? right : center;
   };
 
-  sheet.mergeCells('A1:L1');
-  sheet.getCell('A1').value = 'Daksh Inventory Solution V2';
-  setFill(1, 1, 12, fills.black, { bold: true, size: 16, color: { argb: 'FFFFFFFF' } });
-  sheet.getRow(1).height = 24;
-
-  sheet.mergeCells('A2:L2');
-  sheet.getCell('A2').value = data.sections.title || STOCK_SUMMARY_TITLE;
-  setFill(2, 1, 12, fills.title, { bold: false, size: 14 });
+  sheet.mergeCells('A1:B2');
+  sheet.getCell('A1').value = 'LOGO';
+  setFill(1, 1, 2, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionGold } }, { bold: true, size: 12, color: { argb: theme.title } });
+  sheet.getCell('A1').alignment = center;
+  sheet.getRow(1).height = 26;
   sheet.getRow(2).height = 22;
+
+  sheet.mergeCells('C1:L1');
+  sheet.getCell('C1').value = 'Daksh Inventory Solution V2';
+  setFill(1, 3, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.title } }, { bold: true, size: 20, color: { argb: theme.titleText } });
+  sheet.getCell('C1').alignment = center;
+
+  sheet.mergeCells('C2:L2');
+  sheet.getCell('C2').value = data.sections.title || STOCK_SUMMARY_TITLE;
+  setFill(2, 3, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.subtitle } }, { bold: true, size: 12, color: { argb: theme.subtitleText } });
+  sheet.getCell('C2').alignment = center;
 
   const metadata = data.sections.metadata || [];
   metadata.forEach((item, index) => {
     const rowNumber = index + 3;
+    const isEven = index % 2 === 0;
     sheet.mergeCells(rowNumber, 1, rowNumber, 3);
     sheet.mergeCells(rowNumber, 4, rowNumber, 12);
     sheet.getCell(rowNumber, 1).value = `${item.label || ''} :`;
     sheet.getCell(rowNumber, 4).value = item.value || '';
     sheet.getCell(rowNumber, 1).alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
     sheet.getCell(rowNumber, 4).alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
-    setFill(rowNumber, 1, 12, fills.meta, { bold: false });
-    sheet.getCell(rowNumber, 1).font = { name: 'Arial', size: 10, bold: true };
-    sheet.getCell(rowNumber, 4).font = { name: 'Arial', size: 10, bold: /Dealership Name/i.test(item.label || '') };
+    setFill(rowNumber, 1, 3, { type: 'pattern', pattern: 'solid', fgColor: { argb: isEven ? theme.sectionBlue : theme.sectionGrey } }, { bold: true, color: { argb: theme.subtitleText } });
+    setFill(rowNumber, 4, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.value } }, { bold: /Dealership Name/i.test(item.label || '') });
+    sheet.getCell(rowNumber, 1).font = { name: 'Calibri', size: 10, bold: true, color: { argb: theme.subtitleText } };
+    sheet.getCell(rowNumber, 4).font = { name: 'Calibri', size: 10, bold: /Dealership Name/i.test(item.label || ''), color: { argb: theme.text } };
   });
 
   const reconciliation = data.sections.reconciliationSummary || {};
-  const reconciliationRows = Array.isArray(reconciliation.rows) ? reconciliation.rows : [];
+  const reconciliationRows = Array.isArray(reconciliation.rows) ? reconciliation.rows.map((item) => {
+    const label = String(item.label || '');
+    const normalized = { ...item };
+    if (/DMS Stock Value/i.test(label) && canonicalTotals.totalDmsDlcValue !== undefined) {
+      normalized.value = canonicalTotals.totalDmsDlcValue;
+      normalized.displayValue = stockSummaryAmountText(canonicalTotals.totalDmsDlcValue);
+    }
+    if (/Actual Physical Stock Value|Actual Stock Value \(DLC\)|Total Inventory Value/i.test(label) && canonicalTotals.totalPhysicalDlcValue !== undefined) {
+      normalized.value = canonicalTotals.totalPhysicalDlcValue;
+      normalized.displayValue = stockSummaryAmountText(canonicalTotals.totalPhysicalDlcValue);
+    }
+    if (/Variance Value|Net Difference/i.test(label) && canonicalTotals.netDifference !== undefined) {
+      normalized.value = canonicalTotals.netDifference;
+      normalized.displayValue = stockSummaryAmountTextSigned(canonicalTotals.netDifference);
+    }
+    if (/Shortages Identified|Total Shortage Value/i.test(label) && canonicalTotals.totalShortValue !== undefined) {
+      normalized.value = canonicalTotals.totalShortValue;
+      normalized.displayValue = stockSummaryAmountText(canonicalTotals.totalShortValue);
+    }
+    if (/Excess Stock Identified|Total Excess Value/i.test(label) && canonicalTotals.totalExcessValue !== undefined) {
+      normalized.value = canonicalTotals.totalExcessValue;
+      normalized.displayValue = stockSummaryAmountText(canonicalTotals.totalExcessValue);
+    }
+    return normalized;
+  }) : [];
   const serviceRow = metadata.length + 3;
   sheet.mergeCells(serviceRow, 1, serviceRow, 12);
   sheet.getCell(serviceRow, 1).value = 'Inventory Reconciliation Summary';
-  setFill(serviceRow, 1, 12, fills.green, { bold: true });
+  setFill(serviceRow, 1, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionGold } }, { bold: true, size: 11, color: { argb: theme.subtitleText } });
+  sheet.getCell(serviceRow, 1).alignment = center;
 
   const reconciliationStart = serviceRow + 1;
   reconciliationRows.forEach((item, index) => {
     const rowNumber = reconciliationStart + index;
+    const valueText = String(item.displayValue !== undefined && item.displayValue !== null
+      ? item.displayValue
+      : item.value === undefined || item.value === null
+        ? ''
+        : item.value);
+    const isStatus = item.kind === 'status';
+    const isRemarks = item.kind === 'remarks';
+    const isDamage = item.kind === 'damage';
+    const isNet = item.kind === 'net' || /net difference|variance/i.test(String(item.label || ''));
+    const valueRaw = String(item.value === undefined || item.value === null ? '' : item.value);
+    const valueFill = isStatus
+      ? theme.sectionGreen
+      : isDamage
+        ? theme.warningFill
+        : isNet && /^-/.test(valueRaw.replace(/[^-\d.]/g, ''))
+          ? theme.warningFill
+          : isNet
+            ? theme.sectionGold
+            : isRemarks
+              ? theme.sectionGrey
+              : theme.value;
     sheet.mergeCells(rowNumber, 1, rowNumber, 4);
     sheet.mergeCells(rowNumber, 5, rowNumber, 12);
     sheet.getCell(rowNumber, 1).value = `${item.label || ''} :`;
-    sheet.getCell(rowNumber, 5).value = item.value === undefined || item.value === null || item.value === '' ? '' : item.value;
+    sheet.getCell(rowNumber, 5).value = valueText;
     sheet.getCell(rowNumber, 1).alignment = { vertical: 'middle', horizontal: 'right', wrapText: true };
-    sheet.getCell(rowNumber, 5).alignment = { vertical: 'middle', horizontal: /remarks/i.test(item.label || '') ? 'left' : 'center', wrapText: true };
-    setFill(rowNumber, 1, 4, fills.green, { bold: true });
-    setFill(rowNumber, 5, 12, item.kind === 'status' ? fills.total : item.kind === 'net' ? fills.black : item.kind === 'damage' ? fills.excess : item.kind === 'remarks' ? fills.meta : fills.meta, { bold: true });
-    if (item.kind === 'variance' || item.kind === 'net') sheet.getCell(rowNumber, 5).numFmt = '0';
-    if (item.kind === 'remarks') sheet.getRow(rowNumber).height = 30;
-    if (item.kind === 'damage') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
-    if (item.kind === 'status') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
-    if (item.kind === 'net') sheet.getCell(rowNumber, 5).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    sheet.getCell(rowNumber, 5).alignment = { vertical: 'middle', horizontal: isRemarks ? 'left' : 'center', wrapText: true };
+    setFill(rowNumber, 1, 4, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionBlue } }, { bold: true, color: { argb: theme.subtitleText } });
+    setFill(rowNumber, 5, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: valueFill } }, {
+      bold: true,
+      color: isStatus ? theme.success : isDamage || /^-/.test(valueRaw.replace(/[^-\d.]/g, '')) ? theme.danger : theme.text
+    });
+    if (/variance|net/i.test(String(item.label || ''))) sheet.getCell(rowNumber, 5).numFmt = '0';
+    if (isRemarks) sheet.getRow(rowNumber).height = 30;
   });
 
   const groupRow = reconciliationStart + reconciliationRows.length;
@@ -3589,36 +3656,46 @@ function addStockSummarySheet(workbook, data) {
   sheet.getCell(groupRow, 12).value = 'Net Difference';
   ['Value', 'Part Lines', 'Quantity', 'Value', 'Part Lines', 'Quantity', 'Value', 'Part Lines', 'Value', 'Part Lines', 'Value']
     .forEach((value, index) => { sheet.getCell(subHeadRow, index + 2).value = value; });
-  setFill(groupRow, 1, 1, fills.green, { bold: true });
-  setFill(subHeadRow, 1, 1, fills.green, { bold: true });
-  setFill(groupRow, 2, 4, fills.dms, { bold: true });
-  setFill(subHeadRow, 2, 4, fills.dms, { bold: true });
-  setFill(groupRow, 5, 7, fills.physical, { bold: true });
-  setFill(subHeadRow, 5, 7, fills.physical, { bold: true });
-  setFill(groupRow, 8, 9, fills.excess, { bold: true });
-  setFill(subHeadRow, 8, 9, fills.excess, { bold: true });
-  setFill(groupRow, 10, 11, fills.short, { bold: true });
-  setFill(subHeadRow, 10, 11, fills.short, { bold: true });
-  setFill(groupRow, 12, 12, fills.net, { bold: true });
-  setFill(subHeadRow, 12, 12, fills.net, { bold: true });
+  setFill(groupRow, 1, 1, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionBlue } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(subHeadRow, 1, 1, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionBlue } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(groupRow, 2, 4, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionBlue } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(subHeadRow, 2, 4, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionBlue } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(groupRow, 5, 7, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionGreen } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(subHeadRow, 5, 7, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionGreen } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(groupRow, 8, 9, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionGold } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(subHeadRow, 8, 9, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionGold } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(groupRow, 10, 11, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.warningFill } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(subHeadRow, 10, 11, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.warningFill } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(groupRow, 12, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionGrey } }, { bold: true, color: { argb: theme.subtitleText } });
+  setFill(subHeadRow, 12, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionGrey } }, { bold: true, color: { argb: theme.subtitleText } });
 
-  const rows = data.rows || [];
+  const rows = Array.isArray(data.rows) ? data.rows.map((row) => {
+    const normalized = { ...row };
+    if (row.rowType === 'total' || row.rowType === 'grandTotal') {
+      if (canonicalTotals.totalDmsDlcValue !== undefined) normalized.dmsValue = canonicalTotals.totalDmsDlcValue;
+      if (canonicalTotals.totalSystemQty !== undefined) normalized.dmsQuantity = canonicalTotals.totalSystemQty;
+      if (canonicalTotals.totalPhysicalDlcValue !== undefined) normalized.physicalValue = canonicalTotals.totalPhysicalDlcValue;
+      if (canonicalTotals.totalPhysicalQty !== undefined) normalized.physicalQuantity = canonicalTotals.totalPhysicalQty;
+      if (canonicalTotals.totalExcessValue !== undefined) normalized.excessValue = canonicalTotals.totalExcessValue;
+      if (canonicalTotals.totalShortValue !== undefined) normalized.shortValue = canonicalTotals.totalShortValue;
+      if (canonicalTotals.netDifference !== undefined) normalized.netDifference = canonicalTotals.netDifference;
+    }
+    return normalized;
+  }) : [];
   const dataStartRow = subHeadRow + 1;
   rows.forEach((row, rowIndex) => {
     const rowNumber = dataStartRow + rowIndex;
+    const isTotal = row.rowType === 'total' || row.rowType === 'grandTotal';
+    const rowFill = isTotal ? theme.sectionGreen : rowIndex % 2 === 0 ? theme.value : theme.sectionGrey;
     sheet.getCell(rowNumber, 1).value = row.category;
+    sheet.getCell(rowNumber, 1).alignment = left;
     numberKeys.forEach((key, index) => setNumber(rowNumber, index + 2, row[key], currencyKeys.has(key)));
-    const isTotal = row.rowType === 'total';
-    setFill(rowNumber, 1, 12, isTotal ? fills.total : fills.meta, { bold: isTotal });
-    sheet.getCell(rowNumber, 1).font = { name: 'Arial', size: 10, bold: true };
-    setFill(rowNumber, 2, 4, isTotal ? fills.total : fills.dms, { bold: isTotal });
-    setFill(rowNumber, 5, 7, isTotal ? fills.total : fills.physical, { bold: isTotal });
-    setFill(rowNumber, 8, 9, isTotal ? fills.total : fills.excess, { bold: isTotal });
-    setFill(rowNumber, 10, 11, isTotal ? fills.total : fills.short, { bold: isTotal });
-    setFill(rowNumber, 12, 12, isTotal ? fills.total : fills.net, { bold: isTotal });
+    setFill(rowNumber, 1, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: rowFill } }, { bold: isTotal, color: { argb: isTotal ? theme.success : theme.text } });
+    sheet.getCell(rowNumber, 1).font = { name: 'Calibri', size: 10, bold: true, color: { argb: isTotal ? theme.success : theme.text } };
   });
 
   applyRange(1, dataStartRow + rows.length - 1);
+  sheet.autoFilter = { from: { row: subHeadRow, column: 1 }, to: { row: dataStartRow + rows.length - 1, column: 12 } };
   sheet.views = [{ state: 'frozen', ySplit: dataStartRow - 1, showGridLines: false, topLeftCell: 'A1', activeCell: 'A1' }];
   sheet.pageSetup = {
     fitToPage: true,
@@ -3628,7 +3705,7 @@ function addStockSummarySheet(workbook, data) {
     paperSize: 9
   };
   sheet.headerFooter = {
-    oddFooter: '&LGenerated from Daksh Inventory System'
+    oddFooter: `&LDaksh Inventory Solution V2${generatedAt ? ` | Generated: ${generatedAt}` : ''}&RPage &P of &N`
   };
   return sheet;
 }

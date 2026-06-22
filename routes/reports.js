@@ -1059,59 +1059,135 @@ function packMetricWidths(rows = []) {
   return [sectionWidth, metricWidth, valueWidth];
 }
 
-function styleHeaderRow(row, fill = 'FF153A5B') {
-  row.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+function styleHeaderRow(row, fill = PACK_THEME.header) {
+  row.font = { name: PACK_FONT, size: 11, bold: true, color: { argb: PACK_THEME.titleText } };
   row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
   row.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  row.height = 24;
   row.eachCell((cell) => {
     cell.border = {
-      top: { style: 'thin', color: { argb: 'FFD7E2EE' } },
-      left: { style: 'thin', color: { argb: 'FFD7E2EE' } },
-      bottom: { style: 'thin', color: { argb: 'FFD7E2EE' } },
-      right: { style: 'thin', color: { argb: 'FFD7E2EE' } }
+      top: { style: 'thin', color: { argb: PACK_THEME.border } },
+      left: { style: 'thin', color: { argb: PACK_THEME.border } },
+      bottom: { style: 'thin', color: { argb: PACK_THEME.border } },
+      right: { style: 'thin', color: { argb: PACK_THEME.border } }
     };
   });
 }
 
 function styleDataRow(row, columns, options = {}) {
+  const zebraFill = options.rowIndex !== undefined && options.rowIndex % 2 === 1 ? PACK_THEME.altRow : PACK_THEME.value;
   row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
     const column = columns[columnNumber - 1] || {};
+    const key = clean(column.key || '').toLowerCase();
+    const numericValue = typeof cell.value === 'number'
+      ? cell.value
+      : (cell.value && typeof cell.value === 'object' && typeof cell.value.result === 'number'
+        ? cell.value.result
+        : NaN);
     cell.border = {
-      top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-      left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-      bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-      right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      top: { style: 'thin', color: { argb: PACK_THEME.border } },
+      left: { style: 'thin', color: { argb: PACK_THEME.border } },
+      bottom: { style: 'thin', color: { argb: PACK_THEME.border } },
+      right: { style: 'thin', color: { argb: PACK_THEME.border } }
     };
+    const keyText = clean(column.key || '').toLowerCase();
+    const isQuantityColumn = /(^|_)(qty|quantity|count|parts|rows|scan|scans|users|devices|bins|damage|short|excess|pending|failed|duplicate|rejected|deleted)(_|$)/.test(keyText)
+      && !/value|amount|price|cost|mrp|dlc|dms|variance|difference|inventory|stock/.test(keyText);
+    const isCurrencyColumn = /value|amount|price|cost|mrp|dlc|dms|variance|difference|inventory|stock/.test(keyText);
+    const shouldRightAlign = options.rightAlignColumns && options.rightAlignColumns.has(columnNumber - 1);
     cell.alignment = {
       vertical: 'middle',
-      horizontal: options.rightAlignColumns && options.rightAlignColumns.has(columnNumber - 1) ? 'right' : 'left',
+      horizontal: isQuantityColumn ? 'center' : shouldRightAlign || isCurrencyColumn ? 'right' : 'left',
       wrapText: true
     };
+    cell.font = { name: PACK_FONT, size: 10, color: { argb: 'FF1F2937' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: zebraFill } };
     if (column.numFmt) cell.numFmt = column.numFmt;
+    if (/^(status|reconciliationstatus|syncstatus|scanstatus|inventoryriskstatus)$/i.test(key)) {
+      const tone = packValueTone({ label: column.header || key, value: cell.value, kind: 'status' });
+      if (tone) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: tone.fill } };
+        cell.font = { name: PACK_FONT, size: 10, bold: true, color: { argb: tone.font } };
+      }
+    } else if (Number.isFinite(numericValue)) {
+      if (numericValue < 0 && /(variance|difference|short|damage|loss|netdifference)/.test(key)) {
+        cell.font = { name: PACK_FONT, size: 10, bold: key.includes('variance') || key.includes('difference'), color: { argb: PACK_THEME.dangerText } };
+        if (key.includes('short') || key.includes('damage') || key.includes('variance')) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDE2E2' } };
+        }
+      } else if (numericValue > 0 && /(excess|surplus)/.test(key)) {
+        cell.font = { name: PACK_FONT, size: 10, bold: key.includes('excess'), color: { argb: PACK_THEME.successText } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGreen } };
+      }
+    }
   });
 }
 
-function addSheetFooter(sheet) {
+function addSheetFooter(sheet, generatedAt = '') {
+  const stamp = generatedAt ? `Generated: ${generatedAt}` : 'Generated: Premium audit pack export';
   sheet.headerFooter = {
-    oddFooter: '&LGenerated from DAKSH Inventory System'
+    oddFooter: `&LDaksh Inventory Solution V2&C${stamp}&RPage &P of &N`
   };
 }
 
 const PACK_CURRENCY_FORMAT = '₹ #,##0.00;[Red]-₹ #,##0.00';
 const PACK_INTEGER_FORMAT = '#,##0';
 const PACK_THEME = {
-  title: 'FF000000',
-  subtitle: 'FFBDD7EE',
-  sectionGreen: 'FFA7BF95',
-  sectionBlue: 'FF8FB2CC',
-  sectionOrange: 'FFD8C87E',
-  sectionGrey: 'FFC9C9C9',
-  header: 'FF153A5B',
-  total: 'FF70A83A',
-  value: 'FFF8FAFC',
-  border: 'FFE2E8F0',
-  labelBorder: 'FFD7E2EE'
+  title: 'FF1F4E78',
+  titleText: 'FFFFFFFF',
+  subtitle: 'FFDCEEFF',
+  subtitleText: 'FF1F4E78',
+  sectionBlue: 'FFDCEEFF',
+  sectionGreen: 'FFD9EAD3',
+  sectionGold: 'FFF4E3B2',
+  sectionGrey: 'FFF3F5F7',
+  warningFill: 'FFFBE4D5',
+  header: 'FF1F4E78',
+  total: 'FFD9EAD3',
+  value: 'FFFFFFFF',
+  altRow: 'FFF8FAFC',
+  border: 'FFD0D7DE',
+  labelBorder: 'FFC4D0DB',
+  logo: 'FFF4E3B2',
+  successText: 'FF166534',
+  warningText: 'FF9A3412',
+  dangerText: 'FFB91C1C'
 };
+
+const PACK_FONT = 'Calibri';
+
+function packValueTone(item = {}) {
+  const label = clean(item.label || '').toLowerCase();
+  const valueText = clean(item.value || '').toLowerCase();
+  const kind = clean(item.kind || '').toLowerCase();
+  const text = `${label} ${valueText}`.trim();
+  if (kind === 'status' || /status/.test(label)) {
+    if (/balanced|matched|synced|accepted|completed|ok|success/.test(text)) {
+      return { fill: PACK_THEME.sectionGreen, font: PACK_THEME.successText };
+    }
+    if (/excess|duplicate/.test(text)) {
+      return { fill: PACK_THEME.sectionGold, font: PACK_THEME.warningText };
+    }
+    if (/short|failed|reject|damage|pending|error/.test(text)) {
+      return { fill: PACK_THEME.warningFill, font: PACK_THEME.dangerText };
+    }
+    return { fill: PACK_THEME.sectionBlue, font: PACK_THEME.subtitleText };
+  }
+  if (kind === 'remarks') return { fill: PACK_THEME.sectionGrey, font: 'FF1F2937' };
+  if (kind === 'warning') return { fill: PACK_THEME.warningFill, font: PACK_THEME.warningText };
+  if (kind === 'danger') return { fill: PACK_THEME.warningFill, font: PACK_THEME.dangerText };
+  const numeric = packNumberLike(item.value, NaN);
+  if (Number.isFinite(numeric)) {
+    if (numeric < 0) return { fill: PACK_THEME.warningFill, font: PACK_THEME.dangerText };
+    if (numeric > 0 && /excess|surplus|positive/.test(label)) {
+      return { fill: PACK_THEME.sectionGreen, font: PACK_THEME.successText };
+    }
+    if (numeric > 0 && /short|damage|loss/.test(label)) {
+      return { fill: PACK_THEME.warningFill, font: PACK_THEME.dangerText };
+    }
+  }
+  return { fill: PACK_THEME.value, font: 'FF1F2937' };
+}
 
 function packNumberLike(value, fallback = 0) {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -1241,17 +1317,31 @@ function packMergeBand(sheet, rowNumber, startCol, endCol, value, options = {}) 
 }
 
 function packRenderTitleBlock(sheet, totalColumns, subtitle) {
-  packMergeBand(sheet, 1, 1, totalColumns, 'Daksh Inventory Solution V2', {
+  packMergeBand(sheet, 1, 1, 2, 'LOGO', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGold } },
+    font: { name: PACK_FONT, size: 12, bold: true, color: { argb: PACK_THEME.title } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+    borderColor: PACK_THEME.border,
+    height: 26
+  });
+  packMergeBand(sheet, 1, 3, totalColumns, 'Daksh Inventory Solution V2', {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.title } },
-    font: { name: 'Arial', size: 16, bold: true, color: { argb: 'FFFFFFFF' } },
+    font: { name: PACK_FONT, size: 20, bold: true, color: { argb: PACK_THEME.titleText } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.title,
-    height: 24
+    height: 26
   });
-  packMergeBand(sheet, 2, 1, totalColumns, subtitle || '', {
+  packMergeBand(sheet, 2, 1, 2, 'Premium Audit Pack', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGrey } },
+    font: { name: PACK_FONT, size: 10, bold: true, color: { argb: PACK_THEME.subtitleText } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+    borderColor: PACK_THEME.border,
+    height: 22
+  });
+  packMergeBand(sheet, 2, 3, totalColumns, subtitle || '', {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.subtitle } },
-    font: { name: 'Arial', size: 14, bold: false, color: { argb: 'FF111827' } },
-    alignment: { vertical: 'middle', horizontal: 'left', wrapText: true },
+    font: { name: PACK_FONT, size: 12, bold: true, color: { argb: PACK_THEME.subtitleText } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.border,
     height: 22
   });
@@ -1262,15 +1352,15 @@ function packRenderInfoBlock(sheet, startRow, totalColumns, leftTitle, leftRows 
   const rightStart = 7;
   const rightEnd = Math.max(totalColumns, 12);
   packMergeBand(sheet, startRow, 1, leftEnd, leftTitle || 'Dealer Details', {
-    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGreen } },
-    font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionBlue } },
+    font: { name: PACK_FONT, size: 11, bold: true, color: { argb: PACK_THEME.subtitleText } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.border,
     height: 20
   });
   packMergeBand(sheet, startRow, rightStart, rightEnd, rightTitle || 'Audit Details', {
-    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionBlue } },
-    font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGold } },
+    font: { name: PACK_FONT, size: 11, bold: true, color: { argb: PACK_THEME.subtitleText } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.border,
     height: 20
@@ -1281,29 +1371,31 @@ function packRenderInfoBlock(sheet, startRow, totalColumns, leftTitle, leftRows 
     const left = leftRows[index] || {};
     const right = rightRows[index] || {};
     packMergeBand(sheet, rowNumber, 1, 2, left.label ? `${left.label} :` : '', {
-      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGreen } },
-      font: { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionBlue } },
+      font: { name: PACK_FONT, size: 10, bold: true, color: { argb: PACK_THEME.subtitleText } },
       alignment: { vertical: 'middle', horizontal: 'right', wrapText: true },
       borderColor: PACK_THEME.border,
       height: 20
     });
+    const leftTone = packValueTone({ label: left.label, value: left.value, kind: left.kind });
     packMergeBand(sheet, rowNumber, 3, leftEnd, firstPresentValue(left.value, ''), {
-      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.value } },
-      font: { name: 'Arial', size: 10, bold: Boolean(left.boldValue), color: { argb: 'FF111827' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: leftTone.fill || PACK_THEME.value } },
+      font: { name: PACK_FONT, size: 10, bold: Boolean(left.boldValue), color: { argb: leftTone.font || 'FF1F2937' } },
       alignment: { vertical: 'middle', horizontal: 'left', wrapText: true },
       borderColor: PACK_THEME.border,
       height: 20
     });
     packMergeBand(sheet, rowNumber, rightStart, rightStart + 1, right.label ? `${right.label} :` : '', {
-      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionBlue } },
-      font: { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGold } },
+      font: { name: PACK_FONT, size: 10, bold: true, color: { argb: PACK_THEME.subtitleText } },
       alignment: { vertical: 'middle', horizontal: 'right', wrapText: true },
       borderColor: PACK_THEME.border,
       height: 20
     });
+    const rightTone = packValueTone({ label: right.label, value: right.value, kind: right.kind });
     packMergeBand(sheet, rowNumber, rightStart + 2, rightEnd, firstPresentValue(right.value, ''), {
-      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.value } },
-      font: { name: 'Arial', size: 10, bold: Boolean(right.boldValue), color: { argb: 'FF111827' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: rightTone.fill || PACK_THEME.value } },
+      font: { name: PACK_FONT, size: 10, bold: Boolean(right.boldValue), color: { argb: rightTone.font || 'FF1F2937' } },
       alignment: { vertical: 'middle', horizontal: 'left', wrapText: true },
       borderColor: PACK_THEME.border,
       height: 20
@@ -1316,12 +1408,12 @@ function packRenderMetricCards(sheet, startRow, totalColumns, title, metrics = [
   const effectiveMetrics = metrics.length ? metrics : [{ label: 'No Data Available', value: '-' }];
   packMergeBand(sheet, startRow, 1, totalColumns, title || 'Summary', {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: options.fill || PACK_THEME.sectionBlue } },
-    font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+    font: { name: PACK_FONT, size: 11, bold: true, color: { argb: PACK_THEME.subtitleText } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.border,
     height: 20
   });
-  const palette = options.palette || ['FFEFF6FF', 'FFEFFAF1', 'FFFFF7ED', 'FFFDF2F8'];
+  const palette = options.palette || [PACK_THEME.sectionBlue, PACK_THEME.sectionGreen, PACK_THEME.sectionGold, PACK_THEME.sectionGrey];
   const cardsPerRow = 4;
   const cardWidth = Math.max(3, Math.floor(Math.min(totalColumns, 12) / cardsPerRow));
   let currentRow = startRow + 1;
@@ -1331,16 +1423,17 @@ function packRenderMetricCards(sheet, startRow, totalColumns, title, metrics = [
       const startCol = 1 + cardIndex * cardWidth;
       const endCol = Math.min(totalColumns, startCol + cardWidth - 1);
       const fillArgb = metric.fill || palette[(index + cardIndex) % palette.length];
+      const tone = packValueTone(metric);
       packMergeBand(sheet, currentRow, startCol, endCol, metric.label || '', {
         fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } },
-        font: { name: 'Arial', size: 10, bold: true, color: { argb: 'FF111827' } },
+        font: { name: PACK_FONT, size: 10, bold: true, color: { argb: PACK_THEME.subtitleText } },
         alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
         borderColor: PACK_THEME.border,
         height: 20
       });
       packMergeBand(sheet, currentRow + 1, startCol, endCol, firstPresentValue(metric.value, ''), {
-        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: metric.valueFill || 'FFFFFFFF' } },
-        font: { name: 'Arial', size: 13, bold: true, color: { argb: 'FF111827' } },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: metric.valueFill || tone.fill || PACK_THEME.value } },
+        font: { name: PACK_FONT, size: 13, bold: true, color: { argb: tone.font || 'FF1F2937' } },
         alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
         borderColor: PACK_THEME.border,
         height: 24
@@ -1355,7 +1448,7 @@ function packRenderSummaryRows(sheet, startRow, totalColumns, title, rows = [], 
   const effectiveRows = rows.length ? rows : [{ label: 'No Data Available', value: '-', kind: 'info' }];
   packMergeBand(sheet, startRow, 1, totalColumns, title || 'Summary', {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: options.fill || PACK_THEME.sectionGreen } },
-    font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+    font: { name: PACK_FONT, size: 11, bold: true, color: { argb: PACK_THEME.subtitleText } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.border,
     height: 20
@@ -1364,23 +1457,24 @@ function packRenderSummaryRows(sheet, startRow, totalColumns, title, rows = [], 
   const valueStart = labelEnd + 1;
   let rowNumber = startRow + 1;
   effectiveRows.forEach((item) => {
-    const valueFillArgb = item.kind === 'status'
+    const valueTone = packValueTone(item);
+    const valueFillArgb = item.valueFill || valueTone.fill || (item.kind === 'status'
       ? PACK_THEME.total
       : item.kind === 'remarks'
         ? PACK_THEME.sectionGrey
         : item.kind === 'warning' || item.kind === 'danger'
-          ? PACK_THEME.sectionOrange
-          : PACK_THEME.value;
+          ? PACK_THEME.warningFill
+          : PACK_THEME.value);
     packMergeBand(sheet, rowNumber, 1, labelEnd, `${item.label || ''}${item.label ? ' :' : ''}`, {
-      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGreen } },
-      font: { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: item.labelFill || PACK_THEME.sectionBlue } },
+      font: { name: PACK_FONT, size: 10, bold: true, color: { argb: PACK_THEME.subtitleText } },
       alignment: { vertical: 'middle', horizontal: 'right', wrapText: true },
       borderColor: PACK_THEME.border,
       height: item.kind === 'remarks' ? 30 : 20
     });
     packMergeBand(sheet, rowNumber, valueStart, totalColumns, firstPresentValue(item.value, ''), {
       fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: valueFillArgb } },
-      font: { name: 'Arial', size: 10, bold: true, color: { argb: valueFillArgb === PACK_THEME.total ? 'FFFFFFFF' : 'FF111827' } },
+      font: { name: PACK_FONT, size: 10, bold: true, color: { argb: valueFillArgb === PACK_THEME.total ? 'FFFFFFFF' : valueTone.font || 'FF1F2937' } },
       alignment: { vertical: 'middle', horizontal: item.kind === 'remarks' ? 'left' : 'center', wrapText: true },
       borderColor: PACK_THEME.border,
       height: item.kind === 'remarks' ? 30 : 20
@@ -1404,7 +1498,7 @@ function packRenderDataTable(sheet, startRow, totalColumns, title, columns = [],
 
   packMergeBand(sheet, startRow, 1, totalColumns, title || 'Detailed Data', {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: options.fill || PACK_THEME.sectionBlue } },
-    font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+    font: { name: PACK_FONT, size: 11, bold: true, color: { argb: PACK_THEME.subtitleText } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.border,
     height: 20
@@ -1429,7 +1523,7 @@ function packRenderDataTable(sheet, startRow, totalColumns, title, columns = [],
       added.font = { bold: true };
       added.eachCell({ includeEmpty: true }, (cell) => {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.total } };
-        cell.font = { bold: true };
+        cell.font = { name: PACK_FONT, bold: true, color: { argb: PACK_THEME.successText } };
       });
     }
     if (String(row.message || '').trim() === (options.emptyMessage || 'No Data Available')) {
@@ -1488,7 +1582,7 @@ function addTableSheet(workbook, name, columns, rows, options = {}) {
     orientation: options.orientation || 'landscape',
     paperSize: 9
   };
-  addSheetFooter(sheet);
+  addSheetFooter(sheet, options.generatedAt || '');
   return sheet;
 }
 
@@ -1521,7 +1615,7 @@ function addMetricSheet(workbook, name, rows, options = {}) {
       kind: row.kind || 'info'
     }));
     currentRow = packRenderSummaryRows(sheet, currentRow, totalColumns, section, sectionRows, {
-      fill: (options.sectionFills && options.sectionFills[section]) || [PACK_THEME.sectionGreen, PACK_THEME.sectionBlue, PACK_THEME.sectionOrange, PACK_THEME.sectionGrey][index % 4]
+      fill: (options.sectionFills && options.sectionFills[section]) || [PACK_THEME.sectionBlue, PACK_THEME.sectionGreen, PACK_THEME.sectionGold, PACK_THEME.sectionGrey][index % 4]
     }) + 1;
   });
 
@@ -1547,7 +1641,7 @@ function addMetricSheet(workbook, name, rows, options = {}) {
     orientation: options.orientation || 'landscape',
     paperSize: 9
   };
-  addSheetFooter(sheet);
+  addSheetFooter(sheet, options.generatedAt || '');
   return sheet;
 }
 
@@ -1602,30 +1696,109 @@ function normalizeAuditPackSelection(payload = {}) {
   };
 }
 
-function buildSummaryStatusRows(reportData = {}, selectedReports = [], extras = {}, generatedBy = '', generatedAt = '', movementAnalysis = null, scanRegisterRowsData = []) {
+function buildAuditPackContext(reportData = {}, movementAnalysis = null, scanRegisterRowsData = [], options = {}) {
   const summary = Array.isArray(reportData.summary) && reportData.summary.length ? reportData.summary[0] : {};
   const dealer = reportData.selectedDealer || {};
   const audit = reportData.selectedAudit || {};
   const finalRows = Array.isArray(reportData.finalRows) ? reportData.finalRows : [];
   const scans = Array.isArray(reportData.scans) ? reportData.scans : [];
+  const movementSummary = movementAnalysis && movementAnalysis.summary ? movementAnalysis.summary : {};
   const registerCounts = countScanRegisterRows(scanRegisterRowsData);
-  const totalQuantity = Number(summary.totalQuantity || summary.totalScans || sumBy(finalRows, (row) => firstNumericValue(row.physicalQty, row.qty, row.actualStock, row.totalQty, row.scanCount)) || 0);
-  const totalVariance = sumBy(finalRows, (row) => firstNumericValue(
-    row.varianceQty,
-    row.differenceQty,
-    row.variance,
-    row.netDifference
-  ));
-  const totalExcess = countRows(finalRows, (row) => Number(firstNumericValue(row.excessQty, row.excess, 0)) > 0 || String(row.status || '').toLowerCase().includes('excess'));
-  const totalShort = countRows(finalRows, (row) => Number(firstNumericValue(row.shortQty, row.shortageQty, row.short, 0)) > 0 || String(row.status || '').toLowerCase().includes('short'));
-  const damageCount = countRows(finalRows, (row) => Number(firstNumericValue(row.damageQty, 0)) > 0);
+  const scanTotals = reportTotals(scans, {
+    dedupe: true,
+    duplicateCount: summary.duplicateCount || summary.duplicates || 0,
+    visibleRows: summary.visibleRows || finalRows.length
+  });
+  const valuationTotals = stockValuationTotals(finalRows);
+  const totalQuantity = firstNumericValue(summary.totalQuantity, summary.totalPhysicalQty, scanTotals.totalQuantity, finalRows.reduce((sum, row) => sum + firstNumericValue(row.physicalQty, row.qty, row.actualStock, row.totalQty, row.scanCount), 0));
+  const totalParts = firstNumericValue(summary.totalMasterParts, finalRows.length);
+  const totalScans = firstNumericValue(summary.totalScans, scanTotals.scanRows, scans.length);
+  const uniqueParts = firstNumericValue(summary.uniqueParts, scanTotals.uniqueParts, countDistinctBy(finalRows, (row) => row.partNumber || row.partNo || row._id));
+  const visibleRows = firstNumericValue(summary.visibleRows, finalRows.length);
+  const totalPhysicalQty = firstNumericValue(summary.totalPhysicalQty, totalQuantity);
+  const totalSystemQty = firstNumericValue(summary.totalSystemQty, finalRows.reduce((sum, row) => sum + firstNumericValue(row.systemQty, row.dmsStock), 0));
+  const totalPhysicalDlcValue = firstNumericValue(summary.totalActualStockValue, summary.totalPhysicalStockValue, valuationTotals.actualDlcTotal);
+  const totalDmsDlcValue = firstNumericValue(summary.totalDmsStockValue, valuationTotals.dmsDlcTotal);
+  const totalPhysicalMrpValue = firstNumericValue(summary.totalActualMrpValue, valuationTotals.actualMrpTotal);
+  const totalDmsMrpValue = firstNumericValue(summary.totalDmsMrpValue, valuationTotals.dmsMrpTotal);
+  const totalVarianceDlcValue = firstNumericValue(summary.totalVarianceValue, valuationTotals.varianceDlcTotal);
+  const totalVarianceMrpValue = firstNumericValue(summary.totalVarianceMrpValue, valuationTotals.varianceMrpTotal);
+  const totalExcessValue = firstNumericValue(summary.totalExcessValue, sumBy(finalRows, (row) => firstNumericValue(row.excessValue, 0)));
+  const totalShortValue = firstNumericValue(summary.totalShortValue, sumBy(finalRows, (row) => firstNumericValue(row.shortageValue, 0)));
+  const damageCount = countRows(finalRows, (row) => Number(firstNumericValue(row.damageQty, 0)) > 0 || /damage/.test(String(row.status || '').toLowerCase()));
+  const excessCount = countRows(finalRows, (row) => Number(firstNumericValue(row.excessQty, row.excess, 0)) > 0 || /excess|extra part/.test(String(row.status || '').toLowerCase()));
+  const shortCount = countRows(finalRows, (row) => Number(firstNumericValue(row.shortQty, row.shortageQty, row.short, 0)) > 0 || /short/.test(String(row.status || '').toLowerCase()));
+  const deadStockCount = firstNumericValue(movementSummary.deadStockCount, movementSummary.deadStockParts, 0);
+  const fastMovingCount = firstNumericValue(movementSummary.fastMovingCount, movementSummary.fastMovingParts, 0);
+  const slowMovingCount = firstNumericValue(movementSummary.slowMovingCount, movementSummary.slowMovingParts, 0);
+  const criticalShortageCount = firstNumericValue(movementSummary.criticalShortageCount, movementSummary.criticalShortageParts, 0);
   const uniqueUsers = countDistinctBy(scans, (scan) => scan.userName || scan.staffName || scan.loginId || scan.userId);
   const uniqueDevices = countDistinctBy(scans, (scan) => scan.deviceId || scan.deviceName);
-  const movementSummary = movementAnalysis && movementAnalysis.summary ? movementAnalysis.summary : {};
   const categoryRows = summarizeByCategory(finalRows, {
     qtyResolver: (row) => firstNumericValue(row.physicalQty, row.actualStock, row.qty),
     valueResolver: (row) => firstNumericValue(row.finalInventoryValue, row.stockValue, row.actualStockValue)
   }).slice(0, 8);
+  const netDifference = firstNumericValue(summary.netDifference, summary.netDiff, totalVarianceDlcValue);
+  const finalStatus = summary.status || reconciliationStatusText({
+    netDifference,
+    totalShortageValue: totalShortValue,
+    totalExcessValue
+  });
+  return {
+    summary,
+    dealer,
+    audit,
+    finalRows,
+    scans,
+    movementSummary,
+    registerCounts,
+    scanTotals,
+    valuationTotals,
+    categoryRows,
+    selectedReports: Array.isArray(options.selectedReports) ? options.selectedReports : [],
+    extras: options.extras || {},
+    generatedBy: options.generatedBy || '',
+    generatedAt: options.generatedAt || '',
+    resolvedQuery: options.resolvedQuery || {},
+    totals: {
+      totalParts,
+      totalScans,
+      totalQuantity,
+      uniqueParts,
+      visibleRows,
+      totalPhysicalQty,
+      totalSystemQty,
+      totalPhysicalDlcValue,
+      totalDmsDlcValue,
+      totalPhysicalMrpValue,
+      totalDmsMrpValue,
+      totalVarianceDlcValue,
+      totalVarianceMrpValue,
+      totalExcessValue,
+      totalShortValue,
+      damageCount,
+      excessCount,
+      shortCount,
+      deadStockCount,
+      fastMovingCount,
+      slowMovingCount,
+      criticalShortageCount,
+      uniqueUsers,
+      uniqueDevices,
+      netDifference,
+      finalStatus
+    }
+  };
+}
+
+function buildSummaryStatusRows(reportData = {}, selectedReports = [], extras = {}, generatedBy = '', generatedAt = '', movementAnalysis = null, scanRegisterRowsData = [], context = null) {
+  const packContext = context || buildAuditPackContext(reportData, movementAnalysis, scanRegisterRowsData, {
+    selectedReports,
+    extras,
+    generatedBy,
+    generatedAt
+  });
+  const { summary, dealer, audit, categoryRows, totals, registerCounts, movementSummary } = packContext;
   return [
     ...packMetricRows('Dealer Information', [
       ['Dealer Name', dealer.dealerName || summary.dealerName || packText(summary.dealerCode || dealer.dealerCode || reportData.filters?.dealerCode)],
@@ -1645,28 +1818,32 @@ function buildSummaryStatusRows(reportData = {}, selectedReports = [], extras = 
       ['Sync Status', auditSyncStatus(registerCounts)]
     ]),
     ...packMetricRows('Inventory Summary', [
-      ['Total Parts', packNumber(summary.totalMasterParts || finalRows.length || 0, 0)],
-      ['Total Scans', packNumber(summary.totalScans || scans.length || 0, 0)],
-      ['Total Quantity', packNumber(totalQuantity, 0)],
-      ['Unique Parts', packNumber(summary.uniqueParts || countDistinctBy(finalRows, (row) => row.partNumber || row.partNo || row._id), 0)],
-      ['Unique Users', packNumber(uniqueUsers, 0)],
-      ['Unique Devices', packNumber(uniqueDevices, 0)]
+      ['Total Parts', packNumber(totals.totalParts || 0, 0)],
+      ['Total Scans', packNumber(totals.totalScans || 0, 0)],
+      ['Total Quantity', packNumber(totals.totalQuantity || 0, 0)],
+      ['Unique Parts', packNumber(totals.uniqueParts || 0, 0)],
+      ['Total Physical Qty', packNumber(totals.totalPhysicalQty || 0, 0)],
+      ['Total System Qty', packNumber(totals.totalSystemQty || 0, 0)],
+      ['Inventory Value (DLC)', packCurrency(totals.totalPhysicalDlcValue || 0)],
+      ['DMS Value (DLC)', packCurrency(totals.totalDmsDlcValue || 0)],
+      ['Net Difference (DLC)', packCurrency(totals.totalVarianceDlcValue || 0)]
     ]),
     ...packMetricRows('Variance Summary', [
-      ['Total Excess', packNumber(totalExcess, 0)],
-      ['Total Short', packNumber(totalShort, 0)],
-      ['Damage Count', packNumber(damageCount, 0)],
-      ['Net Difference', packCurrency(totalVariance)],
+      ['Total Excess', packNumber(totals.excessCount || 0, 0)],
+      ['Total Short', packNumber(totals.shortCount || 0, 0)],
+      ['Damage Count', packNumber(totals.damageCount || 0, 0)],
+      ['Dead Stock', packNumber(totals.deadStockCount || 0, 0)],
+      ['Net Difference', packCurrency(totals.netDifference || 0)],
       ['Pending Sync', packNumber(registerCounts.pending || 0, 0)],
       ['Failed Sync', packNumber(registerCounts.failed || 0, 0)],
       ['Duplicate Sync', packNumber(registerCounts.duplicate || 0, 0)],
       ['Movement Status', auditSyncStatus(registerCounts)]
     ]),
     ...packMetricRows('Movement Summary', [
-      ['Fast Moving', packNumber(movementSummary.fastMovingCount || movementSummary.fastMovingParts || 0, 0)],
-      ['Slow Moving', packNumber(movementSummary.slowMovingCount || movementSummary.slowMovingParts || 0, 0)],
-      ['Dead Stock', packNumber(movementSummary.deadStockCount || movementSummary.deadStockParts || 0, 0)],
-      ['Critical Shortage', packNumber(movementSummary.criticalShortageCount || movementSummary.criticalShortageParts || 0, 0)]
+      ['Fast Moving', packNumber(totals.fastMovingCount || 0, 0)],
+      ['Slow Moving', packNumber(totals.slowMovingCount || 0, 0)],
+      ['Dead Stock', packNumber(totals.deadStockCount || 0, 0)],
+      ['Critical Shortage', packNumber(totals.criticalShortageCount || 0, 0)]
     ]),
     ...packMetricRows('Category Summary', categoryRows.map((row) => ([
       row.category,
@@ -1679,32 +1856,32 @@ function buildSummaryStatusRows(reportData = {}, selectedReports = [], extras = 
   ];
 }
 
-function buildDashboardSummaryRows(reportData = {}, movementAnalysis = null, scanRegisterRowsData = []) {
-  const summary = Array.isArray(reportData.summary) && reportData.summary.length ? reportData.summary[0] : {};
-  const scans = Array.isArray(reportData.scans) ? reportData.scans : [];
-  const registerCounts = countScanRegisterRows(scanRegisterRowsData);
-  const movementSummary = movementAnalysis && movementAnalysis.summary ? movementAnalysis.summary : {};
+function buildDashboardSummaryRows(reportData = {}, movementAnalysis = null, scanRegisterRowsData = [], context = null) {
+  const packContext = context || buildAuditPackContext(reportData, movementAnalysis, scanRegisterRowsData);
+  const { totals, registerCounts, movementSummary } = packContext;
   return [
     ...packMetricRows('Dashboard KPIs', [
-      ['Total Parts', packNumber(summary.totalMasterParts || reportData.finalRows?.length || 0, 0)],
-      ['Total Scans', packNumber(summary.totalScans || scans.length || 0, 0)],
-      ['Total Quantity', packNumber(summary.totalQuantity || 0, 0)],
-      ['Unique Parts', packNumber(summary.uniqueParts || 0, 0)],
-      ['Visible Rows', packNumber(summary.visibleRows || reportData.finalRows?.length || 0, 0)],
+      ['Total Parts', packNumber(totals.totalParts || 0, 0)],
+      ['Total Scans', packNumber(totals.totalScans || 0, 0)],
+      ['Total Quantity', packNumber(totals.totalQuantity || 0, 0)],
+      ['Unique Parts', packNumber(totals.uniqueParts || 0, 0)],
+      ['Visible Rows', packNumber(totals.visibleRows || 0, 0)],
+      ['Inventory Value (DLC)', packCurrency(totals.totalPhysicalDlcValue || 0)],
+      ['DMS Value (DLC)', packCurrency(totals.totalDmsDlcValue || 0)],
+      ['Variance (DLC)', packCurrency(totals.totalVarianceDlcValue || 0)],
       ['Pending Records', packNumber(registerCounts.pending || 0, 0)],
       ['Failed Records', packNumber(registerCounts.failed || 0, 0)],
       ['Duplicate Records', packNumber(registerCounts.duplicate || 0, 0)],
-      ['Rejected Records', packNumber(registerCounts.rejected || 0, 0)],
-      ['Deleted Records', packNumber(registerCounts.deleted || 0, 0)],
-      ['Users', packNumber(new Set(scans.map((scan) => clean(scan.userName || scan.staffName || scan.loginId || scan.userId)).filter(Boolean)).size, 0)],
-      ['Devices', packNumber(new Set(scans.map((scan) => clean(scan.deviceId || scan.deviceName)).filter(Boolean)).size, 0)]
+      ['Users', packNumber(totals.uniqueUsers || 0, 0)],
+      ['Devices', packNumber(totals.uniqueDevices || 0, 0)],
+      ['Net Status', totals.finalStatus || reconciliationStatusText({ netDifference: totals.netDifference, totalShortageValue: totals.totalShortValue, totalExcessValue: totals.totalExcessValue })]
     ]),
     ...packMetricRows('Movement Summary', [
-      ['Fast Moving', packNumber(movementSummary.fastMovingCount || movementSummary.fastMovingParts || 0, 0)],
-      ['Slow Moving', packNumber(movementSummary.slowMovingCount || movementSummary.slowMovingParts || 0, 0)],
-      ['Dead Stock', packNumber(movementSummary.deadStockCount || movementSummary.deadStockParts || 0, 0)],
-      ['Critical Shortage', packNumber(movementSummary.criticalShortageCount || movementSummary.criticalShortageParts || 0, 0)],
-      ['Excess Stock', packNumber(movementSummary.excessStockCount || movementSummary.excessStockParts || 0, 0)]
+      ['Fast Moving', packNumber(totals.fastMovingCount || movementSummary.fastMovingCount || movementSummary.fastMovingParts || 0, 0)],
+      ['Slow Moving', packNumber(totals.slowMovingCount || movementSummary.slowMovingCount || movementSummary.slowMovingParts || 0, 0)],
+      ['Dead Stock', packNumber(totals.deadStockCount || movementSummary.deadStockCount || movementSummary.deadStockParts || 0, 0)],
+      ['Critical Shortage', packNumber(totals.criticalShortageCount || movementSummary.criticalShortageCount || movementSummary.criticalShortageParts || 0, 0)],
+      ['Excess Stock', packNumber(totals.excessCount || movementSummary.excessStockCount || movementSummary.excessStockParts || 0, 0)]
     ])
   ];
 }
@@ -1747,21 +1924,20 @@ function buildDealerInformationRows(reportData = {}) {
   return packMetricRows('Dealer', keys);
 }
 
-function buildScanStatisticsRows(reportData = {}, scanRegisterRowsData = []) {
-  const summary = Array.isArray(reportData.summary) && reportData.summary.length ? reportData.summary[0] : {};
-  const registerCounts = countScanRegisterRows(scanRegisterRowsData);
-  const scans = Array.isArray(reportData.scans) ? reportData.scans : [];
-  const uniqueUsers = new Set(scans.map((scan) => clean(scan.userName || scan.staffName || scan.loginId || scan.userId)).filter(Boolean)).size;
-  const uniqueDevices = new Set(scans.map((scan) => clean(scan.deviceId || scan.deviceName)).filter(Boolean)).size;
+function buildScanStatisticsRows(reportData = {}, scanRegisterRowsData = [], context = null) {
+  const packContext = context || buildAuditPackContext(reportData, null, scanRegisterRowsData);
+  const { summary, totals, registerCounts } = packContext;
   return [
     ...packMetricRows('Scan Totals', [
-      ['Total Scan Rows', packNumber(summary.totalScans || scans.length || 0, 0)],
-      ['Total Quantity', packNumber(summary.totalQuantity || 0, 0)],
-      ['Total Parts', packNumber(summary.totalMasterParts || reportData.finalRows?.length || 0, 0)],
-      ['Unique Parts', packNumber(summary.uniqueParts || 0, 0)],
-      ['Visible Rows', packNumber(summary.visibleRows || reportData.finalRows?.length || 0, 0)],
+      ['Total Scan Rows', packNumber(totals.totalScans || 0, 0)],
+      ['Total Quantity', packNumber(totals.totalQuantity || 0, 0)],
+      ['Total Parts', packNumber(totals.totalParts || 0, 0)],
+      ['Unique Parts', packNumber(totals.uniqueParts || 0, 0)],
+      ['Visible Rows', packNumber(totals.visibleRows || 0, 0)],
       ['Unknown Parts', packNumber(summary.unknownPartsCount || 0, 0)],
-      ['Merged Duplicate Scan Rows', packNumber(summary.mergedDuplicateScanRows || 0, 0)]
+      ['Merged Duplicate Scan Rows', packNumber(summary.mergedDuplicateScanRows || 0, 0)],
+      ['Unique Users', packNumber(totals.uniqueUsers || 0, 0)],
+      ['Unique Devices', packNumber(totals.uniqueDevices || 0, 0)]
     ]),
     ...packMetricRows('Status Breakdown', [
       ['Accepted', packNumber(registerCounts.accepted || 0, 0)],
@@ -1773,8 +1949,8 @@ function buildScanStatisticsRows(reportData = {}, scanRegisterRowsData = []) {
       ['Synced', packNumber(registerCounts.synced || 0, 0)]
     ]),
     ...packMetricRows('Users & Devices', [
-      ['Unique Users', packNumber(uniqueUsers, 0)],
-      ['Unique Devices', packNumber(uniqueDevices, 0)],
+      ['Unique Users', packNumber(totals.uniqueUsers || 0, 0)],
+      ['Unique Devices', packNumber(totals.uniqueDevices || 0, 0)],
       ['First Scan Time', packText(summary.firstScanTime || '')],
       ['Last Scan Time', packText(summary.lastScanTime || '')]
     ])
@@ -1825,19 +2001,20 @@ function buildUserWiseSummaryRows(reportData = {}) {
   }));
 }
 
-function buildCategoryVarianceRows(data = {}) {
+function buildCategoryVarianceRows(data = {}, context = null) {
   const rows = Array.isArray(data.rows) ? data.rows.slice() : [];
+  const totals = context && context.totals ? context.totals : {};
   return rows.concat([{
     productCategory: 'Grand Total',
     action: '',
-    totalScannedParts: Number(data.grandTotal?.totalScannedParts || 0),
-    totalScannedQuantity: Number(data.grandTotal?.totalScannedQuantity || 0),
-    sumPhysicalValueOnMRP: Number(data.grandTotal?.sumPhysicalValueOnMRP || 0),
-    sumPhysicalValueOnDLC: Number(data.grandTotal?.sumPhysicalValueOnDLC || 0),
-    sumDmsValueOnMRP: Number(data.grandTotal?.sumDmsValueOnMRP || 0),
-    sumDmsValueOnDLC: Number(data.grandTotal?.sumDmsValueOnDLC || 0),
-    sumVarianceOnMRP: Number(data.grandTotal?.sumVarianceOnMRP || 0),
-    sumVarianceOnDLC: Number(data.grandTotal?.sumVarianceOnDLC || 0),
+    totalScannedParts: Number(totals.totalParts || data.grandTotal?.totalScannedParts || 0),
+    totalScannedQuantity: Number(totals.totalQuantity || data.grandTotal?.totalScannedQuantity || 0),
+    sumPhysicalValueOnMRP: Number(totals.totalPhysicalMrpValue || data.grandTotal?.sumPhysicalValueOnMRP || 0),
+    sumPhysicalValueOnDLC: Number(totals.totalPhysicalDlcValue || data.grandTotal?.sumPhysicalValueOnDLC || 0),
+    sumDmsValueOnMRP: Number(totals.totalDmsMrpValue || data.grandTotal?.sumDmsValueOnMRP || 0),
+    sumDmsValueOnDLC: Number(totals.totalDmsDlcValue || data.grandTotal?.sumDmsValueOnDLC || 0),
+    sumVarianceOnMRP: Number(totals.totalVarianceMrpValue || data.grandTotal?.sumVarianceOnMRP || 0),
+    sumVarianceOnDLC: Number(totals.totalVarianceDlcValue || data.grandTotal?.sumVarianceOnDLC || 0),
     rowType: 'grandTotal'
   }]);
 }
@@ -1860,8 +2037,9 @@ function reconciliationRemarksText(summary = {}) {
   return 'Reconciliation requires manual review';
 }
 
-function buildReconciliationCategoryRows(report = {}) {
+function buildReconciliationCategoryRows(report = {}, context = null) {
   const rows = Array.isArray(report.rows) ? report.rows : [];
+  const contextTotals = context && context.totals ? context.totals : {};
   const categories = summarizeByCategory(rows, {
     qtyResolver: (row) => firstNumericValue(row.actualStock, row.physicalQty, row.qty),
     valueResolver: (row) => firstNumericValue(row.actualStockValue, row.finalInventoryValue, row.stockValue),
@@ -1886,7 +2064,7 @@ function buildReconciliationCategoryRows(report = {}) {
     netDifference: row.varianceValue,
     status: reconciliationStatusText({ netDifference: row.varianceValue, totalShortageValue: row.shortValue, totalExcessValue: row.excessValue })
   }));
-  const totals = aggregated.reduce((summary, row) => ({
+  const aggregatedTotals = aggregated.reduce((summary, row) => ({
     dmsQty: summary.dmsQty + Number(row.dmsQty || 0),
     actualQty: summary.actualQty + Number(row.actualQty || 0),
     varianceQty: summary.varianceQty + Number(row.varianceQty || 0),
@@ -1907,44 +2085,53 @@ function buildReconciliationCategoryRows(report = {}) {
   });
   aggregated.push({
     category: 'Grand Total',
-    dmsQty: totals.dmsQty,
-    actualQty: totals.actualQty,
-    varianceQty: totals.varianceQty,
-    dmsValue: totals.dmsValue,
-    actualValue: totals.actualValue,
-    shortValue: totals.shortValue,
-    excessValue: totals.excessValue,
-    netDifference: totals.netDifference,
-    status: reconciliationStatusText({ netDifference: totals.netDifference, totalShortageValue: totals.shortValue, totalExcessValue: totals.excessValue }),
+    dmsQty: Number(contextTotals.totalSystemQty || aggregatedTotals.dmsQty || 0),
+    actualQty: Number(contextTotals.totalPhysicalQty || aggregatedTotals.actualQty || 0),
+    varianceQty: Number((contextTotals.totalPhysicalQty || aggregatedTotals.actualQty || 0) - (contextTotals.totalSystemQty || aggregatedTotals.dmsQty || 0)),
+    dmsValue: Number(contextTotals.totalDmsDlcValue || aggregatedTotals.dmsValue || 0),
+    actualValue: Number(contextTotals.totalPhysicalDlcValue || aggregatedTotals.actualValue || 0),
+    shortValue: Number(contextTotals.totalShortValue || aggregatedTotals.shortValue || 0),
+    excessValue: Number(contextTotals.totalExcessValue || aggregatedTotals.excessValue || 0),
+    netDifference: Number(firstNumericValue(contextTotals.netDifference, contextTotals.totalVarianceDlcValue, 0)),
+    status: reconciliationStatusText({
+      netDifference: firstNumericValue(contextTotals.netDifference, contextTotals.totalVarianceDlcValue, 0),
+      totalShortageValue: contextTotals.totalShortValue || aggregatedTotals.shortValue || 0,
+      totalExcessValue: contextTotals.totalExcessValue || aggregatedTotals.excessValue || 0
+    }),
     rowType: 'grandTotal'
   });
   return aggregated;
 }
 
-function buildReconciliationSummaryRows(report = {}) {
+function buildReconciliationSummaryRows(report = {}, context = null) {
   const summary = report.summary || {};
+  const totals = context && context.totals ? context.totals : {};
   const rows = packMetricRows('Inventory Reconciliation Summary', [
-    ['Dealer Code', summary.dealerCode || report.scope?.dealerCode || '-'],
-    ['Audit ID', summary.auditId || report.scope?.auditId || '-'],
-    ['Total Parts Uploaded', summary.totalPartsUploaded || 0],
-    ['Total DMS Stock Qty', summary.totalDmsStockQty || 0],
-    ['Total Actual Scanned Qty', summary.totalActualScannedQty || 0],
+    ['Dealer Code', summary.dealerCode || report.scope?.dealerCode || report.filters?.dealerCode || '-'],
+    ['Audit ID', summary.auditId || report.scope?.auditId || report.filters?.auditId || '-'],
+    ['Total Parts Uploaded', totals.totalParts || summary.totalPartsUploaded || 0],
+    ['Total DMS Stock Qty', totals.totalSystemQty || summary.totalDmsStockQty || 0],
+    ['Total Actual Scanned Qty', totals.totalPhysicalQty || summary.totalActualScannedQty || 0],
     ['Total Matched Parts', summary.totalMatchedParts || 0],
-    ['Total Shortage Parts', summary.totalShortageParts || 0],
-    ['Total Excess Parts', summary.totalExcessParts || 0],
-    ['Total Fast Moving Parts', summary.totalFastMovingParts || 0],
-    ['Total Slow Moving Parts', summary.totalSlowMovingParts || 0],
-    ['Total Dead Stock Parts', summary.totalDeadStockParts || 0],
-    ['Total Inventory Value', packCurrency(summary.totalInventoryValue || 0)],
-    ['Actual Stock Value (DLC)', packCurrency(summary.actualStockValueDLC || 0)],
-    ['DMS Stock Value (DLC)', packCurrency(summary.dmsStockValueDLC || 0)],
-    ['Total Shortage Value', packCurrency(summary.totalShortageValue || 0)],
-    ['Total Excess Value', packCurrency(summary.totalExcessValue || 0)],
+    ['Total Shortage Parts', totals.shortCount || summary.totalShortageParts || 0],
+    ['Total Excess Parts', totals.excessCount || summary.totalExcessParts || 0],
+    ['Total Fast Moving Parts', totals.fastMovingCount || summary.totalFastMovingParts || 0],
+    ['Total Slow Moving Parts', totals.slowMovingCount || summary.totalSlowMovingParts || 0],
+    ['Total Dead Stock Parts', totals.deadStockCount || summary.totalDeadStockParts || 0],
+    ['Total Inventory Value', packCurrency(totals.totalPhysicalDlcValue || summary.totalInventoryValue || 0)],
+    ['Actual Stock Value (DLC)', packCurrency(totals.totalPhysicalDlcValue || summary.actualStockValueDLC || 0)],
+    ['DMS Stock Value (DLC)', packCurrency(totals.totalDmsDlcValue || summary.dmsStockValueDLC || 0)],
+    ['Total Shortage Value', packCurrency(totals.totalShortValue || summary.totalShortageValue || 0)],
+    ['Total Excess Value', packCurrency(totals.totalExcessValue || summary.totalExcessValue || 0)],
     ['Scanned But Not In DMS', summary.totalScannedButNotInDms || 0],
-    ['Net Difference', packCurrency(summary.netDifference || 0)],
+    ['Net Difference', packCurrency(totals.netDifference || summary.netDifference || 0)],
     ['Mismatch Count', summary.mismatchCount || 0],
-    ['Final Status', reconciliationStatusText(summary)],
-    ['Remarks', reconciliationRemarksText(summary)]
+    ['Final Status', totals.finalStatus || reconciliationStatusText(summary)],
+    ['Remarks', reconciliationRemarksText({
+      netDifference: totals.netDifference || summary.netDifference || 0,
+      totalShortageValue: totals.totalShortValue || summary.totalShortageValue || 0,
+      totalExcessValue: totals.totalExcessValue || summary.totalExcessValue || 0
+    })]
   ]);
   if (rows.length >= 2) {
     rows[rows.length - 2].kind = 'status';
@@ -1983,6 +2170,32 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
   const selectedAudit = reportData.selectedAudit || (resolvedQuery.auditId && Array.isArray(reportData.audits) ? reportData.audits.find((audit) => clean(audit.auditId) === clean(resolvedQuery.auditId)) : null) || null;
   const generatedBy = clean(user.name || user.username || user.email || user.id || 'System');
   const generatedAt = formatIstDateTime(new Date());
+  const getStockSummaryData = () => (getStockSummaryData.cache || (getStockSummaryData.cache = reportModule.buildStockSummaryReport(resolvedQuery)));
+  const getPartwiseData = () => (getPartwiseData.cache || (getPartwiseData.cache = reportModule.buildPartwiseInventoryAuditReport(resolvedQuery)));
+  const getCategoryData = () => (getCategoryData.cache || (getCategoryData.cache = reportModule.buildCategoryWiseVarianceSummary(resolvedQuery)));
+  const getReconciliationData = () => (getReconciliationData.cache || (getReconciliationData.cache = reconciliationRoute.buildReconciliationReport(resolvedQuery)));
+  const packContext = buildAuditPackContext(reportData, movementAnalysisData, scanRegisterRowsData, {
+    selectedReports: resolvedQuery.reports,
+    extras: normalized,
+    generatedBy,
+    generatedAt,
+    resolvedQuery
+  });
+  const validationResults = await Promise.allSettled([getPartwiseData(), getStockSummaryData(), getCategoryData()]);
+  try {
+    const validationPayload = {};
+    if (validationResults[0].status === 'fulfilled') validationPayload.partwise = validationResults[0].value;
+    if (validationResults[1].status === 'fulfilled') validationPayload.stockSummary = validationResults[1].value;
+    if (validationResults[2].status === 'fulfilled') validationPayload.category = validationResults[2].value;
+    await reportModule.validateValuationReports(resolvedQuery, validationPayload);
+  } catch (error) {
+    console.error('Complete audit pack valuation validation failed', {
+      dealerCode: resolvedQuery.dealerCode,
+      auditId: resolvedQuery.auditId,
+      message: error.message,
+      reconciliation: error.reconciliation || null
+    });
+  }
   const workbook = new ExcelJS.Workbook();
   workbook.creator = generatedBy || 'Daksh Inventory';
   workbook.lastModifiedBy = generatedBy || workbook.creator;
@@ -2000,55 +2213,59 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     generatedBy,
     generatedAt,
     movementAnalysisData,
-    scanRegisterRowsData
+    scanRegisterRowsData,
+    packContext
   ), {
     title: 'AUDIT SUMMARY',
-    orientation: 'landscape'
+    orientation: 'landscape',
+    generatedAt
   });
 
   if (normalized.includeDashboardSummary) {
-    addMetricSheet(workbook, 'Dashboard Summary', buildDashboardSummaryRows(reportData, movementAnalysisData, scanRegisterRowsData), {
+    addMetricSheet(workbook, 'Dashboard Summary', buildDashboardSummaryRows(reportData, movementAnalysisData, scanRegisterRowsData, packContext), {
       title: 'DASHBOARD SUMMARY',
-      orientation: 'landscape'
+      orientation: 'landscape',
+      generatedAt
     });
   }
 
   if (normalized.includeAuditInformation) {
     addMetricSheet(workbook, 'Audit Information', buildAuditInformationRows(resolvedQuery, reportData), {
       title: 'AUDIT INFORMATION',
-      orientation: 'landscape'
+      orientation: 'landscape',
+      generatedAt
     });
   }
 
   if (normalized.includeDealerInformation) {
     addMetricSheet(workbook, 'Dealer Information', buildDealerInformationRows(reportData), {
       title: 'DEALER INFORMATION',
-      orientation: 'landscape'
+      orientation: 'landscape',
+      generatedAt
     });
   }
 
   if (normalized.includeScanStatistics) {
-    addMetricSheet(workbook, 'Scan Statistics', buildScanStatisticsRows(reportData, scanRegisterRowsData), {
+    addMetricSheet(workbook, 'Scan Statistics', buildScanStatisticsRows(reportData, scanRegisterRowsData, packContext), {
       title: 'SCAN STATISTICS',
-      orientation: 'landscape'
+      orientation: 'landscape',
+      generatedAt
     });
   }
 
   if (normalized.includePendingOfflineScanDetails) {
     addTableSheet(workbook, 'Pending Offline Scans', SCAN_REGISTER_COLUMNS, buildPendingOfflineRows(scanRegisterRowsData), {
-      emptyMessage: 'No Data Available'
+      emptyMessage: 'No Data Available',
+      generatedAt
     });
   }
 
   if (normalized.includeUserWiseSummary) {
     addTableSheet(workbook, 'User Wise Summary', USER_WISE_SUMMARY_COLUMNS, buildUserWiseSummaryRows(reportData), {
-      emptyMessage: 'No Data Available'
+      emptyMessage: 'No Data Available',
+      generatedAt
     });
   }
-
-  const getStockSummaryData = () => (getStockSummaryData.cache || (getStockSummaryData.cache = reportModule.buildStockSummaryReport(resolvedQuery)));
-  const getPartwiseData = () => (getPartwiseData.cache || (getPartwiseData.cache = reportModule.buildPartwiseInventoryAuditReport(resolvedQuery)));
-  const getReconciliationData = () => (getReconciliationData.cache || (getReconciliationData.cache = reconciliationRoute.buildReconciliationReport(resolvedQuery)));
   const buildDealerInfoRows = () => [
     { label: 'Dealer Name', value: packText(selectedDealer.dealerName || reportData.summary?.[0]?.dealerName || resolvedQuery.dealerCode || '-') },
     { label: 'Dealer Code', value: packText(selectedDealer.dealerCode || reportData.summary?.[0]?.dealerCode || resolvedQuery.dealerCode || '-') },
@@ -2070,15 +2287,16 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     const uniqueParts = countDistinctBy(rows, (row) => row.partNumber || row.partNo || row._id || row.upiCode || row.rawScan || row.rawScanValue || row.rawScanString);
     const totalQty = sumBy(rows, (row) => firstNumericValue(row.qty, row.quantity, row.actualStock, row.physicalQty, row.dmsStock, row.totalQty, row.scanCount, row.totalScannedQuantity));
     const totalValue = sumBy(rows, (row) => firstNumericValue(row.finalInventoryValue, row.stockValue, row.actualStockValue, row.dmsStockValue, row.totalDlcValue, row.excessValue, row.shortageValue, row.varianceDlc));
-    const movement = context.movementAnalysis && context.movementAnalysis.summary ? context.movementAnalysis.summary : {};
+    const movement = context.movementSummary || (context.movementAnalysis && context.movementAnalysis.summary) || {};
     const registerCounts = context.registerCounts || countScanRegisterRows(rows);
+    const totals = context.totals || {};
     switch (reportKey) {
       case 'bin-wise-stock':
         return [
           { label: 'Rows', value: packNumber(rowCount, 0) },
           { label: 'Unique Bins', value: packNumber(countDistinctBy(rows, (row) => row.bin || row.binLocation), 0) },
           { label: 'Unique Parts', value: packNumber(uniqueParts, 0) },
-          { label: 'Total Qty', value: packNumber(totalQty, 0) }
+          { label: 'Total Qty', value: packNumber(totals.totalQuantity || totalQty, 0) }
         ];
       case 'user-dealer-wise':
         return [
@@ -2136,20 +2354,22 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
           { label: 'Dead Stock', value: packNumber(movement.deadStockCount || movement.deadStockParts || 0, 0) },
           { label: 'Critical Shortage', value: packNumber(movement.criticalShortageCount || movement.criticalShortageParts || 0, 0) }
         ];
-      case 'category-wise-variance-summary':
+      case 'category-wise-variance-summary': {
+        const categoryCount = rowCount > 0 && rows[rowCount - 1] && rows[rowCount - 1].rowType === 'grandTotal' ? rowCount - 1 : rowCount;
         return [
-          { label: 'Categories', value: packNumber(rowCount, 0) },
-          { label: 'Total Scanned Parts', value: packNumber(sumBy(rows, (row) => firstNumericValue(row.totalScannedParts, 0)), 0) },
-          { label: 'Total Scanned Qty', value: packNumber(sumBy(rows, (row) => firstNumericValue(row.totalScannedQuantity, 0)), 0) },
-          { label: 'Variance Value', value: packCurrency(sumBy(rows, (row) => firstNumericValue(row.sumVarianceOnDLC, 0))) }
+          { label: 'Categories', value: packNumber(categoryCount, 0) },
+          { label: 'Total Scanned Parts', value: packNumber(totals.totalParts || sumBy(rows, (row) => firstNumericValue(row.totalScannedParts, 0)), 0) },
+          { label: 'Total Scanned Qty', value: packNumber(totals.totalQuantity || sumBy(rows, (row) => firstNumericValue(row.totalScannedQuantity, 0)), 0) },
+          { label: 'Variance Value', value: packCurrency(totals.totalVarianceDlcValue || sumBy(rows, (row) => firstNumericValue(row.sumVarianceOnDLC, 0))) }
         ];
+      }
       case 'partwise-inventory-audit':
         return [
           { label: 'Rows', value: packNumber(rowCount, 0) },
           { label: 'Unique Categories', value: packNumber(countDistinctBy(rows, (row) => row.productCategory || row.category), 0) },
-          { label: 'Total Qty', value: packNumber(totalQty, 0) },
-          { label: 'Total Value', value: packCurrency(totalValue) },
-          { label: 'Net Difference', value: packCurrency(sumBy(rows, (row) => firstNumericValue(row.varianceDlc, row.netDifference, row.varianceValue))) }
+          { label: 'Total Qty', value: packNumber(totals.totalQuantity || totalQty, 0) },
+          { label: 'Total Value', value: packCurrency(totals.totalPhysicalDlcValue || totalValue) },
+          { label: 'Net Difference', value: packCurrency(totals.totalVarianceDlcValue || sumBy(rows, (row) => firstNumericValue(row.varianceDlc, row.netDifference, row.varianceValue))) }
         ];
       case 'parts-inventory-refresh-template':
         return [
@@ -2177,8 +2397,8 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         return [
           { label: 'Rows', value: packNumber(rowCount, 0) },
           { label: 'Unique Parts', value: packNumber(uniqueParts, 0) },
-          { label: 'Total Qty', value: packNumber(totalQty, 0) },
-          { label: 'Total Value', value: packCurrency(totalValue) }
+          { label: 'Total Qty', value: packNumber(totals.totalQuantity || totalQty, 0) },
+          { label: 'Total Value', value: packCurrency(totals.totalPhysicalDlcValue || totalValue) }
         ];
     }
   };
@@ -2191,7 +2411,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       rows: selectRows(reportData, 'bin-wise-stock'),
       dealerInfo: buildDealerInfoRows(),
       auditInfo: buildAuditInfoRows(),
-      summaryMetrics: buildSummaryMetricsForReport('bin-wise-stock', selectRows(reportData, 'bin-wise-stock')),
+      summaryMetrics: buildSummaryMetricsForReport('bin-wise-stock', selectRows(reportData, 'bin-wise-stock'), packContext),
       reportKey: 'bin-wise-stock'
     }),
     'user-dealer-wise': async () => ({
@@ -2201,7 +2421,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       rows: selectRows(reportData, 'user-dealer-wise'),
       dealerInfo: buildDealerInfoRows(),
       auditInfo: buildAuditInfoRows(),
-      summaryMetrics: buildSummaryMetricsForReport('user-dealer-wise', selectRows(reportData, 'user-dealer-wise')),
+      summaryMetrics: buildSummaryMetricsForReport('user-dealer-wise', selectRows(reportData, 'user-dealer-wise'), packContext),
       reportKey: 'user-dealer-wise'
     }),
     'raw-upi': async () => ({
@@ -2211,7 +2431,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       rows: Array.isArray(reportData.rawLogRows) ? reportData.rawLogRows : [],
       dealerInfo: buildDealerInfoRows(),
       auditInfo: buildAuditInfoRows(),
-      summaryMetrics: buildSummaryMetricsForReport('raw-upi', Array.isArray(reportData.rawLogRows) ? reportData.rawLogRows : []),
+      summaryMetrics: buildSummaryMetricsForReport('raw-upi', Array.isArray(reportData.rawLogRows) ? reportData.rawLogRows : [], packContext),
       reportKey: 'raw-upi'
     }),
     'scan-register': async () => ({
@@ -2221,7 +2441,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       rows: scanRegisterRowsData,
       dealerInfo: buildDealerInfoRows(),
       auditInfo: buildAuditInfoRows(),
-      summaryMetrics: buildSummaryMetricsForReport('scan-register', scanRegisterRowsData, { registerCounts: countScanRegisterRows(scanRegisterRowsData) }),
+      summaryMetrics: buildSummaryMetricsForReport('scan-register', scanRegisterRowsData, packContext),
       reportKey: 'scan-register'
     }),
     'invalid-scan-report': async () => {
@@ -2233,7 +2453,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         rows: rejectedRows,
         dealerInfo: buildDealerInfoRows(),
         auditInfo: buildAuditInfoRows(),
-        summaryMetrics: buildSummaryMetricsForReport('invalid-scan-report', rejectedRows),
+        summaryMetrics: buildSummaryMetricsForReport('invalid-scan-report', rejectedRows, packContext),
         reportKey: 'invalid-scan-report'
       };
     },
@@ -2254,7 +2474,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         rows: (partwise.rows || []).filter((row) => String(row.status || '').toLowerCase() === 'short'),
         dealerInfo: buildDealerInfoRows(),
         auditInfo: buildAuditInfoRows(),
-        summaryMetrics: buildSummaryMetricsForReport('short', (partwise.rows || []).filter((row) => String(row.status || '').toLowerCase() === 'short')),
+        summaryMetrics: buildSummaryMetricsForReport('short', (partwise.rows || []).filter((row) => String(row.status || '').toLowerCase() === 'short'), packContext),
         reportKey: 'short'
       };
     },
@@ -2267,7 +2487,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         rows: (partwise.rows || []).filter((row) => ['excess', 'extra part'].includes(String(row.status || '').toLowerCase())),
         dealerInfo: buildDealerInfoRows(),
         auditInfo: buildAuditInfoRows(),
-        summaryMetrics: buildSummaryMetricsForReport('excess', (partwise.rows || []).filter((row) => ['excess', 'extra part'].includes(String(row.status || '').toLowerCase()))),
+        summaryMetrics: buildSummaryMetricsForReport('excess', (partwise.rows || []).filter((row) => ['excess', 'extra part'].includes(String(row.status || '').toLowerCase())), packContext),
         reportKey: 'excess'
       };
     },
@@ -2278,7 +2498,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       rows: movementAnalysisData.rows || [],
       dealerInfo: buildDealerInfoRows(),
       auditInfo: buildAuditInfoRows(),
-      summaryMetrics: buildSummaryMetricsForReport('movement_wise_stock_analysis', movementAnalysisData.rows || [], { movementAnalysis: movementAnalysisData }),
+      summaryMetrics: buildSummaryMetricsForReport('movement_wise_stock_analysis', movementAnalysisData.rows || [], packContext),
       reportKey: 'movement_wise_stock_analysis'
     }),
     damage: async () => {
@@ -2290,20 +2510,20 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         rows: (partwise.rows || []).filter((row) => Number(row.damageQty || 0) > 0),
         dealerInfo: buildDealerInfoRows(),
         auditInfo: buildAuditInfoRows(),
-        summaryMetrics: buildSummaryMetricsForReport('damage', (partwise.rows || []).filter((row) => Number(row.damageQty || 0) > 0)),
+        summaryMetrics: buildSummaryMetricsForReport('damage', (partwise.rows || []).filter((row) => Number(row.damageQty || 0) > 0), packContext),
         reportKey: 'damage'
       };
     },
     'category-wise-variance-summary': async () => {
-      const category = await reportModule.buildCategoryWiseVarianceSummary(resolvedQuery);
+      const category = await getCategoryData();
       return {
         title: 'CATEGORY WISE VARIANCE SUMMARY',
         kind: 'table',
         columns: CATEGORY_VARIANCE_COLUMNS,
-        rows: buildCategoryVarianceRows(category),
+        rows: buildCategoryVarianceRows(category, packContext),
         dealerInfo: buildDealerInfoRows(),
         auditInfo: buildAuditInfoRows(),
-        summaryMetrics: buildSummaryMetricsForReport('category-wise-variance-summary', buildCategoryVarianceRows(category)),
+        summaryMetrics: buildSummaryMetricsForReport('category-wise-variance-summary', buildCategoryVarianceRows(category, packContext), packContext),
         reportKey: 'category-wise-variance-summary'
       };
     },
@@ -2316,7 +2536,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         rows: partwise.rows || [],
         dealerInfo: buildDealerInfoRows(),
         auditInfo: buildAuditInfoRows(),
-        summaryMetrics: buildSummaryMetricsForReport('partwise-inventory-audit', partwise.rows || []),
+        summaryMetrics: buildSummaryMetricsForReport('partwise-inventory-audit', partwise.rows || [], packContext),
         reportKey: 'partwise-inventory-audit'
       };
     },
@@ -2357,7 +2577,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         }),
         dealerInfo: buildDealerInfoRows(),
         auditInfo: buildAuditInfoRows(),
-        summaryMetrics: buildSummaryMetricsForReport('parts-inventory-refresh-template', rows),
+        summaryMetrics: buildSummaryMetricsForReport('parts-inventory-refresh-template', rows, packContext),
         reportKey: 'parts-inventory-refresh-template'
       };
     },
@@ -2366,7 +2586,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       return {
         title: 'RECONCILIATION REPORT',
         kind: 'metrics',
-        rows: buildReconciliationSummaryRows(reconciliation),
+        rows: buildReconciliationSummaryRows(reconciliation, packContext),
         tables: [{
           title: 'CATEGORY-WISE RECONCILIATION',
           columns: [
@@ -2381,7 +2601,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
             { header: 'NET DIFFERENCE', key: 'netDifference', width: 16, numFmt: PACK_CURRENCY_FORMAT },
             { header: 'STATUS', key: 'status', width: 14 }
           ],
-          rows: buildReconciliationCategoryRows(reconciliation)
+          rows: buildReconciliationCategoryRows(reconciliation, packContext)
         }],
         reportKey: 'reconciliation-report'
       };
@@ -2395,7 +2615,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         rows: reconciliation.rows || [],
         dealerInfo: buildDealerInfoRows(),
         auditInfo: buildAuditInfoRows(),
-        summaryMetrics: buildSummaryMetricsForReport('dealer-reconciliation-report', reconciliation.rows || []),
+        summaryMetrics: buildSummaryMetricsForReport('dealer-reconciliation-report', reconciliation.rows || [], packContext),
         reportKey: 'dealer-reconciliation-report'
       };
     },
@@ -2406,7 +2626,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       rows: (movementAnalysisData.sections && movementAnalysisData.sections.deadStock) || [],
       dealerInfo: buildDealerInfoRows(),
       auditInfo: buildAuditInfoRows(),
-      summaryMetrics: buildSummaryMetricsForReport('dead-stock-report', (movementAnalysisData.sections && movementAnalysisData.sections.deadStock) || []),
+      summaryMetrics: buildSummaryMetricsForReport('dead-stock-report', (movementAnalysisData.sections && movementAnalysisData.sections.deadStock) || [], packContext),
       reportKey: 'dead-stock-report'
     }),
     'fast-moving-report': async () => ({
@@ -2416,7 +2636,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       rows: (movementAnalysisData.sections && movementAnalysisData.sections.fastMoving) || [],
       dealerInfo: buildDealerInfoRows(),
       auditInfo: buildAuditInfoRows(),
-      summaryMetrics: buildSummaryMetricsForReport('fast-moving-report', (movementAnalysisData.sections && movementAnalysisData.sections.fastMoving) || []),
+      summaryMetrics: buildSummaryMetricsForReport('fast-moving-report', (movementAnalysisData.sections && movementAnalysisData.sections.fastMoving) || [], packContext),
       reportKey: 'fast-moving-report'
     }),
     'slow-moving-report': async () => ({
@@ -2426,7 +2646,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       rows: (movementAnalysisData.sections && movementAnalysisData.sections.slowMoving) || [],
       dealerInfo: buildDealerInfoRows(),
       auditInfo: buildAuditInfoRows(),
-      summaryMetrics: buildSummaryMetricsForReport('slow-moving-report', (movementAnalysisData.sections && movementAnalysisData.sections.slowMoving) || []),
+      summaryMetrics: buildSummaryMetricsForReport('slow-moving-report', (movementAnalysisData.sections && movementAnalysisData.sections.slowMoving) || [], packContext),
       reportKey: 'slow-moving-report'
     }),
     'critical-shortage-report': async () => ({
@@ -2436,7 +2656,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       rows: (movementAnalysisData.sections && movementAnalysisData.sections.criticalShortage) || [],
       dealerInfo: buildDealerInfoRows(),
       auditInfo: buildAuditInfoRows(),
-      summaryMetrics: buildSummaryMetricsForReport('critical-shortage-report', (movementAnalysisData.sections && movementAnalysisData.sections.criticalShortage) || []),
+      summaryMetrics: buildSummaryMetricsForReport('critical-shortage-report', (movementAnalysisData.sections && movementAnalysisData.sections.criticalShortage) || [], packContext),
       reportKey: 'critical-shortage-report'
     })
   };
@@ -2459,7 +2679,12 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
   selectedSpecs.forEach((spec) => {
     if (!spec) return;
     if (spec.kind === 'stock-summary') {
-      reportModule.addStockSummarySheet(workbook, spec.data || {});
+      reportModule.addStockSummarySheet(workbook, spec.data || {}, {
+        generatedBy,
+        generatedAt,
+        canonicalContext: packContext,
+        reportData
+      });
       return;
     }
     if (spec.kind === 'metrics') {
@@ -2467,7 +2692,8 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         title: spec.title,
         tables: spec.tables || [],
         sectionFills: spec.sectionFills || {},
-        orientation: spec.orientation || 'landscape'
+        orientation: spec.orientation || 'landscape',
+        generatedAt
       });
       return;
     }
@@ -2486,6 +2712,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       reportData,
       generatedBy,
       generatedAt,
+      canonicalContext: packContext,
       dealerTitle: 'Dealer Details',
       auditTitle: 'Audit Details',
       summaryTitle: spec.summaryTitle || 'Report Summary',
