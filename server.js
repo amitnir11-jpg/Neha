@@ -469,6 +469,7 @@ app.use('/api/auth', (req, res, next) => {
 app.use('/api/auth', authRoutes);
 
 app.use('/api', (req, res, next) => {
+  if (req.path === '/mobile/version') return next();
   if (isDatabaseReady()) return next();
   return res.status(503).json({
     success: false,

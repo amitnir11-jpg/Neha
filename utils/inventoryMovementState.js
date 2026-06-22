@@ -28,6 +28,9 @@ function upiCodeValue(input = {}) {
 function activeInventoryValue(input = {}) {
   if (input.activeInventory === true) return true;
   if (input.activeInventory === false) return false;
+  const explicit = clean(input.activeInventory).toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(explicit)) return true;
+  if (['false', '0', 'no', 'off'].includes(explicit)) return false;
   const movementType = movementTypeValue(input);
   if (movementType !== 'INWARD') return false;
   return numberValue(input.remainingQty !== undefined ? input.remainingQty : input.qty !== undefined ? input.qty : input.quantity, 0) > 0;

@@ -51,6 +51,18 @@ function modelMirrorFields(modelName) {
   }
 }
 
+function modelMirrorFieldTypes(modelName) {
+  try {
+    const model = Prisma.dmmf.datamodel.models.find(
+      (item) => item.name.toLowerCase() === String(modelName || '').toLowerCase()
+    );
+    if (!model) return new Map();
+    return new Map(model.fields.map((field) => [field.name, field]));
+  } catch (error) {
+    return new Map();
+  }
+}
+
 const DATE_FIELDS = new Set([
   'timestamp',
   'scanTime',
@@ -134,14 +146,37 @@ function publicRow(record = {}) {
   return hydrateDates(output);
 }
 
-function valueForMirror(data, field) {
+function booleanMirrorValue(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const text = String(value || '').trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(text)) return false;
+  return Boolean(value);
+}
+
+function valueForMirror(data, field, fieldInfo = null) {
   const value = data[field];
   if (value === undefined || value === null || value === '') return null;
-  if (DATE_FIELDS.has(field)) return asDate(value);
+  const type = String(fieldInfo?.type || '');
+  if (type === 'Boolean') return booleanMirrorValue(value);
+  if (['Int', 'Float', 'Decimal'].includes(type)) {
+    const number = Number(String(value).replace(/,/g, '').trim());
+    return Number.isFinite(number) ? number : null;
+  }
+  if (type === 'BigInt') {
+    try {
+      return BigInt(value);
+    } catch (_) {
+      return null;
+    }
+  }
+  if (type === 'DateTime' || DATE_FIELDS.has(field)) return asDate(value);
+  if (type === 'Json') return cleanObject(value);
   return String(value);
 }
 
-function buildRow(data, id, mirrorFields) {
+function buildRow(data, id, mirrorFields, mirrorFieldTypes = new Map()) {
   const fields = mirrorFields || MIRROR_FIELDS;
   const now = new Date();
   const clean = cleanObject({ ...data });
@@ -156,7 +191,7 @@ function buildRow(data, id, mirrorFields) {
     updatedAt
   };
   fields.forEach((field) => {
-    row[field] = valueForMirror(clean, field);
+    row[field] = valueForMirror(clean, field, mirrorFieldTypes.get(field));
   });
   return row;
 }
@@ -897,6 +932,7 @@ function createModel(config) {
   const indexes = config.indexes || [];
   const defaults = config.defaults || {};
   const resolvedMirrorFields = modelMirrorFields(config.name);
+  const resolvedMirrorFieldTypes = modelMirrorFieldTypes(config.name);
 
   class Model extends Document {
     constructor(data = {}) {
@@ -927,7 +963,7 @@ function createModel(config) {
       const prepared = await this.__prepare({ ...input, id, _id: id }, options);
       prepared.id = id;
       prepared._id = id;
-      const row = buildRow(prepared, id, resolvedMirrorFields);
+      const row = buildRow(prepared, id, resolvedMirrorFields, resolvedMirrorFieldTypes);
       const saved = await this.__delegate.upsert({
         where: { id },
         create: row,
@@ -1147,6 +1183,8 @@ function createModel(config) {
 }
 
 module.exports = {
+  booleanMirrorValue,
   createModel,
-  matchesFilter
+  matchesFilter,
+  valueForMirror
 };

@@ -1,6 +1,6 @@
 (function () {
-  const APP_VERSION = 'Daksh Fresh Web Scanner v1.0.2';
-  const CACHE_VERSION = '20260620-mobile-auto-start-square';
+  const APP_VERSION = 'Daksh Mobile Scanner v1.1.0';
+  const CACHE_VERSION = '20260622-scanner-reliability-v2';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -17,6 +17,9 @@
   const STORAGE_OPEN_TIMEOUT_MS = 7000;
   const BATCH_SIZE = 50;
   const DEDUPE_MS = 1800;
+  const SUCCESS_SCAN_LOCK_MS = 1000;
+  const FAILED_SCAN_LOCK_MS = 180;
+  const SAME_CODE_COOLDOWN_MS = 4500;
   const DUPLICATE_NOTICE_MS = 3000;
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
@@ -102,6 +105,9 @@
     cameraTimer: null,
     autoCameraTimer: null,
     saveLockTimer: null,
+    zxingRestartTimer: null,
+    versionTimer: null,
+    cameraRunId: 0,
     lastBinStartAt: 0,
     lastBinStartValue: '',
     nativeDetector: null,
@@ -119,6 +125,10 @@
     liveRecentRefreshPromise: null,
     liveRecentRefreshToken: 0,
     lastDecodeAtByKey: new Map(),
+    pendingDecodeQueue: [],
+    processingRaw: '',
+    lastCompletedRaw: '',
+    lastCompletedAt: 0,
     duplicateNoticeLocks: new Map(),
     recentCleanupTimer: null,
     manualRaw: '',
@@ -126,6 +136,7 @@
     manualMode: loadMode(),
     cameraDevices: [],
     selectedCameraId: storageGet(CAMERA_KEY, ''),
+    cameraSelectionExplicit: false,
     health: null,
     authReady: false,
     loginConfigLoading: true,
@@ -513,6 +524,7 @@
     renderLoginDealers();
     try {
       const data = await api('/api/mobile/config', { auth: false, timeoutMs: LOGIN_CONFIG_TIMEOUT_MS });
+      if (reloadForScannerBuild(data.webScannerBuild)) return null;
       state.authReady = true;
       state.canonicalUrl = data.mobileScannerUrl || data.scanUrl || state.canonicalUrl;
       state.loginUrl = data.loginUrl || state.loginUrl;
@@ -536,6 +548,27 @@
       renderLoginDealers();
       return null;
     }
+  }
+
+  function reloadForScannerBuild(serverBuild = '') {
+    const build = clean(serverBuild);
+    if (!build || build === CACHE_VERSION) return false;
+    const reloadKey = `dakshScannerReload:${build}`;
+    try {
+      if (sessionStorage.getItem(reloadKey) === '1') return false;
+      sessionStorage.setItem(reloadKey, '1');
+    } catch (_) {}
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set('build', build);
+    window.location.replace(nextUrl.toString());
+    return true;
+  }
+
+  async function checkScannerBuild() {
+    try {
+      const data = await api(`/api/mobile/version?t=${Date.now()}`, { auth: false, timeoutMs: 7000 });
+      reloadForScannerBuild(data.webScannerBuild);
+    } catch (_) {}
   }
 
   function api(path, options = {}) {
@@ -998,7 +1031,7 @@
       panel.classList.toggle('blocked', !ready);
       message.textContent = ready
         ? `Scanning will save to bin ${current}.`
-        : 'Enter a bin location before starting inward or damage scanning.';
+        : 'Camera stays on automatically. Enter a bin before saving inward or damage scans.';
     } else if (state.mode === 'OUTWARD') {
       panel.classList.remove('blocked');
       panel.classList.remove('ready');
@@ -1020,9 +1053,8 @@
     if (!requiresBin()) return true;
     const bin = loadActiveBin();
     if (bin) return true;
-    if (state.scanning) stopCamera({ preserveRequest: true });
     state.cameraRequested = true;
-    cameraState('Enter a bin location before scanning this mode.');
+    cameraState('Camera on - enter a bin to save this scan.');
     toast('Bin location is required before inward or damage scans', 'error');
     byId('activeBinLocation').focus();
     return false;
@@ -1052,7 +1084,11 @@
     state.paused = false;
     state.cameraRequested = true;
     clearTimeout(state.autoCameraTimer);
-    requestAutoCameraStart({ forceRestart: true });
+    if (state.scanning) {
+      cameraState('Scanning automatically');
+    } else {
+      requestAutoCameraStart();
+    }
     return bin;
   }
 
@@ -1211,6 +1247,14 @@
     return qs('.camera-frame');
   }
 
+  function renderCameraControlState({ live = state.scanning, starting = false } = {}) {
+    const button = byId('startScanBtn');
+    if (!button) return;
+    button.textContent = starting ? 'Starting Camera...' : live ? 'Camera On' : 'Start Camera';
+    button.disabled = Boolean(starting || live);
+    button.setAttribute('aria-pressed', live ? 'true' : 'false');
+  }
+
   function setCameraLive(live) {
     const frame = cameraFrame();
     if (frame) {
@@ -1219,6 +1263,7 @@
       frame.classList.remove('camera-starting');
     }
     document.body.classList.toggle('camera-live', Boolean(live));
+    renderCameraControlState({ live: Boolean(live), starting: false });
   }
 
   function setCameraStarting(starting) {
@@ -1226,6 +1271,7 @@
     if (!frame) return;
     frame.classList.toggle('camera-starting', Boolean(starting));
     if (starting) frame.classList.remove('camera-live');
+    renderCameraControlState({ live: false, starting: Boolean(starting) });
   }
 
   function bindVideoState(video) {
@@ -1248,11 +1294,14 @@
   function cameraConstraints(deviceId = '') {
     const video = {
       facingMode: { ideal: 'environment' },
-      width: { ideal: 1920, max: 2560 },
-      height: { ideal: 1080, max: 1440 },
-      aspectRatio: { ideal: 16 / 9 },
-      frameRate: { ideal: 30, max: 60 },
-      resizeMode: 'crop-and-scale'
+      width: { ideal: 1920, min: 640 },
+      height: { ideal: 1440, min: 480 },
+      frameRate: { ideal: 30, min: 20, max: 60 },
+      advanced: [
+        { focusMode: 'continuous' },
+        { exposureMode: 'continuous' },
+        { whiteBalanceMode: 'continuous' }
+      ]
     };
     if (deviceId) {
       video.deviceId = { exact: deviceId };
@@ -1348,6 +1397,7 @@
   }
 
   function stopCamera({ preserveRequest = false } = {}) {
+    state.cameraRunId += 1;
     stopNativeDetector();
     state.torchSupported = false;
     state.torchEnabled = false;
@@ -1375,9 +1425,15 @@
     }
     setCameraLive(false);
     clearTimeout(state.cameraTimer);
+    clearTimeout(state.zxingRestartTimer);
     state.cameraTimer = null;
+    state.zxingRestartTimer = null;
     state.scanning = false;
-    if (!preserveRequest) state.cameraRequested = false;
+    if (!preserveRequest) {
+      state.cameraRequested = false;
+      state.pendingDecodeQueue = [];
+      state.processingRaw = '';
+    }
     cameraState(state.paused ? 'Paused' : preserveRequest ? 'Camera stopped' : 'Camera stopped');
   }
 
@@ -1542,9 +1598,10 @@
     toast(next ? 'Torch enabled' : 'Torch disabled', 'info');
   }
 
-  function setSelectedCamera(deviceIdValue) {
+  function setSelectedCamera(deviceIdValue, { explicit = false } = {}) {
     state.cameraDevices = state.cameraDevices || [];
     state.selectedCameraId = deviceIdValue || '';
+    if (explicit) state.cameraSelectionExplicit = true;
     storageSet(CAMERA_KEY, state.selectedCameraId);
     const select = byId('cameraSelect');
     if (select) select.value = state.selectedCameraId;
@@ -1552,9 +1609,10 @@
 
   function preferredCameraId(devices = []) {
     const selected = state.selectedCameraId || storageGet(CAMERA_KEY, '');
-    if (selected && devices.some((device) => device.deviceId === selected)) return selected;
     const preferred = devices.find((device) => /back|rear|environment|world/i.test(device.label || ''));
-    return preferred ? preferred.deviceId : (devices[0] ? devices[0].deviceId : '');
+    if (preferred) return preferred.deviceId;
+    if (state.cameraSelectionExplicit && selected && devices.some((device) => device.deviceId === selected)) return selected;
+    return '';
   }
 
   async function refreshCameraList() {
@@ -2229,11 +2287,13 @@
     clearInterval(state.syncTimer);
     clearInterval(state.heartbeatTimer);
     clearInterval(state.recentRefreshTimer);
+    clearInterval(state.versionTimer);
     state.autoCameraTimer = null;
     state.syncDelayTimer = null;
     state.syncTimer = null;
     state.heartbeatTimer = null;
     state.recentRefreshTimer = null;
+    state.versionTimer = null;
     state.liveRecentRows = null;
     state.liveRecentRefreshPromise = null;
     state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
@@ -2256,11 +2316,13 @@
     clearInterval(state.syncTimer);
     clearInterval(state.heartbeatTimer);
     clearInterval(state.recentRefreshTimer);
+    clearInterval(state.versionTimer);
     state.autoCameraTimer = null;
     state.syncDelayTimer = null;
     state.syncTimer = null;
     state.heartbeatTimer = null;
     state.recentRefreshTimer = null;
+    state.versionTimer = null;
     state.cameraRequested = false;
     state.paused = false;
     state.pendingLogin = null;
@@ -2296,11 +2358,7 @@
       cameraState('Open the secure Railway URL to use the camera.');
       return;
     }
-    if (requiresBin() && !loadActiveBin()) {
-      cameraState('Set bin location to start camera automatically.');
-      if (focusBin) byId('activeBinLocation')?.focus();
-      return;
-    }
+    if (requiresBin() && !loadActiveBin() && focusBin) byId('activeBinLocation')?.focus();
     if (forceRestart && state.scanning) stopCamera({ preserveRequest: true });
     cameraState('Starting camera automatically...');
     const startAttempt = () => {
@@ -2323,12 +2381,13 @@
       cameraState('Open the secure Railway URL to use the camera.');
       return;
     }
-    if (requiresBin() && !ensureActiveBinReady()) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       cameraState('Camera API unavailable. Use manual entry.');
       return;
     }
     stopCamera({ preserveRequest: true });
+    const runId = state.cameraRunId + 1;
+    state.cameraRunId = runId;
     state.cameraRequested = true;
     state.paused = false;
     state.scanning = true;
@@ -2341,16 +2400,30 @@
     video.muted = true;
     video.autoplay = true;
     video.setAttribute('playsinline', '');
-    const selected = state.selectedCameraId || preferredCameraId(state.cameraDevices || []);
+    const selected = state.cameraSelectionExplicit
+      ? state.selectedCameraId
+      : preferredCameraId(state.cameraDevices || []);
     cameraState('Opening camera...');
     setCameraStarting(true);
+    let stream = null;
     try {
       const readerPromise = ensureReader();
-      const onDecode = (result) => {
+      let reader = null;
+      const onDecode = (result, error) => {
+        if (runId !== state.cameraRunId || !state.scanning) return;
         if (result) handleDecodeResult(result);
+        if (error && !/NotFound|Checksum|Format/i.test(String(error.name || error.constructor?.name || ''))) {
+          clearTimeout(state.zxingRestartTimer);
+          state.zxingRestartTimer = setTimeout(() => {
+            if (runId !== state.cameraRunId || !state.scanning || !reader) return;
+            try {
+              reader.stopContinuousDecode();
+              reader.decodeContinuously(video, onDecode);
+            } catch (_) {}
+          }, 250);
+        }
       };
       const openStream = async (deviceId) => navigator.mediaDevices.getUserMedia(cameraConstraints(deviceId));
-      let stream = null;
       try {
         stream = await openStream(selected);
       } catch (firstError) {
@@ -2361,7 +2434,7 @@
           throw firstError;
         }
       }
-      if (!state.scanning) {
+      if (!state.scanning || runId !== state.cameraRunId) {
         stream?.getTracks?.().forEach((track) => track.stop());
         return;
       }
@@ -2375,9 +2448,17 @@
       cameraState('Camera ready');
       await refreshTorchState(video).catch(() => undefined);
       startNativeDetector(video).catch(() => undefined);
-      const reader = await readerPromise;
-      if (!state.scanning) return;
-      if (reader && typeof reader.decodeContinuously === 'function') {
+      try {
+        reader = await readerPromise;
+      } catch (readerError) {
+        const nativeDetector = await nativeBarcodeDetector().catch(() => null);
+        if (!nativeDetector) throw readerError;
+        console.warn('[SCANNER] ZXing fallback unavailable; native BarcodeDetector remains active.', readerError);
+      }
+      if (!state.scanning || runId !== state.cameraRunId) return;
+      if (!reader) {
+        cameraState('Scanning automatically');
+      } else if (typeof reader.decodeContinuously === 'function') {
         try {
           reader.decodeContinuously(video, onDecode);
         } catch (error) {
@@ -2398,7 +2479,7 @@
           throw error;
         });
         promise.catch((error) => {
-          if (state.scanning) {
+          if (state.scanning && runId === state.cameraRunId) {
             state.scanning = false;
             setCameraStarting(false);
             setCameraLive(false);
@@ -2411,7 +2492,7 @@
         throw new Error('Scanner library failed to initialize');
       }
       state.cameraTimer = setTimeout(() => {
-        if (state.scanning) {
+        if (state.scanning && runId === state.cameraRunId) {
           if (video?.srcObject && video.readyState >= 2) setCameraLive(true);
           if (video?.srcObject && video.readyState >= 2) startNativeDetector(video).catch(() => undefined);
           cameraState('Scanning automatically');
@@ -2421,6 +2502,10 @@
       renderCameraListSoon();
       refreshLiveRecentScans({ force: true, reason: 'camera-start' }).catch(() => undefined);
     } catch (error) {
+      if (runId !== state.cameraRunId) {
+        stream?.getTracks?.().forEach((track) => track.stop());
+        return;
+      }
       state.scanning = false;
       setCameraStarting(false);
       setCameraLive(false);
@@ -2450,7 +2535,16 @@
 
   function handleDecodeResult(result) {
     const raw = clean(typeof result?.getText === 'function' ? result.getText() : result?.text || result?.rawValue || result);
-    if (!raw || state.saveInFlight) return;
+    if (!raw) return;
+    if (state.saveInFlight) {
+      if (raw !== state.processingRaw && !state.pendingDecodeQueue.includes(raw)) {
+        state.pendingDecodeQueue.push(raw);
+        state.pendingDecodeQueue = state.pendingDecodeQueue.slice(-5);
+        cameraState('Next QR detected - waiting to process...');
+      }
+      return;
+    }
+    if (raw === state.lastCompletedRaw && Date.now() - Number(state.lastCompletedAt || 0) < SAME_CODE_COOLDOWN_MS) return;
     const key = `${state.mode}|${raw}`;
     const lastSeen = state.lastDecodeAtByKey.get(key) || 0;
     if (Date.now() - lastSeen < DEDUPE_MS) return;
@@ -2463,8 +2557,29 @@
     void processDecodedText(raw);
   }
 
+  function finishDecodedText(raw, { accepted = false } = {}) {
+    state.lastCompletedRaw = raw;
+    state.lastCompletedAt = Date.now();
+    clearTimeout(state.saveLockTimer);
+    state.saveLockTimer = setTimeout(() => {
+      state.saveInFlight = false;
+      state.processingRaw = '';
+      const nextRaw = state.pendingDecodeQueue.shift() || '';
+      if (state.scanning && !state.paused) {
+        cameraState(nextRaw ? 'Processing next QR...' : 'Scanning automatically');
+      }
+      if (nextRaw && state.scanning && !state.paused) void processDecodedText(nextRaw);
+    }, accepted ? SUCCESS_SCAN_LOCK_MS : FAILED_SCAN_LOCK_MS);
+  }
+
   async function processDecodedText(raw) {
-    if (state.saveInFlight) return;
+    if (state.saveInFlight) {
+      if (raw && raw !== state.processingRaw && !state.pendingDecodeQueue.includes(raw)) {
+        state.pendingDecodeQueue.push(raw);
+        state.pendingDecodeQueue = state.pendingDecodeQueue.slice(-5);
+      }
+      return;
+    }
     const mode = currentScanType();
     if (mode === 'FITTED') {
       toast('Fitted scans need vehicle and job card details', 'warning');
@@ -2478,8 +2593,14 @@
     }
     const partCandidate = parsePartCandidate(raw);
     if (requiresBin() && !ensureActiveBinReady()) {
+      state.lastCompletedRaw = raw;
+      state.lastCompletedAt = Date.now();
       return;
     }
+    state.saveInFlight = true;
+    state.processingRaw = raw;
+    clearTimeout(state.saveLockTimer);
+    let accepted = false;
     const record = createScanRecord({
       rawText: raw,
       manual: false,
@@ -2487,40 +2608,41 @@
       binLocation: requiresBin() ? loadActiveBin() : ''
     });
     try {
-      const masterFields = await validatePartBeforeSave(record.partNumber || record.part || '', record.dealerCode || activeDealerCode());
-      if (masterFields) {
-        Object.assign(record, masterFields, {
-          partNumber: normalizePartCandidateValue(record.partNumber || record.part || ''),
-          part: normalizePartCandidateValue(record.partNumber || record.part || '')
-        });
+      if (partCandidate) {
+        try {
+          const masterFields = await validatePartBeforeSave(record.partNumber || record.part || '', record.dealerCode || activeDealerCode());
+          if (masterFields) {
+            Object.assign(record, masterFields, {
+              partNumber: normalizePartCandidateValue(record.partNumber || record.part || ''),
+              part: normalizePartCandidateValue(record.partNumber || record.part || '')
+            });
+          }
+        } catch (error) {
+          cameraState('Invalid scan - not saved');
+          toast(error.message || 'Invalid part number - not found in master catalogue', 'error');
+          beep('error');
+          vibrate([30, 30, 30]);
+          return;
+        }
       }
-    } catch (error) {
-      cameraState('Invalid scan - not saved');
-      toast(error.message || 'Invalid part number - not found in master catalogue', 'error');
-      beep('error');
-      vibrate([30, 30, 30]);
-      return;
-    }
-    const liveDuplicate = await checkBackendDuplicateBeforeSync(record);
-    if (liveDuplicate?.duplicate) {
-      const existing = liveDuplicate.existing || record;
-      const message = liveDuplicate.message || duplicateScanMessage(existing);
-      updateLastScan({
-        ...existing,
-        status: 'duplicate',
-        syncStatus: 'duplicate',
-        syncError: message
-      });
-      cameraState('Duplicate blocked');
-      showDuplicateOnce(record, existing, message);
-      return;
-    }
-    state.saveInFlight = true;
-    clearTimeout(state.saveLockTimer);
-    try {
+      const liveDuplicate = await checkBackendDuplicateBeforeSync(record);
+      if (liveDuplicate?.duplicate) {
+        const existing = liveDuplicate.existing || record;
+        const message = liveDuplicate.message || duplicateScanMessage(existing);
+        updateLastScan({
+          ...existing,
+          status: 'duplicate',
+          syncStatus: 'duplicate',
+          syncError: message
+        });
+        cameraState('Duplicate blocked');
+        showDuplicateOnce(record, existing, message);
+        return;
+      }
       if (navigator.onLine && state.session?.token) {
         cameraState('Saving to server...');
         const { response } = await saveRecordToServer(record);
+        accepted = true;
         byId('manualRawPreview').hidden = true;
         toast(response.message || 'Scan saved to server', 'success');
         beep('ok');
@@ -2528,6 +2650,7 @@
       } else {
         cameraState('Saved locally');
         await saveRecord(record, { silent: true, deferSync: false });
+        accepted = true;
         byId('manualRawPreview').hidden = true;
         toast('Scan saved locally. Sync will retry automatically.', 'success');
         beep('ok');
@@ -2544,6 +2667,7 @@
           await markDuplicateRecord(record, data.existing || data.scan || {}, message);
         } else if (isRetryableTransportError(error)) {
           await saveRecord({ ...record, syncError: message }, { silent: true, deferSync: false });
+          accepted = true;
           cameraState('Saved locally');
           toast('Scan saved locally. Sync will retry automatically.', 'warning');
           beep('ok');
@@ -2564,10 +2688,7 @@
         }
       }
     } finally {
-      state.saveLockTimer = setTimeout(() => {
-        state.saveInFlight = false;
-        if (state.scanning && !state.paused) cameraState('Scanning automatically');
-      }, DEDUPE_MS);
+      finishDecodedText(raw, { accepted });
     }
   }
 
@@ -2991,7 +3112,7 @@
       if (value) byId('loginMessage').textContent = '';
     });
     byId('cameraSelect').addEventListener('change', (event) => {
-      setSelectedCamera(event.target.value);
+      setSelectedCamera(event.target.value, { explicit: true });
       if (state.scanning) {
         startCamera().catch((error) => toast(error.message || 'Camera restart failed', 'error'));
       }
@@ -3038,7 +3159,12 @@
         startCamera().catch(() => undefined);
       }
     });
-    window.addEventListener('pagehide', () => stopCamera({ preserveRequest: false }));
+    window.addEventListener('pagehide', () => stopCamera({ preserveRequest: true }));
+    window.addEventListener('pageshow', () => {
+      if (state.cameraRequested && !state.paused && state.session?.token && !state.scanning) {
+        requestAutoCameraStart();
+      }
+    });
     window.addEventListener('beforeunload', () => stopCamera({ preserveRequest: false }));
   }
 
@@ -3117,17 +3243,16 @@
       state.cameraRequested = true;
       state.paused = false;
       updateScannerPanel();
-      await refreshSessionContext();
-      await refreshHealth();
-      state.allRows = await getAllRecords().catch(() => []);
-      renderAll();
       byId('cameraState').textContent = isSecureScannerContext()
-        ? (requiresBin() && !loadActiveBin() ? 'Set bin location to start camera automatically.' : 'Starting camera automatically...')
+        ? 'Starting camera automatically...'
         : 'Camera is blocked on this HTTP page. Use the secure scanner URL.';
       startTimers();
+      requestAutoCameraStart({ focusBin: false });
       toast('Login successful', 'success');
       sendHeartbeat().catch(() => undefined);
-      requestAutoCameraStart({ focusBin: true, forceRestart: true });
+      await Promise.allSettled([refreshSessionContext(), refreshHealth()]);
+      state.allRows = await getAllRecords().catch(() => []);
+      renderAll();
     } catch (error) {
       if (showDealerSelectionError(error)) return;
       byId('loginMessage').textContent = error.message;
@@ -3167,6 +3292,7 @@
     clearInterval(state.syncTimer);
     clearInterval(state.recentRefreshTimer);
     clearInterval(state.heartbeatTimer);
+    clearInterval(state.versionTimer);
     state.syncDelayTimer = null;
     state.syncTimer = setInterval(() => {
       if (document.hidden) return;
@@ -3180,9 +3306,13 @@
       if (document.hidden) return;
       sendHeartbeat().catch(() => undefined);
     }, HEARTBEAT_INTERVAL_MS);
+    state.versionTimer = setInterval(() => {
+      if (!document.hidden) checkScannerBuild().catch(() => undefined);
+    }, 60000);
     refreshLiveRecentScans({ force: true, reason: 'timer-start' }).catch(() => undefined);
     syncQueue({ silent: true }).catch(() => undefined);
     sendHeartbeat().catch(() => undefined);
+    checkScannerBuild().catch(() => undefined);
   }
 
   async function clearSyncedRows() {
@@ -3248,7 +3378,9 @@
     renderConnectionBadge();
     renderSessionHeader();
     renderServerSummary();
+    setMode(state.mode, { silent: true });
 
+    const configReady = refreshMobileConfig();
     const dbReady = openDb()
       .then(async (db) => {
         state.db = db;
@@ -3263,31 +3395,21 @@
         return false;
       });
 
-    await refreshMobileConfig();
     await dbReady;
     ensureReader().catch(() => undefined);
     nativeBarcodeDetector().catch(() => undefined);
     refreshCameraList().catch(() => undefined);
-    setMode(state.mode, { silent: true });
-    renderUrlState();
-    renderConnectionBadge();
-    renderSessionHeader();
-    renderServerSummary();
 
     if (state.session?.token) {
       byId('loginPanel').classList.add('hidden');
       byId('scannerPanel').classList.remove('hidden');
       document.body.classList.add('scanner-active');
       state.cameraRequested = true;
-      await refreshSessionContext();
-      await refreshHealth();
-      state.allRows = await getAllRecords().catch(() => []);
       renderAll();
-      startTimers();
       byId('cameraState').textContent = isSecureScannerContext()
-        ? (requiresBin() && !loadActiveBin() ? 'Set bin location to start camera automatically.' : 'Starting camera automatically...')
+        ? 'Starting camera automatically...'
         : 'Camera is blocked on this HTTP page. Use the secure scanner URL.';
-      requestAutoCameraStart({ focusBin: false, forceRestart: true });
+      requestAutoCameraStart({ focusBin: false });
     } else {
       byId('scannerPanel').classList.add('hidden');
       byId('loginPanel').classList.remove('hidden');
@@ -3295,12 +3417,19 @@
       renderAll();
     }
 
-    if (!state.session?.token) {
-      await refreshHealth();
-    }
+    await configReady;
+    renderUrlState();
+    renderConnectionBadge();
+    renderSessionHeader();
+    renderServerSummary();
 
     if (state.session?.token) {
+      startTimers();
+      await Promise.allSettled([refreshSessionContext(), refreshHealth()]);
       state.allRows = await getAllRecords().catch(() => []);
+      renderAll();
+    } else {
+      await refreshHealth();
       renderAll();
     }
   }

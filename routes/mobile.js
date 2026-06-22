@@ -28,7 +28,8 @@ const { applyCacheHeaders, getCachedResponse } = require('../utils/safeCache');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
-const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.0.5';
+const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.1.0';
+const WEB_SCANNER_BUILD = '20260622-scanner-reliability-v2';
 const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 const MOBILE_SCAN_SELECT = [
   'uniqueScanId scanId syncKey qrFingerprint rawUpiHash',
@@ -341,6 +342,11 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
   }
 });
 
+router.get('/version', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  return res.json({ success: true, webScannerBuild: WEB_SCANNER_BUILD });
+});
+
 router.get('/config', auth.optionalAuth, async (req, res) => {
   try {
     const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
@@ -371,6 +377,7 @@ router.get('/config', auth.optionalAuth, async (req, res) => {
       success: true,
       appName: 'Daksh Inventory',
       mobileAppVersion: MOBILE_APP_VERSION,
+      webScannerBuild: WEB_SCANNER_BUILD,
       serverTime: new Date(),
       serverUrl: info.serverUrl,
       scanUrl: info.scanUrl,
