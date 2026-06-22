@@ -1,4 +1,6 @@
 const ExcelJS = require('exceljs');
+const fs = require('fs');
+const path = require('path');
 const { jsPDF } = require('jspdf');
 const autoTableModule = require('jspdf-autotable');
 const nodemailer = require('nodemailer');
@@ -22,6 +24,17 @@ const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategor
 const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 
 const autoTable = autoTableModule.default || autoTableModule;
+const DAKSH_PRO_MARK_PNG = path.resolve(__dirname, '..', 'public', 'assets', 'daksh-pro-mark.png');
+const DAKSH_PRO_MARK_BUFFER = fs.readFileSync(DAKSH_PRO_MARK_PNG);
+const workbookLogoIds = new WeakMap();
+
+function packGetDakshProLogoId(workbook) {
+  if (!workbook) return null;
+  if (workbookLogoIds.has(workbook)) return workbookLogoIds.get(workbook);
+  const imageId = workbook.addImage({ buffer: DAKSH_PRO_MARK_BUFFER, extension: 'png' });
+  workbookLogoIds.set(workbook, imageId);
+  return imageId;
+}
 
 function reportErrorStatus(error) {
   const status = Number(error && (error.statusCode || error.status));
@@ -1323,13 +1336,20 @@ function packMergeBand(sheet, rowNumber, startCol, endCol, value, options = {}) 
 }
 
 function packRenderTitleBlock(sheet, totalColumns, subtitle) {
-  packMergeBand(sheet, 1, 1, 2, 'LOGO', {
+  packMergeBand(sheet, 1, 1, 2, '', {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGold } },
     font: { name: PACK_FONT, size: 12, bold: true, color: { argb: PACK_THEME.title } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.border,
     height: 26
   });
+  const logoId = packGetDakshProLogoId(sheet.workbook);
+  if (logoId !== null) {
+    sheet.addImage(logoId, {
+      tl: { col: 0.15, row: 0.08 },
+      ext: { width: 48, height: 48 }
+    });
+  }
   packMergeBand(sheet, 1, 3, totalColumns, 'Daksh Inventory Solution V2', {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.title } },
     font: { name: PACK_FONT, size: 20, bold: true, color: { argb: PACK_THEME.titleText } },

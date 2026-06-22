@@ -589,6 +589,36 @@ a:focus-visible,
   gap: 16px;
 }
 
+.brand-lockup-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.brand-lockup-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.brand-pro-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #fff2a2 0%, #f2b93c 100%);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: 0 8px 18px rgba(242, 185, 60, 0.28);
+}
+
 .brand-mark {
   width: 58px;
   height: 58px;
@@ -597,13 +627,16 @@ a:focus-visible,
   place-items: center;
   border-radius: 8px;
   background: #ffffff;
+  overflow: hidden;
   box-shadow: 0 12px 28px rgba(15, 76, 129, 0.18);
 }
 
-.brand-mark svg {
+.brand-mark svg,
+.brand-mark img {
   width: 46px;
   height: 46px;
   stroke: none;
+  display: block;
 }
 
 .brand-lockup strong,
@@ -2085,7 +2118,8 @@ body[data-page="report"] table thead {
   box-shadow: 0 12px 30px rgba(2, 12, 27, 0.24);
 }
 
-.brand-mark svg {
+.brand-mark svg,
+.brand-mark img {
   width: 40px;
   height: 40px;
 }
@@ -2614,10 +2648,11 @@ body[data-page="report"] table thead {
     flex-basis: 44px;
   }
 
-  .brand-mark svg {
-    width: 34px;
-    height: 34px;
-  }
+.brand-mark svg,
+.brand-mark img {
+  width: 34px;
+  height: 34px;
+}
 
   .brand-lockup strong {
     font-size: 18px;

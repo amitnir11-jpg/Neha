@@ -1,5 +1,7 @@
 const express = require('express');
 const ExcelJS = require('exceljs');
+const fs = require('fs');
+const path = require('path');
 const nodemailer = require('nodemailer');
 const { jsPDF } = require('jspdf');
 const autoTableModule = require('jspdf-autotable');
@@ -51,6 +53,17 @@ const {
 
 const router = express.Router();
 const autoTable = autoTableModule.default || autoTableModule;
+const DAKSH_PRO_MARK_PNG = path.resolve(__dirname, '..', 'public', 'assets', 'daksh-pro-mark.png');
+const DAKSH_PRO_MARK_BUFFER = fs.readFileSync(DAKSH_PRO_MARK_PNG);
+const workbookLogoIds = new WeakMap();
+
+function getDakshProLogoId(workbook) {
+  if (!workbook) return null;
+  if (workbookLogoIds.has(workbook)) return workbookLogoIds.get(workbook);
+  const imageId = workbook.addImage({ buffer: DAKSH_PRO_MARK_BUFFER, extension: 'png' });
+  workbookLogoIds.set(workbook, imageId);
+  return imageId;
+}
 const REPORT_SCAN_SELECT = [
   'uniqueScanId scanId syncKey clientScanId clientSyncKey qrFingerprint rawUpiHash',
   'part partNumber normalizedPartNumber partName partDescription model year manufacturingYear category productCategory productGroup productType partGroup partSubGroup gstCategory superceededBy',
@@ -3538,11 +3551,18 @@ function addStockSummarySheet(workbook, data, options = {}) {
   };
 
   sheet.mergeCells('A1:B2');
-  sheet.getCell('A1').value = 'LOGO';
+  sheet.getCell('A1').value = '';
   setFill(1, 1, 2, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionGold } }, { bold: true, size: 12, color: { argb: theme.title } });
   sheet.getCell('A1').alignment = center;
   sheet.getRow(1).height = 26;
   sheet.getRow(2).height = 22;
+  const logoId = getDakshProLogoId(sheet.workbook);
+  if (logoId !== null) {
+    sheet.addImage(logoId, {
+      tl: { col: 0.15, row: 0.08 },
+      ext: { width: 48, height: 48 }
+    });
+  }
 
   sheet.mergeCells('C1:L1');
   sheet.getCell('C1').value = 'Daksh Inventory Solution V2';
