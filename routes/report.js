@@ -3481,6 +3481,7 @@ function addStockSummarySheet(workbook, data) {
     { width: 15 }, { width: 11 }, { width: 12 }, { width: 14 },
     { width: 11 }, { width: 14 }, { width: 11 }, { width: 14 }
   ];
+  const currencyFormat = '₹ #,##0.00;[Red]-₹ #,##0.00';
   const fills = {
     title: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBDD7EE' } },
     meta: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC9C9C9' } },
@@ -3501,6 +3502,7 @@ function addStockSummarySheet(workbook, data) {
   };
   const center = { vertical: 'middle', horizontal: 'center', wrapText: true };
   const numberKeys = stockSummaryColumns().filter((column) => column.key !== 'category').map((column) => column.key);
+  const currencyKeys = new Set(['dmsValue', 'physicalValue', 'excessValue', 'shortValue', 'netDifference']);
   const applyRange = (startRow, endRow, startCol = 1, endCol = 12) => {
     for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
       for (let colNumber = startCol; colNumber <= endCol; colNumber += 1) {
@@ -3517,10 +3519,10 @@ function addStockSummarySheet(workbook, data) {
       cell.font = { name: 'Arial', size: 10, ...font };
     }
   };
-  const setNumber = (rowNumber, colNumber, value) => {
+  const setNumber = (rowNumber, colNumber, value, isCurrency = false) => {
     const cell = sheet.getCell(rowNumber, colNumber);
     cell.value = Number(value || 0);
-    cell.numFmt = '0';
+    cell.numFmt = isCurrency ? currencyFormat : '#,##0';
   };
 
   sheet.mergeCells('A1:L1');
@@ -3605,7 +3607,7 @@ function addStockSummarySheet(workbook, data) {
   rows.forEach((row, rowIndex) => {
     const rowNumber = dataStartRow + rowIndex;
     sheet.getCell(rowNumber, 1).value = row.category;
-    numberKeys.forEach((key, index) => setNumber(rowNumber, index + 2, row[key]));
+    numberKeys.forEach((key, index) => setNumber(rowNumber, index + 2, row[key], currencyKeys.has(key)));
     const isTotal = row.rowType === 'total';
     setFill(rowNumber, 1, 12, isTotal ? fills.total : fills.meta, { bold: isTotal });
     sheet.getCell(rowNumber, 1).font = { name: 'Arial', size: 10, bold: true };
@@ -3617,7 +3619,17 @@ function addStockSummarySheet(workbook, data) {
   });
 
   applyRange(1, dataStartRow + rows.length - 1);
-  sheet.views = [{ showGridLines: false, topLeftCell: 'A1', activeCell: 'A1' }];
+  sheet.views = [{ state: 'frozen', ySplit: dataStartRow - 1, showGridLines: false, topLeftCell: 'A1', activeCell: 'A1' }];
+  sheet.pageSetup = {
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    orientation: 'landscape',
+    paperSize: 9
+  };
+  sheet.headerFooter = {
+    oddFooter: '&LGenerated from Daksh Inventory System'
+  };
   return sheet;
 }
 

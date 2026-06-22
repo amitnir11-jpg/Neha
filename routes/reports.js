@@ -1097,78 +1097,457 @@ function addSheetFooter(sheet) {
   };
 }
 
-function addTableSheet(workbook, name, columns, rows, options = {}) {
-  const sheet = workbook.addWorksheet(uniqueSheetName(workbook, name));
-  const rowData = Array.isArray(rows) && rows.length ? rows : [{
-    [columns[0] && columns[0].key ? columns[0].key : 'message']: options.emptyMessage || 'No Data Available'
-  }];
-  const resolvedColumns = packColumnWidths(columns, rowData, options.sampleSize || 100, options.maxWidth || 60);
-  sheet.columns = resolvedColumns.map((column) => ({
-    header: column.header,
-    key: column.key,
-    width: column.width
-  }));
-  resolvedColumns.forEach((column, index) => {
-    if (column.numFmt) sheet.getColumn(index + 1).numFmt = column.numFmt;
+const PACK_CURRENCY_FORMAT = '₹ #,##0.00;[Red]-₹ #,##0.00';
+const PACK_INTEGER_FORMAT = '#,##0';
+const PACK_THEME = {
+  title: 'FF000000',
+  subtitle: 'FFBDD7EE',
+  sectionGreen: 'FFA7BF95',
+  sectionBlue: 'FF8FB2CC',
+  sectionOrange: 'FFD8C87E',
+  sectionGrey: 'FFC9C9C9',
+  header: 'FF153A5B',
+  total: 'FF70A83A',
+  value: 'FFF8FAFC',
+  border: 'FFE2E8F0',
+  labelBorder: 'FFD7E2EE'
+};
+
+function packNumberLike(value, fallback = 0) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const text = String(value ?? '')
+    .replace(/[₹,$,\s]/g, '')
+    .replace(/^\((.*)\)$/, '-$1');
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function firstPresentValue(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '') ?? '';
+}
+
+function firstNumericValue(...values) {
+  for (const value of values) {
+    const number = packNumberLike(value, NaN);
+    if (Number.isFinite(number)) return number;
+  }
+  return 0;
+}
+
+function countDistinctBy(rows = [], selector = () => '') {
+  return new Set(rows.map((row, index) => clean(selector(row, index))).filter(Boolean)).size;
+}
+
+function sumBy(rows = [], selector = () => 0) {
+  return rows.reduce((sum, row, index) => sum + packNumberLike(selector(row, index), 0), 0);
+}
+
+function normalizePackCategory(value) {
+  return canonicalizePartCategory(value || 'Uncategorized') || 'Uncategorized';
+}
+
+function summarizeByCategory(rows = [], options = {}) {
+  const buckets = new Map();
+  rows.forEach((row, index) => {
+    const category = normalizePackCategory(firstPresentValue(
+      options.categoryResolver ? options.categoryResolver(row, index) : '',
+      row.productCategory,
+      row.category,
+      row.partCategory,
+      row.partDescription,
+      row.partName
+    ));
+    const bucket = buckets.get(category) || {
+      category,
+      parts: 0,
+      qty: 0,
+      value: 0,
+      dmsQty: 0,
+      actualQty: 0,
+      dmsValue: 0,
+      actualValue: 0,
+      shortValue: 0,
+      excessValue: 0,
+      varianceQty: 0,
+      varianceValue: 0,
+      partSet: new Set()
+    };
+    bucket.parts += 1;
+    bucket.qty += packNumberLike(options.qtyResolver ? options.qtyResolver(row, index) : firstPresentValue(row.physicalQty, row.actualStock, row.qty, row.totalQty, row.scanCount, row.dmsStock), 0);
+    bucket.value += packNumberLike(options.valueResolver ? options.valueResolver(row, index) : firstPresentValue(row.finalInventoryValue, row.stockValue, row.actualStockValue, row.totalDlcValue), 0);
+    bucket.dmsQty += packNumberLike(options.dmsQtyResolver ? options.dmsQtyResolver(row, index) : firstPresentValue(row.dmsStock, row.systemQty), 0);
+    bucket.actualQty += packNumberLike(options.actualQtyResolver ? options.actualQtyResolver(row, index) : firstPresentValue(row.physicalQty, row.actualStock, row.qty), 0);
+    bucket.dmsValue += packNumberLike(options.dmsValueResolver ? options.dmsValueResolver(row, index) : firstPresentValue(row.dmsStockValue), 0);
+    bucket.actualValue += packNumberLike(options.actualValueResolver ? options.actualValueResolver(row, index) : firstPresentValue(row.actualStockValue, row.finalInventoryValue), 0);
+    bucket.shortValue += packNumberLike(options.shortValueResolver ? options.shortValueResolver(row, index) : firstPresentValue(row.shortageValue, row.shortValue), 0);
+    bucket.excessValue += packNumberLike(options.excessValueResolver ? options.excessValueResolver(row, index) : firstPresentValue(row.excessValue), 0);
+    bucket.varianceQty += packNumberLike(options.varianceQtyResolver ? options.varianceQtyResolver(row, index) : firstPresentValue(row.varianceQty, row.variance), 0);
+    bucket.varianceValue += packNumberLike(options.varianceValueResolver ? options.varianceValueResolver(row, index) : firstPresentValue(row.varianceDlc, row.varianceValue, row.netDifference), 0);
+    bucket.partSet.add(clean(firstPresentValue(row.partNumber, row.partNo, row._id)));
+    buckets.set(category, bucket);
   });
-  styleHeaderRow(sheet.getRow(1), options.headerFill || 'FF153A5B');
-  sheet.getRow(1).height = 22;
-  const rightAlignColumns = new Set(resolvedColumns
+  const aggregated = Array.from(buckets.values()).sort((a, b) => b.value - a.value || a.category.localeCompare(b.category));
+  const totalValue = aggregated.reduce((sum, bucket) => sum + bucket.value, 0);
+  return aggregated.map((bucket) => ({
+    ...bucket,
+    uniqueParts: bucket.partSet.size,
+    share: totalValue > 0 ? bucket.value / totalValue : 0
+  }));
+}
+
+function packResolveColumns(columns = [], rows = [], minimumColumns = 12, maxWidth = 60) {
+  const resolved = packColumnWidths(columns, rows, 100, maxWidth).map((column) => {
+    if (column.numFmt) return column;
+    const text = `${column.key || ''} ${column.header || ''}`.toLowerCase();
+    if (/date|time|timestamp/.test(text)) return column;
+    if (/value|amount|price|cost|mrp|dlc|dlp|variance|difference|inventory|stock/.test(text) && !/qty|quantity|count|lines|parts|rows|users|devices/.test(text)) {
+      return { ...column, numFmt: PACK_CURRENCY_FORMAT };
+    }
+    if (/qty|quantity|count|lines|parts|rows|users|devices|scan|short|excess|damage|matched|pending|failed|duplicate/.test(text)) {
+      return { ...column, numFmt: PACK_INTEGER_FORMAT };
+    }
+    return column;
+  });
+  while (resolved.length < minimumColumns) {
+    resolved.push({ header: '', key: `blank_${resolved.length + 1}`, width: 2.5 });
+  }
+  return resolved;
+}
+
+function packStyleRange(sheet, startRow, endRow, startCol, endCol, options = {}) {
+  for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
+    const row = sheet.getRow(rowNumber);
+    if (options.height) row.height = options.height;
+    for (let colNumber = startCol; colNumber <= endCol; colNumber += 1) {
+      const cell = sheet.getCell(rowNumber, colNumber);
+      cell.border = {
+        top: { style: 'thin', color: { argb: options.borderColor || PACK_THEME.border } },
+        left: { style: 'thin', color: { argb: options.borderColor || PACK_THEME.border } },
+        bottom: { style: 'thin', color: { argb: options.borderColor || PACK_THEME.border } },
+        right: { style: 'thin', color: { argb: options.borderColor || PACK_THEME.border } }
+      };
+      if (options.fill) cell.fill = options.fill;
+      if (options.font) cell.font = options.font;
+      if (options.alignment) cell.alignment = options.alignment;
+    }
+  }
+}
+
+function packMergeBand(sheet, rowNumber, startCol, endCol, value, options = {}) {
+  sheet.mergeCells(rowNumber, startCol, rowNumber, endCol);
+  const cell = sheet.getCell(rowNumber, startCol);
+  cell.value = value;
+  packStyleRange(sheet, rowNumber, rowNumber, startCol, endCol, options);
+}
+
+function packRenderTitleBlock(sheet, totalColumns, subtitle) {
+  packMergeBand(sheet, 1, 1, totalColumns, 'Daksh Inventory Solution V2', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.title } },
+    font: { name: 'Arial', size: 16, bold: true, color: { argb: 'FFFFFFFF' } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+    borderColor: PACK_THEME.title,
+    height: 24
+  });
+  packMergeBand(sheet, 2, 1, totalColumns, subtitle || '', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.subtitle } },
+    font: { name: 'Arial', size: 14, bold: false, color: { argb: 'FF111827' } },
+    alignment: { vertical: 'middle', horizontal: 'left', wrapText: true },
+    borderColor: PACK_THEME.border,
+    height: 22
+  });
+}
+
+function packRenderInfoBlock(sheet, startRow, totalColumns, leftTitle, leftRows = [], rightTitle, rightRows = []) {
+  const leftEnd = 6;
+  const rightStart = 7;
+  const rightEnd = Math.max(totalColumns, 12);
+  packMergeBand(sheet, startRow, 1, leftEnd, leftTitle || 'Dealer Details', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGreen } },
+    font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+    borderColor: PACK_THEME.border,
+    height: 20
+  });
+  packMergeBand(sheet, startRow, rightStart, rightEnd, rightTitle || 'Audit Details', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionBlue } },
+    font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+    borderColor: PACK_THEME.border,
+    height: 20
+  });
+  const rowCount = Math.max(leftRows.length, rightRows.length);
+  for (let index = 0; index < rowCount; index += 1) {
+    const rowNumber = startRow + 1 + index;
+    const left = leftRows[index] || {};
+    const right = rightRows[index] || {};
+    packMergeBand(sheet, rowNumber, 1, 2, left.label ? `${left.label} :` : '', {
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGreen } },
+      font: { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } },
+      alignment: { vertical: 'middle', horizontal: 'right', wrapText: true },
+      borderColor: PACK_THEME.border,
+      height: 20
+    });
+    packMergeBand(sheet, rowNumber, 3, leftEnd, firstPresentValue(left.value, ''), {
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.value } },
+      font: { name: 'Arial', size: 10, bold: Boolean(left.boldValue), color: { argb: 'FF111827' } },
+      alignment: { vertical: 'middle', horizontal: 'left', wrapText: true },
+      borderColor: PACK_THEME.border,
+      height: 20
+    });
+    packMergeBand(sheet, rowNumber, rightStart, rightStart + 1, right.label ? `${right.label} :` : '', {
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionBlue } },
+      font: { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } },
+      alignment: { vertical: 'middle', horizontal: 'right', wrapText: true },
+      borderColor: PACK_THEME.border,
+      height: 20
+    });
+    packMergeBand(sheet, rowNumber, rightStart + 2, rightEnd, firstPresentValue(right.value, ''), {
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.value } },
+      font: { name: 'Arial', size: 10, bold: Boolean(right.boldValue), color: { argb: 'FF111827' } },
+      alignment: { vertical: 'middle', horizontal: 'left', wrapText: true },
+      borderColor: PACK_THEME.border,
+      height: 20
+    });
+  }
+  return startRow + rowCount;
+}
+
+function packRenderMetricCards(sheet, startRow, totalColumns, title, metrics = [], options = {}) {
+  const effectiveMetrics = metrics.length ? metrics : [{ label: 'No Data Available', value: '-' }];
+  packMergeBand(sheet, startRow, 1, totalColumns, title || 'Summary', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: options.fill || PACK_THEME.sectionBlue } },
+    font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+    borderColor: PACK_THEME.border,
+    height: 20
+  });
+  const palette = options.palette || ['FFEFF6FF', 'FFEFFAF1', 'FFFFF7ED', 'FFFDF2F8'];
+  const cardsPerRow = 4;
+  const cardWidth = Math.max(3, Math.floor(Math.min(totalColumns, 12) / cardsPerRow));
+  let currentRow = startRow + 1;
+  for (let index = 0; index < effectiveMetrics.length; index += cardsPerRow) {
+    const chunk = effectiveMetrics.slice(index, index + cardsPerRow);
+    chunk.forEach((metric, cardIndex) => {
+      const startCol = 1 + cardIndex * cardWidth;
+      const endCol = Math.min(totalColumns, startCol + cardWidth - 1);
+      const fillArgb = metric.fill || palette[(index + cardIndex) % palette.length];
+      packMergeBand(sheet, currentRow, startCol, endCol, metric.label || '', {
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } },
+        font: { name: 'Arial', size: 10, bold: true, color: { argb: 'FF111827' } },
+        alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+        borderColor: PACK_THEME.border,
+        height: 20
+      });
+      packMergeBand(sheet, currentRow + 1, startCol, endCol, firstPresentValue(metric.value, ''), {
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: metric.valueFill || 'FFFFFFFF' } },
+        font: { name: 'Arial', size: 13, bold: true, color: { argb: 'FF111827' } },
+        alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+        borderColor: PACK_THEME.border,
+        height: 24
+      });
+    });
+    currentRow += 2;
+  }
+  return currentRow - 1;
+}
+
+function packRenderSummaryRows(sheet, startRow, totalColumns, title, rows = [], options = {}) {
+  const effectiveRows = rows.length ? rows : [{ label: 'No Data Available', value: '-', kind: 'info' }];
+  packMergeBand(sheet, startRow, 1, totalColumns, title || 'Summary', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: options.fill || PACK_THEME.sectionGreen } },
+    font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+    borderColor: PACK_THEME.border,
+    height: 20
+  });
+  const labelEnd = Math.min(4, totalColumns - 1);
+  const valueStart = labelEnd + 1;
+  let rowNumber = startRow + 1;
+  effectiveRows.forEach((item) => {
+    const valueFillArgb = item.kind === 'status'
+      ? PACK_THEME.total
+      : item.kind === 'remarks'
+        ? PACK_THEME.sectionGrey
+        : item.kind === 'warning' || item.kind === 'danger'
+          ? PACK_THEME.sectionOrange
+          : PACK_THEME.value;
+    packMergeBand(sheet, rowNumber, 1, labelEnd, `${item.label || ''}${item.label ? ' :' : ''}`, {
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGreen } },
+      font: { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } },
+      alignment: { vertical: 'middle', horizontal: 'right', wrapText: true },
+      borderColor: PACK_THEME.border,
+      height: item.kind === 'remarks' ? 30 : 20
+    });
+    packMergeBand(sheet, rowNumber, valueStart, totalColumns, firstPresentValue(item.value, ''), {
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: valueFillArgb } },
+      font: { name: 'Arial', size: 10, bold: true, color: { argb: valueFillArgb === PACK_THEME.total ? 'FFFFFFFF' : 'FF111827' } },
+      alignment: { vertical: 'middle', horizontal: item.kind === 'remarks' ? 'left' : 'center', wrapText: true },
+      borderColor: PACK_THEME.border,
+      height: item.kind === 'remarks' ? 30 : 20
+    });
+    rowNumber += 1;
+  });
+  return rowNumber - 1;
+}
+
+function packRenderDataTable(sheet, startRow, totalColumns, title, columns = [], rows = [], options = {}) {
+  const effectiveColumns = packResolveColumns(columns, rows, Math.max(1, columns.length), options.maxWidth || 60);
+  const sheetColumns = effectiveColumns.map((column) => ({
+    header: column.header || '',
+    key: column.key || '',
+    width: column.width || 14
+  }));
+  while (sheetColumns.length < totalColumns) {
+    sheetColumns.push({ header: '', key: `blank_${sheetColumns.length + 1}`, width: 2.5 });
+  }
+  sheet.columns = sheetColumns;
+
+  packMergeBand(sheet, startRow, 1, totalColumns, title || 'Detailed Data', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: options.fill || PACK_THEME.sectionBlue } },
+    font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+    borderColor: PACK_THEME.border,
+    height: 20
+  });
+
+  const headerRow = sheet.getRow(startRow + 1);
+  const visibleColumns = columns.length || 1;
+  for (let index = 0; index < visibleColumns; index += 1) {
+    headerRow.getCell(index + 1).value = effectiveColumns[index] && effectiveColumns[index].header ? effectiveColumns[index].header : '';
+  }
+  styleHeaderRow(headerRow, options.headerFill || PACK_THEME.header);
+  headerRow.height = 22;
+
+  const dataRows = rows.length ? rows : [{ [effectiveColumns[0] && effectiveColumns[0].key ? effectiveColumns[0].key : 'message']: options.emptyMessage || 'No Data Available' }];
+  const rightAlignColumns = new Set(effectiveColumns
     .map((column, index) => (column.numFmt ? index : null))
     .filter((index) => index !== null));
-  rowData.forEach((row) => {
-    const added = sheet.addRow(normalizePackRow(row));
-    styleDataRow(added, resolvedColumns, { rightAlignColumns });
-    if (row.rowType === 'grandTotal' || row.rowType === 'subtotal' || row.isTotal) {
+  dataRows.forEach((row) => {
+    const added = sheet.addRow(formatDateLikeFields(normalizePackRow(row)));
+    styleDataRow(added, effectiveColumns, { rightAlignColumns });
+    if (row.rowType === 'total' || row.rowType === 'grandTotal' || row.isTotal) {
       added.font = { bold: true };
-      added.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFF6FF' } };
+      added.eachCell({ includeEmpty: true }, (cell) => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.total } };
+        cell.font = { bold: true };
+      });
     }
-    if (String(row.message || '').trim() === 'No Data Available') {
+    if (String(row.message || '').trim() === (options.emptyMessage || 'No Data Available')) {
       added.font = { italic: true, color: { argb: 'FF64748B' } };
     }
+    added.height = 20;
   });
-  sheet.views = [{ state: 'frozen', ySplit: 1 }];
-  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: resolvedColumns.length } };
+
+  sheet.autoFilter = { from: { row: startRow + 1, column: 1 }, to: { row: startRow + 1, column: visibleColumns } };
+  return { headerRow: startRow + 1, nextRow: startRow + 1 + dataRows.length };
+}
+
+function addTableSheet(workbook, name, columns, rows, options = {}) {
+  const sheet = workbook.addWorksheet(uniqueSheetName(workbook, name));
+  const reportData = options.reportData || {};
+  const selectedDealer = reportData.selectedDealer || {};
+  const selectedAudit = reportData.selectedAudit || {};
+  const subtitle = options.title || name;
+  const visibleColumns = Array.isArray(columns) ? columns : [];
+  const resolvedColumns = packResolveColumns(visibleColumns, rows, Math.max(visibleColumns.length, 12), options.maxWidth || 60);
+  const totalColumns = Math.max(12, resolvedColumns.length);
+  sheet.columns = Array.from({ length: totalColumns }, (_, index) => ({ width: index < 4 ? 18 : 14 }));
+  packRenderTitleBlock(sheet, totalColumns, subtitle);
+
+  const dealerInfo = Array.isArray(options.dealerInfo) && options.dealerInfo.length ? options.dealerInfo : [
+    { label: 'Dealer Name', value: packText(selectedDealer.dealerName || reportData.summary?.[0]?.dealerName || '-') },
+    { label: 'Dealer Code', value: packText(selectedDealer.dealerCode || reportData.summary?.[0]?.dealerCode || options.dealerCode || '-') },
+    { label: 'Location', value: packText(selectedDealer.location || '-') },
+    { label: 'Auditor Name', value: packText(selectedAudit.auditorName || selectedDealer.auditorName || '-') }
+  ];
+  const auditInfo = Array.isArray(options.auditInfo) && options.auditInfo.length ? options.auditInfo : [
+    { label: 'Audit ID', value: packText(selectedAudit.auditId || options.auditId || '-') },
+    { label: 'Audit Date', value: packText(selectedAudit.auditStartDate || selectedAudit.auditDate || options.auditDate || '-') },
+    { label: 'Generated By', value: packText(options.generatedBy || '-') },
+    { label: 'Generated At', value: packText(options.generatedAt || '-') }
+  ];
+  let currentRow = 3;
+  currentRow = packRenderInfoBlock(sheet, currentRow, totalColumns, options.dealerTitle || 'Dealer Details', dealerInfo, options.auditTitle || 'Audit Details', auditInfo) + 1;
+
+  const summaryMetrics = Array.isArray(options.summaryMetrics) && options.summaryMetrics.length ? options.summaryMetrics : [
+    { label: 'Rows', value: packNumber(rows.length, 0), fill: 'FFEFF6FF' },
+    { label: 'Unique Parts', value: packNumber(countDistinctBy(rows, (row) => firstPresentValue(row.partNumber, row.partNo, row._id)), 0), fill: 'FFEFFAF1' },
+    { label: 'Total Qty', value: packNumber(sumBy(rows, (row) => firstNumericValue(row.qty, row.quantity, row.actualStock, row.physicalQty, row.dmsStock, row.totalQty, row.scanCount)), 0), fill: 'FFFFF7ED' },
+    { label: 'Total Value', value: packCurrency(sumBy(rows, (row) => firstNumericValue(row.finalInventoryValue, row.stockValue, row.actualStockValue, row.dmsStockValue, row.totalDlcValue, row.excessValue, row.shortageValue))), fill: 'FFFDF2F8' }
+  ];
+  currentRow = packRenderMetricCards(sheet, currentRow, totalColumns, options.summaryTitle || 'Report Summary', summaryMetrics, {
+    fill: options.summaryFill || PACK_THEME.sectionBlue
+  }) + 1;
+
+  const table = packRenderDataTable(sheet, currentRow, totalColumns, options.tableTitle || subtitle, visibleColumns, rows, options);
+  sheet.views = [{ state: 'frozen', ySplit: table.headerRow, showGridLines: false, topLeftCell: 'A1', activeCell: 'A1' }];
+  sheet.pageSetup = {
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    orientation: options.orientation || 'landscape',
+    paperSize: 9
+  };
   addSheetFooter(sheet);
-  sheet.pageSetup = { fitToPage: true, orientation: options.orientation || 'landscape' };
   return sheet;
 }
 
 function addMetricSheet(workbook, name, rows, options = {}) {
   const sheet = workbook.addWorksheet(uniqueSheetName(workbook, name));
-  const title = options.title || name;
-  const rowData = Array.isArray(rows) && rows.length ? rows : [{
-    section: 'Info',
-    metric: 'No Data Available',
-    value: '-'
-  }];
-  const [sectionWidth, metricWidth, valueWidth] = packMetricWidths(rowData);
-  sheet.columns = [
-    { key: 'section', width: sectionWidth },
-    { key: 'metric', width: metricWidth },
-    { key: 'value', width: valueWidth }
-  ];
-  sheet.mergeCells(1, 1, 1, 3);
-  sheet.getCell(1, 1).value = title;
-  sheet.getCell(1, 1).font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
-  sheet.getCell(1, 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: options.titleFill || 'FF0F4C81' } };
-  sheet.getCell(1, 1).alignment = { vertical: 'middle', horizontal: 'left' };
-  const headerRow = sheet.getRow(2);
-  headerRow.values = ['Section', 'Metric', 'Value'];
-  styleHeaderRow(headerRow, options.headerFill || 'FF153A5B');
-  headerRow.height = 22;
-  rowData.forEach((row) => {
-    const added = sheet.addRow({
-      section: packText(row.section),
-      metric: packText(row.metric),
-      value: packText(row.value)
-    });
-    styleDataRow(added, sheet.columns, {});
+  const subtitle = options.title || name;
+  const rowData = Array.isArray(rows) ? rows : [];
+  const tables = Array.isArray(options.tables) ? options.tables : [];
+  const tableWidth = tables.reduce((max, table) => Math.max(max, Array.isArray(table.columns) ? table.columns.length : 0), 0);
+  const totalColumns = Math.max(12, tableWidth);
+  sheet.columns = Array.from({ length: totalColumns }, (_, index) => ({ width: index < 4 ? 18 : 14 }));
+  packRenderTitleBlock(sheet, totalColumns, subtitle);
+
+  const sections = [];
+  const sectionMap = new Map();
+  rowData.forEach((row, index) => {
+    const section = packText(row.section || row.group || 'Summary');
+    if (!sectionMap.has(section)) {
+      sectionMap.set(section, []);
+      sections.push(section);
+    }
+    sectionMap.get(section).push({ ...row, __index: index });
   });
-  sheet.views = [{ state: 'frozen', ySplit: 2 }];
-  sheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: 3 } };
+
+  let currentRow = 3;
+  sections.forEach((section, index) => {
+    const sectionRows = sectionMap.get(section).map((row) => ({
+      label: row.metric || row.label || '',
+      value: row.value === undefined || row.value === null ? '' : row.value,
+      kind: row.kind || 'info'
+    }));
+    currentRow = packRenderSummaryRows(sheet, currentRow, totalColumns, section, sectionRows, {
+      fill: (options.sectionFills && options.sectionFills[section]) || [PACK_THEME.sectionGreen, PACK_THEME.sectionBlue, PACK_THEME.sectionOrange, PACK_THEME.sectionGrey][index % 4]
+    }) + 1;
+  });
+
+  let firstTableHeader = null;
+  tables.forEach((table, index) => {
+    currentRow += 1;
+    const rendered = packRenderDataTable(sheet, currentRow, totalColumns, table.title || table.name || 'Detailed Data', table.columns || [], table.rows || [], {
+      ...options,
+      ...(table.options || {}),
+      fill: table.fill || options.tableFill,
+      headerFill: table.headerFill || options.headerFill,
+      maxWidth: table.maxWidth || options.maxWidth
+    });
+    if (!firstTableHeader) firstTableHeader = rendered.headerRow;
+    currentRow = rendered.nextRow;
+  });
+
+  sheet.views = [{ state: 'frozen', ySplit: firstTableHeader || 2, showGridLines: false, topLeftCell: 'A1', activeCell: 'A1' }];
+  sheet.pageSetup = {
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    orientation: options.orientation || 'landscape',
+    paperSize: 9
+  };
   addSheetFooter(sheet);
-  sheet.pageSetup = { fitToPage: true, orientation: options.orientation || 'portrait' };
   return sheet;
 }
 
@@ -1230,56 +1609,73 @@ function buildSummaryStatusRows(reportData = {}, selectedReports = [], extras = 
   const finalRows = Array.isArray(reportData.finalRows) ? reportData.finalRows : [];
   const scans = Array.isArray(reportData.scans) ? reportData.scans : [];
   const registerCounts = countScanRegisterRows(scanRegisterRowsData);
-  const totalQuantity = Number(summary.totalQuantity || summary.totalScans || finalRows.reduce((sum, row) => sum + Number(row.physicalQty || row.qty || 0), 0) || 0);
-  const totalVariance = finalRows.reduce((sum, row) => sum + Number(row.varianceQty !== undefined ? row.varianceQty : row.differenceQty || row.variance || 0), 0);
-  const totalExcess = countRows(finalRows, (row) => Number(row.excessQty || 0) > 0 || String(row.status || '').toLowerCase().includes('excess'));
-  const totalShort = countRows(finalRows, (row) => Number(row.shortQty || 0) > 0 || String(row.status || '').toLowerCase().includes('short'));
-  const damageCount = countRows(finalRows, (row) => Number(row.damageQty || 0) > 0);
-  const uniqueUsers = new Set(scans.map((scan) => clean(scan.userName || scan.staffName || scan.loginId || scan.userId)).filter(Boolean)).size;
-  const uniqueDevices = new Set(scans.map((scan) => clean(scan.deviceId || scan.deviceName)).filter(Boolean)).size;
+  const totalQuantity = Number(summary.totalQuantity || summary.totalScans || sumBy(finalRows, (row) => firstNumericValue(row.physicalQty, row.qty, row.actualStock, row.totalQty, row.scanCount)) || 0);
+  const totalVariance = sumBy(finalRows, (row) => firstNumericValue(
+    row.varianceQty,
+    row.differenceQty,
+    row.variance,
+    row.netDifference
+  ));
+  const totalExcess = countRows(finalRows, (row) => Number(firstNumericValue(row.excessQty, row.excess, 0)) > 0 || String(row.status || '').toLowerCase().includes('excess'));
+  const totalShort = countRows(finalRows, (row) => Number(firstNumericValue(row.shortQty, row.shortageQty, row.short, 0)) > 0 || String(row.status || '').toLowerCase().includes('short'));
+  const damageCount = countRows(finalRows, (row) => Number(firstNumericValue(row.damageQty, 0)) > 0);
+  const uniqueUsers = countDistinctBy(scans, (scan) => scan.userName || scan.staffName || scan.loginId || scan.userId);
+  const uniqueDevices = countDistinctBy(scans, (scan) => scan.deviceId || scan.deviceName);
   const movementSummary = movementAnalysis && movementAnalysis.summary ? movementAnalysis.summary : {};
-  const labelText = selectedReportLabels(selectedReports).join(', ') || '-';
-  const extraText = selectedExtraLabels(extras).join(', ') || '-';
-  const categoryTotals = {
-    hhml: countRows(finalRows, (row) => /hhml/i.test(String(row.productCategory || row.category || ''))),
-    lubricant: countRows(finalRows, (row) => /lubricant|lube/i.test(String(row.productCategory || row.category || row.partDescription || row.partName || ''))),
-    battery: countRows(finalRows, (row) => /battery/i.test(String(row.productCategory || row.category || row.partDescription || row.partName || ''))),
-    oil: countRows(finalRows, (row) => /(^|\b)oil\b/i.test(String(row.productCategory || row.category || row.partDescription || row.partName || '')))
-  };
+  const categoryRows = summarizeByCategory(finalRows, {
+    qtyResolver: (row) => firstNumericValue(row.physicalQty, row.actualStock, row.qty),
+    valueResolver: (row) => firstNumericValue(row.finalInventoryValue, row.stockValue, row.actualStockValue)
+  }).slice(0, 8);
   return [
-    ...packMetricRows('Audit Details', [
+    ...packMetricRows('Dealer Information', [
       ['Dealer Name', dealer.dealerName || summary.dealerName || packText(summary.dealerCode || dealer.dealerCode || reportData.filters?.dealerCode)],
       ['Dealer Code', dealer.dealerCode || summary.dealerCode || reportData.filters?.dealerCode || '-'],
-      ['Audit Start Date', packText(audit.auditStartDate || audit.auditDate || summary.fromDate || reportData.filters?.fromDate || reportData.filters?.from)],
-      ['Audit End Date', packText(audit.auditClosedDate || audit.auditEndDate || summary.toDate || reportData.filters?.toDate || reportData.filters?.to)],
-      ['Generated By', generatedBy],
-      ['Generated Date Time', generatedAt],
-      ['Selected Reports', labelText],
-      ['Included Extras', extraText]
+      ['Location', dealer.location || '-'],
+      ['Auditor Name', dealer.auditorName || audit.auditorName || '-'],
+      ['Brand', dealer.brand || '-']
     ]),
-    ...packMetricRows('Audit Totals', [
-      ['Total Parts', packNumber(summary.totalMasterParts || finalRows.length || 0)],
-      ['Total Scan Qty', packNumber(totalQuantity, 0)],
-      ['Total Variance', packNumber(totalVariance, 2)],
+    ...packMetricRows('Audit Information', [
+      ['Audit ID', audit.auditId || summary.auditId || '-'],
+      ['Audit Date', audit.auditStartDate || audit.auditDate || summary.fromDate || reportData.filters?.fromDate || reportData.filters?.from || '-'],
+      ['Audit End Date', audit.auditClosedDate || audit.auditEndDate || summary.toDate || reportData.filters?.toDate || reportData.filters?.to || '-'],
+      ['Generated By', generatedBy || 'System'],
+      ['Generated At', generatedAt || '-'],
+      ['Selected Reports', packNumber(selectedReports.length, 0)],
+      ['Included Extras', selectedExtraLabels(extras).join(', ') || '-'],
+      ['Sync Status', auditSyncStatus(registerCounts)]
+    ]),
+    ...packMetricRows('Inventory Summary', [
+      ['Total Parts', packNumber(summary.totalMasterParts || finalRows.length || 0, 0)],
+      ['Total Scans', packNumber(summary.totalScans || scans.length || 0, 0)],
+      ['Total Quantity', packNumber(totalQuantity, 0)],
+      ['Unique Parts', packNumber(summary.uniqueParts || countDistinctBy(finalRows, (row) => row.partNumber || row.partNo || row._id), 0)],
+      ['Unique Users', packNumber(uniqueUsers, 0)],
+      ['Unique Devices', packNumber(uniqueDevices, 0)]
+    ]),
+    ...packMetricRows('Variance Summary', [
       ['Total Excess', packNumber(totalExcess, 0)],
       ['Total Short', packNumber(totalShort, 0)],
       ['Damage Count', packNumber(damageCount, 0)],
-      ['User Count', packNumber(uniqueUsers, 0)],
-      ['Scan Device Count', packNumber(uniqueDevices, 0)],
-      ['Sync Status', auditSyncStatus(registerCounts)]
+      ['Net Difference', packCurrency(totalVariance)],
+      ['Pending Sync', packNumber(registerCounts.pending || 0, 0)],
+      ['Failed Sync', packNumber(registerCounts.failed || 0, 0)],
+      ['Duplicate Sync', packNumber(registerCounts.duplicate || 0, 0)],
+      ['Movement Status', auditSyncStatus(registerCounts)]
     ]),
-    ...packMetricRows('Category Totals', [
-      ['HHML Parts Total', packNumber(categoryTotals.hhml, 0)],
-      ['Lubricant Total', packNumber(categoryTotals.lubricant, 0)],
-      ['Battery Total', packNumber(categoryTotals.battery, 0)],
-      ['Oil Total', packNumber(categoryTotals.oil, 0)]
-    ]),
-    ...packMetricRows('Movement Totals', [
+    ...packMetricRows('Movement Summary', [
       ['Fast Moving', packNumber(movementSummary.fastMovingCount || movementSummary.fastMovingParts || 0, 0)],
       ['Slow Moving', packNumber(movementSummary.slowMovingCount || movementSummary.slowMovingParts || 0, 0)],
       ['Dead Stock', packNumber(movementSummary.deadStockCount || movementSummary.deadStockParts || 0, 0)],
       ['Critical Shortage', packNumber(movementSummary.criticalShortageCount || movementSummary.criticalShortageParts || 0, 0)]
-    ])
+    ]),
+    ...packMetricRows('Category Summary', categoryRows.map((row) => ([
+      row.category,
+      `Parts ${packNumber(row.uniqueParts || row.parts || 0, 0)} | Qty ${packNumber(row.qty || 0, 0)} | Value ${packCurrency(row.value || 0)} | Share ${packNumber((row.share || 0) * 100, 2)}%`
+    ]))),
+    ...packMetricRows('Selected Reports Summary', selectedReportLabels(selectedReports).map((label) => ([
+      label,
+      'Included'
+    ])))
   ];
 }
 
@@ -1446,9 +1842,88 @@ function buildCategoryVarianceRows(data = {}) {
   }]);
 }
 
+function reconciliationStatusText(summary = {}) {
+  const net = Number(summary.netDifference || 0);
+  const shortValue = Number(summary.totalShortageValue || 0);
+  const excessValue = Number(summary.totalExcessValue || 0);
+  if (net === 0 && shortValue === 0 && excessValue === 0) return 'Balanced';
+  if (net > 0) return 'Excess';
+  if (net < 0) return 'Shortage';
+  return 'Review Required';
+}
+
+function reconciliationRemarksText(summary = {}) {
+  const status = reconciliationStatusText(summary);
+  if (status === 'Balanced') return 'No variance found in the selected reconciliation scope';
+  if (status === 'Excess') return 'Excess stock detected. Review category-wise mismatches before closure';
+  if (status === 'Shortage') return 'Shortage detected. Verify missing items and pending postings';
+  return 'Reconciliation requires manual review';
+}
+
+function buildReconciliationCategoryRows(report = {}) {
+  const rows = Array.isArray(report.rows) ? report.rows : [];
+  const categories = summarizeByCategory(rows, {
+    qtyResolver: (row) => firstNumericValue(row.actualStock, row.physicalQty, row.qty),
+    valueResolver: (row) => firstNumericValue(row.actualStockValue, row.finalInventoryValue, row.stockValue),
+    dmsQtyResolver: (row) => firstNumericValue(row.dmsStock, row.systemQty),
+    actualQtyResolver: (row) => firstNumericValue(row.actualStock, row.physicalQty, row.qty),
+    dmsValueResolver: (row) => firstNumericValue(row.dmsStockValue, 0),
+    actualValueResolver: (row) => firstNumericValue(row.actualStockValue, row.finalInventoryValue, row.stockValue),
+    shortValueResolver: (row) => firstNumericValue(row.shortageValue, 0),
+    excessValueResolver: (row) => firstNumericValue(row.excessValue, 0),
+    varianceQtyResolver: (row) => firstNumericValue(row.variance, row.varianceQty, 0),
+    varianceValueResolver: (row) => firstNumericValue(row.varianceDlc, row.varianceValue, row.netDifference, 0)
+  });
+  const aggregated = categories.map((row) => ({
+    category: row.category,
+    dmsQty: row.dmsQty,
+    actualQty: row.actualQty,
+    varianceQty: row.actualQty - row.dmsQty,
+    dmsValue: row.dmsValue,
+    actualValue: row.actualValue,
+    shortValue: row.shortValue,
+    excessValue: row.excessValue,
+    netDifference: row.varianceValue,
+    status: reconciliationStatusText({ netDifference: row.varianceValue, totalShortageValue: row.shortValue, totalExcessValue: row.excessValue })
+  }));
+  const totals = aggregated.reduce((summary, row) => ({
+    dmsQty: summary.dmsQty + Number(row.dmsQty || 0),
+    actualQty: summary.actualQty + Number(row.actualQty || 0),
+    varianceQty: summary.varianceQty + Number(row.varianceQty || 0),
+    dmsValue: summary.dmsValue + Number(row.dmsValue || 0),
+    actualValue: summary.actualValue + Number(row.actualValue || 0),
+    shortValue: summary.shortValue + Number(row.shortValue || 0),
+    excessValue: summary.excessValue + Number(row.excessValue || 0),
+    netDifference: summary.netDifference + Number(row.netDifference || 0)
+  }), {
+    dmsQty: 0,
+    actualQty: 0,
+    varianceQty: 0,
+    dmsValue: 0,
+    actualValue: 0,
+    shortValue: 0,
+    excessValue: 0,
+    netDifference: 0
+  });
+  aggregated.push({
+    category: 'Grand Total',
+    dmsQty: totals.dmsQty,
+    actualQty: totals.actualQty,
+    varianceQty: totals.varianceQty,
+    dmsValue: totals.dmsValue,
+    actualValue: totals.actualValue,
+    shortValue: totals.shortValue,
+    excessValue: totals.excessValue,
+    netDifference: totals.netDifference,
+    status: reconciliationStatusText({ netDifference: totals.netDifference, totalShortageValue: totals.shortValue, totalExcessValue: totals.excessValue }),
+    rowType: 'grandTotal'
+  });
+  return aggregated;
+}
+
 function buildReconciliationSummaryRows(report = {}) {
   const summary = report.summary || {};
-  return packMetricRows('Reconciliation', [
+  const rows = packMetricRows('Inventory Reconciliation Summary', [
     ['Dealer Code', summary.dealerCode || report.scope?.dealerCode || '-'],
     ['Audit ID', summary.auditId || report.scope?.auditId || '-'],
     ['Total Parts Uploaded', summary.totalPartsUploaded || 0],
@@ -1466,9 +1941,16 @@ function buildReconciliationSummaryRows(report = {}) {
     ['Total Shortage Value', packCurrency(summary.totalShortageValue || 0)],
     ['Total Excess Value', packCurrency(summary.totalExcessValue || 0)],
     ['Scanned But Not In DMS', summary.totalScannedButNotInDms || 0],
-    ['Net Difference', summary.netDifference || 0],
-    ['Mismatch Count', summary.mismatchCount || 0]
+    ['Net Difference', packCurrency(summary.netDifference || 0)],
+    ['Mismatch Count', summary.mismatchCount || 0],
+    ['Final Status', reconciliationStatusText(summary)],
+    ['Remarks', reconciliationRemarksText(summary)]
   ]);
+  if (rows.length >= 2) {
+    rows[rows.length - 2].kind = 'status';
+    rows[rows.length - 1].kind = 'remarks';
+  }
+  return rows;
 }
 
 async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
@@ -1521,34 +2003,34 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     scanRegisterRowsData
   ), {
     title: 'AUDIT SUMMARY',
-    orientation: 'portrait'
+    orientation: 'landscape'
   });
 
   if (normalized.includeDashboardSummary) {
     addMetricSheet(workbook, 'Dashboard Summary', buildDashboardSummaryRows(reportData, movementAnalysisData, scanRegisterRowsData), {
       title: 'DASHBOARD SUMMARY',
-      orientation: 'portrait'
+      orientation: 'landscape'
     });
   }
 
   if (normalized.includeAuditInformation) {
     addMetricSheet(workbook, 'Audit Information', buildAuditInformationRows(resolvedQuery, reportData), {
       title: 'AUDIT INFORMATION',
-      orientation: 'portrait'
+      orientation: 'landscape'
     });
   }
 
   if (normalized.includeDealerInformation) {
     addMetricSheet(workbook, 'Dealer Information', buildDealerInformationRows(reportData), {
       title: 'DEALER INFORMATION',
-      orientation: 'portrait'
+      orientation: 'landscape'
     });
   }
 
   if (normalized.includeScanStatistics) {
     addMetricSheet(workbook, 'Scan Statistics', buildScanStatisticsRows(reportData, scanRegisterRowsData), {
       title: 'SCAN STATISTICS',
-      orientation: 'portrait'
+      orientation: 'landscape'
     });
   }
 
@@ -1564,77 +2046,252 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     });
   }
 
+  const getStockSummaryData = () => (getStockSummaryData.cache || (getStockSummaryData.cache = reportModule.buildStockSummaryReport(resolvedQuery)));
+  const getPartwiseData = () => (getPartwiseData.cache || (getPartwiseData.cache = reportModule.buildPartwiseInventoryAuditReport(resolvedQuery)));
+  const getReconciliationData = () => (getReconciliationData.cache || (getReconciliationData.cache = reconciliationRoute.buildReconciliationReport(resolvedQuery)));
+  const buildDealerInfoRows = () => [
+    { label: 'Dealer Name', value: packText(selectedDealer.dealerName || reportData.summary?.[0]?.dealerName || resolvedQuery.dealerCode || '-') },
+    { label: 'Dealer Code', value: packText(selectedDealer.dealerCode || reportData.summary?.[0]?.dealerCode || resolvedQuery.dealerCode || '-') },
+    { label: 'Location', value: packText(selectedDealer.location || '-') },
+    { label: 'Auditor Name', value: packText(selectedDealer.auditorName || selectedAudit.auditorName || '-') },
+    { label: 'Brand', value: packText(selectedDealer.brand || '-') }
+  ];
+  const buildAuditInfoRows = () => [
+    { label: 'Audit ID', value: packText(selectedAudit.auditId || resolvedQuery.auditId || '-') },
+    { label: 'Audit Date', value: packText(selectedAudit.auditStartDate || selectedAudit.auditDate || reportData.summary?.[0]?.fromDate || resolvedQuery.fromDate || '-') },
+    { label: 'Audit End Date', value: packText(selectedAudit.auditClosedDate || selectedAudit.auditEndDate || reportData.summary?.[0]?.toDate || resolvedQuery.toDate || '-') },
+    { label: 'Generated By', value: generatedBy },
+    { label: 'Generated At', value: generatedAt },
+    { label: 'Selected Reports', value: packNumber(normalized.reports.length, 0) },
+    { label: 'Included Extras', value: selectedExtraLabels(normalized).join(', ') || '-' }
+  ];
+  const buildSummaryMetricsForReport = (reportKey, rows = [], context = {}) => {
+    const rowCount = rows.length;
+    const uniqueParts = countDistinctBy(rows, (row) => row.partNumber || row.partNo || row._id || row.upiCode || row.rawScan || row.rawScanValue || row.rawScanString);
+    const totalQty = sumBy(rows, (row) => firstNumericValue(row.qty, row.quantity, row.actualStock, row.physicalQty, row.dmsStock, row.totalQty, row.scanCount, row.totalScannedQuantity));
+    const totalValue = sumBy(rows, (row) => firstNumericValue(row.finalInventoryValue, row.stockValue, row.actualStockValue, row.dmsStockValue, row.totalDlcValue, row.excessValue, row.shortageValue, row.varianceDlc));
+    const movement = context.movementAnalysis && context.movementAnalysis.summary ? context.movementAnalysis.summary : {};
+    const registerCounts = context.registerCounts || countScanRegisterRows(rows);
+    switch (reportKey) {
+      case 'bin-wise-stock':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Unique Bins', value: packNumber(countDistinctBy(rows, (row) => row.bin || row.binLocation), 0) },
+          { label: 'Unique Parts', value: packNumber(uniqueParts, 0) },
+          { label: 'Total Qty', value: packNumber(totalQty, 0) }
+        ];
+      case 'user-dealer-wise':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Unique Users', value: packNumber(countDistinctBy(rows, (row) => row.userName || row.staffName || row.userId || row.loginId), 0) },
+          { label: 'Unique Dealers', value: packNumber(countDistinctBy(rows, (row) => row.dealerCode || row.dealerName), 0) },
+          { label: 'Scan Count', value: packNumber(sumBy(rows, (row) => firstNumericValue(row.scanCount, 0)), 0) }
+        ];
+      case 'raw-upi':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Unique Parts', value: packNumber(uniqueParts, 0) },
+          { label: 'Total Qty', value: packNumber(totalQty, 0) },
+          { label: 'Total Value', value: packCurrency(totalValue) }
+        ];
+      case 'scan-register':
+        return [
+          { label: 'Rows', value: packNumber(registerCounts.total || rowCount, 0) },
+          { label: 'Accepted', value: packNumber(registerCounts.accepted || 0, 0) },
+          { label: 'Pending', value: packNumber(registerCounts.pending || 0, 0) },
+          { label: 'Failed', value: packNumber(registerCounts.failed || 0, 0) },
+          { label: 'Duplicate', value: packNumber(registerCounts.duplicate || 0, 0) },
+          { label: 'Rejected', value: packNumber(registerCounts.rejected || 0, 0) }
+        ];
+      case 'invalid-scan-report':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Unique Reasons', value: packNumber(countDistinctBy(rows, (row) => row.reason), 0) },
+          { label: 'Unique Users', value: packNumber(countDistinctBy(rows, (row) => row.user || row.scannedBy), 0) },
+          { label: 'Unique Devices', value: packNumber(countDistinctBy(rows, (row) => row.device), 0) }
+        ];
+      case 'short':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Total Short Qty', value: packNumber(sumBy(rows, (row) => firstNumericValue(row.shortQty, row.shortageQty, row.short, row.variance && row.variance < 0 ? Math.abs(row.variance) : 0)), 0) },
+          { label: 'Total Short Value', value: packCurrency(sumBy(rows, (row) => firstNumericValue(row.shortageValue, row.varianceDlc, row.varianceValue))) }
+        ];
+      case 'excess':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Total Excess Qty', value: packNumber(sumBy(rows, (row) => firstNumericValue(row.excessQty, row.excess, row.variance && row.variance > 0 ? row.variance : 0)), 0) },
+          { label: 'Total Excess Value', value: packCurrency(sumBy(rows, (row) => firstNumericValue(row.excessValue, row.varianceDlc, row.varianceValue))) }
+        ];
+      case 'damage':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Damage Qty', value: packNumber(sumBy(rows, (row) => firstNumericValue(row.damageQty, 0)), 0) },
+          { label: 'Damage Value', value: packCurrency(sumBy(rows, (row) => firstNumericValue(row.damageValue, row.excessValue, row.shortageValue))) }
+        ];
+      case 'movement_wise_stock_analysis':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Fast Moving', value: packNumber(movement.fastMovingCount || movement.fastMovingParts || 0, 0) },
+          { label: 'Slow Moving', value: packNumber(movement.slowMovingCount || movement.slowMovingParts || 0, 0) },
+          { label: 'Dead Stock', value: packNumber(movement.deadStockCount || movement.deadStockParts || 0, 0) },
+          { label: 'Critical Shortage', value: packNumber(movement.criticalShortageCount || movement.criticalShortageParts || 0, 0) }
+        ];
+      case 'category-wise-variance-summary':
+        return [
+          { label: 'Categories', value: packNumber(rowCount, 0) },
+          { label: 'Total Scanned Parts', value: packNumber(sumBy(rows, (row) => firstNumericValue(row.totalScannedParts, 0)), 0) },
+          { label: 'Total Scanned Qty', value: packNumber(sumBy(rows, (row) => firstNumericValue(row.totalScannedQuantity, 0)), 0) },
+          { label: 'Variance Value', value: packCurrency(sumBy(rows, (row) => firstNumericValue(row.sumVarianceOnDLC, 0))) }
+        ];
+      case 'partwise-inventory-audit':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Unique Categories', value: packNumber(countDistinctBy(rows, (row) => row.productCategory || row.category), 0) },
+          { label: 'Total Qty', value: packNumber(totalQty, 0) },
+          { label: 'Total Value', value: packCurrency(totalValue) },
+          { label: 'Net Difference', value: packCurrency(sumBy(rows, (row) => firstNumericValue(row.varianceDlc, row.netDifference, row.varianceValue))) }
+        ];
+      case 'parts-inventory-refresh-template':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Unique Parts', value: packNumber(uniqueParts, 0) },
+          { label: 'Total Qty', value: packNumber(totalQty, 0) }
+        ];
+      case 'dead-stock-report':
+      case 'fast-moving-report':
+      case 'slow-moving-report':
+      case 'critical-shortage-report':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Total Qty', value: packNumber(totalQty, 0) },
+          { label: 'Total Value', value: packCurrency(totalValue) }
+        ];
+      case 'dealer-reconciliation-report':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Matched', value: packNumber(countRows(rows, (row) => row.status === 'Matched'), 0) },
+          { label: 'Shortage', value: packNumber(countRows(rows, (row) => row.status === 'Shortage'), 0) },
+          { label: 'Excess', value: packNumber(countRows(rows, (row) => row.status === 'Excess' || row.notInDms), 0) }
+        ];
+      default:
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Unique Parts', value: packNumber(uniqueParts, 0) },
+          { label: 'Total Qty', value: packNumber(totalQty, 0) },
+          { label: 'Total Value', value: packCurrency(totalValue) }
+        ];
+    }
+  };
+
   const packBuildMap = {
     'bin-wise-stock': async () => ({
       title: 'BIN WISE STOCK REPORT',
       kind: 'table',
       columns: BIN_COLUMNS,
-      rows: selectRows(reportData, 'bin-wise-stock')
+      rows: selectRows(reportData, 'bin-wise-stock'),
+      dealerInfo: buildDealerInfoRows(),
+      auditInfo: buildAuditInfoRows(),
+      summaryMetrics: buildSummaryMetricsForReport('bin-wise-stock', selectRows(reportData, 'bin-wise-stock')),
+      reportKey: 'bin-wise-stock'
     }),
     'user-dealer-wise': async () => ({
       title: 'USER & DEALER WISE REPORT',
       kind: 'table',
       columns: USER_DEALER_COLUMNS,
-      rows: selectRows(reportData, 'user-dealer-wise')
+      rows: selectRows(reportData, 'user-dealer-wise'),
+      dealerInfo: buildDealerInfoRows(),
+      auditInfo: buildAuditInfoRows(),
+      summaryMetrics: buildSummaryMetricsForReport('user-dealer-wise', selectRows(reportData, 'user-dealer-wise')),
+      reportKey: 'user-dealer-wise'
     }),
     'raw-upi': async () => ({
       title: 'RAW UPI REPORT',
       kind: 'table',
       columns: RAW_UPI_COLUMNS,
-      rows: Array.isArray(reportData.rawLogRows) ? reportData.rawLogRows : []
+      rows: Array.isArray(reportData.rawLogRows) ? reportData.rawLogRows : [],
+      dealerInfo: buildDealerInfoRows(),
+      auditInfo: buildAuditInfoRows(),
+      summaryMetrics: buildSummaryMetricsForReport('raw-upi', Array.isArray(reportData.rawLogRows) ? reportData.rawLogRows : []),
+      reportKey: 'raw-upi'
     }),
     'scan-register': async () => ({
       title: 'SCAN REGISTER REPORT',
       kind: 'table',
       columns: SCAN_REGISTER_COLUMNS,
-      rows: scanRegisterRowsData
+      rows: scanRegisterRowsData,
+      dealerInfo: buildDealerInfoRows(),
+      auditInfo: buildAuditInfoRows(),
+      summaryMetrics: buildSummaryMetricsForReport('scan-register', scanRegisterRowsData, { registerCounts: countScanRegisterRows(scanRegisterRowsData) }),
+      reportKey: 'scan-register'
     }),
-    'invalid-scan-report': async () => ({
-      title: 'INVALID SCAN REPORT',
-      kind: 'table',
-      columns: INVALID_SCAN_COLUMNS,
-      rows: await rejectedReportRows(resolvedQuery)
-    }),
+    'invalid-scan-report': async () => {
+      const rejectedRows = await rejectedReportRows(resolvedQuery);
+      return {
+        title: 'INVALID SCAN REPORT',
+        kind: 'table',
+        columns: INVALID_SCAN_COLUMNS,
+        rows: rejectedRows,
+        dealerInfo: buildDealerInfoRows(),
+        auditInfo: buildAuditInfoRows(),
+        summaryMetrics: buildSummaryMetricsForReport('invalid-scan-report', rejectedRows),
+        reportKey: 'invalid-scan-report'
+      };
+    },
     'stock-summary': async () => {
-      const stockSummary = await reportModule.buildStockSummaryReport(resolvedQuery);
+      const stockSummary = await getStockSummaryData();
       return {
         title: 'STOCK SUMMARY',
-        kind: 'table',
-        columns: stockSummary.columns || [],
-        rows: stockSummary.rows || []
+        kind: 'stock-summary',
+        data: stockSummary
       };
     },
     short: async () => {
-      const partwise = await reportModule.buildPartwiseInventoryAuditReport(resolvedQuery);
+      const partwise = await getPartwiseData();
       return {
         title: 'SHORT REPORT',
         kind: 'table',
         columns: partwise.columns || [],
-        rows: (partwise.rows || []).filter((row) => String(row.status || '').toLowerCase() === 'short')
+        rows: (partwise.rows || []).filter((row) => String(row.status || '').toLowerCase() === 'short'),
+        dealerInfo: buildDealerInfoRows(),
+        auditInfo: buildAuditInfoRows(),
+        summaryMetrics: buildSummaryMetricsForReport('short', (partwise.rows || []).filter((row) => String(row.status || '').toLowerCase() === 'short')),
+        reportKey: 'short'
       };
     },
     excess: async () => {
-      const partwise = await reportModule.buildPartwiseInventoryAuditReport(resolvedQuery);
+      const partwise = await getPartwiseData();
       return {
         title: 'EXCESS REPORT',
         kind: 'table',
         columns: partwise.columns || [],
-        rows: (partwise.rows || []).filter((row) => ['excess', 'extra part'].includes(String(row.status || '').toLowerCase()))
+        rows: (partwise.rows || []).filter((row) => ['excess', 'extra part'].includes(String(row.status || '').toLowerCase())),
+        dealerInfo: buildDealerInfoRows(),
+        auditInfo: buildAuditInfoRows(),
+        summaryMetrics: buildSummaryMetricsForReport('excess', (partwise.rows || []).filter((row) => ['excess', 'extra part'].includes(String(row.status || '').toLowerCase()))),
+        reportKey: 'excess'
       };
     },
     movement_wise_stock_analysis: async () => ({
       title: 'MOVEMENT WISE STOCK ANALYSIS',
       kind: 'table',
       columns: movementAnalysisData.columns || [],
-      rows: movementAnalysisData.rows || []
+      rows: movementAnalysisData.rows || [],
+      dealerInfo: buildDealerInfoRows(),
+      auditInfo: buildAuditInfoRows(),
+      summaryMetrics: buildSummaryMetricsForReport('movement_wise_stock_analysis', movementAnalysisData.rows || [], { movementAnalysis: movementAnalysisData }),
+      reportKey: 'movement_wise_stock_analysis'
     }),
     damage: async () => {
-      const partwise = await reportModule.buildPartwiseInventoryAuditReport(resolvedQuery);
+      const partwise = await getPartwiseData();
       return {
         title: 'DAMAGE REPORT',
         kind: 'table',
         columns: partwise.columns || [],
-        rows: (partwise.rows || []).filter((row) => Number(row.damageQty || 0) > 0)
+        rows: (partwise.rows || []).filter((row) => Number(row.damageQty || 0) > 0),
+        dealerInfo: buildDealerInfoRows(),
+        auditInfo: buildAuditInfoRows(),
+        summaryMetrics: buildSummaryMetricsForReport('damage', (partwise.rows || []).filter((row) => Number(row.damageQty || 0) > 0)),
+        reportKey: 'damage'
       };
     },
     'category-wise-variance-summary': async () => {
@@ -1643,16 +2300,24 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         title: 'CATEGORY WISE VARIANCE SUMMARY',
         kind: 'table',
         columns: CATEGORY_VARIANCE_COLUMNS,
-        rows: buildCategoryVarianceRows(category)
+        rows: buildCategoryVarianceRows(category),
+        dealerInfo: buildDealerInfoRows(),
+        auditInfo: buildAuditInfoRows(),
+        summaryMetrics: buildSummaryMetricsForReport('category-wise-variance-summary', buildCategoryVarianceRows(category)),
+        reportKey: 'category-wise-variance-summary'
       };
     },
     'partwise-inventory-audit': async () => {
-      const partwise = await reportModule.buildPartwiseInventoryAuditReport(resolvedQuery);
+      const partwise = await getPartwiseData();
       return {
         title: 'PARTWISE INVENTORY AUDIT REPORT',
         kind: 'table',
         columns: partwise.columns || [],
-        rows: partwise.rows || []
+        rows: partwise.rows || [],
+        dealerInfo: buildDealerInfoRows(),
+        auditInfo: buildAuditInfoRows(),
+        summaryMetrics: buildSummaryMetricsForReport('partwise-inventory-audit', partwise.rows || []),
+        reportKey: 'partwise-inventory-audit'
       };
     },
     'parts-inventory-refresh-template': async () => {
@@ -1689,46 +2354,90 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
             record[column.key] = (row.binLocations || [])[index] || '';
           });
           return record;
-        })
+        }),
+        dealerInfo: buildDealerInfoRows(),
+        auditInfo: buildAuditInfoRows(),
+        summaryMetrics: buildSummaryMetricsForReport('parts-inventory-refresh-template', rows),
+        reportKey: 'parts-inventory-refresh-template'
       };
     },
-    'reconciliation-report': async () => ({
-      title: 'RECONCILIATION REPORT',
-      kind: 'metrics',
-      rows: buildReconciliationSummaryRows(await reconciliationRoute.buildReconciliationReport(resolvedQuery))
-    }),
+    'reconciliation-report': async () => {
+      const reconciliation = await getReconciliationData();
+      return {
+        title: 'RECONCILIATION REPORT',
+        kind: 'metrics',
+        rows: buildReconciliationSummaryRows(reconciliation),
+        tables: [{
+          title: 'CATEGORY-WISE RECONCILIATION',
+          columns: [
+            { header: 'CATEGORY', key: 'category', width: 24 },
+            { header: 'DMS QTY', key: 'dmsQty', width: 12, numFmt: '#,##0' },
+            { header: 'ACTUAL QTY', key: 'actualQty', width: 12, numFmt: '#,##0' },
+            { header: 'VARIANCE QTY', key: 'varianceQty', width: 14, numFmt: '#,##0' },
+            { header: 'DMS VALUE (DLC)', key: 'dmsValue', width: 18, numFmt: PACK_CURRENCY_FORMAT },
+            { header: 'ACTUAL VALUE (DLC)', key: 'actualValue', width: 20, numFmt: PACK_CURRENCY_FORMAT },
+            { header: 'SHORT VALUE', key: 'shortValue', width: 14, numFmt: PACK_CURRENCY_FORMAT },
+            { header: 'EXCESS VALUE', key: 'excessValue', width: 14, numFmt: PACK_CURRENCY_FORMAT },
+            { header: 'NET DIFFERENCE', key: 'netDifference', width: 16, numFmt: PACK_CURRENCY_FORMAT },
+            { header: 'STATUS', key: 'status', width: 14 }
+          ],
+          rows: buildReconciliationCategoryRows(reconciliation)
+        }],
+        reportKey: 'reconciliation-report'
+      };
+    },
     'dealer-reconciliation-report': async () => {
-      const reconciliation = await reconciliationRoute.buildReconciliationReport(resolvedQuery);
+      const reconciliation = await getReconciliationData();
       return {
         title: 'DEALER RECONCILIATION REPORT',
         kind: 'table',
         columns: RECONCILIATION_COLUMNS,
-        rows: reconciliation.rows || []
+        rows: reconciliation.rows || [],
+        dealerInfo: buildDealerInfoRows(),
+        auditInfo: buildAuditInfoRows(),
+        summaryMetrics: buildSummaryMetricsForReport('dealer-reconciliation-report', reconciliation.rows || []),
+        reportKey: 'dealer-reconciliation-report'
       };
     },
     'dead-stock-report': async () => ({
       title: 'DEAD STOCK REPORT',
       kind: 'table',
       columns: movementAnalysisData.columns || [],
-      rows: (movementAnalysisData.sections && movementAnalysisData.sections.deadStock) || []
+      rows: (movementAnalysisData.sections && movementAnalysisData.sections.deadStock) || [],
+      dealerInfo: buildDealerInfoRows(),
+      auditInfo: buildAuditInfoRows(),
+      summaryMetrics: buildSummaryMetricsForReport('dead-stock-report', (movementAnalysisData.sections && movementAnalysisData.sections.deadStock) || []),
+      reportKey: 'dead-stock-report'
     }),
     'fast-moving-report': async () => ({
       title: 'FAST MOVING REPORT',
       kind: 'table',
       columns: movementAnalysisData.columns || [],
-      rows: (movementAnalysisData.sections && movementAnalysisData.sections.fastMoving) || []
+      rows: (movementAnalysisData.sections && movementAnalysisData.sections.fastMoving) || [],
+      dealerInfo: buildDealerInfoRows(),
+      auditInfo: buildAuditInfoRows(),
+      summaryMetrics: buildSummaryMetricsForReport('fast-moving-report', (movementAnalysisData.sections && movementAnalysisData.sections.fastMoving) || []),
+      reportKey: 'fast-moving-report'
     }),
     'slow-moving-report': async () => ({
       title: 'SLOW MOVING REPORT',
       kind: 'table',
       columns: movementAnalysisData.columns || [],
-      rows: (movementAnalysisData.sections && movementAnalysisData.sections.slowMoving) || []
+      rows: (movementAnalysisData.sections && movementAnalysisData.sections.slowMoving) || [],
+      dealerInfo: buildDealerInfoRows(),
+      auditInfo: buildAuditInfoRows(),
+      summaryMetrics: buildSummaryMetricsForReport('slow-moving-report', (movementAnalysisData.sections && movementAnalysisData.sections.slowMoving) || []),
+      reportKey: 'slow-moving-report'
     }),
     'critical-shortage-report': async () => ({
       title: 'CRITICAL SHORTAGE REPORT',
       kind: 'table',
       columns: movementAnalysisData.columns || [],
-      rows: (movementAnalysisData.sections && movementAnalysisData.sections.criticalShortage) || []
+      rows: (movementAnalysisData.sections && movementAnalysisData.sections.criticalShortage) || [],
+      dealerInfo: buildDealerInfoRows(),
+      auditInfo: buildAuditInfoRows(),
+      summaryMetrics: buildSummaryMetricsForReport('critical-shortage-report', (movementAnalysisData.sections && movementAnalysisData.sections.criticalShortage) || []),
+      reportKey: 'critical-shortage-report'
     })
   };
 
@@ -1749,12 +2458,41 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
 
   selectedSpecs.forEach((spec) => {
     if (!spec) return;
-    if (spec.kind === 'metrics') {
-      addMetricSheet(workbook, spec.title, spec.rows || [], { title: spec.title });
+    if (spec.kind === 'stock-summary') {
+      reportModule.addStockSummarySheet(workbook, spec.data || {});
       return;
     }
+    if (spec.kind === 'metrics') {
+      addMetricSheet(workbook, spec.title, spec.rows || [], {
+        title: spec.title,
+        tables: spec.tables || [],
+        sectionFills: spec.sectionFills || {},
+        orientation: spec.orientation || 'landscape'
+      });
+      return;
+    }
+    const summaryMetrics = Array.isArray(spec.summaryMetrics) && spec.summaryMetrics.length
+      ? spec.summaryMetrics
+      : buildSummaryMetricsForReport(
+        spec.reportKey || '',
+        spec.rows || [],
+        { movementAnalysis: movementAnalysisData, registerCounts: countScanRegisterRows(scanRegisterRowsData) }
+      );
     addTableSheet(workbook, spec.title, spec.columns || [], spec.rows || [], {
-      emptyMessage: spec.emptyMessage || 'No Data Available'
+      title: spec.title,
+      dealerInfo: spec.dealerInfo || buildDealerInfoRows(),
+      auditInfo: spec.auditInfo || buildAuditInfoRows(),
+      summaryMetrics,
+      reportData,
+      generatedBy,
+      generatedAt,
+      dealerTitle: 'Dealer Details',
+      auditTitle: 'Audit Details',
+      summaryTitle: spec.summaryTitle || 'Report Summary',
+      tableTitle: spec.tableTitle || spec.title,
+      emptyMessage: spec.emptyMessage || 'No Data Available',
+      orientation: spec.orientation || 'landscape',
+      maxWidth: spec.maxWidth
     });
   });
 
