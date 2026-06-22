@@ -22,6 +22,11 @@ const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogu
 
 const autoTable = autoTableModule.default || autoTableModule;
 
+function reportErrorStatus(error) {
+  const status = Number(error && (error.statusCode || error.status));
+  return Number.isFinite(status) && status >= 400 ? status : 500;
+}
+
 function money(value) {
   return Math.round(Number(value || 0) * 100) / 100;
 }
@@ -2167,7 +2172,11 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     reconciliationRoute.buildMovementAnalysisReport(resolvedQuery)
   ]);
   const selectedDealer = reportData.selectedDealer || {};
-  const selectedAudit = reportData.selectedAudit || (resolvedQuery.auditId && Array.isArray(reportData.audits) ? reportData.audits.find((audit) => clean(audit.auditId) === clean(resolvedQuery.auditId)) : null) || null;
+  const selectedAudit = reportData.selectedAudit
+    || (resolvedQuery.auditId && Array.isArray(reportData.audits)
+      ? reportData.audits.find((audit) => audit && clean(audit.auditId) === clean(resolvedQuery.auditId))
+      : null)
+    || {};
   const generatedBy = clean(user.name || user.username || user.email || user.id || 'System');
   const generatedAt = formatIstDateTime(new Date());
   const getStockSummaryData = () => (getStockSummaryData.cache || (getStockSummaryData.cache = reportModule.buildStockSummaryReport(resolvedQuery)));
