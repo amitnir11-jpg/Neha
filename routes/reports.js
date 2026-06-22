@@ -13,6 +13,7 @@ const { formatDateLikeFields, formatIstDateTime, parseIstFilterDate } = require(
 const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
 const { reportTotals, signedScanQuantity } = require('../utils/reportTotals');
+const { stockValuationTotals } = require('../utils/stockValuation');
 const categoryResolver = require('../utils/categoryResolver');
 const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
   ? categoryResolver.canonicalizePartCategory
