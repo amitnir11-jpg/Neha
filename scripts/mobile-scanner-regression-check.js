@@ -15,7 +15,9 @@ assert.ok(scanHtml.includes(`/scan.js?v=${build}`), 'Scanner script build must m
 assert.ok(scanHtml.includes(`/scan.css?v=${build}`), 'Scanner stylesheet build must match HTML');
 assert.ok(mobileRoute.includes(`const WEB_SCANNER_BUILD = '${build}'`), 'Backend scanner build must match frontend');
 assert.ok(server.includes("req.path === '/mobile/version'"), 'Scanner version check must work without a database connection');
-assert.ok(scanCss.includes('object-fit: contain'), 'Camera preview must show the full uncropped frame');
+assert.ok(scanCss.includes('object-fit: cover'), 'Camera preview must fill the frame without black bars');
+assert.ok(scanHtml.includes('id="lastScanStatus"'), 'Last scan status line must be present');
+assert.ok(scanHtml.includes('id="lastScanSync"'), 'Last scan sync line must be present');
 assert.ok(scanJs.includes("api('/api/scans/process'"), 'Scanner must use the common process API');
 assert.ok(!scanJs.includes("api('/api/mobile/process'"), 'Legacy mobile process API must not be used');
 assert.ok(!scanJs.includes("api('/api/mobile/sync-batch'"), 'Legacy mobile batch API must not be used');

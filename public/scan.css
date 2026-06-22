@@ -506,7 +506,8 @@ a {
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
+  object-position: center center;
   transform: none;
   z-index: 1;
   opacity: 0;
@@ -908,56 +909,56 @@ a {
 .scan-page.scanner-active .camera-card,
 .scan-page.scanner-active .summary-card,
 .scan-page.scanner-active .history-card {
-  padding: 9px;
-  border-radius: 14px;
+  padding: 8px;
+  border-radius: 12px;
 }
 
 .scan-page.scanner-active .camera-head {
-  margin-bottom: 7px;
-  gap: 6px;
+  margin-bottom: 6px;
+  gap: 5px;
 }
 
 .scan-page.scanner-active .camera-head h3 {
   margin-top: 2px;
-  font-size: 1rem;
+  font-size: 0.98rem;
   line-height: 1.1;
 }
 
 .scan-page.scanner-active .camera-frame {
-  height: clamp(220px, 42vh, 390px);
+  height: clamp(206px, 38vh, 324px);
   min-height: 0;
   max-height: none;
-  aspect-ratio: auto;
-  border-radius: 14px;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
 }
 
 .scan-page.scanner-active .camera-overlay {
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
-  padding: 7px 9px;
+  left: 7px;
+  right: 7px;
+  bottom: 7px;
+  padding: 6px 8px;
 }
 
 .scan-page.scanner-active .camera-overlay span {
-  font-size: 0.8rem;
+  font-size: 0.78rem;
 }
 
 .scan-page.scanner-active .camera-overlay small {
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   line-height: 1.2;
 }
 
 .scan-page.scanner-active .control-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 7px;
+  gap: 5px;
+  margin-top: 6px;
 }
 
 .scan-page.scanner-active .control-row .btn {
-  min-height: 36px;
-  padding: 7px 8px;
-  font-size: 0.76rem;
+  min-height: 34px;
+  padding: 6px 7px;
+  font-size: 0.75rem;
   width: 100%;
 }
 
@@ -967,7 +968,7 @@ a {
 }
 
 .scan-page.scanner-active .side-stack {
-  gap: 8px;
+  gap: 7px;
 }
 
 .scan-page.scanner-active .secondary-summary {
@@ -975,24 +976,34 @@ a {
 }
 
 .scan-page.scanner-active .last-scan-card {
-  gap: 4px;
+  gap: 3px;
   border-color: rgba(37, 99, 235, 0.16);
 }
 
 .scan-page.scanner-active .last-scan-card strong {
-  font-size: 0.96rem;
+  font-size: 0.94rem;
   line-height: 1.2;
   word-break: break-word;
 }
 
 .scan-page.scanner-active .last-scan-card p {
   margin: 0;
-  font-size: 0.78rem;
-  line-height: 1.25;
+  font-size: 0.74rem;
+  line-height: 1.22;
+}
+
+.scan-page.scanner-active .last-scan-status {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.scan-page.scanner-active .last-scan-sync {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .scan-page.scanner-active .history-card {
-  gap: 7px;
+  gap: 6px;
 }
 
 .scan-page.scanner-active .panel-title.compact {
@@ -1000,7 +1011,7 @@ a {
 }
 
 .scan-page.scanner-active .history-card h3 {
-  font-size: 0.96rem;
+  font-size: 0.94rem;
 }
 
 .scan-page.scanner-active .history-note {
@@ -1010,7 +1021,7 @@ a {
 }
 
 .scan-page.scanner-active .table-wrap {
-  border-radius: 16px;
+  border-radius: 14px;
 }
 
 .scan-page.scanner-active .scan-table {
@@ -1020,8 +1031,8 @@ a {
 
 .scan-page.scanner-active .scan-table th,
 .scan-page.scanner-active .scan-table td {
-  padding: 6px 5px;
-  font-size: 0.72rem;
+  padding: 5px 4px;
+  font-size: 0.7rem;
   word-break: break-word;
 }
 
@@ -1033,12 +1044,12 @@ a {
 @media (max-width: 640px) {
   .scan-page.scanner-active .app-shell {
     width: 100%;
-    padding: 4px 5px 12px;
+    padding: 3px 4px 10px;
   }
 
   .scan-page.scanner-active .scanner-panel {
-    padding: 7px;
-    border-radius: 14px;
+    padding: 6px;
+    border-radius: 12px;
   }
 
   .scan-page.scanner-active .scanner-header,

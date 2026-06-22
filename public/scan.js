@@ -1,6 +1,6 @@
 (function () {
-  const APP_VERSION = 'Daksh Mobile Scanner v1.2.0';
-  const CACHE_VERSION = '20260622-scanner-native-queue-v3';
+  const APP_VERSION = 'Daksh Mobile Scanner v1.2.1';
+  const CACHE_VERSION = '20260622-scanner-native-queue-v4';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -1901,6 +1901,9 @@
     if (!row || !Object.keys(row).length) {
       byId('lastScanTitle').textContent = 'No recent scan';
       byId('lastScanMeta').textContent = 'Live recent scans will appear here.';
+      byId('lastScanStatus').textContent = 'Ready to scan';
+      byId('lastScanSync').textContent = '';
+      byId('lastScanSync').hidden = true;
       return;
     }
     const part = rowPart(row);
@@ -1917,21 +1920,30 @@
       : status === 'pending'
         ? (networkPending ? 'Network pending' : 'Queued')
       : status === 'duplicate' || status === 'failed-duplicate'
-        ? (errorText || 'Duplicate rejected')
+        ? 'Duplicate'
       : status === 'rejected' || status === 'invalid'
           ? 'Rejected'
       : status === 'failed'
           ? (networkPending ? 'Network pending' : `Failed${errorText ? `: ${errorText}` : ''}`)
           : 'Queued';
+    const syncText = status === 'duplicate' || status === 'failed-duplicate'
+      ? 'Synced'
+      : status === 'pending'
+        ? (networkPending ? 'Network pending' : 'Saved locally')
+        : status === 'synced'
+          ? ''
+          : '';
     byId('lastScanTitle').textContent = description || part || 'Scan captured';
     byId('lastScanMeta').textContent = [
       part ? `Part ${part}` : '',
       mode,
       `Qty ${fmtNumber(qty)}`,
       bin ? `Bin ${bin}` : '',
-      mrp > 0 ? `MRP ${fmtNumber(mrp)}` : '',
-      statusText
+      mrp > 0 ? `MRP ${fmtNumber(mrp)}` : ''
     ].filter(Boolean).join(' · ');
+    byId('lastScanStatus').textContent = statusText;
+    byId('lastScanSync').textContent = syncText;
+    byId('lastScanSync').hidden = !syncText;
   }
 
   function applyRecordToUi(record) {
