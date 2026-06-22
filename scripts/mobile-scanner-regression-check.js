@@ -19,7 +19,8 @@ assert.ok(scanCss.includes('object-fit: contain'), 'Camera preview must show the
 assert.ok(scanJs.includes("api('/api/scans/process'"), 'Scanner must use the common process API');
 assert.ok(!scanJs.includes("api('/api/mobile/process'"), 'Legacy mobile process API must not be used');
 assert.ok(!scanJs.includes("api('/api/mobile/sync-batch'"), 'Legacy mobile batch API must not be used');
-assert.ok(scanJs.includes('state.pendingDecodeQueue.push(raw)'), 'Distinct scans must queue while a save is running');
+assert.ok(scanJs.includes("await saveRecord(record, { silent: true, deferSync: false })"), 'Scanner must queue decoded scans locally before sync');
+assert.ok(!scanJs.includes('pendingDecodeQueue'), 'Legacy pending decode queue should not be used');
 
 const initStart = scanJs.indexOf('async function init()');
 const cameraStart = scanJs.indexOf('requestAutoCameraStart({ focusBin: false });', initStart);

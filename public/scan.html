@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>Daksh Scan</title>
-  <link rel="stylesheet" href="/scan.css?v=20260622-scanner-reliability-v2">
+  <link rel="stylesheet" href="/scan.css?v=20260622-scanner-native-queue-v3">
 </head>
 <body class="scan-page">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -115,25 +115,18 @@
               <span class="panel-tag">Camera Scanner</span>
               <h3>Scan QR / barcode</h3>
             </div>
-            <div class="camera-tools">
-              <select id="cameraSelect" class="camera-select" aria-label="Camera device"></select>
-              <button id="refreshCamerasBtn" class="btn btn-secondary btn-small" type="button">Refresh</button>
-            </div>
           </div>
 
           <div class="camera-frame">
             <video id="cameraPreview" playsinline muted autoplay></video>
           </div>
           <div class="camera-overlay">
-            <span id="cameraState">Camera starts automatically after login</span>
-            <small id="cameraHint">QR can be anywhere in view and rotated in any direction.</small>
+            <span id="cameraState">Ready to scan</span>
+            <small id="cameraHint">Ready to scan</small>
           </div>
 
           <div class="control-row">
-            <button id="startScanBtn" class="btn btn-primary" type="button">Start Camera</button>
-            <button id="torchBtn" class="btn btn-secondary" type="button" hidden disabled>Torch</button>
-            <button id="pauseScanBtn" class="btn btn-secondary" type="button">Pause</button>
-            <button id="resumeScanBtn" class="btn btn-secondary" type="button">Resume</button>
+            <button id="startScanBtn" class="btn btn-primary" type="button">Camera On</button>
             <button id="manualBtn" class="btn btn-secondary" type="button">Manual Entry</button>
             <button id="syncNowBtn" class="btn btn-primary" type="button">Sync Now</button>
           </div>
@@ -255,6 +248,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="/config.js"></script>
-  <script src="/scan.js?v=20260622-scanner-reliability-v2"></script>
+  <script src="/scan.js?v=20260622-scanner-native-queue-v3"></script>
 </body>
 </html>

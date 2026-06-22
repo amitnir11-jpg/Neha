@@ -490,21 +490,6 @@ a {
   margin-top: 6px;
 }
 
-.camera-tools {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.camera-select {
-  min-width: 160px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid var(--line-strong);
-  color: var(--text);
-  background: #f8fafc;
-}
-
 .camera-frame {
   position: relative;
   border-radius: 18px;
@@ -779,16 +764,6 @@ a {
     justify-content: flex-start;
   }
 
-  .camera-select {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .camera-tools {
-    width: 100%;
-    flex-direction: column;
-    align-items: stretch;
-  }
 }
 
 @media (max-width: 640px) {
@@ -948,16 +923,6 @@ a {
   line-height: 1.1;
 }
 
-.scan-page.scanner-active .camera-tools {
-  display: none;
-}
-
-.scan-page.scanner-active .camera-select {
-  min-height: 40px;
-  padding: 8px 10px;
-  border-radius: 12px;
-}
-
 .scan-page.scanner-active .camera-frame {
   height: clamp(220px, 42vh, 390px);
   min-height: 0;
@@ -999,11 +964,6 @@ a {
 .scan-page.scanner-active #startScanBtn,
 .scan-page.scanner-active #syncNowBtn {
   grid-column: auto;
-}
-
-.scan-page.scanner-active #pauseScanBtn,
-.scan-page.scanner-active #resumeScanBtn {
-  display: none;
 }
 
 .scan-page.scanner-active .side-stack {
