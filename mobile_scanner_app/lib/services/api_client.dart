@@ -10,7 +10,7 @@ import '../models/scan_record.dart';
 import '../models/session.dart';
 import 'settings_store.dart';
 
-const mobileAppVersionName = 'Daksh Mobile Scanner v1.0.5';
+const mobileAppVersionName = 'Daksh Scan v1.1.0';
 
 class ApiException implements Exception {
   ApiException(this.message,
@@ -274,16 +274,16 @@ class ApiClient {
 
   Future<List<ScanRecord>> recentScans(
       {int limit = 10, String dealerCode = ''}) async {
-    final effectiveDealerCode = dealerCode.isNotEmpty
-        ? dealerCode
-        : await settings.dealerCode;
+    final effectiveDealerCode =
+        dealerCode.isNotEmpty ? dealerCode : await settings.dealerCode;
     final query = <String, String>{'limit': limit.toString()};
     if (effectiveDealerCode.isNotEmpty) {
       query['dealerCode'] = effectiveDealerCode;
     }
     final data = await _request(
         '/api/mobile/reports/last-scans?${Uri(queryParameters: query).query}');
-    final rows = (data['records'] ?? data['rows'] ?? data['data'] ?? []) as List<dynamic>;
+    final rows = (data['records'] ?? data['rows'] ?? data['data'] ?? [])
+        as List<dynamic>;
     return rows
         .whereType<Map>()
         .map((row) => ScanRecord.fromServerMap(Map<String, dynamic>.from(row)))

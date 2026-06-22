@@ -37,10 +37,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   final _syncService = SyncService();
   final _defaultBinController = TextEditingController();
   final _cameraController = MobileScannerController(
-    cameraResolution: const Size(640, 480),
-    detectionSpeed: DetectionSpeed.normal,
-    detectionTimeoutMs: 80,
+    cameraResolution: const Size(1280, 720),
+    detectionSpeed: DetectionSpeed.noDuplicates,
+    detectionTimeoutMs: 120,
     facing: CameraFacing.back,
+    useNewCameraSelector: true,
     formats: const [
       BarcodeFormat.qrCode,
       BarcodeFormat.code128,
@@ -566,14 +567,37 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     return Colors.orange;
   }
 
+  String _scanSecondaryLine(ScanRecord scan) {
+    if (scan.status == 'Duplicate') {
+      return scan.serverSyncId.isNotEmpty ? 'Synced' : 'Duplicate';
+    }
+    if (scan.status == 'Failed' && scan.errorMessage.isNotEmpty) {
+      return scan.errorMessage;
+    }
+    if (scan.serverSyncId.isNotEmpty && scan.status != 'Synced') {
+      return 'Synced';
+    }
+    return '';
+  }
+
+  Color _scanSecondaryColor(ScanRecord scan, Color fallback) {
+    if (scan.status == 'Duplicate' && scan.serverSyncId.isNotEmpty) {
+      return Colors.green;
+    }
+    if (scan.status == 'Failed' && scan.errorMessage.isNotEmpty) {
+      return Colors.red;
+    }
+    return fallback;
+  }
+
   @override
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.of(context).size.height;
-    final cameraHeight = (screenHeight * 0.32).clamp(240.0, 340.0).toDouble();
+    final cameraHeight = (screenHeight * 0.34).clamp(250.0, 340.0).toDouble();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Daksh Scanner'),
+        title: const Text('Daksh Scan'),
         actions: [
           IconButton(
               onPressed: _refreshConnection,
@@ -588,7 +612,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       body: SafeArea(
         child: SingleChildScrollView(
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          padding: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.only(bottom: 12),
           child: Column(
             children: [
               _StatusHeader(
@@ -606,7 +630,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
               if (_clockSkewWarning.isNotEmpty)
                 Padding(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   child: Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(10),
@@ -624,7 +648,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                   ),
                 ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
                 child: Row(
                   children: [
                     Expanded(
@@ -650,7 +674,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: TextField(
                   controller: _defaultBinController,
                   textCapitalization: TextCapitalization.characters,
@@ -672,16 +696,30 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
               ),
               Container(
                 height: cameraHeight,
-                margin: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                margin: const EdgeInsets.fromLTRB(10, 8, 10, 6),
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
-                    color: Colors.black,
-                    borderRadius: BorderRadius.circular(8)),
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFF09111E), Color(0xFF13233A)],
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x12000000),
+                        blurRadius: 18,
+                        offset: Offset(0, 8),
+                      )
+                    ]),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
                     MobileScanner(
-                        controller: _cameraController, onDetect: _onDetect),
+                      controller: _cameraController,
+                      onDetect: _onDetect,
+                      fit: BoxFit.cover,
+                    ),
                     AnimatedOpacity(
                       opacity: _savingScan ? 1 : 0,
                       duration: const Duration(milliseconds: 120),
@@ -733,61 +771,66 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                         ),
                       ),
                     ),
-                    Positioned(
-                      top: 10,
-                      right: 10,
-                      child: Row(
-                        children: [
-                          IconButton.filledTonal(
-                              onPressed: () => _cameraController.toggleTorch(),
-                              icon: const Icon(Icons.flash_on)),
-                          const SizedBox(width: 8),
-                          IconButton.filledTonal(
-                              onPressed: () => _cameraController.switchCamera(),
-                              icon: const Icon(Icons.cameraswitch)),
-                        ],
-                      ),
-                    ),
                   ],
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                child: Row(
+                padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+                child: Column(
                   children: [
-                    Expanded(
-                        child: OutlinedButton.icon(
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
                             onPressed: _openManualEntry,
                             icon: const Icon(Icons.keyboard),
                             label: const FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text('Manual Entry')))),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        child: OutlinedButton.icon(
+                              fit: BoxFit.scaleDown,
+                              child: Text('Manual Entry'),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
                             onPressed: _verifyLastScan,
                             icon: const Icon(Icons.fact_check),
                             label: const FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text('Last Verify')))),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        child: OutlinedButton.icon(
+                              fit: BoxFit.scaleDown,
+                              child: Text('Last Verify'),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
                             onPressed: _resetScanLock,
                             icon: const Icon(Icons.replay),
                             label: const FittedBox(
-                                fit: BoxFit.scaleDown, child: Text('Rescan')))),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        child: FilledButton.icon(
+                              fit: BoxFit.scaleDown,
+                              child: Text('Rescan'),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.icon(
                             onPressed:
                                 _syncInFlight ? null : () => _syncPending(),
                             icon: const Icon(Icons.sync),
                             label: FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(_syncInFlight
-                                    ? 'Syncing'
-                                    : 'Manual Sync')))),
+                              fit: BoxFit.scaleDown,
+                              child:
+                                  Text(_syncInFlight ? 'Syncing' : 'Sync Now'),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -808,6 +851,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                         itemBuilder: (_, index) {
                           final scan = _lastScans[index];
                           final color = _recordColor(scan);
+                          final detailLine = _scanSecondaryLine(scan);
+                          final detailColor = _scanSecondaryColor(scan, color);
                           return ListTile(
                             dense: true,
                             leading: Icon(
@@ -818,10 +863,30 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                             title: Text('${scan.partNumber}  x${scan.quantity}',
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w900)),
-                            subtitle: Text(
-                                '${scan.scanType} | ${scan.binLocation} | ${scan.rawValue}',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  '${scan.scanType} | ${scan.binLocation} | ${scan.rawValue}',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                if (detailLine.isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    detailLine,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: detailColor,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
                             trailing: Text(scan.status,
                                 style: TextStyle(
                                     color: color, fontWeight: FontWeight.w900)),
@@ -866,7 +931,7 @@ class _StatusHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
       color: Colors.white,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -877,14 +942,14 @@ class _StatusHeader extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 3),
           Text('$userName ${role.isEmpty ? '' : '| $role'}',
               style: const TextStyle(
                   color: Colors.black54, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Wrap(
-            spacing: 8,
-            runSpacing: 8,
+            spacing: 6,
+            runSpacing: 6,
             children: [
               StatusChip(
                   label: online ? 'Online' : 'Offline',

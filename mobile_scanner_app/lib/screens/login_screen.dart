@@ -137,7 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Daksh Scanner v1.0.5')),
+      appBar: AppBar(title: const Text('Daksh Scan')),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(18),
@@ -146,12 +146,46 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text('Secure login',
-                    style:
-                        TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
-                const SizedBox(height: 6),
-                const Text(
-                    'Connect to the Daksh Railway/web portal API. Scanning is locked until login and dealer code are verified.'),
+                Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFF0E1B2A), Color(0xFF0F4C81)],
+                    ),
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: const Row(
+                    children: [
+                      _LoginMark(),
+                      SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Secure login',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            SizedBox(height: 6),
+                            Text(
+                              'Connect to the Daksh web portal. Login and dealer verification unlock the scanner.',
+                              style: TextStyle(
+                                color: Color(0xDDF4F7FB),
+                                height: 1.45,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 18),
                 TextFormField(
                   controller: _serverController,
@@ -248,6 +282,24 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _LoginMark extends StatelessWidget {
+  const _LoginMark();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 68,
+      height: 68,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white.withOpacity(0.14),
+        border: Border.all(color: Colors.white.withOpacity(0.16)),
+      ),
+      child: const Icon(Icons.qr_code_scanner, color: Colors.white, size: 32),
     );
   }
 }

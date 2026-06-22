@@ -132,14 +132,19 @@ class SyncService {
         if (diag is Map) {
           final serverUtc = diag['serverUtcTime'] ?? '';
           final mobileUtc = diag['mobileReceivedTimeUtc'] ?? '';
-          if (serverUtc is String && serverUtc.isNotEmpty && mobileUtc is String && mobileUtc.isNotEmpty) {
+          if (serverUtc is String &&
+              serverUtc.isNotEmpty &&
+              mobileUtc is String &&
+              mobileUtc.isNotEmpty) {
             final serverTime = DateTime.tryParse(serverUtc);
             final mobileTime = DateTime.tryParse(mobileUtc);
             if (serverTime != null && mobileTime != null) {
-              final skew = serverTime.difference(mobileTime).inMilliseconds.abs();
+              final skew =
+                  serverTime.difference(mobileTime).inMilliseconds.abs();
               if (skew > 5 * 60 * 1000) {
                 hasClockSkew = true;
-                final warn = 'Warning: device clock differs from server by ${(skew / 60000).toStringAsFixed(1)} minutes. Server time used.';
+                final warn =
+                    'Warning: device clock differs from server by ${(skew / 60000).toStringAsFixed(1)} minutes. Server time used.';
                 data['message'] = '${data['message'] ?? ''} \n$warn';
               }
             }
@@ -149,6 +154,7 @@ class SyncService {
       final logs = (data['logs'] ?? []) as List<dynamic>;
       var synced = 0;
       final completedKeys = <String>{};
+      final duplicateByKey = <String, String>{};
       final failedByKey = <String, String>{};
       final touchedLocalIds = <String>{};
       final completedAt = (data['completedAt'] ?? '').toString();
@@ -169,6 +175,15 @@ class SyncService {
               status == 'synced' ||
               status == 'duplicate') {
             completedKeys.addAll(keys);
+            if (status == 'duplicate') {
+              final message = (log['errorMessage'] ??
+                      log['reason'] ??
+                      'Duplicate scan skipped')
+                  .toString();
+              for (final key in keys) {
+                duplicateByKey[key] = message;
+              }
+            }
           } else if (status == 'failed' || status == 'invalid') {
             final message = (log['errorMessage'] ?? 'Sync failed').toString();
             for (final key in keys) {
@@ -189,6 +204,20 @@ class SyncService {
           if (failedKey.isNotEmpty) {
             await database.updateStatus(record.localId, 'Failed',
                 errorMessage: failedByKey[failedKey] ?? 'Sync failed');
+            touchedLocalIds.add(record.localId);
+            continue;
+          }
+          var duplicateKey = '';
+          for (final key in keys) {
+            if (duplicateByKey.containsKey(key)) {
+              duplicateKey = key;
+              break;
+            }
+          }
+          if (duplicateKey.isNotEmpty) {
+            await database.updateStatus(record.localId, 'Duplicate',
+                serverSyncId: completedAt,
+                errorMessage: duplicateByKey[duplicateKey] ?? '');
             touchedLocalIds.add(record.localId);
             continue;
           }
@@ -236,7 +265,9 @@ class SyncService {
 
 class SyncResult {
   SyncResult(this.success, this.message,
-      {required this.synced, this.serverReached = false, this.hasClockSkew = false});
+      {required this.synced,
+      this.serverReached = false,
+      this.hasClockSkew = false});
 
   final bool success;
   final String message;

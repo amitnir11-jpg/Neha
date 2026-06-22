@@ -31,31 +31,56 @@ class DakshScannerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Daksh Mobile Scanner',
+      title: 'Daksh Scan',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF145C9E)),
+        colorScheme: const ColorScheme.light(
+          primary: Color(0xFF0F4C81),
+          secondary: Color(0xFF0E7490),
+          surface: Color(0xFFF4F7FB),
+        ),
         useMaterial3: true,
         scaffoldBackgroundColor: const Color(0xFFF4F7FB),
         appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF101820),
+          backgroundColor: Color(0xFF0E1B2A),
           foregroundColor: Colors.white,
           elevation: 0,
+          centerTitle: false,
+          systemOverlayStyle: SystemUiOverlayStyle.light,
         ),
         filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
-            minimumSize: const Size(52, 48),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            minimumSize: const Size(52, 50),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size(52, 50),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            side: const BorderSide(color: Color(0xFFD7E0EA)),
           ),
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.white,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Color(0xFF145C9E), width: 1.4),
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Color(0xFF0F4C81), width: 1.4),
+          ),
+        ),
+        cardTheme: CardTheme(
+          color: Colors.white,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
           ),
         ),
       ),
@@ -89,7 +114,9 @@ class _AppGateState extends State<AppGate> {
     try {
       token = await settings.token.timeout(const Duration(seconds: 6));
       dealer = await settings.dealerCode.timeout(const Duration(seconds: 6));
-      _tokenCleared = await settings.consumeTokenClearedFlag().timeout(const Duration(seconds: 2));
+      _tokenCleared = await settings
+          .consumeTokenClearedFlag()
+          .timeout(const Duration(seconds: 2));
     } catch (_) {
       // Local storage read failed or timed out; continue without blocking startup.
     }
@@ -104,7 +131,8 @@ class _AppGateState extends State<AppGate> {
             context: context,
             builder: (_) => AlertDialog(
                   title: const Text('Session Reset'),
-                  content: const Text('Your secure session was cleared due to storage corruption. Please login again.'),
+                  content: const Text(
+                      'Your secure session was cleared due to storage corruption. Please login again.'),
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.of(context).pop(),
@@ -118,10 +146,98 @@ class _AppGateState extends State<AppGate> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return Scaffold(
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF061321), Color(0xFF0E1B2A), Color(0xFFF4F7FB)],
+              stops: [0.0, 0.55, 1.0],
+            ),
+          ),
+          child: SafeArea(
+            child: Center(
+              child: Container(
+                width: 340,
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.95),
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x22000000),
+                      blurRadius: 36,
+                      offset: Offset(0, 18),
+                    )
+                  ],
+                ),
+                child: const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _SplashMark(),
+                    SizedBox(height: 18),
+                    Text(
+                      'Daksh Scan',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Professional scanner companion for the Daksh web app.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 14,
+                        height: 1.5,
+                        color: Color(0xFF5F6B83),
+                      ),
+                    ),
+                    SizedBox(height: 22),
+                    CircularProgressIndicator(),
+                    SizedBox(height: 10),
+                    Text(
+                      'Preparing secure session...',
+                      style: TextStyle(
+                        color: Color(0xFF5F6B83),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
     }
     return _loggedIn
         ? ScannerHomeScreen(onLogout: () => setState(() => _loggedIn = false))
         : LoginScreen(onLoggedIn: () => setState(() => _loggedIn = true));
+  }
+}
+
+class _SplashMark extends StatelessWidget {
+  const _SplashMark();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 78,
+      height: 78,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF0F4C81), Color(0xFF0E7490)],
+        ),
+      ),
+      child: const Icon(Icons.qr_code_scanner, color: Colors.white, size: 36),
+    );
   }
 }

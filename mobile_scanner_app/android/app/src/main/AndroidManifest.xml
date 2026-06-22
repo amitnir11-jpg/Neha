@@ -7,7 +7,7 @@
     <uses-feature android:name="android.hardware.camera" android:required="true" />
 
     <application
-        android:label="Daksh Mobile Scanner"
+        android:label="Daksh Scan"
         android:name="${applicationName}"
         android:usesCleartextTraffic="false"
         android:icon="@mipmap/ic_launcher">
