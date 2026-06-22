@@ -1580,7 +1580,7 @@ function addTableSheet(workbook, name, columns, rows, options = {}) {
   }) + 1;
 
   const table = packRenderDataTable(sheet, currentRow, totalColumns, options.tableTitle || subtitle, visibleColumns, rows, options);
-  sheet.views = [{ state: 'frozen', ySplit: table.headerRow, showGridLines: false, topLeftCell: 'A1', activeCell: 'A1' }];
+  sheet.views = [{ state: 'frozen', ySplit: table.headerRow, showGridLines: false }];
   sheet.pageSetup = {
     fitToPage: true,
     fitToWidth: 1,
@@ -1639,7 +1639,7 @@ function addMetricSheet(workbook, name, rows, options = {}) {
     currentRow = rendered.nextRow;
   });
 
-  sheet.views = [{ state: 'frozen', ySplit: firstTableHeader || 2, showGridLines: false, topLeftCell: 'A1', activeCell: 'A1' }];
+  sheet.views = [{ state: 'frozen', ySplit: firstTableHeader || 2, showGridLines: false }];
   sheet.pageSetup = {
     fitToPage: true,
     fitToWidth: 1,

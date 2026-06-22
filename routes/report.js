@@ -3696,7 +3696,7 @@ function addStockSummarySheet(workbook, data, options = {}) {
 
   applyRange(1, dataStartRow + rows.length - 1);
   sheet.autoFilter = { from: { row: subHeadRow, column: 1 }, to: { row: dataStartRow + rows.length - 1, column: 12 } };
-  sheet.views = [{ state: 'frozen', ySplit: dataStartRow - 1, showGridLines: false, topLeftCell: 'A1', activeCell: 'A1' }];
+  sheet.views = [{ state: 'frozen', ySplit: dataStartRow - 1, showGridLines: false }];
   sheet.pageSetup = {
     fitToPage: true,
     fitToWidth: 1,
