@@ -3,11 +3,13 @@ const { jsPDF } = require('jspdf');
 const autoTableModule = require('jspdf-autotable');
 const nodemailer = require('nodemailer');
 const reportModule = require('./report');
+const reconciliationRoute = require('./reconciliation');
 const router = reportModule;
 const auth = require('./auth');
+const { applyCacheHeaders, getCachedResponse } = require('../utils/reportCache');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const VerificationLog = require('../models/VerificationLog');
-const { formatDateLikeFields, parseIstFilterDate } = require('../utils/time');
+const { formatDateLikeFields, formatIstDateTime, parseIstFilterDate } = require('../utils/time');
 const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
 const { reportTotals, signedScanQuantity } = require('../utils/reportTotals');
@@ -372,6 +374,128 @@ const DUPLICATE_COLUMNS = [
   { header: 'DUPLICATE COUNT', key: 'duplicateCount', width: 16 },
   { header: 'LAST DUPLICATE TIME', key: 'lastDuplicateTime', width: 22 },
   { header: 'REASON', key: 'reason', width: 24 }
+];
+
+const COMPLETE_AUDIT_PACK_REPORTS = [
+  { key: 'bin-wise-stock', label: 'Bin Wise Stock Report' },
+  { key: 'user-dealer-wise', label: 'User & Dealer Wise Report' },
+  { key: 'raw-upi', label: 'Raw UPI Report' },
+  { key: 'scan-register', label: 'Scan Register Report' },
+  { key: 'invalid-scan-report', label: 'Invalid Scan Report' },
+  { key: 'stock-summary', label: 'Stock Summary' },
+  { key: 'short', label: 'Short Report' },
+  { key: 'excess', label: 'Excess Report' },
+  { key: 'movement_wise_stock_analysis', label: 'Movement Wise Stock Analysis Report' },
+  { key: 'damage', label: 'Damage Report' },
+  { key: 'category-wise-variance-summary', label: 'Category Wise Variance Summary' },
+  { key: 'partwise-inventory-audit', label: 'Partwise Inventory Audit Report' },
+  { key: 'parts-inventory-refresh-template', label: 'Part Inventory Refresh Template' },
+  { key: 'reconciliation-report', label: 'Reconciliation Report' },
+  { key: 'dealer-reconciliation-report', label: 'Dealer Reconciliation Report' },
+  { key: 'dead-stock-report', label: 'Dead Stock Report' },
+  { key: 'fast-moving-report', label: 'Fast Moving Report' },
+  { key: 'slow-moving-report', label: 'Slow Moving Report' },
+  { key: 'critical-shortage-report', label: 'Critical Shortage Report' }
+];
+
+const COMPLETE_AUDIT_PACK_REPORT_MAP = new Map(COMPLETE_AUDIT_PACK_REPORTS.map((item) => [item.key, item.label]));
+
+const COMPLETE_AUDIT_PACK_EXTRA_OPTIONS = [
+  { key: 'includeDashboardSummary', label: 'Include Dashboard Summary' },
+  { key: 'includeAuditInformation', label: 'Include Audit Information' },
+  { key: 'includeDealerInformation', label: 'Include Dealer Information' },
+  { key: 'includeScanStatistics', label: 'Include Scan Statistics' },
+  { key: 'includePendingOfflineScanDetails', label: 'Include Pending/Offline Scan Details' },
+  { key: 'includeUserWiseSummary', label: 'Include User Wise Summary' }
+];
+
+const CATEGORY_VARIANCE_COLUMNS = [
+  { header: 'Product Category', key: 'productCategory', width: 28 },
+  { header: 'Action / Scan Type', key: 'action', width: 22 },
+  { header: 'Total Scanned Parts', key: 'totalScannedParts', width: 22, numFmt: '#,##0' },
+  { header: 'Total Scanned Quantity', key: 'totalScannedQuantity', width: 24, numFmt: '#,##0.00' },
+  { header: 'Actual Stock Value (DLC)', key: 'sumPhysicalValueOnDLC', width: 26, numFmt: '#,##0.00' },
+  { header: 'DMS Stock Value (DLC)', key: 'sumDmsValueOnDLC', width: 26, numFmt: '#,##0.00' },
+  { header: 'Variance Value (DLC)', key: 'sumVarianceOnDLC', width: 24, numFmt: '#,##0.00' },
+  { header: 'Actual MRP Value (Reference)', key: 'sumPhysicalValueOnMRP', width: 28, numFmt: '#,##0.00' },
+  { header: 'DMS MRP Value (Reference)', key: 'sumDmsValueOnMRP', width: 28, numFmt: '#,##0.00' },
+  { header: 'Variance MRP Value (Reference)', key: 'sumVarianceOnMRP', width: 30, numFmt: '#,##0.00' }
+];
+
+const RAW_UPI_COLUMNS = [
+  { header: 'Time', key: 'time', width: 22 },
+  { header: 'Raw Scan', key: 'rawScan', width: 50 },
+  { header: 'Part Number', key: 'partNumber', width: 16 },
+  { header: 'Part Description', key: 'partDescription', width: 28 },
+  { header: 'Model', key: 'model', width: 16 },
+  { header: 'Manufacturing Year', key: 'manufacturingYear', width: 18 },
+  { header: 'Product Category', key: 'productCategory', width: 20 },
+  { header: 'MRP', key: 'mrp', width: 12 },
+  { header: 'DLC', key: 'dlc', width: 12 },
+  { header: 'Qty', key: 'qty', width: 10 },
+  { header: 'Type', key: 'type', width: 12 },
+  { header: 'Bin', key: 'bin', width: 12 },
+  { header: 'Regd No', key: 'regdNo', width: 16 },
+  { header: 'Job Card No', key: 'jobCardNo', width: 18 },
+  { header: 'Fitted Qty', key: 'fittedQty', width: 14 },
+  { header: 'Auto Detected Bin', key: 'autoDetectedBin', width: 20 },
+  { header: 'Stock Deducted From Bin', key: 'stockDeductedFromBin', width: 24 },
+  { header: 'Dealer Code', key: 'dealerCode', width: 14 },
+  { header: 'Audit ID', key: 'auditId', width: 24 },
+  { header: 'Device', key: 'deviceId', width: 20 },
+  { header: 'Entry Mode', key: 'entryMode', width: 18 },
+  { header: 'Entry Channel', key: 'entryChannel', width: 16 },
+  { header: 'Entry Source', key: 'scanSourceLabel', width: 24 },
+  { header: 'Staff', key: 'staffName', width: 18 },
+  { header: 'Warnings', key: 'warnings', width: 32 }
+];
+
+const RECONCILIATION_COLUMNS = [
+  { header: 'PART NUMBER', key: 'partNumber', width: 18 },
+  { header: 'PART DESCRIPTION', key: 'partDescription', width: 32 },
+  { header: 'CATEGORY', key: 'productCategory', width: 20 },
+  { header: 'DMS STOCK', key: 'dmsStock', width: 12 },
+  { header: 'ACTUAL STOCK', key: 'actualStock', width: 14 },
+  { header: 'VARIANCE', key: 'variance', width: 12 },
+  { header: 'STATUS', key: 'status', width: 20 },
+  { header: 'MRP', key: 'mrp', width: 12 },
+  { header: 'DLC/DLP', key: 'dlp', width: 12 },
+  { header: 'PRICING STATUS', key: 'pricingStatus', width: 24 },
+  { header: 'PRICING SOURCE', key: 'pricingSource', width: 20 },
+  { header: 'ACTUAL STOCK VALUE (DLC)', key: 'actualStockValue', width: 24 },
+  { header: 'DMS STOCK VALUE (DLC)', key: 'dmsStockValue', width: 24 },
+  { header: 'ACTUAL MRP VALUE (REFERENCE)', key: 'actualMrpValue', width: 28 },
+  { header: 'DMS MRP VALUE (REFERENCE)', key: 'dmsMrpValue', width: 28 },
+  { header: 'BIN LOCATION', key: 'binLocation', width: 24 },
+  { header: 'MOVEMENT TYPE', key: 'movementType', width: 18 },
+  { header: 'FAST/SLOW/DEAD STATUS', key: 'movementStatus', width: 22 },
+  { header: 'MOVEMENT A', key: 'movementCodeA', width: 14 },
+  { header: 'MOVEMENT B', key: 'movementCodeB', width: 14 },
+  { header: 'AVERAGE DEMAND', key: 'averageDemand', width: 16 },
+  { header: 'FORECAST', key: 'forecast', width: 12 },
+  { header: 'SAFETY STOCK', key: 'safetyStock', width: 14 },
+  { header: 'ROP', key: 'rop', width: 10 },
+  { header: 'SHORTAGE VALUE', key: 'shortageValue', width: 16 },
+  { header: 'EXCESS VALUE', key: 'excessValue', width: 16 }
+];
+
+const USER_WISE_SUMMARY_COLUMNS = [
+  { header: 'USER NAME', key: 'userName', width: 22 },
+  { header: 'USER ID', key: 'userId', width: 22 },
+  { header: 'ROLE', key: 'role', width: 16 },
+  { header: 'SCAN COUNT', key: 'scanCount', width: 14 },
+  { header: 'TOTAL QTY', key: 'totalQty', width: 14 },
+  { header: 'AUDIT QTY', key: 'auditQty', width: 14 },
+  { header: 'INWARD QTY', key: 'inwardQty', width: 14 },
+  { header: 'OUTWARD QTY', key: 'outwardQty', width: 14 },
+  { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
+  { header: 'DAMAGE QTY', key: 'damageQty', width: 14 },
+  { header: 'UNIQUE PARTS', key: 'uniqueParts', width: 14 },
+  { header: 'DEALERS', key: 'dealers', width: 34 },
+  { header: 'DEVICES', key: 'devices', width: 34 },
+  { header: 'TOTAL MRP VALUE', key: 'totalMrpValue', width: 18 },
+  { header: 'TOTAL DLC VALUE', key: 'totalDlcValue', width: 18 },
+  { header: 'LAST SCAN TIME', key: 'lastScanTime', width: 22 }
 ];
 
 function auditRow(row) {
@@ -819,6 +943,865 @@ function selectRows(data, type) {
   return data.finalRows.map(auditRow);
 }
 
+function packText(value) {
+  if (value === undefined || value === null || value === '') return '-';
+  if (Array.isArray(value)) return value.filter(Boolean).map((item) => packText(item)).filter(Boolean).join(', ') || '-';
+  if (value instanceof Date) return formatIstDateTime(value);
+  if (typeof value === 'number') return Number.isInteger(value)
+    ? value.toLocaleString('en-IN')
+    : value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'object') return JSON.stringify(value);
+  const text = String(value).trim();
+  return text || '-';
+}
+
+function packNumber(value, digits = 0) {
+  const number = Number(value || 0);
+  return number.toLocaleString('en-IN', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits
+  });
+}
+
+function packCurrency(value) {
+  const number = Number(value || 0);
+  return `₹ ${number.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function packPercentage(value) {
+  const number = Number(value || 0);
+  return `${number.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%`;
+}
+
+function sanitizeSheetName(name = 'Sheet') {
+  const text = String(name || 'Sheet').replace(/[:\\/?*\[\]]/g, ' ').replace(/\s+/g, ' ').trim() || 'Sheet';
+  return text.slice(0, 31);
+}
+
+function uniqueSheetName(workbook, desiredName) {
+  const used = new Set((workbook.worksheets || []).map((sheet) => String(sheet.name || '').toLowerCase()));
+  const base = sanitizeSheetName(desiredName);
+  if (!used.has(base.toLowerCase())) return base;
+  for (let index = 2; index < 100; index += 1) {
+    const suffix = ` (${index})`;
+    const candidate = sanitizeSheetName(`${base.slice(0, Math.max(1, 31 - suffix.length))}${suffix}`);
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+  return sanitizeSheetName(`${base.slice(0, 28)}...`);
+}
+
+function normalizePackRow(row = {}) {
+  const flattened = formatDateLikeFields(row);
+  return Object.fromEntries(Object.entries(flattened).map(([key, value]) => {
+    if (Array.isArray(value)) return [key, value.filter(Boolean).join(', ')];
+    if (value && typeof value === 'object' && !(value instanceof Date)) return [key, JSON.stringify(value)];
+    return [key, value];
+  }));
+}
+
+function countRows(rows = [], predicate = () => true) {
+  return rows.reduce((sum, row) => sum + (predicate(row) ? 1 : 0), 0);
+}
+
+function countScanRegisterRows(rows = []) {
+  return rows.reduce((counts, row) => {
+    const scanStatus = clean(row.scanStatus).toLowerCase();
+    const syncStatus = clean(row.syncStatus).toLowerCase();
+    const key = scanStatus.includes('duplicate') || syncStatus === 'duplicate'
+      ? 'duplicate'
+      : scanStatus.includes('reject') || syncStatus === 'rejected'
+        ? 'rejected'
+        : scanStatus.includes('fail') || syncStatus === 'failed'
+          ? 'failed'
+          : scanStatus.includes('delete')
+            ? 'deleted'
+            : syncStatus === 'pending'
+              ? 'pending'
+              : syncStatus === 'synced'
+                ? 'synced'
+                : 'accepted';
+    counts[key] = (counts[key] || 0) + 1;
+    counts.total += 1;
+    return counts;
+  }, { accepted: 0, pending: 0, failed: 0, duplicate: 0, rejected: 0, deleted: 0, synced: 0, total: 0 });
+}
+
+function auditSyncStatus(counts = {}) {
+  const pending = Number(counts.pending || 0);
+  const failed = Number(counts.failed || 0);
+  const duplicate = Number(counts.duplicate || 0);
+  const rejected = Number(counts.rejected || 0);
+  if (failed > 0 && pending > 0) return `Mixed (${failed} failed, ${pending} pending)`;
+  if (failed > 0) return `Failed (${failed})`;
+  if (pending > 0) return `Pending (${pending})`;
+  if (duplicate > 0 || rejected > 0) return 'Synced with exceptions';
+  return 'Synced';
+}
+
+function packColumnWidths(columns = [], rows = [], sampleSize = 100, maxWidth = 60) {
+  const samples = Array.isArray(rows) ? rows.slice(0, sampleSize) : [];
+  return columns.map((column, index) => {
+    const headerLength = String(column.header || column.key || `Column ${index + 1}`).length;
+    const sampleLength = samples.reduce((max, row) => Math.max(max, packText(row[column.key]).length), 0);
+    return {
+      ...column,
+      width: Math.min(maxWidth, Math.max(column.width || 12, headerLength + 2, sampleLength + 2))
+    };
+  });
+}
+
+function packMetricWidths(rows = []) {
+  const samples = Array.isArray(rows) ? rows.slice(0, 120) : [];
+  const sectionWidth = Math.min(28, Math.max(16, samples.reduce((max, row) => Math.max(max, packText(row.section).length), 0) + 2));
+  const metricWidth = Math.min(36, Math.max(18, samples.reduce((max, row) => Math.max(max, packText(row.metric).length), 0) + 2));
+  const valueWidth = Math.min(70, Math.max(24, samples.reduce((max, row) => Math.max(max, packText(row.value).length), 0) + 2));
+  return [sectionWidth, metricWidth, valueWidth];
+}
+
+function styleHeaderRow(row, fill = 'FF153A5B') {
+  row.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+  row.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  row.eachCell((cell) => {
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FFD7E2EE' } },
+      left: { style: 'thin', color: { argb: 'FFD7E2EE' } },
+      bottom: { style: 'thin', color: { argb: 'FFD7E2EE' } },
+      right: { style: 'thin', color: { argb: 'FFD7E2EE' } }
+    };
+  });
+}
+
+function styleDataRow(row, columns, options = {}) {
+  row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+    const column = columns[columnNumber - 1] || {};
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+    };
+    cell.alignment = {
+      vertical: 'middle',
+      horizontal: options.rightAlignColumns && options.rightAlignColumns.has(columnNumber - 1) ? 'right' : 'left',
+      wrapText: true
+    };
+    if (column.numFmt) cell.numFmt = column.numFmt;
+  });
+}
+
+function addSheetFooter(sheet) {
+  sheet.headerFooter = {
+    oddFooter: '&LGenerated from DAKSH Inventory System'
+  };
+}
+
+function addTableSheet(workbook, name, columns, rows, options = {}) {
+  const sheet = workbook.addWorksheet(uniqueSheetName(workbook, name));
+  const rowData = Array.isArray(rows) && rows.length ? rows : [{
+    [columns[0] && columns[0].key ? columns[0].key : 'message']: options.emptyMessage || 'No Data Available'
+  }];
+  const resolvedColumns = packColumnWidths(columns, rowData, options.sampleSize || 100, options.maxWidth || 60);
+  sheet.columns = resolvedColumns.map((column) => ({
+    header: column.header,
+    key: column.key,
+    width: column.width
+  }));
+  resolvedColumns.forEach((column, index) => {
+    if (column.numFmt) sheet.getColumn(index + 1).numFmt = column.numFmt;
+  });
+  styleHeaderRow(sheet.getRow(1), options.headerFill || 'FF153A5B');
+  sheet.getRow(1).height = 22;
+  const rightAlignColumns = new Set(resolvedColumns
+    .map((column, index) => (column.numFmt ? index : null))
+    .filter((index) => index !== null));
+  rowData.forEach((row) => {
+    const added = sheet.addRow(normalizePackRow(row));
+    styleDataRow(added, resolvedColumns, { rightAlignColumns });
+    if (row.rowType === 'grandTotal' || row.rowType === 'subtotal' || row.isTotal) {
+      added.font = { bold: true };
+      added.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFF6FF' } };
+    }
+    if (String(row.message || '').trim() === 'No Data Available') {
+      added.font = { italic: true, color: { argb: 'FF64748B' } };
+    }
+  });
+  sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: resolvedColumns.length } };
+  addSheetFooter(sheet);
+  sheet.pageSetup = { fitToPage: true, orientation: options.orientation || 'landscape' };
+  return sheet;
+}
+
+function addMetricSheet(workbook, name, rows, options = {}) {
+  const sheet = workbook.addWorksheet(uniqueSheetName(workbook, name));
+  const title = options.title || name;
+  const rowData = Array.isArray(rows) && rows.length ? rows : [{
+    section: 'Info',
+    metric: 'No Data Available',
+    value: '-'
+  }];
+  const [sectionWidth, metricWidth, valueWidth] = packMetricWidths(rowData);
+  sheet.columns = [
+    { key: 'section', width: sectionWidth },
+    { key: 'metric', width: metricWidth },
+    { key: 'value', width: valueWidth }
+  ];
+  sheet.mergeCells(1, 1, 1, 3);
+  sheet.getCell(1, 1).value = title;
+  sheet.getCell(1, 1).font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
+  sheet.getCell(1, 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: options.titleFill || 'FF0F4C81' } };
+  sheet.getCell(1, 1).alignment = { vertical: 'middle', horizontal: 'left' };
+  const headerRow = sheet.getRow(2);
+  headerRow.values = ['Section', 'Metric', 'Value'];
+  styleHeaderRow(headerRow, options.headerFill || 'FF153A5B');
+  headerRow.height = 22;
+  rowData.forEach((row) => {
+    const added = sheet.addRow({
+      section: packText(row.section),
+      metric: packText(row.metric),
+      value: packText(row.value)
+    });
+    styleDataRow(added, sheet.columns, {});
+  });
+  sheet.views = [{ state: 'frozen', ySplit: 2 }];
+  sheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: 3 } };
+  addSheetFooter(sheet);
+  sheet.pageSetup = { fitToPage: true, orientation: options.orientation || 'portrait' };
+  return sheet;
+}
+
+function packMetricRows(section, entries = []) {
+  return entries.map(([metric, value]) => ({
+    section,
+    metric,
+    value
+  }));
+}
+
+function reportLabelForKey(key) {
+  return COMPLETE_AUDIT_PACK_REPORT_MAP.get(key) || key;
+}
+
+function selectedReportLabels(selectedReports = []) {
+  return selectedReports.map((key) => reportLabelForKey(key)).filter(Boolean);
+}
+
+function extraLabelMap() {
+  return new Map(COMPLETE_AUDIT_PACK_EXTRA_OPTIONS.map((item) => [item.key, item.label]));
+}
+
+function selectedExtraLabels(extras = {}) {
+  const labels = [];
+  COMPLETE_AUDIT_PACK_EXTRA_OPTIONS.forEach((item) => {
+    if (extras[item.key]) labels.push(item.label);
+  });
+  return labels;
+}
+
+function normalizeAuditPackSelection(payload = {}) {
+  const reports = Array.isArray(payload.reports)
+    ? payload.reports
+    : String(payload.reports || '')
+      .split(/[,;\n]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const selectedReports = Array.from(new Set(reports.filter((key) => COMPLETE_AUDIT_PACK_REPORT_MAP.has(key))));
+  const extras = {};
+  COMPLETE_AUDIT_PACK_EXTRA_OPTIONS.forEach((item) => {
+    extras[item.key] = payload[item.key] === true || payload[item.key] === 'true' || payload[item.key] === 1 || payload[item.key] === '1';
+  });
+  return {
+    dealerCode: selectedDealerCode(payload),
+    auditId: clean(payload.auditId || payload.audit || ''),
+    fromDate: clean(payload.fromDate || payload.from || ''),
+    toDate: clean(payload.toDate || payload.to || ''),
+    includeSummary: payload.includeSummary !== false && payload.includeSummary !== 'false',
+    reports: selectedReports,
+    ...extras
+  };
+}
+
+function buildSummaryStatusRows(reportData = {}, selectedReports = [], extras = {}, generatedBy = '', generatedAt = '', movementAnalysis = null, scanRegisterRowsData = []) {
+  const summary = Array.isArray(reportData.summary) && reportData.summary.length ? reportData.summary[0] : {};
+  const dealer = reportData.selectedDealer || {};
+  const audit = reportData.selectedAudit || {};
+  const finalRows = Array.isArray(reportData.finalRows) ? reportData.finalRows : [];
+  const scans = Array.isArray(reportData.scans) ? reportData.scans : [];
+  const registerCounts = countScanRegisterRows(scanRegisterRowsData);
+  const totalQuantity = Number(summary.totalQuantity || summary.totalScans || finalRows.reduce((sum, row) => sum + Number(row.physicalQty || row.qty || 0), 0) || 0);
+  const totalVariance = finalRows.reduce((sum, row) => sum + Number(row.varianceQty !== undefined ? row.varianceQty : row.differenceQty || row.variance || 0), 0);
+  const totalExcess = countRows(finalRows, (row) => Number(row.excessQty || 0) > 0 || String(row.status || '').toLowerCase().includes('excess'));
+  const totalShort = countRows(finalRows, (row) => Number(row.shortQty || 0) > 0 || String(row.status || '').toLowerCase().includes('short'));
+  const damageCount = countRows(finalRows, (row) => Number(row.damageQty || 0) > 0);
+  const uniqueUsers = new Set(scans.map((scan) => clean(scan.userName || scan.staffName || scan.loginId || scan.userId)).filter(Boolean)).size;
+  const uniqueDevices = new Set(scans.map((scan) => clean(scan.deviceId || scan.deviceName)).filter(Boolean)).size;
+  const movementSummary = movementAnalysis && movementAnalysis.summary ? movementAnalysis.summary : {};
+  const labelText = selectedReportLabels(selectedReports).join(', ') || '-';
+  const extraText = selectedExtraLabels(extras).join(', ') || '-';
+  const categoryTotals = {
+    hhml: countRows(finalRows, (row) => /hhml/i.test(String(row.productCategory || row.category || ''))),
+    lubricant: countRows(finalRows, (row) => /lubricant|lube/i.test(String(row.productCategory || row.category || row.partDescription || row.partName || ''))),
+    battery: countRows(finalRows, (row) => /battery/i.test(String(row.productCategory || row.category || row.partDescription || row.partName || ''))),
+    oil: countRows(finalRows, (row) => /(^|\b)oil\b/i.test(String(row.productCategory || row.category || row.partDescription || row.partName || '')))
+  };
+  return [
+    ...packMetricRows('Audit Details', [
+      ['Dealer Name', dealer.dealerName || summary.dealerName || packText(summary.dealerCode || dealer.dealerCode || reportData.filters?.dealerCode)],
+      ['Dealer Code', dealer.dealerCode || summary.dealerCode || reportData.filters?.dealerCode || '-'],
+      ['Audit Start Date', packText(audit.auditStartDate || audit.auditDate || summary.fromDate || reportData.filters?.fromDate || reportData.filters?.from)],
+      ['Audit End Date', packText(audit.auditClosedDate || audit.auditEndDate || summary.toDate || reportData.filters?.toDate || reportData.filters?.to)],
+      ['Generated By', generatedBy],
+      ['Generated Date Time', generatedAt],
+      ['Selected Reports', labelText],
+      ['Included Extras', extraText]
+    ]),
+    ...packMetricRows('Audit Totals', [
+      ['Total Parts', packNumber(summary.totalMasterParts || finalRows.length || 0)],
+      ['Total Scan Qty', packNumber(totalQuantity, 0)],
+      ['Total Variance', packNumber(totalVariance, 2)],
+      ['Total Excess', packNumber(totalExcess, 0)],
+      ['Total Short', packNumber(totalShort, 0)],
+      ['Damage Count', packNumber(damageCount, 0)],
+      ['User Count', packNumber(uniqueUsers, 0)],
+      ['Scan Device Count', packNumber(uniqueDevices, 0)],
+      ['Sync Status', auditSyncStatus(registerCounts)]
+    ]),
+    ...packMetricRows('Category Totals', [
+      ['HHML Parts Total', packNumber(categoryTotals.hhml, 0)],
+      ['Lubricant Total', packNumber(categoryTotals.lubricant, 0)],
+      ['Battery Total', packNumber(categoryTotals.battery, 0)],
+      ['Oil Total', packNumber(categoryTotals.oil, 0)]
+    ]),
+    ...packMetricRows('Movement Totals', [
+      ['Fast Moving', packNumber(movementSummary.fastMovingCount || movementSummary.fastMovingParts || 0, 0)],
+      ['Slow Moving', packNumber(movementSummary.slowMovingCount || movementSummary.slowMovingParts || 0, 0)],
+      ['Dead Stock', packNumber(movementSummary.deadStockCount || movementSummary.deadStockParts || 0, 0)],
+      ['Critical Shortage', packNumber(movementSummary.criticalShortageCount || movementSummary.criticalShortageParts || 0, 0)]
+    ])
+  ];
+}
+
+function buildDashboardSummaryRows(reportData = {}, movementAnalysis = null, scanRegisterRowsData = []) {
+  const summary = Array.isArray(reportData.summary) && reportData.summary.length ? reportData.summary[0] : {};
+  const scans = Array.isArray(reportData.scans) ? reportData.scans : [];
+  const registerCounts = countScanRegisterRows(scanRegisterRowsData);
+  const movementSummary = movementAnalysis && movementAnalysis.summary ? movementAnalysis.summary : {};
+  return [
+    ...packMetricRows('Dashboard KPIs', [
+      ['Total Parts', packNumber(summary.totalMasterParts || reportData.finalRows?.length || 0, 0)],
+      ['Total Scans', packNumber(summary.totalScans || scans.length || 0, 0)],
+      ['Total Quantity', packNumber(summary.totalQuantity || 0, 0)],
+      ['Unique Parts', packNumber(summary.uniqueParts || 0, 0)],
+      ['Visible Rows', packNumber(summary.visibleRows || reportData.finalRows?.length || 0, 0)],
+      ['Pending Records', packNumber(registerCounts.pending || 0, 0)],
+      ['Failed Records', packNumber(registerCounts.failed || 0, 0)],
+      ['Duplicate Records', packNumber(registerCounts.duplicate || 0, 0)],
+      ['Rejected Records', packNumber(registerCounts.rejected || 0, 0)],
+      ['Deleted Records', packNumber(registerCounts.deleted || 0, 0)],
+      ['Users', packNumber(new Set(scans.map((scan) => clean(scan.userName || scan.staffName || scan.loginId || scan.userId)).filter(Boolean)).size, 0)],
+      ['Devices', packNumber(new Set(scans.map((scan) => clean(scan.deviceId || scan.deviceName)).filter(Boolean)).size, 0)]
+    ]),
+    ...packMetricRows('Movement Summary', [
+      ['Fast Moving', packNumber(movementSummary.fastMovingCount || movementSummary.fastMovingParts || 0, 0)],
+      ['Slow Moving', packNumber(movementSummary.slowMovingCount || movementSummary.slowMovingParts || 0, 0)],
+      ['Dead Stock', packNumber(movementSummary.deadStockCount || movementSummary.deadStockParts || 0, 0)],
+      ['Critical Shortage', packNumber(movementSummary.criticalShortageCount || movementSummary.criticalShortageParts || 0, 0)],
+      ['Excess Stock', packNumber(movementSummary.excessStockCount || movementSummary.excessStockParts || 0, 0)]
+    ])
+  ];
+}
+
+function buildAuditInformationRows(payload = {}, reportData = {}) {
+  const selectedDealer = reportData.selectedDealer || {};
+  const selectedAudit = reportData.selectedAudit || {};
+  return packMetricRows('Scope', [
+    ['Dealer Code', payload.dealerCode || selectedDealer.dealerCode || reportData.filters?.dealerCode || '-'],
+    ['Dealer Name', selectedDealer.dealerName || reportData.summary?.[0]?.dealerName || '-'],
+    ['Audit ID', payload.auditId || selectedAudit.auditId || reportData.summary?.[0]?.auditId || '-'],
+    ['Audit Start Date', payload.fromDate || payload.from || selectedAudit.auditStartDate || reportData.summary?.[0]?.fromDate || '-'],
+    ['Audit End Date', payload.toDate || payload.to || selectedAudit.auditClosedDate || reportData.summary?.[0]?.toDate || '-'],
+    ['Product Category', payload.category || payload.productCategory || '-'],
+    ['Product Group', payload.productGroup || '-'],
+    ['Product SubGroup', payload.partSubGroup || payload.productSubGroup || '-'],
+    ['Part Number', payload.partNumber || '-'],
+    ['Bin Location', payload.bin || payload.binLocation || '-'],
+    ['Movement Status', payload.movementStatus || '-'],
+    ['Scan Type', payload.scanType || payload.type || '-']
+  ]);
+}
+
+function buildDealerInformationRows(reportData = {}) {
+  const dealer = reportData.selectedDealer || {};
+  const keys = [
+    ['Dealer Code', dealer.dealerCode],
+    ['Dealer Name', dealer.dealerName],
+    ['Brand', dealer.brand],
+    ['Location', dealer.location],
+    ['Current Audit ID', dealer.currentAuditId],
+    ['Audit Name', dealer.auditName],
+    ['Auditor Name', dealer.auditorName],
+    ['General Manager', dealer.generalManager],
+    ['SPM Name', dealer.spmName],
+    ['Phone', dealer.phone || dealer.mobileNumber || dealer.contactNumber],
+    ['Email', dealer.email],
+    ['Address', dealer.address]
+  ];
+  return packMetricRows('Dealer', keys);
+}
+
+function buildScanStatisticsRows(reportData = {}, scanRegisterRowsData = []) {
+  const summary = Array.isArray(reportData.summary) && reportData.summary.length ? reportData.summary[0] : {};
+  const registerCounts = countScanRegisterRows(scanRegisterRowsData);
+  const scans = Array.isArray(reportData.scans) ? reportData.scans : [];
+  const uniqueUsers = new Set(scans.map((scan) => clean(scan.userName || scan.staffName || scan.loginId || scan.userId)).filter(Boolean)).size;
+  const uniqueDevices = new Set(scans.map((scan) => clean(scan.deviceId || scan.deviceName)).filter(Boolean)).size;
+  return [
+    ...packMetricRows('Scan Totals', [
+      ['Total Scan Rows', packNumber(summary.totalScans || scans.length || 0, 0)],
+      ['Total Quantity', packNumber(summary.totalQuantity || 0, 0)],
+      ['Total Parts', packNumber(summary.totalMasterParts || reportData.finalRows?.length || 0, 0)],
+      ['Unique Parts', packNumber(summary.uniqueParts || 0, 0)],
+      ['Visible Rows', packNumber(summary.visibleRows || reportData.finalRows?.length || 0, 0)],
+      ['Unknown Parts', packNumber(summary.unknownPartsCount || 0, 0)],
+      ['Merged Duplicate Scan Rows', packNumber(summary.mergedDuplicateScanRows || 0, 0)]
+    ]),
+    ...packMetricRows('Status Breakdown', [
+      ['Accepted', packNumber(registerCounts.accepted || 0, 0)],
+      ['Pending', packNumber(registerCounts.pending || 0, 0)],
+      ['Failed', packNumber(registerCounts.failed || 0, 0)],
+      ['Duplicate', packNumber(registerCounts.duplicate || 0, 0)],
+      ['Rejected', packNumber(registerCounts.rejected || 0, 0)],
+      ['Deleted', packNumber(registerCounts.deleted || 0, 0)],
+      ['Synced', packNumber(registerCounts.synced || 0, 0)]
+    ]),
+    ...packMetricRows('Users & Devices', [
+      ['Unique Users', packNumber(uniqueUsers, 0)],
+      ['Unique Devices', packNumber(uniqueDevices, 0)],
+      ['First Scan Time', packText(summary.firstScanTime || '')],
+      ['Last Scan Time', packText(summary.lastScanTime || '')]
+    ])
+  ];
+}
+
+function buildPendingOfflineRows(scanRegisterRowsData = []) {
+  return scanRegisterRowsData
+    .filter((row) => clean(row.syncStatus).toLowerCase() !== 'synced')
+    .map((row) => normalizePackRow(row));
+}
+
+function buildUserWiseSummaryRows(reportData = {}) {
+  const scans = Array.isArray(reportData.scans) ? reportData.scans : [];
+  return groupedScanSummary(
+    scans,
+    (scan) => clean(scan.userId || scan.loginId || scan.staffName || scan.userName || 'UNKNOWN').toUpperCase(),
+    (scan) => ({
+      userName: scan.userName || scan.staffName || scan.loginId || scan.userId || 'UNKNOWN',
+      userId: scan.userId || scan.loginId || '',
+      role: scan.role || ''
+    }),
+    {
+      dealers: (scan) => {
+        const code = clean(scan.dealerCode || '');
+        const name = clean(scan.dealerName || '');
+        return code ? `${code}${name ? ` (${name})` : ''}` : name;
+      },
+      devices: scanDeviceLabel
+    }
+  ).map((row) => ({
+    userName: row.userName,
+    userId: row.userId,
+    role: row.role,
+    scanCount: row.scanCount,
+    totalQty: row.totalQty,
+    auditQty: row.auditQty,
+    inwardQty: row.inwardQty,
+    outwardQty: row.outwardQty,
+    fittedQty: row.fittedQty,
+    damageQty: row.damageQty,
+    uniqueParts: row.uniqueParts,
+    dealers: row.dealers,
+    devices: row.devices,
+    totalMrpValue: row.totalMrpValue,
+    totalDlcValue: row.totalDlcValue,
+    lastScanTime: row.lastScanTime
+  }));
+}
+
+function buildCategoryVarianceRows(data = {}) {
+  const rows = Array.isArray(data.rows) ? data.rows.slice() : [];
+  return rows.concat([{
+    productCategory: 'Grand Total',
+    action: '',
+    totalScannedParts: Number(data.grandTotal?.totalScannedParts || 0),
+    totalScannedQuantity: Number(data.grandTotal?.totalScannedQuantity || 0),
+    sumPhysicalValueOnMRP: Number(data.grandTotal?.sumPhysicalValueOnMRP || 0),
+    sumPhysicalValueOnDLC: Number(data.grandTotal?.sumPhysicalValueOnDLC || 0),
+    sumDmsValueOnMRP: Number(data.grandTotal?.sumDmsValueOnMRP || 0),
+    sumDmsValueOnDLC: Number(data.grandTotal?.sumDmsValueOnDLC || 0),
+    sumVarianceOnMRP: Number(data.grandTotal?.sumVarianceOnMRP || 0),
+    sumVarianceOnDLC: Number(data.grandTotal?.sumVarianceOnDLC || 0),
+    rowType: 'grandTotal'
+  }]);
+}
+
+function buildReconciliationSummaryRows(report = {}) {
+  const summary = report.summary || {};
+  return packMetricRows('Reconciliation', [
+    ['Dealer Code', summary.dealerCode || report.scope?.dealerCode || '-'],
+    ['Audit ID', summary.auditId || report.scope?.auditId || '-'],
+    ['Total Parts Uploaded', summary.totalPartsUploaded || 0],
+    ['Total DMS Stock Qty', summary.totalDmsStockQty || 0],
+    ['Total Actual Scanned Qty', summary.totalActualScannedQty || 0],
+    ['Total Matched Parts', summary.totalMatchedParts || 0],
+    ['Total Shortage Parts', summary.totalShortageParts || 0],
+    ['Total Excess Parts', summary.totalExcessParts || 0],
+    ['Total Fast Moving Parts', summary.totalFastMovingParts || 0],
+    ['Total Slow Moving Parts', summary.totalSlowMovingParts || 0],
+    ['Total Dead Stock Parts', summary.totalDeadStockParts || 0],
+    ['Total Inventory Value', packCurrency(summary.totalInventoryValue || 0)],
+    ['Actual Stock Value (DLC)', packCurrency(summary.actualStockValueDLC || 0)],
+    ['DMS Stock Value (DLC)', packCurrency(summary.dmsStockValueDLC || 0)],
+    ['Total Shortage Value', packCurrency(summary.totalShortageValue || 0)],
+    ['Total Excess Value', packCurrency(summary.totalExcessValue || 0)],
+    ['Scanned But Not In DMS', summary.totalScannedButNotInDms || 0],
+    ['Net Difference', summary.netDifference || 0],
+    ['Mismatch Count', summary.mismatchCount || 0]
+  ]);
+}
+
+async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
+  const normalized = normalizeAuditPackSelection(payload);
+  if (!normalized.reports.length) {
+    const error = new Error('Please select at least one report');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!normalized.dealerCode) {
+    const error = new Error('Select dealer code first to generate complete audit pack');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  let reportData = await reportModule.buildReportData(normalized);
+  const resolvedAuditId = clean(normalized.auditId || reportData.selectedAudit?.auditId || reportData.selectedDealer?.currentAuditId || (Array.isArray(reportData.audits) && reportData.audits[0] ? reportData.audits[0].auditId : ''));
+  const resolvedQuery = resolvedAuditId && resolvedAuditId !== normalized.auditId
+    ? { ...normalized, auditId: resolvedAuditId }
+    : normalized;
+  if (resolvedQuery.auditId !== normalized.auditId || !reportData.selectedAudit) {
+    reportData = await reportModule.buildReportData(resolvedQuery);
+  }
+
+  const [scanRegisterRowsData, movementAnalysisData] = await Promise.all([
+    scanRegisterRows(resolvedQuery),
+    reconciliationRoute.buildMovementAnalysisReport(resolvedQuery)
+  ]);
+  const selectedDealer = reportData.selectedDealer || {};
+  const selectedAudit = reportData.selectedAudit || (resolvedQuery.auditId && Array.isArray(reportData.audits) ? reportData.audits.find((audit) => clean(audit.auditId) === clean(resolvedQuery.auditId)) : null) || null;
+  const generatedBy = clean(user.name || user.username || user.email || user.id || 'System');
+  const generatedAt = formatIstDateTime(new Date());
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = generatedBy || 'Daksh Inventory';
+  workbook.lastModifiedBy = generatedBy || workbook.creator;
+  workbook.created = new Date();
+  workbook.modified = new Date();
+  workbook.title = 'Complete Audit Pack';
+  workbook.subject = 'Daksh Inventory Complete Audit Pack';
+  workbook.company = 'DAKSH INVENTORY SYSTEM';
+  workbook.properties = { date1904: false };
+
+  addMetricSheet(workbook, 'Audit Summary', buildSummaryStatusRows(
+    reportData,
+    resolvedQuery.reports,
+    normalized,
+    generatedBy,
+    generatedAt,
+    movementAnalysisData,
+    scanRegisterRowsData
+  ), {
+    title: 'AUDIT SUMMARY',
+    orientation: 'portrait'
+  });
+
+  if (normalized.includeDashboardSummary) {
+    addMetricSheet(workbook, 'Dashboard Summary', buildDashboardSummaryRows(reportData, movementAnalysisData, scanRegisterRowsData), {
+      title: 'DASHBOARD SUMMARY',
+      orientation: 'portrait'
+    });
+  }
+
+  if (normalized.includeAuditInformation) {
+    addMetricSheet(workbook, 'Audit Information', buildAuditInformationRows(resolvedQuery, reportData), {
+      title: 'AUDIT INFORMATION',
+      orientation: 'portrait'
+    });
+  }
+
+  if (normalized.includeDealerInformation) {
+    addMetricSheet(workbook, 'Dealer Information', buildDealerInformationRows(reportData), {
+      title: 'DEALER INFORMATION',
+      orientation: 'portrait'
+    });
+  }
+
+  if (normalized.includeScanStatistics) {
+    addMetricSheet(workbook, 'Scan Statistics', buildScanStatisticsRows(reportData, scanRegisterRowsData), {
+      title: 'SCAN STATISTICS',
+      orientation: 'portrait'
+    });
+  }
+
+  if (normalized.includePendingOfflineScanDetails) {
+    addTableSheet(workbook, 'Pending Offline Scans', SCAN_REGISTER_COLUMNS, buildPendingOfflineRows(scanRegisterRowsData), {
+      emptyMessage: 'No Data Available'
+    });
+  }
+
+  if (normalized.includeUserWiseSummary) {
+    addTableSheet(workbook, 'User Wise Summary', USER_WISE_SUMMARY_COLUMNS, buildUserWiseSummaryRows(reportData), {
+      emptyMessage: 'No Data Available'
+    });
+  }
+
+  const packBuildMap = {
+    'bin-wise-stock': async () => ({
+      title: 'BIN WISE STOCK REPORT',
+      kind: 'table',
+      columns: BIN_COLUMNS,
+      rows: selectRows(reportData, 'bin-wise-stock')
+    }),
+    'user-dealer-wise': async () => ({
+      title: 'USER & DEALER WISE REPORT',
+      kind: 'table',
+      columns: USER_DEALER_COLUMNS,
+      rows: selectRows(reportData, 'user-dealer-wise')
+    }),
+    'raw-upi': async () => ({
+      title: 'RAW UPI REPORT',
+      kind: 'table',
+      columns: RAW_UPI_COLUMNS,
+      rows: Array.isArray(reportData.rawLogRows) ? reportData.rawLogRows : []
+    }),
+    'scan-register': async () => ({
+      title: 'SCAN REGISTER REPORT',
+      kind: 'table',
+      columns: SCAN_REGISTER_COLUMNS,
+      rows: scanRegisterRowsData
+    }),
+    'invalid-scan-report': async () => ({
+      title: 'INVALID SCAN REPORT',
+      kind: 'table',
+      columns: INVALID_SCAN_COLUMNS,
+      rows: await rejectedReportRows(resolvedQuery)
+    }),
+    'stock-summary': async () => {
+      const stockSummary = await reportModule.buildStockSummaryReport(resolvedQuery);
+      return {
+        title: 'STOCK SUMMARY',
+        kind: 'table',
+        columns: stockSummary.columns || [],
+        rows: stockSummary.rows || []
+      };
+    },
+    short: async () => {
+      const partwise = await reportModule.buildPartwiseInventoryAuditReport(resolvedQuery);
+      return {
+        title: 'SHORT REPORT',
+        kind: 'table',
+        columns: partwise.columns || [],
+        rows: (partwise.rows || []).filter((row) => String(row.status || '').toLowerCase() === 'short')
+      };
+    },
+    excess: async () => {
+      const partwise = await reportModule.buildPartwiseInventoryAuditReport(resolvedQuery);
+      return {
+        title: 'EXCESS REPORT',
+        kind: 'table',
+        columns: partwise.columns || [],
+        rows: (partwise.rows || []).filter((row) => ['excess', 'extra part'].includes(String(row.status || '').toLowerCase()))
+      };
+    },
+    movement_wise_stock_analysis: async () => ({
+      title: 'MOVEMENT WISE STOCK ANALYSIS',
+      kind: 'table',
+      columns: movementAnalysisData.columns || [],
+      rows: movementAnalysisData.rows || []
+    }),
+    damage: async () => {
+      const partwise = await reportModule.buildPartwiseInventoryAuditReport(resolvedQuery);
+      return {
+        title: 'DAMAGE REPORT',
+        kind: 'table',
+        columns: partwise.columns || [],
+        rows: (partwise.rows || []).filter((row) => Number(row.damageQty || 0) > 0)
+      };
+    },
+    'category-wise-variance-summary': async () => {
+      const category = await reportModule.buildCategoryWiseVarianceSummary(resolvedQuery);
+      return {
+        title: 'CATEGORY WISE VARIANCE SUMMARY',
+        kind: 'table',
+        columns: CATEGORY_VARIANCE_COLUMNS,
+        rows: buildCategoryVarianceRows(category)
+      };
+    },
+    'partwise-inventory-audit': async () => {
+      const partwise = await reportModule.buildPartwiseInventoryAuditReport(resolvedQuery);
+      return {
+        title: 'PARTWISE INVENTORY AUDIT REPORT',
+        kind: 'table',
+        columns: partwise.columns || [],
+        rows: partwise.rows || []
+      };
+    },
+    'parts-inventory-refresh-template': async () => {
+      const rows = await reportModule.buildPartsInventoryRefreshRows(resolvedQuery);
+      const maxBinCount = Math.max(1, ...rows.map((row) => (row.binLocations || []).length));
+      const binColumns = Array.from({ length: maxBinCount }, (_, index) => ({
+        header: `Bin Loc ${index + 1}`,
+        key: `binLocation${index + 1}`,
+        width: 16
+      }));
+      const columns = [
+        { header: 'Part Number', key: 'partNumber', width: 18 },
+        { header: 'Qty', key: 'qty', width: 10 },
+        { header: 'Physical Bin Qty', key: 'physicalBinQty', width: 18 },
+        { header: 'Fitted Qty', key: 'fittedQty', width: 14 },
+        { header: 'Fitted Regd No', key: 'fittedRegdNo', width: 18 },
+        { header: 'Fitted Job Card No', key: 'fittedJobCardNo', width: 20 },
+        ...binColumns
+      ];
+      return {
+        title: 'PART INVENTORY REFRESH TEMPLATE',
+        kind: 'table',
+        columns,
+        rows: rows.map((row) => {
+          const record = {
+            partNumber: row.partNumber || '',
+            qty: row.qty || row.quantity || 0,
+            physicalBinQty: row.physicalBinQty || 0,
+            fittedQty: row.fittedQty || 0,
+            fittedRegdNo: row.fittedRegdNo || '',
+            fittedJobCardNo: row.fittedJobCardNo || ''
+          };
+          binColumns.forEach((column, index) => {
+            record[column.key] = (row.binLocations || [])[index] || '';
+          });
+          return record;
+        })
+      };
+    },
+    'reconciliation-report': async () => ({
+      title: 'RECONCILIATION REPORT',
+      kind: 'metrics',
+      rows: buildReconciliationSummaryRows(await reconciliationRoute.buildReconciliationReport(resolvedQuery))
+    }),
+    'dealer-reconciliation-report': async () => {
+      const reconciliation = await reconciliationRoute.buildReconciliationReport(resolvedQuery);
+      return {
+        title: 'DEALER RECONCILIATION REPORT',
+        kind: 'table',
+        columns: RECONCILIATION_COLUMNS,
+        rows: reconciliation.rows || []
+      };
+    },
+    'dead-stock-report': async () => ({
+      title: 'DEAD STOCK REPORT',
+      kind: 'table',
+      columns: movementAnalysisData.columns || [],
+      rows: (movementAnalysisData.sections && movementAnalysisData.sections.deadStock) || []
+    }),
+    'fast-moving-report': async () => ({
+      title: 'FAST MOVING REPORT',
+      kind: 'table',
+      columns: movementAnalysisData.columns || [],
+      rows: (movementAnalysisData.sections && movementAnalysisData.sections.fastMoving) || []
+    }),
+    'slow-moving-report': async () => ({
+      title: 'SLOW MOVING REPORT',
+      kind: 'table',
+      columns: movementAnalysisData.columns || [],
+      rows: (movementAnalysisData.sections && movementAnalysisData.sections.slowMoving) || []
+    }),
+    'critical-shortage-report': async () => ({
+      title: 'CRITICAL SHORTAGE REPORT',
+      kind: 'table',
+      columns: movementAnalysisData.columns || [],
+      rows: (movementAnalysisData.sections && movementAnalysisData.sections.criticalShortage) || []
+    })
+  };
+
+  const selectedSpecs = [];
+  for (const reportKey of normalized.reports) {
+    const builder = packBuildMap[reportKey];
+    if (!builder) continue;
+    try {
+      selectedSpecs.push(await builder());
+    } catch (error) {
+      selectedSpecs.push({
+        title: reportLabelForKey(reportKey).toUpperCase(),
+        kind: 'metrics',
+        rows: packMetricRows('Error', [['Message', error.message]])
+      });
+    }
+  }
+
+  selectedSpecs.forEach((spec) => {
+    if (!spec) return;
+    if (spec.kind === 'metrics') {
+      addMetricSheet(workbook, spec.title, spec.rows || [], { title: spec.title });
+      return;
+    }
+    addTableSheet(workbook, spec.title, spec.columns || [], spec.rows || [], {
+      emptyMessage: spec.emptyMessage || 'No Data Available'
+    });
+  });
+
+  return {
+    workbook,
+    normalized,
+    resolvedQuery,
+    reportData,
+    selectedDealer,
+    selectedAudit,
+    generatedBy,
+    generatedAt
+  };
+}
+
+function packFileDate(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(date);
+}
+
+function sanitizePackFilePart(value) {
+  return clean(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+}
+
+function buildAuditPackFilename(result = {}) {
+  const normalized = result.normalized || {};
+  const selectedDealer = result.selectedDealer || {};
+  const selectedAudit = result.selectedAudit || {};
+  const dealerCode = sanitizePackFilePart(selectedDealer.dealerCode || normalized.dealerCode || 'DEALER');
+  const dealerName = sanitizePackFilePart(selectedDealer.dealerName || normalized.dealerName || selectedDealer.dealerCode || 'AUDIT');
+  const auditDate = packFileDate(
+    selectedAudit.auditClosedDate ||
+    selectedAudit.auditEndDate ||
+    selectedAudit.auditStartDate ||
+    selectedAudit.auditDate ||
+    normalized.toDate ||
+    normalized.fromDate ||
+    new Date()
+  );
+  return `AUDIT_PACK_${dealerCode}_${dealerName}_${auditDate}.xlsx`;
+}
+
 function columnsForRows(rows) {
   const first = rows[0] || {};
   return Object.keys(first).filter((key) => !key.startsWith('_')).map((key) => ({
@@ -1105,8 +2088,48 @@ async function handleInvalidScanReport(req, res) {
   }
 }
 
+async function handleCompleteAuditPack(req, res) {
+  try {
+    const normalized = normalizeAuditPackSelection(req.body || {});
+    if (!normalized.dealerCode) return requireDealerSelection(res);
+    if (!normalized.reports.length) {
+      return res.status(400).json({ success: false, message: 'Please select at least one report' });
+    }
+
+    const generatedBy = clean(req.user && (req.user.name || req.user.username || req.user.email || req.user.id || 'System'));
+    const cacheQuery = {
+      ...normalized,
+      generatedBy
+    };
+
+    const cached = await getCachedResponse('complete-audit-pack', cacheQuery, async () => {
+      const result = await buildCompleteAuditPackWorkbook({
+        ...normalized,
+        generatedBy
+      }, req.user || {});
+      const buffer = Buffer.from(await result.workbook.xlsx.writeBuffer());
+      return {
+        buffer,
+        filename: buildAuditPackFilename(result)
+      };
+    }, {
+      scope: { dealerCode: normalized.dealerCode, auditId: normalized.auditId },
+      tags: ['report', 'reconciliation', 'scan', 'stock', 'master', 'catalogue', 'dealer', 'bin', 'price', 'audit']
+    });
+
+    applyCacheHeaders(res, cached);
+    const output = cached.data || {};
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${output.filename || 'AUDIT_PACK.xlsx'}"`);
+    return res.send(Buffer.isBuffer(output.buffer) ? output.buffer : Buffer.from(output.buffer || []));
+  } catch (error) {
+    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
+  }
+}
+
 router.get('/invalid-scan-report', auth.requireAuth, handleInvalidScanReport);
 router.get('/wrong-not-found-master', auth.requireAuth, handleInvalidScanReport);
+router.post('/download-complete-audit-pack', auth.requireAuth, handleCompleteAuditPack);
 
 router.get('/duplicate-scans', auth.requireAuth, (req, res) => handleScanRegisterAlias(req, res, 'Duplicate'));
 router.post('/duplicate-scans/email', auth.requireAuth, auth.requireAdmin, (req, res) => emailScanRegisterAlias(req, res, 'Duplicate'));

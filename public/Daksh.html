@@ -14,7 +14,7 @@
       if (width >= 132) document.documentElement.classList.add('sidebar-wide-initial');
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260616-scan-local-first-sync">
+  <link rel="stylesheet" href="/style.css?v=20260622-complete-audit-pack">
 </head>
 <body class="app-booting dashboard-view-active">
   <script>
@@ -297,7 +297,7 @@
 
       <section id="reports" class="view">
         <section class="card">
-          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Load Report</button><button id="reportRefresh" class="btn light" type="button" disabled>Refresh Now</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button></div></div>
+          <div class="card-head"><h2>Reports</h2><div class="actions"><button id="reportFilterSettingsOpen" class="btn icon-btn" type="button" title="Select Report Filters" aria-label="Select Report Filters">&#9881;</button><button id="reportShow" class="btn primary" type="button" disabled>Load Report</button><button id="reportRefresh" class="btn light" type="button" disabled>Refresh Now</button><button id="reportExcel" class="btn primary" type="button" disabled>Download Excel</button><button id="downloadCompleteAuditPackBtn" class="btn primary audit-pack-button" type="button" disabled><svg class="audit-pack-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 2.5h8l4 4V21a1 1 0 0 1-1 1H6.5A1.5 1.5 0 0 1 5 20.5v-17A1 1 0 0 1 6 2.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 2.5V7h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 12h8M8 16h8" fill="none" stroke="#22c55e" stroke-width="1.8" stroke-linecap="round"/></svg><span>Download Complete Audit Pack</span></button></div></div>
           <form id="reportFilters" class="filter-grid">
             <label>Report Type<select name="reportType" id="reportTypeSelect" required>
               <option value="">Select report</option>
@@ -1295,10 +1295,71 @@
       </div>
     </div>
   </div>
+  <div id="completeAuditPackModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="completeAuditPackTitle">
+    <div class="modal-card audit-pack-modal-card">
+      <div class="modal-head">
+        <div>
+          <h2 id="completeAuditPackTitle">Select Reports For Audit Pack</h2>
+          <p class="muted">Choose the report tabs to bundle into one Excel workbook. Audit Summary is always included.</p>
+        </div>
+        <button id="completeAuditPackClose" class="btn icon-btn" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="audit-pack-modal-body">
+        <section class="audit-pack-block">
+          <div class="audit-pack-block-head">
+            <div class="audit-pack-block-head-copy">
+              <h3>Reports</h3>
+              <p id="completeAuditPackSelectedCount" class="muted audit-pack-selected-count">0 Reports Selected</p>
+            </div>
+            <div class="audit-pack-block-head-actions">
+              <input id="completeAuditPackSearch" class="audit-pack-search" type="search" placeholder="Search reports">
+              <button id="completeAuditPackSelectAll" class="btn light" type="button">Select All Reports</button>
+              <button id="completeAuditPackUnselectAll" class="btn light" type="button">Unselect All Reports</button>
+            </div>
+          </div>
+          <div id="completeAuditPackReports" class="audit-pack-report-list"></div>
+        </section>
+        <section class="audit-pack-block">
+          <h3>Optional Sheets</h3>
+          <div id="completeAuditPackExtras" class="audit-pack-extra-grid"></div>
+          <p class="muted audit-pack-note">The first sheet is always the audit summary.</p>
+        </section>
+      </div>
+      <div class="modal-actions">
+        <button id="completeAuditPackCancel" class="btn light" type="button">Cancel</button>
+        <button id="completeAuditPackGenerate" class="btn primary" type="button">Generate Audit Pack</button>
+      </div>
+    </div>
+  </div>
+  <div id="completeAuditPackProgressModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="completeAuditPackProgressTitle">
+    <div class="modal-card audit-pack-progress-card">
+      <div class="modal-head">
+        <div>
+          <h2 id="completeAuditPackProgressTitle">Generating Audit Pack</h2>
+          <p id="completeAuditPackProgressText" class="muted">Preparing workbook...</p>
+        </div>
+        <button id="completeAuditPackProgressClose" class="btn icon-btn" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="audit-pack-progress-body">
+        <div class="audit-pack-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Complete audit pack generation progress">
+          <span id="completeAuditPackProgressFill"></span>
+        </div>
+        <ol id="completeAuditPackProgressSteps" class="audit-pack-progress-steps">
+          <li data-step="0" class="active"><strong>Preparing Reports</strong><span>Validating selection and audit scope.</span></li>
+          <li data-step="1"><strong>Fetching Data</strong><span>Loading report rows from the database.</span></li>
+          <li data-step="2"><strong>Creating Excel Sheets</strong><span>Building workbook tabs and formatting.</span></li>
+          <li data-step="3"><strong>Finalizing Download</strong><span>Starting the file download.</span></li>
+        </ol>
+      </div>
+      <div class="modal-actions">
+        <button id="completeAuditPackProgressAction" class="btn light" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
 
   <script src="/config.js"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260620-dashboard-stream-camera-fix"></script>
+  <script src="/ui.js?v=20260622-complete-audit-pack"></script>
 </body>
 </html>

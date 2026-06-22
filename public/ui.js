@@ -202,6 +202,13 @@
     masterSearch: { q: '', page: 1, limit: 25, total: 0 },
     masterSearchRows: [],
     activeAudit: null,
+    auditPackInProgress: false,
+    auditPackProgress: { stage: 'idle', percent: 0, message: '', activeStep: 0, status: 'idle' },
+    auditPackAbortController: null,
+    auditPackTimer: null,
+    auditPackCloseTimer: null,
+    auditPackRequestId: 0,
+    auditPackSettings: null,
     binTransferParts: [],
     binTransferLoadedParts: [],
     binTransferDestinationBins: [],
@@ -290,6 +297,60 @@
     [SYNC_QUEUE_KEY, SYNC_LOG_KEY, CONNECTION_LOG_KEY, 'dakshReportPreviewCache'].forEach((key) => storageRemove(key));
     storageSet(DATA_VERSION_KEY, CURRENT_DATA_VERSION);
   }
+  const AUDIT_PACK_REPORTS = [
+    { key: 'bin-wise-stock', label: 'Bin Wise Stock Report' },
+    { key: 'user-dealer-wise', label: 'User & Dealer Wise Report' },
+    { key: 'raw-upi', label: 'Raw UPI Report' },
+    { key: 'scan-register', label: 'Scan Register Report' },
+    { key: 'invalid-scan-report', label: 'Invalid Scan Report' },
+    { key: 'stock-summary', label: 'Stock Summary' },
+    { key: 'short', label: 'Short Report' },
+    { key: 'excess', label: 'Excess Report' },
+    { key: 'movement_wise_stock_analysis', label: 'Movement Wise Stock Analysis Report' },
+    { key: 'damage', label: 'Damage Report' },
+    { key: 'category-wise-variance-summary', label: 'Category Wise Variance Summary' },
+    { key: 'partwise-inventory-audit', label: 'Partwise Inventory Audit Report' },
+    { key: 'parts-inventory-refresh-template', label: 'Part Inventory Refresh Template' },
+    { key: 'reconciliation-report', label: 'Reconciliation Report' },
+    { key: 'dealer-reconciliation-report', label: 'Dealer Reconciliation Report' },
+    { key: 'dead-stock-report', label: 'Dead Stock Report' },
+    { key: 'fast-moving-report', label: 'Fast Moving Report' },
+    { key: 'slow-moving-report', label: 'Slow Moving Report' },
+    { key: 'critical-shortage-report', label: 'Critical Shortage Report' }
+  ];
+  const AUDIT_PACK_REPORT_KEYS = new Set(AUDIT_PACK_REPORTS.map((item) => item.key));
+  const AUDIT_PACK_EXTRA_OPTIONS = [
+    { key: 'includeDashboardSummary', label: 'Include Dashboard Summary' },
+    { key: 'includeAuditInformation', label: 'Include Audit Information' },
+    { key: 'includeDealerInformation', label: 'Include Dealer Information' },
+    { key: 'includeScanStatistics', label: 'Include Scan Statistics' },
+    { key: 'includePendingOfflineScanDetails', label: 'Include Pending/Offline Scan Details' },
+    { key: 'includeUserWiseSummary', label: 'Include User Wise Summary' }
+  ];
+  const AUDIT_PACK_EXTRA_KEYS = new Set(AUDIT_PACK_EXTRA_OPTIONS.map((item) => item.key));
+  const AUDIT_PACK_REPORT_GROUPS = [
+    {
+      title: 'Stock Reports',
+      keys: ['stock-summary', 'bin-wise-stock', 'partwise-inventory-audit', 'parts-inventory-refresh-template']
+    },
+    {
+      title: 'Scan Reports',
+      keys: ['scan-register', 'raw-upi', 'invalid-scan-report']
+    },
+    {
+      title: 'Variance Reports',
+      keys: ['category-wise-variance-summary', 'short', 'excess', 'damage']
+    },
+    {
+      title: 'Analysis Reports',
+      keys: ['movement_wise_stock_analysis', 'dead-stock-report', 'fast-moving-report', 'slow-moving-report', 'critical-shortage-report']
+    },
+    {
+      title: 'Dealer & Reconciliation',
+      keys: ['user-dealer-wise', 'reconciliation-report', 'dealer-reconciliation-report']
+    }
+  ];
+  const AUDIT_PACK_STORAGE_KEY = 'dakshCompleteAuditPackSettingsV2';
   const REPORT_TITLES = {
     'bin-wise-stock': 'Bin Wise Stock Report',
     'user-dealer-wise': 'User & Dealer Wise Report',
@@ -902,19 +963,68 @@
     return data;
   }
 
-  async function downloadGet(path, fileName) {
+  function sanitizeDownloadFileName(value, fallback = 'download.bin') {
+    const text = String(value || '').trim().replace(/^["']|["']$/g, '');
+    if (!text) return fallback;
+    return text.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim() || fallback;
+  }
+
+  function filenameFromContentDisposition(header = '') {
+    const text = String(header || '').trim();
+    if (!text) return '';
+    const utf8Match = text.match(/filename\*\s*=\s*([^']*)''([^;]+)/i);
+    if (utf8Match) {
+      try {
+        return sanitizeDownloadFileName(decodeURIComponent(utf8Match[2].trim().replace(/^"|"$/g, '')));
+      } catch (error) {
+        return sanitizeDownloadFileName(utf8Match[2]);
+      }
+    }
+    const quotedMatch = text.match(/filename\s*=\s*"([^"]+)"/i);
+    if (quotedMatch) return sanitizeDownloadFileName(quotedMatch[1]);
+    const plainMatch = text.match(/filename\s*=\s*([^;]+)/i);
+    if (plainMatch) return sanitizeDownloadFileName(plainMatch[1]);
+    return '';
+  }
+
+  function downloadFileNameFromPath(path, fallback = 'download.bin') {
+    try {
+      const url = new URL(String(path || ''), window.location.origin);
+      const lastSegment = decodeURIComponent((url.pathname.split('/').filter(Boolean).pop() || '').trim());
+      return sanitizeDownloadFileName(lastSegment || fallback, fallback);
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function resolveDownloadFileName(response, path, requestedName) {
+    const fromHeader = filenameFromContentDisposition(response.headers.get('content-disposition'));
+    return sanitizeDownloadFileName(fromHeader || requestedName || downloadFileNameFromPath(path), 'download.bin');
+  }
+
+  async function downloadGet(path, fileName, options = {}) {
+    const { headers: optionHeaders, ...fetchOptions } = options || {};
     const response = await fetch(apiUrl(withActiveDealerQuery(path)), {
-      headers: state.token ? { Authorization: `Bearer ${state.token}` } : {}
+      ...fetchOptions,
+      headers: {
+        ...(optionHeaders || {}),
+        ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
+      }
     });
     if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
     const blob = await response.blob();
-    triggerDownload(blob, fileName);
+    const finalName = resolveDownloadFileName(response, path, fileName);
+    triggerDownload(blob, finalName);
+    return finalName;
   }
 
-  async function downloadPost(path, body, fileName) {
+  async function downloadPost(path, body, fileName, options = {}) {
+    const { headers: optionHeaders, ...fetchOptions } = options || {};
     const response = await fetch(apiUrl(withActiveDealerQuery(path)), {
+      ...fetchOptions,
       method: 'POST',
       headers: {
+        ...(optionHeaders || {}),
         'Content-Type': 'application/json',
         ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
       },
@@ -922,14 +1032,16 @@
     });
     if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
     const blob = await response.blob();
-    triggerDownload(blob, fileName);
+    const finalName = resolveDownloadFileName(response, path, fileName);
+    triggerDownload(blob, finalName);
+    return finalName;
   }
 
   function triggerDownload(blob, fileName) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = fileName;
+    link.download = sanitizeDownloadFileName(fileName, 'download.bin');
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -4571,11 +4683,442 @@
     const canShow = Boolean(reportType) && validateReportSelection(false);
     const isCsvReport = CSV_REPORT_TYPES.has(reportType);
     const blocksPdfEmail = NO_PDF_EMAIL_REPORT_TYPES.has(reportType);
+    const auditPackDealerCode = auditPackDealerCodeValue();
+    const auditPackButton = $('#downloadCompleteAuditPackBtn');
     $('#reportShow').disabled = !canShow || state.reportLoading;
     $('#reportRefresh').disabled = !canShow || state.reportLoading;
     $('#reportExcel').disabled = isCsvReport || !canShow || state.reportLoading;
     if ($('#reportPdf')) $('#reportPdf').disabled = isCsvReport || blocksPdfEmail || !state.reportLoaded || state.reportLoading;
     if ($('#reportEmail')) $('#reportEmail').disabled = isCsvReport || blocksPdfEmail || !state.reportLoaded || state.reportLoading;
+    if (auditPackButton) {
+      auditPackButton.disabled = !auditPackDealerCode || state.auditPackInProgress;
+      auditPackButton.title = state.auditPackInProgress
+        ? 'Generating audit pack...'
+        : (auditPackDealerCode ? 'Download the complete audit pack workbook' : 'Select a dealer code first');
+    }
+    updateAuditPackGenerateButton();
+  }
+
+  function auditPackDealerCodeValue() {
+    const dealerCode = cleanDealerCode(
+      ($('#reportFilters') && formObject($('#reportFilters')).dealerCode) ||
+      (state.activeAudit && state.activeAudit.dealerCode) ||
+      activeDealerId() ||
+      ''
+    );
+    return dealerCode === 'ALL' ? '' : dealerCode;
+  }
+
+  function auditPackStorageKey() {
+    return userScopedStorageKey(AUDIT_PACK_STORAGE_KEY);
+  }
+
+  function defaultAuditPackSettings() {
+    return {
+      reports: [],
+      extras: []
+    };
+  }
+
+  function normalizeAuditPackSettings(settings = {}) {
+    const selectedReports = Array.isArray(settings.reports)
+      ? settings.reports
+      : Object.entries(settings)
+        .filter(([key, value]) => AUDIT_PACK_REPORT_KEYS.has(key) && (value === true || value === 'true' || value === 1 || value === '1'))
+        .map(([key]) => key);
+    const selectedExtras = Array.isArray(settings.extras)
+      ? settings.extras
+      : Object.entries(settings)
+        .filter(([key, value]) => AUDIT_PACK_EXTRA_KEYS.has(key) && (value === true || value === 'true' || value === 1 || value === '1'))
+        .map(([key]) => key);
+    const reports = Array.from(new Set(selectedReports.filter((key) => AUDIT_PACK_REPORT_KEYS.has(key))));
+    const extras = Array.from(new Set(selectedExtras.filter((key) => AUDIT_PACK_EXTRA_KEYS.has(key))));
+    return { reports, extras };
+  }
+
+  function readAuditPackSettings() {
+    try {
+      return normalizeAuditPackSettings(JSON.parse(storageGet(auditPackStorageKey()) || 'null') || {});
+    } catch (error) {
+      return defaultAuditPackSettings();
+    }
+  }
+
+  function saveAuditPackSettings(settings = state.auditPackSettings || defaultAuditPackSettings()) {
+    const normalized = normalizeAuditPackSettings(settings);
+    state.auditPackSettings = normalized;
+    storageSet(auditPackStorageKey(), JSON.stringify(normalized));
+    return normalized;
+  }
+
+  function auditPackDealerCode() {
+    const form = $('#reportFilters');
+    const formData = form ? formObject(form) : {};
+    const dealerCode = cleanDealerCode(
+      formData.dealerCode ||
+      (state.activeAudit && state.activeAudit.dealerCode) ||
+      activeDealerId() ||
+      ''
+    );
+    return dealerCode === 'ALL' ? '' : dealerCode;
+  }
+
+  function auditPackSelectedReportKeys() {
+    return $$('#completeAuditPackReports input[type="checkbox"]:checked')
+      .map((box) => String(box.value || '').trim())
+      .filter((key) => AUDIT_PACK_REPORT_KEYS.has(key));
+  }
+
+  function auditPackSelectedExtraKeys() {
+    return $$('#completeAuditPackExtras input[type="checkbox"]:checked')
+      .map((box) => String(box.value || '').trim())
+      .filter((key) => AUDIT_PACK_EXTRA_KEYS.has(key));
+  }
+
+  function auditPackSelectedCount() {
+    return Array.isArray(state.auditPackSettings?.reports)
+      ? state.auditPackSettings.reports.length
+      : auditPackSelectedReportKeys().length;
+  }
+
+  function auditPackSelectedCountText(count = auditPackSelectedCount()) {
+    const total = Math.max(0, Number(count || 0));
+    return `${wholeNumber(total)} Report${total === 1 ? '' : 's'} Selected`;
+  }
+
+  function updateAuditPackSelectedCount(count = auditPackSelectedCount()) {
+    const node = $('#completeAuditPackSelectedCount');
+    if (node) node.textContent = auditPackSelectedCountText(count);
+  }
+
+  function auditPackMatchesSearch(item = {}, searchTerm = '') {
+    const term = String(searchTerm || '').trim().toLowerCase();
+    if (!term) return true;
+    const haystack = [
+      item.key,
+      item.label,
+      item.group
+    ].map((value) => String(value || '').toLowerCase());
+    return haystack.some((value) => value.includes(term));
+  }
+
+  function auditPackGroupedReports(searchTerm = '') {
+    const lookup = new Map(AUDIT_PACK_REPORTS.map((item) => [item.key, item]));
+    return AUDIT_PACK_REPORT_GROUPS.map((group) => {
+      const items = group.keys
+        .map((key) => lookup.get(key))
+        .filter(Boolean)
+        .map((item) => {
+          const withGroup = { ...item, group: group.title };
+          return {
+            ...withGroup,
+            matchesSearch: auditPackMatchesSearch(withGroup, searchTerm)
+          };
+        });
+      return {
+        title: group.title,
+        items,
+        hasVisibleItems: items.some((item) => item.matchesSearch)
+      };
+    }).filter((group) => group.items.length);
+  }
+
+  function syncAuditPackSettingsFromDom() {
+    const settings = normalizeAuditPackSettings({
+      reports: auditPackSelectedReportKeys(),
+      extras: auditPackSelectedExtraKeys()
+    });
+    state.auditPackSettings = settings;
+    saveAuditPackSettings(settings);
+    updateAuditPackSelectedCount(settings.reports.length);
+    updateAuditPackGenerateButton();
+    return settings;
+  }
+
+  function updateAuditPackGenerateButton() {
+    const button = $('#completeAuditPackGenerate');
+    if (!button) return;
+    const settings = state.auditPackSettings || defaultAuditPackSettings();
+    const reportCount = Array.isArray(settings.reports) ? settings.reports.length : 0;
+    const dealerCode = auditPackDealerCode();
+    button.disabled = state.auditPackInProgress || !dealerCode;
+    button.title = state.auditPackInProgress
+      ? 'Generating audit pack...'
+      : (!dealerCode ? 'Select a dealer code first' : (reportCount ? 'Generate the complete audit pack workbook' : 'Please select at least one report'));
+  }
+
+  function renderAuditPackModal(searchTerm = null) {
+    const settings = saveAuditPackSettings(state.auditPackSettings || readAuditPackSettings());
+    const reportSet = new Set(settings.reports);
+    const extraSet = new Set(settings.extras);
+    const searchInput = $('#completeAuditPackSearch');
+    const term = searchTerm === null ? String(searchInput?.value || '').trim() : String(searchTerm || '').trim();
+    if (searchInput && searchTerm !== null) searchInput.value = term;
+
+    const reportGrid = $('#completeAuditPackReports');
+    const extraGrid = $('#completeAuditPackExtras');
+    const groups = auditPackGroupedReports(term);
+    const hasVisibleReports = groups.some((group) => group.hasVisibleItems);
+    if (reportGrid) {
+      reportGrid.innerHTML = groups.length ? groups.map((group) => `
+        <section class="audit-pack-report-group${group.hasVisibleItems ? '' : ' hidden'}">
+          <h4 class="audit-pack-report-group-title">${escapeHtml(group.title)}</h4>
+          <div class="audit-pack-group-items">
+            ${group.items.map((item) => `
+              <label class="audit-pack-option${item.matchesSearch ? '' : ' hidden'}">
+                <input type="checkbox" value="${escapeHtml(item.key)}" ${reportSet.has(item.key) ? 'checked' : ''}>
+                <span>${escapeHtml(item.label)}</span>
+              </label>
+            `).join('')}
+          </div>
+        </section>
+      `).join('') : '';
+      if (!hasVisibleReports) {
+        reportGrid.innerHTML += '<p class="audit-pack-empty-state">No reports match your search.</p>';
+      }
+    }
+    if (extraGrid) {
+      extraGrid.innerHTML = AUDIT_PACK_EXTRA_OPTIONS.map((item) => `
+        <label class="audit-pack-option audit-pack-option-soft">
+          <input type="checkbox" value="${escapeHtml(item.key)}" ${extraSet.has(item.key) ? 'checked' : ''}>
+          <span>${escapeHtml(item.label)}</span>
+        </label>
+      `).join('');
+    }
+    updateAuditPackSelectedCount(settings.reports.length);
+    updateAuditPackGenerateButton();
+  }
+
+  function openAuditPackModal() {
+    if (state.auditPackInProgress) return;
+    const dealerCode = auditPackDealerCode();
+    if (!dealerCode) {
+      toast('Select dealer code first', 'error');
+      return;
+    }
+    renderAuditPackModal('');
+    $('#completeAuditPackModal')?.classList.remove('hidden');
+    $('#completeAuditPackGenerate')?.focus();
+  }
+
+  function closeAuditPackModal() {
+    $('#completeAuditPackModal')?.classList.add('hidden');
+  }
+
+  function clearAuditPackTimers() {
+    clearInterval(state.auditPackTimer);
+    clearTimeout(state.auditPackCloseTimer);
+    state.auditPackTimer = null;
+    state.auditPackCloseTimer = null;
+  }
+
+  function setAuditPackProgressStepState(activeStep = 0, status = 'loading') {
+    const steps = $$('#completeAuditPackProgressSteps li');
+    steps.forEach((step, index) => {
+      step.classList.remove('active', 'complete', 'error');
+      if (status === 'error') {
+        if (index < activeStep) step.classList.add('complete');
+        else if (index === activeStep) step.classList.add('error');
+        return;
+      }
+      if (status === 'complete') {
+        if (index <= activeStep) step.classList.add('complete');
+        return;
+      }
+      if (index < activeStep) step.classList.add('complete');
+      else if (index === activeStep) step.classList.add('active');
+    });
+  }
+
+  function setAuditPackProgress(progress = {}) {
+    const percent = Math.max(0, Math.min(100, Number(progress.percent ?? state.auditPackProgress.percent ?? 0)));
+    const activeStep = Math.max(0, Math.min(3, Number.isFinite(Number(progress.activeStep)) ? Number(progress.activeStep) : Number(state.auditPackProgress.activeStep || 0)));
+    const status = String(progress.status || state.auditPackProgress.status || 'loading').trim() || 'loading';
+    const message = String(progress.message ?? state.auditPackProgress.message ?? '').trim() || 'Preparing workbook...';
+    state.auditPackProgress = {
+      ...state.auditPackProgress,
+      ...progress,
+      percent,
+      activeStep,
+      status,
+      message
+    };
+    const fill = $('#completeAuditPackProgressFill');
+    if (fill) fill.style.width = `${percent}%`;
+    const bar = $('#completeAuditPackProgressModal .audit-pack-progress-bar');
+    if (bar) bar.setAttribute('aria-valuenow', String(Math.round(percent)));
+    setText('completeAuditPackProgressText', message);
+    const action = $('#completeAuditPackProgressAction');
+    if (action) action.textContent = status === 'loading' ? 'Cancel' : 'Close';
+    setAuditPackProgressStepState(activeStep, status);
+  }
+
+  function openAuditPackProgress() {
+    clearAuditPackTimers();
+    $('#completeAuditPackProgressModal')?.classList.remove('hidden');
+    setAuditPackProgress({
+      stage: 'preparing',
+      percent: 6,
+      message: 'Preparing workbook...',
+      activeStep: 0,
+      status: 'loading'
+    });
+  }
+
+  function closeAuditPackProgress() {
+    clearAuditPackTimers();
+    $('#completeAuditPackProgressModal')?.classList.add('hidden');
+    state.auditPackInProgress = false;
+    state.auditPackAbortController = null;
+    state.auditPackProgress = {
+      stage: 'idle',
+      percent: 0,
+      message: '',
+      activeStep: 0,
+      status: 'idle'
+    };
+    updateReportButtons();
+  }
+
+  function cancelAuditPackGeneration() {
+    if (!state.auditPackInProgress) {
+      closeAuditPackProgress();
+      return;
+    }
+    state.auditPackRequestId += 1;
+    try {
+      state.auditPackAbortController?.abort();
+    } catch (error) {}
+    clearAuditPackTimers();
+    state.auditPackInProgress = false;
+    state.auditPackAbortController = null;
+    setAuditPackProgress({
+      stage: 'cancelled',
+      percent: Math.max(0, Number(state.auditPackProgress.percent || 0)),
+      message: 'Audit pack generation cancelled',
+      activeStep: Number(state.auditPackProgress.activeStep || 0),
+      status: 'error'
+    });
+    updateReportButtons();
+    state.auditPackCloseTimer = setTimeout(() => {
+      closeAuditPackProgress();
+    }, 300);
+  }
+
+  function collectAuditPackPayload() {
+    const form = $('#reportFilters');
+    const payload = form ? formObject(form) : {};
+    const settings = syncAuditPackSettingsFromDom();
+    delete payload.reportType;
+    payload.dealerCode = auditPackDealerCode();
+    payload.auditId = String(payload.auditId || (state.activeAudit && state.activeAudit.auditId) || '').trim();
+    payload.fromDate = String(payload.fromDate || (state.activeAudit && (state.activeAudit.auditStartDate || state.activeAudit.auditDate)) || '').trim();
+    payload.toDate = String(payload.toDate || (state.activeAudit && (state.activeAudit.auditClosedDate || state.activeAudit.auditEndDate)) || '').trim();
+    payload.includeSummary = true;
+    payload.reports = settings.reports;
+    AUDIT_PACK_EXTRA_OPTIONS.forEach((item) => {
+      payload[item.key] = settings.extras.includes(item.key);
+    });
+    return payload;
+  }
+
+  function auditPackStageForElapsed(elapsedMs) {
+    const stages = [
+      { at: 0, percent: 8, activeStep: 0, message: 'Preparing workbook...' },
+      { at: 650, percent: 22, activeStep: 0, message: 'Validating selection and filters...' },
+      { at: 1600, percent: 44, activeStep: 1, message: 'Fetching report data...' },
+      { at: 2900, percent: 70, activeStep: 2, message: 'Building workbook sheets...' },
+      { at: 4300, percent: 88, activeStep: 3, message: 'Finalizing download...' }
+    ];
+    let stage = stages[0];
+    stages.forEach((candidate) => {
+      if (elapsedMs >= candidate.at) stage = candidate;
+    });
+    const percent = Math.min(94, Math.max(stage.percent, stage.percent + Math.floor((elapsedMs - stage.at) / 350)));
+    return { ...stage, percent };
+  }
+
+  async function generateAuditPack() {
+    if (state.auditPackInProgress) return;
+    const payload = collectAuditPackPayload();
+    if (!payload.dealerCode) {
+      toast('Select dealer code first', 'error');
+      return;
+    }
+    if (!Array.isArray(payload.reports) || !payload.reports.length) {
+      toast('Please select at least one report', 'error');
+      return;
+    }
+
+    closeAuditPackModal();
+    openAuditPackProgress();
+
+    const requestId = ++state.auditPackRequestId;
+    state.auditPackInProgress = true;
+    state.auditPackAbortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    updateReportButtons();
+    const startedAt = Date.now();
+    state.auditPackTimer = setInterval(() => {
+      if (requestId !== state.auditPackRequestId || !state.auditPackInProgress) return;
+      const stage = auditPackStageForElapsed(Date.now() - startedAt);
+      setAuditPackProgress({
+        stage: 'loading',
+        percent: stage.percent,
+        message: stage.message,
+        activeStep: stage.activeStep,
+        status: 'loading'
+      });
+    }, 250);
+
+    try {
+      const downloadOptions = state.auditPackAbortController ? { signal: state.auditPackAbortController.signal } : {};
+      const fileName = await downloadPost('/api/reports/download-complete-audit-pack', payload, undefined, downloadOptions);
+      if (requestId !== state.auditPackRequestId) return;
+      clearAuditPackTimers();
+      state.auditPackInProgress = false;
+      state.auditPackAbortController = null;
+      setAuditPackProgress({
+        stage: 'complete',
+        percent: 100,
+        message: fileName ? `Download started: ${fileName}` : 'Download started',
+        activeStep: 3,
+        status: 'complete'
+      });
+      updateReportButtons();
+      toast('Audit pack download started', 'success');
+      state.auditPackCloseTimer = setTimeout(() => {
+        if (requestId !== state.auditPackRequestId) return;
+        closeAuditPackProgress();
+      }, 900);
+    } catch (error) {
+      if (requestId !== state.auditPackRequestId) return;
+      clearAuditPackTimers();
+      state.auditPackInProgress = false;
+      state.auditPackAbortController = null;
+      updateReportButtons();
+      if (error && error.name === 'AbortError') {
+        setAuditPackProgress({
+          stage: 'cancelled',
+          percent: Math.max(0, Number(state.auditPackProgress.percent || 0)),
+          message: 'Audit pack generation cancelled',
+          activeStep: Number(state.auditPackProgress.activeStep || 0),
+          status: 'error'
+        });
+        state.auditPackCloseTimer = setTimeout(() => {
+          if (requestId !== state.auditPackRequestId) return;
+          closeAuditPackProgress();
+        }, 250);
+        return;
+      }
+      setAuditPackProgress({
+        stage: 'error',
+        percent: Math.max(0, Number(state.auditPackProgress.percent || 0)),
+        message: error.message || 'Audit pack generation failed',
+        activeStep: Number(state.auditPackProgress.activeStep || 0),
+        status: 'error'
+      });
+      toast(error.message || 'Audit pack generation failed', 'error');
+    }
   }
 
   function hasReportCriteria() {
@@ -9687,6 +10230,7 @@
       if (!validateReportSelection(true)) return;
       downloadGet(reportPath('excel'), reportDownloadName('xlsx')).catch((error) => toast(error.message, 'error'));
     });
+    $('#downloadCompleteAuditPackBtn')?.addEventListener('click', () => openAuditPackModal());
     $('#reportPdf')?.addEventListener('click', () => downloadGet(reportPath('pdf'), reportDownloadName('pdf')).catch((error) => toast(error.message, 'error')));
     $('#partsRefreshTemplateCsv')?.addEventListener('click', () => downloadGet(partsRefreshTemplatePath(), 'Parts_Inventory_Refresh_Template.csv').catch((error) => toast(error.message, 'error')));
     $('#reportEmail')?.addEventListener('click', async () => {
@@ -9711,6 +10255,45 @@
         toast(data.message || 'Report email sent');
       } catch (error) {
         toast(error.message, 'error');
+      }
+    });
+    $('#completeAuditPackClose')?.addEventListener('click', closeAuditPackModal);
+    $('#completeAuditPackCancel')?.addEventListener('click', closeAuditPackModal);
+    $('#completeAuditPackModal')?.addEventListener('click', (event) => {
+      if (event.target.id === 'completeAuditPackModal') closeAuditPackModal();
+    });
+    $('#completeAuditPackSelectAll')?.addEventListener('click', () => {
+      $$('#completeAuditPackReports input[type="checkbox"]').forEach((box) => {
+        box.checked = true;
+      });
+      syncAuditPackSettingsFromDom();
+    });
+    $('#completeAuditPackUnselectAll')?.addEventListener('click', () => {
+      $$('#completeAuditPackReports input[type="checkbox"]').forEach((box) => {
+        box.checked = false;
+      });
+      syncAuditPackSettingsFromDom();
+    });
+    $('#completeAuditPackSearch')?.addEventListener('input', (event) => {
+      renderAuditPackModal(event.target.value);
+    });
+    $('#completeAuditPackReports')?.addEventListener('change', syncAuditPackSettingsFromDom);
+    $('#completeAuditPackExtras')?.addEventListener('change', syncAuditPackSettingsFromDom);
+    $('#completeAuditPackGenerate')?.addEventListener('click', () => {
+      generateAuditPack().catch((error) => {
+        if (error && error.name === 'AbortError') return;
+        toast(error.message, 'error');
+      });
+    });
+    $('#completeAuditPackProgressClose')?.addEventListener('click', cancelAuditPackGeneration);
+    $('#completeAuditPackProgressAction')?.addEventListener('click', () => {
+      if (state.auditPackInProgress) cancelAuditPackGeneration();
+      else closeAuditPackProgress();
+    });
+    $('#completeAuditPackProgressModal')?.addEventListener('click', (event) => {
+      if (event.target.id === 'completeAuditPackProgressModal') {
+        if (state.auditPackInProgress) cancelAuditPackGeneration();
+        else closeAuditPackProgress();
       }
     });
     updateReportButtons();
