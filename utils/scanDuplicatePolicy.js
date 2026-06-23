@@ -99,11 +99,11 @@ function globalUpiKey(input = {}) {
 }
 
 function activeUpiDuplicateFilter(input = {}) {
-  if (smartBinDecisionAllowsDuplicate(input)) return null;
   const upi = canonicalUpiValue(input);
   const dealerCode = scanDealerCode(input);
   const auditId = scanAuditId(input);
   const binLocation = upper(input.binLocation || input.bin || input.location || '');
+  if (smartBinDecisionAllowsDuplicate(input) && !binLocation) return null;
   const globalKey = clean(input.globalUpiKey || globalUpiKey(input));
   if (!upi && !globalKey) return null;
   const terms = [];

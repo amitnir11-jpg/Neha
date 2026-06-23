@@ -146,6 +146,10 @@ async function rebuildPartBinLocations(scope = {}) {
   const nextRows = groups
     .map((group) => rowFromGroup(group, normalized, existingByBin.get(normalizeBinLocation(group.binLocation))))
     .filter((row) => row.binLocation && row.quantity > 0);
+  const fallbackRows = sortLocationRows(nextRows).map((row, index) => ({
+    ...row,
+    locationType: index === 0 ? 'PRIMARY' : 'SECONDARY'
+  }));
 
   const activeBins = new Set(nextRows.map((row) => row.binLocation));
   const staleIds = existingRows
@@ -186,6 +190,10 @@ async function rebuildPartBinLocations(scope = {}) {
   }
 
   const finalRows = sortLocationRows(await queryPartBinLocationRows(normalized));
+  if (!finalRows.length && fallbackRows.length) {
+    invalidateCache({ tags: ['smart-bin'], scope: { dealerCode: normalized.dealerCode, auditId: normalized.auditId } });
+    return fallbackRows;
+  }
   for (const [index, row] of finalRows.entries()) {
     const expectedType = index === 0 ? 'PRIMARY' : 'SECONDARY';
     if (normalizeLocationType(row.locationType) === expectedType) continue;
@@ -202,7 +210,8 @@ async function rebuildPartBinLocations(scope = {}) {
   }
 
   invalidateCache({ tags: ['smart-bin'], scope: { dealerCode: normalized.dealerCode, auditId: normalized.auditId } });
-  return sortLocationRows(await queryPartBinLocationRows(normalized));
+  const refreshedRows = sortLocationRows(await queryPartBinLocationRows(normalized));
+  return refreshedRows.length ? refreshedRows : fallbackRows;
 }
 
 async function ensurePartBinLocations(scope = {}, options = {}) {

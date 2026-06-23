@@ -1,6 +1,6 @@
 (function () {
-  const APP_VERSION = 'Daksh Mobile Scanner v1.2.1';
-  const CACHE_VERSION = '20260622-scanner-native-queue-v4';
+  const APP_VERSION = 'Daksh Mobile Scanner v1.2.2';
+  const CACHE_VERSION = '20260623-smart-bin-alerts-v2';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -1165,6 +1165,53 @@
     return `This UPI is already scanned in Bin ${bin}, Part No ${part}`;
   }
 
+  function duplicateRawKey(row = {}) {
+    return normalizeText(row.rawScanString || row.rawScan || row.rawBarcode || row.rawQR || row.rawUpi || row.raw || '');
+  }
+
+  function duplicatePartKey(row = {}) {
+    return normalizePartCandidateValue(row.partNumber || row.normalizedPartNumber || row.part || row.parsedPartNumber || '');
+  }
+
+  function duplicateLookupRows() {
+    const rows = [];
+    const seen = new Set();
+    const push = (row = {}) => {
+      const key = recordKey(row)
+        || scanIdentityKey(row)
+        || `${upper(row.dealerCode || '')}|${clean(row.auditId || '')}|${rowUpiCode(row) || duplicateRawKey(row)}|${upper(rowBin(row))}`;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      rows.push(row);
+    };
+    sessionRows().forEach(push);
+    if (Array.isArray(state.liveRecentRows)) state.liveRecentRows.forEach(push);
+    return rows;
+  }
+
+  function isSameBinDuplicateScan(record = {}, existing = {}) {
+    if (!rowBlocksDuplicate(existing)) return false;
+    if (recordKey(record) && recordKey(record) === recordKey(existing)) return false;
+    const recordDealer = upper(record.dealerCode || activeDealerCode());
+    const existingDealer = upper(existing.dealerCode || existing.dealer || '');
+    if (recordDealer && existingDealer && recordDealer !== existingDealer) return false;
+    const recordAudit = clean(record.auditId || activeAuditId());
+    const existingAudit = clean(existing.auditId || existing.audit || '');
+    if (recordAudit && existingAudit && recordAudit !== existingAudit) return false;
+    const recordBin = upper(rowBin(record));
+    const existingBin = upper(rowBin(existing));
+    if (!recordBin || !existingBin || recordBin !== existingBin) return false;
+    const recordPart = duplicatePartKey(record);
+    const existingPart = duplicatePartKey(existing);
+    if (recordPart && existingPart && recordPart !== existingPart) return false;
+    const recordUpi = rowUpiCode(record) || extractUpiIdFromText(record);
+    const existingUpi = rowUpiCode(existing) || extractUpiIdFromText(existing);
+    if (recordUpi && existingUpi) return recordUpi === existingUpi;
+    const recordRaw = duplicateRawKey(record);
+    const existingRaw = duplicateRawKey(existing);
+    return Boolean(recordRaw && existingRaw && recordRaw === existingRaw);
+  }
+
   async function deleteHistoryRow(row = {}) {
     const scanId = clean(row.scanId || row.uniqueScanId || row.localId || '');
     if (!scanId) {
@@ -1192,13 +1239,8 @@
   }
 
   function localDuplicateForRecord(record = {}) {
-    const key = rowUpiCode(record) || extractUpiIdFromText(record) || scanIdentityKey(record);
-    if (!key) return null;
-    return sessionRows().find((row) => {
-      if (!rowBlocksDuplicate(row)) return false;
-      if (clean(row.scanId || row.uniqueScanId) === clean(record.scanId || record.uniqueScanId)) return false;
-      return rowUpiCode(row) === key || scanIdentityKey(row) === scanIdentityKey(record);
-    }) || null;
+    if (!(rowUpiCode(record) || extractUpiIdFromText(record) || duplicateRawKey(record))) return null;
+    return duplicateLookupRows().find((row) => isSameBinDuplicateScan(record, row)) || null;
   }
 
   function renderUrlState() {
@@ -2101,7 +2143,7 @@
           scanType: normalized.scanType || normalized.type || currentScanType(),
           qty: normalized.qty ?? normalized.quantity ?? 1
         },
-        timeoutMs: 1800
+        timeoutMs: 5500
       });
       if (suggestion && suggestion.shouldPrompt) {
         const decision = await openSmartBinSuggestionModal({
@@ -2117,6 +2159,30 @@
       console.warn('[SMART BIN] preflight skipped', error.message);
       return normalized;
     }
+  }
+
+  async function preflightDuplicateDecision(record = {}) {
+    const normalized = { ...record };
+    if (rowMode(normalized) === 'VERIFICATION') return normalized;
+
+    const localExisting = localDuplicateForRecord(normalized);
+    if (localExisting) {
+      showDuplicateOnce(normalized, localExisting, duplicateScanMessage(localExisting));
+      cameraState('Duplicate blocked');
+      return null;
+    }
+
+    if (!navigator.onLine || !state.session?.token) return normalized;
+
+    const result = await checkBackendDuplicateBeforeSync(normalized, { timeoutMs: 5000 });
+    if (result?.duplicate) {
+      const existing = result.existing || normalized;
+      showDuplicateOnce(normalized, existing, result.message || duplicateScanMessage(existing));
+      cameraState('Duplicate blocked');
+      return null;
+    }
+
+    return normalized;
   }
 
   function mergeStoredRecordWithServer(record = {}, serverScan = {}, extra = {}) {
@@ -2560,7 +2626,7 @@
     return matchingRows.length;
   }
 
-  async function checkBackendDuplicateBeforeSync(record = {}) {
+  async function checkBackendDuplicateBeforeSync(record = {}, options = {}) {
     if (!navigator.onLine || !state.session?.token) {
       return { checkedOnline: false, duplicate: false, existing: null, message: '', cleared: 0 };
     }
@@ -2568,7 +2634,7 @@
       const data = await api('/api/scan/check-duplicate', {
         method: 'POST',
         body: convertToSyncPayload(record),
-        timeoutMs: 10000
+        timeoutMs: Number(options.timeoutMs || 10000)
       });
       const latest = await getRecord(record.scanId).catch(() => null);
       if (!latest || !['pending', 'failed'].includes(rowStatus(latest))) {
@@ -2921,7 +2987,9 @@
         cameraState('Ready to scan');
         return;
       }
-      await saveRecord(readyRecord, { silent: true, deferSync: false });
+      const duplicateReadyRecord = await preflightDuplicateDecision(readyRecord);
+      if (!duplicateReadyRecord) return;
+      await saveRecord(duplicateReadyRecord, { silent: true, deferSync: false });
       byId('manualRawPreview').hidden = true;
       cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
       beep('ok');
@@ -3226,7 +3294,9 @@
     try {
       const readyRecord = await preflightSmartBinDecision(record);
       if (!readyRecord) return;
-      await saveRecord(readyRecord, { silent: true, deferSync: false });
+      const duplicateReadyRecord = await preflightDuplicateDecision(readyRecord);
+      if (!duplicateReadyRecord) return;
+      await saveRecord(duplicateReadyRecord, { silent: true, deferSync: false });
       closeManualDialog();
       cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
       toast(navigator.onLine ? 'Queued' : 'Network pending', navigator.onLine ? 'success' : 'warning');
