@@ -53,14 +53,14 @@ const {
 
 const router = express.Router();
 const autoTable = autoTableModule.default || autoTableModule;
-const DAKSH_PRO_MARK_PNG = path.resolve(__dirname, '..', 'public', 'assets', 'daksh-pro-mark.png');
-const DAKSH_PRO_MARK_BUFFER = fs.readFileSync(DAKSH_PRO_MARK_PNG);
+const DAKSH_REPORT_LOGO_PNG = path.resolve(__dirname, '..', 'public', 'brand', 'logo-report.png');
+const DAKSH_REPORT_LOGO_BUFFER = fs.readFileSync(DAKSH_REPORT_LOGO_PNG);
 const workbookLogoIds = new WeakMap();
 
-function getDakshProLogoId(workbook) {
+function getDakshReportLogoId(workbook) {
   if (!workbook) return null;
   if (workbookLogoIds.has(workbook)) return workbookLogoIds.get(workbook);
-  const imageId = workbook.addImage({ buffer: DAKSH_PRO_MARK_BUFFER, extension: 'png' });
+  const imageId = workbook.addImage({ buffer: DAKSH_REPORT_LOGO_BUFFER, extension: 'png' });
   workbookLogoIds.set(workbook, imageId);
   return imageId;
 }
@@ -3550,29 +3550,29 @@ function addStockSummarySheet(workbook, data, options = {}) {
     cell.alignment = isCurrency ? right : center;
   };
 
-  sheet.mergeCells('A1:B2');
+  sheet.mergeCells('A1:C2');
   sheet.getCell('A1').value = '';
-  setFill(1, 1, 2, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.sectionGold } }, { bold: true, size: 12, color: { argb: theme.title } });
+  setFill(1, 1, 3, { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }, { bold: true, size: 12, color: { argb: theme.title } });
   sheet.getCell('A1').alignment = center;
-  sheet.getRow(1).height = 26;
+  sheet.getRow(1).height = 28;
   sheet.getRow(2).height = 22;
-  const logoId = getDakshProLogoId(sheet.workbook);
+  const logoId = getDakshReportLogoId(sheet.workbook);
   if (logoId !== null) {
     sheet.addImage(logoId, {
-      tl: { col: 0.15, row: 0.08 },
-      ext: { width: 48, height: 48 }
+      tl: { col: 0.2, row: 0.16 },
+      ext: { width: 126, height: 32 }
     });
   }
 
-  sheet.mergeCells('C1:L1');
-  sheet.getCell('C1').value = 'Daksh Inventory Solution V2';
-  setFill(1, 3, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.title } }, { bold: true, size: 20, color: { argb: theme.titleText } });
-  sheet.getCell('C1').alignment = center;
+  sheet.mergeCells('D1:L1');
+  sheet.getCell('D1').value = 'Daksh Inventory Solution V2';
+  setFill(1, 4, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.title } }, { bold: true, size: 20, color: { argb: theme.titleText } });
+  sheet.getCell('D1').alignment = center;
 
-  sheet.mergeCells('C2:L2');
-  sheet.getCell('C2').value = data.sections.title || STOCK_SUMMARY_TITLE;
-  setFill(2, 3, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.subtitle } }, { bold: true, size: 12, color: { argb: theme.subtitleText } });
-  sheet.getCell('C2').alignment = center;
+  sheet.mergeCells('D2:L2');
+  sheet.getCell('D2').value = data.sections.title || STOCK_SUMMARY_TITLE;
+  setFill(2, 4, 12, { type: 'pattern', pattern: 'solid', fgColor: { argb: theme.subtitle } }, { bold: true, size: 12, color: { argb: theme.subtitleText } });
+  sheet.getCell('D2').alignment = center;
 
   const metadata = data.sections.metadata || [];
   metadata.forEach((item, index) => {
@@ -4267,10 +4267,11 @@ router.get('/pdf', auth.requireAuth, async (req, res) => {
       downloadType: 'pdf'
     }, async () => {
       const doc = new jsPDF({ orientation: 'landscape' });
+      doc.addImage(DAKSH_REPORT_LOGO_BUFFER, 'PNG', 14, 8, 72, 18);
       doc.setFontSize(15);
-      doc.text('Daksh Inventory v2 - Inventory Audit Report', 14, 15);
+      doc.text('Daksh Inventory v2 - Inventory Audit Report', 92, 16);
       doc.setFontSize(9);
-      doc.text(`Generated: ${formatIstDateTime(new Date())}`, 14, 22);
+      doc.text(`Generated: ${formatIstDateTime(new Date())}`, 92, 23);
       const body = data.finalRows.slice(0, 80).map((row) => [
         row.partNumber || row.partNo,
         row.partDescription || row.partName,
@@ -4293,7 +4294,7 @@ router.get('/pdf', auth.requireAuth, async (req, res) => {
       autoTable(doc, {
         head: [['Part Number', 'Part Description', 'Product Category', 'MRP', 'DLC', 'Pricing Status', 'Pricing Source', 'Latest MRP Effective Date', 'System Qty', 'Physical Qty', 'Fitted Qty', 'Variance Qty', 'Physical Value on MRP', 'System Value on MRP', 'Variance Value on MRP', 'Inventory Risk Status', 'Action / Remarks']],
         body,
-        startY: 28,
+        startY: 30,
         styles: { fontSize: 7, cellPadding: 2 },
         headStyles: { fillColor: [21, 58, 91] }
       });

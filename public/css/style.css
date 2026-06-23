@@ -584,15 +584,14 @@ a:focus-visible,
 }
 
 .brand-lockup {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+  width: min(520px, 100%);
+  display: block;
 }
 
-.brand-lockup-copy {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
+.brand-logo {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .brand-lockup-line {
@@ -1412,16 +1411,15 @@ textarea:focus {
 .sidebar-brand {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 12px;
+  width: 100%;
   padding-bottom: 18px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.16);
 }
 
-.sidebar-brand span {
-  display: block;
-  margin-top: 2px;
-  color: #bfd1e4;
-  font-size: 12px;
+.sidebar-brand .brand-logo {
+  width: min(220px, 100%);
 }
 
 .sidebar-nav {

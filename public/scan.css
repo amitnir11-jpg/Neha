@@ -145,7 +145,13 @@ a {
 .brand-row {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 0;
+}
+
+.brand-logo {
+  display: block;
+  width: min(400px, 100%);
+  height: auto;
 }
 
 .brand-mark {

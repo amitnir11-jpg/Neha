@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 180" role="img" aria-label="Daksh Inventory Pro report logo">
+  <defs>
+    <linearGradient id="reportMarkBlue" x1="72" x2="290" y1="58" y2="372" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#11459a"/>
+      <stop offset="0.54" stop-color="#1f6be0"/>
+      <stop offset="1" stop-color="#0a2144"/>
+    </linearGradient>
+    <linearGradient id="reportMarkInner" x1="114" x2="200" y1="104" y2="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#edf5ff"/>
+      <stop offset="0.58" stop-color="#bfe0ff"/>
+      <stop offset="1" stop-color="#8bc5ff"/>
+    </linearGradient>
+    <linearGradient id="reportMarkCubeLeft" x1="118" x2="168" y1="176" y2="244" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1b4da8"/>
+      <stop offset="1" stop-color="#0e2f68"/>
+    </linearGradient>
+    <linearGradient id="reportMarkCubeRight" x1="168" x2="214" y1="176" y2="244" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#163d8a"/>
+      <stop offset="1" stop-color="#071a3d"/>
+    </linearGradient>
+    <linearGradient id="reportMarkGold" x1="220" x2="304" y1="228" y2="262" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff0ad"/>
+      <stop offset="0.38" stop-color="#f3c34d"/>
+      <stop offset="1" stop-color="#b97910"/>
+    </linearGradient>
+    <linearGradient id="reportMarkTag" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#fff3bf"/>
+      <stop offset="1" stop-color="#f0b71a"/>
+    </linearGradient>
+    <filter id="reportMarkShadow" x="-35%" y="-35%" width="170%" height="170%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#071f46" flood-opacity=".24"/>
+    </filter>
+  </defs>
+
+  <g transform="translate(18 18)" filter="url(#reportMarkShadow)">
+    <path fill-rule="evenodd" d="M92 60h92c78 0 142 64 142 142s-64 142-142 142H92z M130 98h54c58 0 104 46 104 104s-46 104-104 104h-54z" fill="url(#reportMarkBlue)"/>
+    <path d="M92 60h92c78 0 142 64 142 142s-64 142-142 142H92z" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="2"/>
+
+    <g opacity=".96">
+      <rect x="128" y="102" width="9" height="60" rx="4.5" fill="#8bd2ff"/>
+      <rect x="144" y="96" width="9" height="66" rx="4.5" fill="#4aa0ff"/>
+      <rect x="160" y="106" width="9" height="56" rx="4.5" fill="#9fdcff"/>
+      <rect x="176" y="100" width="9" height="62" rx="4.5" fill="#2f78f1"/>
+    </g>
+
+    <g transform="translate(128 166)">
+      <path d="M0 28 40 6 80 28 40 50Z" fill="url(#reportMarkInner)"/>
+      <path d="M0 28v46l40 22v-46Z" fill="url(#reportMarkCubeLeft)"/>
+      <path d="M80 28v46L40 96V50Z" fill="url(#reportMarkCubeRight)"/>
+      <path d="M0 28 40 50 80 28" fill="none" stroke="#6bbcff" stroke-width="5" stroke-linejoin="round"/>
+      <path d="M16 28h48" fill="none" stroke="rgba(255,255,255,.75)" stroke-width="4" stroke-linecap="round"/>
+      <path d="M16 42h48" fill="none" stroke="rgba(255,255,255,.45)" stroke-width="4" stroke-linecap="round"/>
+    </g>
+
+    <path d="M216 286c24 11 52 11 76 0" stroke="url(#reportMarkGold)" stroke-width="16" stroke-linecap="round"/>
+  </g>
+
+  <g transform="translate(196 52)">
+    <text x="0" y="46" fill="#10264a" font-family="Segoe UI, Arial, sans-serif" font-size="58" font-weight="900" letter-spacing="1.8">DAKSH</text>
+    <text x="0" y="98" fill="#1f5ec4" font-family="Segoe UI, Arial, sans-serif" font-size="48" font-weight="900" letter-spacing="1.2">INVENTORY</text>
+    <g transform="translate(230 42)">
+      <rect x="0" y="0" width="94" height="40" rx="13" fill="url(#reportMarkTag)"/>
+      <rect x="3" y="3" width="88" height="34" rx="10" fill="rgba(255,255,255,.08)"/>
+      <text x="47" y="26" fill="#ffffff" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="900" letter-spacing="3" text-anchor="middle">PRO</text>
+    </g>
+    <path d="M0 118h292" stroke="#d9e5f5" stroke-width="2.5"/>
+  </g>
+</svg>

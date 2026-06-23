@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Daksh Inventory Pro app icon">
+  <defs>
+    <linearGradient id="iconBg" x1="176" x2="848" y1="128" y2="896" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0a1b36"/>
+      <stop offset="0.55" stop-color="#0d2b57"/>
+      <stop offset="1" stop-color="#081326"/>
+    </linearGradient>
+    <linearGradient id="iconMarkBlue" x1="184" x2="644" y1="164" y2="836" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#13489d"/>
+      <stop offset="0.52" stop-color="#1f6ce0"/>
+      <stop offset="1" stop-color="#0a2144"/>
+    </linearGradient>
+    <linearGradient id="iconMarkInner" x1="254" x2="436" y1="270" y2="642" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#edf5ff"/>
+      <stop offset="0.58" stop-color="#bfe0ff"/>
+      <stop offset="1" stop-color="#8bc5ff"/>
+    </linearGradient>
+    <linearGradient id="iconMarkCubeLeft" x1="268" x2="376" y1="438" y2="590" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1b4da8"/>
+      <stop offset="1" stop-color="#0e2f68"/>
+    </linearGradient>
+    <linearGradient id="iconMarkCubeRight" x1="376" x2="476" y1="438" y2="590" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#163d8a"/>
+      <stop offset="1" stop-color="#071a3d"/>
+    </linearGradient>
+    <linearGradient id="iconMarkGold" x1="484" x2="688" y1="548" y2="632" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff0ad"/>
+      <stop offset="0.38" stop-color="#f3c34d"/>
+      <stop offset="1" stop-color="#b97910"/>
+    </linearGradient>
+    <filter id="iconShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity=".34"/>
+    </filter>
+  </defs>
+
+  <rect x="72" y="72" width="880" height="880" rx="210" fill="url(#iconBg)"/>
+
+  <g transform="translate(96 96)" filter="url(#iconShadow)">
+    <path fill-rule="evenodd" d="M160 88h180c152 0 276 124 276 276s-124 276-276 276H160z M234 162h106c118 0 214 96 214 214s-96 214-214 214H234z" fill="url(#iconMarkBlue)"/>
+    <path d="M160 88h180c152 0 276 124 276 276s-124 276-276 276H160z" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="4"/>
+
+    <g opacity=".96">
+      <rect x="228" y="220" width="18" height="116" rx="9" fill="#8bd2ff"/>
+      <rect x="260" y="208" width="18" height="128" rx="9" fill="#4aa0ff"/>
+      <rect x="292" y="226" width="18" height="110" rx="9" fill="#9fdcff"/>
+      <rect x="324" y="214" width="18" height="122" rx="9" fill="#2f78f1"/>
+    </g>
+
+    <g transform="translate(244 392)">
+      <path d="M0 56 72 16 144 56 72 96Z" fill="url(#iconMarkInner)"/>
+      <path d="M0 56v84l72 40v-84Z" fill="url(#iconMarkCubeLeft)"/>
+      <path d="M144 56v84L72 180V96Z" fill="url(#iconMarkCubeRight)"/>
+      <path d="M0 56 72 96 144 56" fill="none" stroke="#6bbcff" stroke-width="10" stroke-linejoin="round"/>
+      <path d="M30 56h84" fill="none" stroke="rgba(255,255,255,.76)" stroke-width="8" stroke-linecap="round"/>
+      <path d="M30 80h84" fill="none" stroke="rgba(255,255,255,.44)" stroke-width="8" stroke-linecap="round"/>
+      <path d="M30 104h84" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="8" stroke-linecap="round"/>
+    </g>
+
+    <path d="M468 712c48 22 106 22 154 0" stroke="url(#iconMarkGold)" stroke-width="30" stroke-linecap="round"/>
+    <path d="M472 712c44 19 96 19 140 0" stroke="rgba(77,47,0,.32)" stroke-width="6" stroke-linecap="round"/>
+  </g>
+</svg>

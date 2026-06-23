@@ -278,40 +278,16 @@ a:focus-visible,
 .side-brand {
   display: flex;
   align-items: center;
-  gap: 9px;
+  justify-content: center;
+  gap: 0;
   padding-bottom: 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.16);
 }
 
-.brand-box {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: #1f78c1;
-  font-size: 12px;
-  font-weight: 800;
-  overflow: hidden;
-}
-
-.brand-box img {
-  width: 100%;
-  height: 100%;
+.brand-logo {
   display: block;
-  object-fit: contain;
-}
-
-.side-brand strong {
-  display: block;
-  font-size: 14px;
-  line-height: 1.1;
-}
-
-.side-brand span {
-  display: block;
-  color: #bfd1e4;
-  font-size: 10.5px;
+  width: min(180px, 100%);
+  height: auto;
 }
 
 .side-nav {
@@ -5295,20 +5271,8 @@ body.sidebar-resizing * {
   border-bottom: 1px solid #303b45;
 }
 
-.brand-box {
-  width: 32px;
-  height: 32px;
-  border-radius: 7px;
-  background: #3b82f6;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-  overflow: hidden;
-}
-
-.side-brand strong,
-.side-brand span {
-  display: none;
+.side-brand .brand-logo {
+  width: min(180px, 100%);
 }
 
 .side-nav {
@@ -5354,9 +5318,8 @@ body.sidebar-wide .side-brand {
   padding: 0 12px;
 }
 
-body.sidebar-wide .side-brand strong,
-body.sidebar-wide .side-brand span {
-  display: block;
+body.sidebar-wide .side-brand .brand-logo {
+  width: min(190px, 100%);
 }
 
 body.sidebar-wide .side-link {

@@ -24,14 +24,14 @@ const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategor
 const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 
 const autoTable = autoTableModule.default || autoTableModule;
-const DAKSH_PRO_MARK_PNG = path.resolve(__dirname, '..', 'public', 'assets', 'daksh-pro-mark.png');
-const DAKSH_PRO_MARK_BUFFER = fs.readFileSync(DAKSH_PRO_MARK_PNG);
+const DAKSH_REPORT_LOGO_PNG = path.resolve(__dirname, '..', 'public', 'brand', 'logo-report.png');
+const DAKSH_REPORT_LOGO_BUFFER = fs.readFileSync(DAKSH_REPORT_LOGO_PNG);
 const workbookLogoIds = new WeakMap();
 
-function packGetDakshProLogoId(workbook) {
+function packGetDakshReportLogoId(workbook) {
   if (!workbook) return null;
   if (workbookLogoIds.has(workbook)) return workbookLogoIds.get(workbook);
-  const imageId = workbook.addImage({ buffer: DAKSH_PRO_MARK_BUFFER, extension: 'png' });
+  const imageId = workbook.addImage({ buffer: DAKSH_REPORT_LOGO_BUFFER, extension: 'png' });
   workbookLogoIds.set(workbook, imageId);
   return imageId;
 }
@@ -1336,35 +1336,35 @@ function packMergeBand(sheet, rowNumber, startCol, endCol, value, options = {}) 
 }
 
 function packRenderTitleBlock(sheet, totalColumns, subtitle) {
-  packMergeBand(sheet, 1, 1, 2, '', {
-    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGold } },
+  packMergeBand(sheet, 1, 1, 3, '', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } },
     font: { name: PACK_FONT, size: 12, bold: true, color: { argb: PACK_THEME.title } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.border,
-    height: 26
+    height: 28
   });
-  const logoId = packGetDakshProLogoId(sheet.workbook);
+  const logoId = packGetDakshReportLogoId(sheet.workbook);
   if (logoId !== null) {
     sheet.addImage(logoId, {
-      tl: { col: 0.15, row: 0.08 },
-      ext: { width: 48, height: 48 }
+      tl: { col: 0.2, row: 0.16 },
+      ext: { width: 126, height: 32 }
     });
   }
-  packMergeBand(sheet, 1, 3, totalColumns, 'Daksh Inventory Solution V2', {
+  packMergeBand(sheet, 1, 4, totalColumns, 'Daksh Inventory Solution V2', {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.title } },
     font: { name: PACK_FONT, size: 20, bold: true, color: { argb: PACK_THEME.titleText } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.title,
     height: 26
   });
-  packMergeBand(sheet, 2, 1, 2, 'Premium Audit Pack', {
+  packMergeBand(sheet, 2, 1, 3, 'Premium Audit Pack', {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.sectionGrey } },
     font: { name: PACK_FONT, size: 10, bold: true, color: { argb: PACK_THEME.subtitleText } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
     borderColor: PACK_THEME.border,
     height: 22
   });
-  packMergeBand(sheet, 2, 3, totalColumns, subtitle || '', {
+  packMergeBand(sheet, 2, 4, totalColumns, subtitle || '', {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.subtitle } },
     font: { name: PACK_FONT, size: 12, bold: true, color: { argb: PACK_THEME.subtitleText } },
     alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
@@ -2847,15 +2847,56 @@ function pageRows(rows = [], query = {}) {
   };
 }
 
+function renderExcelReportHeader(sheet, workbook, title, subtitle, totalColumns) {
+  const endColumn = Math.max(4, Number(totalColumns) || 4);
+  sheet.mergeCells(1, 1, 2, 3);
+  sheet.getCell(1, 1).value = '';
+  sheet.getRow(1).height = 28;
+  sheet.getRow(2).height = 22;
+  const logoId = packGetDakshReportLogoId(workbook);
+  if (logoId !== null) {
+    sheet.addImage(logoId, {
+      tl: { col: 0.2, row: 0.16 },
+      ext: { width: 126, height: 32 }
+    });
+  }
+  sheet.mergeCells(1, 4, 1, endColumn);
+  sheet.getCell(1, 4).value = title || 'DAKSH INVENTORY SYSTEM';
+  sheet.getCell(1, 4).font = { name: PACK_FONT, size: 20, bold: true, color: { argb: 'FFFFFFFF' } };
+  sheet.getCell(1, 4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
+  sheet.getCell(1, 4).alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  sheet.mergeCells(2, 4, 2, endColumn);
+  sheet.getCell(2, 4).value = subtitle || '';
+  sheet.getCell(2, 4).font = { name: PACK_FONT, size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+  sheet.getCell(2, 4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B5CAB' } };
+  sheet.getCell(2, 4).alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  sheet.getRow(3).height = 20;
+}
+
 async function sendExcel(res, title, rows, type, query = {}) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet(title.slice(0, 31));
   const columns = selectedColumns(columnsForReport(type, rows), query);
-  sheet.columns = columns.length ? columns : [{ header: 'Message', key: 'message', width: 30 }];
-  (rows.length ? rows : [{ message: 'No data found' }]).forEach((row) => sheet.addRow(formatDateLikeFields(row)));
-  sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
-  sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  const tableColumns = columns.length ? columns : [{ header: 'Message', key: 'message', width: 30 }];
+  sheet.columns = tableColumns.map((column) => ({ key: column.key, width: column.width }));
+  renderExcelReportHeader(sheet, workbook, 'DAKSH INVENTORY SYSTEM', title, tableColumns.length + 3);
+  sheet.getRow(3).values = tableColumns.map((column) => column.header);
+  sheet.getRow(3).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  sheet.getRow(3).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
+  sheet.getRow(3).alignment = { vertical: 'middle', horizontal: 'left' };
+  sheet.views = [{ state: 'frozen', ySplit: 3 }];
+  (rows.length ? rows : [{ message: 'No data found' }]).forEach((row) => {
+    const added = sheet.addRow(formatDateLikeFields(row));
+    added.eachCell((cell) => {
+      cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' }
+      };
+    });
+  });
   const buffer = await workbook.xlsx.writeBuffer();
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${title.replace(/[^a-z0-9]/gi, '_')}.xlsx"`);
@@ -2866,19 +2907,26 @@ async function buildExcelBuffer(title, rows, type, query = {}) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet(title.slice(0, 31));
   const columns = selectedColumns(columnsForReport(type, rows), query);
-  sheet.columns = columns.length ? columns : [{ header: 'Message', key: 'message', width: 30 }];
-  (rows.length ? rows : [{ message: 'No data found' }]).forEach((row) => sheet.addRow(formatDateLikeFields(row)));
-  sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
-  sheet.eachRow((row) => row.eachCell((cell) => {
-    cell.alignment = { vertical: 'middle', horizontal: 'left' };
-    cell.border = {
-      top: { style: 'thin' },
-      left: { style: 'thin' },
-      bottom: { style: 'thin' },
-      right: { style: 'thin' }
-    };
-  }));
+  const tableColumns = columns.length ? columns : [{ header: 'Message', key: 'message', width: 30 }];
+  sheet.columns = tableColumns.map((column) => ({ key: column.key, width: column.width }));
+  renderExcelReportHeader(sheet, workbook, 'DAKSH INVENTORY SYSTEM', title, tableColumns.length + 3);
+  sheet.getRow(3).values = tableColumns.map((column) => column.header);
+  sheet.getRow(3).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  sheet.getRow(3).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
+  sheet.getRow(3).alignment = { vertical: 'middle', horizontal: 'left' };
+  sheet.views = [{ state: 'frozen', ySplit: 3 }];
+  (rows.length ? rows : [{ message: 'No data found' }]).forEach((row) => {
+    const added = sheet.addRow(formatDateLikeFields(row));
+    added.eachCell((cell) => {
+      cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' }
+      };
+    });
+  });
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
@@ -2886,10 +2934,11 @@ function sendPdf(res, title, rows, type, query = {}) {
   const doc = new jsPDF({ orientation: 'landscape' });
   const columns = selectedColumns(columnsForReport(type, rows), query).slice(0, 12);
   const bodyRows = (rows.length ? rows : [{ message: 'No data found' }]).slice(0, 200);
+  doc.addImage(DAKSH_REPORT_LOGO_BUFFER, 'PNG', 14, 8, 72, 18);
   doc.setFontSize(14);
-  doc.text(`DAKSH INVENTORY SYSTEM - ${title}`, 14, 15);
+  doc.text(`DAKSH INVENTORY SYSTEM - ${title}`, 92, 16);
   autoTable(doc, {
-    startY: 24,
+    startY: 30,
     head: [columns.length ? columns.map((column) => column.header) : ['Message']],
     body: bodyRows.map((row) => {
       const formatted = formatDateLikeFields(row);
@@ -2908,10 +2957,11 @@ function buildPdfBuffer(title, rows, type, query = {}) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
   const columns = selectedColumns(columnsForReport(type, rows), query).slice(0, 12);
   const bodyRows = (rows.length ? rows : [{ message: 'No data found' }]).slice(0, 500);
+  doc.addImage(DAKSH_REPORT_LOGO_BUFFER, 'PNG', 24, 12, 104, 26);
   doc.setFontSize(14);
-  doc.text(`DAKSH INVENTORY SYSTEM - ${title}`, 24, 24);
+  doc.text(`DAKSH INVENTORY SYSTEM - ${title}`, 142, 28);
   autoTable(doc, {
-    startY: 38,
+    startY: 42,
     head: [columns.length ? columns.map((column) => column.header) : ['Message']],
     body: bodyRows.map((row) => {
       const formatted = formatDateLikeFields(row);
