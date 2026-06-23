@@ -807,6 +807,23 @@ function normalizeScan(item = {}) {
     ? { deviceId: item.deviceId }
     : { ...item, deviceId: item.deviceId };
   const uniqueScanId = explicitScanId || makeScanId(idSource, timestamp);
+  const smartBinExistingBins = Array.isArray(item.smartBinExistingBins) ? item.smartBinExistingBins : [];
+  const smartBinCurrentBin = clean(
+    item.smartBinCurrentBin ||
+    item.smartBinOriginalBin ||
+    item.smartBinSourceBin ||
+    item.binLocation ||
+    item.bin ||
+    ''
+  );
+  const smartBinSelectedBin = clean(
+    item.smartBinSelectedBin ||
+    item.smartBinChosenBin ||
+    item.smartBinFinalBin ||
+    item.binLocation ||
+    item.bin ||
+    ''
+  );
   return {
     source: item,
     serverReceivedAt,
@@ -851,7 +868,76 @@ function normalizeScan(item = {}) {
     loginId: clean(item.loginId || item.username || item.userId || item.user),
     deviceId: clean(item.deviceId),
     deviceName: clean(item.deviceName || item.device || item.model),
-    timestamp
+    timestamp,
+    smartBinEnabled: item.smartBinEnabled === undefined ? undefined : Boolean(item.smartBinEnabled),
+    smartBinDecision: clean(item.smartBinDecision || ''),
+    smartBinReason: clean(item.smartBinReason || ''),
+    smartBinSuggestedBin: clean(item.smartBinSuggestedBin || ''),
+    smartBinSelectedBin,
+    smartBinCurrentBin,
+    smartBinExistingBins,
+    smartBinCheckedAt: clean(item.smartBinCheckedAt || ''),
+    smartBinDecisionAt: clean(item.smartBinDecisionAt || ''),
+    smartBinDecisionBy: clean(item.smartBinDecisionBy || item.userName || item.staffName || item.loginId || item.username || ''),
+    smartBinAuditTrail: item.smartBinAuditTrail && typeof item.smartBinAuditTrail === 'object'
+      ? item.smartBinAuditTrail
+      : {
+          enabled: item.smartBinEnabled === undefined ? undefined : Boolean(item.smartBinEnabled),
+          decision: clean(item.smartBinDecision || ''),
+          reason: clean(item.smartBinReason || ''),
+          suggestedBin: clean(item.smartBinSuggestedBin || ''),
+          selectedBin: smartBinSelectedBin,
+          currentBin: smartBinCurrentBin,
+          existingBins: smartBinExistingBins,
+          checkedAt: clean(item.smartBinCheckedAt || ''),
+          decisionAt: clean(item.smartBinDecisionAt || ''),
+          decisionBy: clean(item.smartBinDecisionBy || item.userName || item.staffName || item.loginId || item.username || '')
+        }
+  };
+}
+
+function smartBinAuditFields(scan = {}) {
+  const existingBins = Array.isArray(scan.smartBinExistingBins) ? scan.smartBinExistingBins : [];
+  const selectedBin = clean(scan.smartBinSelectedBin || scan.binLocation || scan.bin || '');
+  const currentBin = clean(scan.smartBinCurrentBin || scan.binLocation || scan.bin || '');
+  const decisionBy = clean(scan.smartBinDecisionBy || scan.userName || scan.staffName || scan.loginId || scan.username || scan.userId || '');
+  const hasSmartBinData = Boolean(
+    clean(scan.smartBinDecision || '') ||
+    clean(scan.smartBinReason || '') ||
+    clean(scan.smartBinSuggestedBin || '') ||
+    clean(scan.smartBinCheckedAt || '') ||
+    clean(scan.smartBinDecisionAt || '') ||
+    decisionBy ||
+    existingBins.length ||
+    (scan.smartBinAuditTrail && typeof scan.smartBinAuditTrail === 'object' && Object.keys(scan.smartBinAuditTrail).length)
+  );
+  if (!hasSmartBinData) return {};
+  const trail = scan.smartBinAuditTrail && typeof scan.smartBinAuditTrail === 'object'
+    ? scan.smartBinAuditTrail
+    : {
+        enabled: scan.smartBinEnabled === undefined ? undefined : Boolean(scan.smartBinEnabled),
+        decision: clean(scan.smartBinDecision || ''),
+        reason: clean(scan.smartBinReason || ''),
+        suggestedBin: clean(scan.smartBinSuggestedBin || ''),
+        selectedBin,
+        currentBin,
+        existingBins,
+        checkedAt: clean(scan.smartBinCheckedAt || ''),
+        decisionAt: clean(scan.smartBinDecisionAt || ''),
+        decisionBy
+      };
+  return {
+    smartBinEnabled: scan.smartBinEnabled === undefined ? undefined : Boolean(scan.smartBinEnabled),
+    smartBinDecision: clean(scan.smartBinDecision || ''),
+    smartBinReason: clean(scan.smartBinReason || ''),
+    smartBinSuggestedBin: clean(scan.smartBinSuggestedBin || ''),
+    smartBinSelectedBin: selectedBin,
+    smartBinCurrentBin: currentBin,
+    smartBinExistingBins: existingBins,
+    smartBinCheckedAt: clean(scan.smartBinCheckedAt || ''),
+    smartBinDecisionAt: clean(scan.smartBinDecisionAt || ''),
+    smartBinDecisionBy: decisionBy,
+    smartBinAuditTrail: trail
   };
 }
 
@@ -1316,6 +1402,7 @@ async function saveNormalizedScan(scan, req) {
     source: normalizeSource(scan.scanSource || scan.source.source || scan.source.scanSource, 'mobile'),
     warnings,
     remarks: warnings.join(', '),
+    ...smartBinAuditFields(scan),
     masterFound: Boolean(master),
     masterMatch: Boolean(master),
     isMasterMatched: Boolean(master)

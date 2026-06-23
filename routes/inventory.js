@@ -25,6 +25,7 @@ const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { canonicalizePartCategory, resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { reportTotals } = require('../utils/reportTotals');
+const { buildSmartBinSuggestion, normalizeBinLocation } = require('../utils/smartBinSuggestion');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
 const {
   activeInventoryValue,
@@ -946,6 +947,32 @@ async function dashboardStats(filter) {
                 }
               }
             }
+          ],
+          multipleBinParts: [
+            {
+              $group: {
+                _id: {
+                  part: '$__dashboardPart',
+                  bin: { $ifNull: ['$binLocation', { $ifNull: ['$bin', ''] }] }
+                },
+                qty: {
+                  $sum: {
+                    $switch: {
+                      branches: [
+                        { case: { $in: ['$__dashboardType', ['INWARD', 'AUDIT']] }, then: { $abs: '$__dashboardQty' } },
+                        { case: { $in: ['$__dashboardType', ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: '$__dashboardQty' }, -1] } },
+                        { case: { $eq: ['$__dashboardType', 'VERIFICATION'] }, then: 0 }
+                      ],
+                      default: { $abs: '$__dashboardQty' }
+                    }
+                  }
+                }
+              }
+            },
+            { $match: { '_id.part': { $nin: [null, ''] }, '_id.bin': { $nin: [null, ''] }, qty: { $gt: 0 } } },
+            { $group: { _id: '$_id.part', binCount: { $sum: 1 } } },
+            { $match: { binCount: { $gt: 1 } } },
+            { $count: 'count' }
           ]
         }
       }
@@ -958,6 +985,7 @@ async function dashboardStats(filter) {
   const lastScan = (aggregate.last && aggregate.last[0]) || {};
   const uniqueParts = Array.isArray(summary.uniqueParts) ? summary.uniqueParts.filter(Boolean).length : 0;
   const partQuantities = (aggregate.partQuantities || []).filter((row) => row._id);
+  const multipleBinPartCount = Number((aggregate.multipleBinParts && aggregate.multipleBinParts[0] ? aggregate.multipleBinParts[0].count : 0) || 0);
   const currentPrices = await getPricesFromPartMaster(partQuantities.map((row) => row._id), filter && filter.dealerCode);
   const actualStockValueDLC = money(partQuantities.reduce((sum, row) => {
     const price = currentPrices.get(normalizePartNumber(row._id));
@@ -984,6 +1012,7 @@ async function dashboardStats(filter) {
     pendingSync: Number(summary.pendingSync || 0),
     duplicateCount,
     mismatchCount: Number(summary.mismatchCount || 0),
+    multipleBinPartCount,
     totalScannedValue: actualStockValueDLC,
     actualStockValueDLC,
     actualStockValueMRP,
@@ -1590,6 +1619,76 @@ async function verifyPartOnly({ rawScan = '', partNumber = '', dealerCode = '', 
     bins: stock.bins,
     color: found ? 'yellow' : '',
     message: found ? VERIFICATION_FOUND_MESSAGE : VERIFICATION_NOT_FOUND_MESSAGE
+  };
+}
+
+async function smartBinSuggestionForScan(input = {}) {
+  const dealerCode = normalizeDealerCode(input.dealerCode || input.dealer || '');
+  const partNumber = normalizePartNumber(input.partNumber || input.part || '');
+  const currentBin = normalizeBinLocation(input.binLocation || input.bin || '');
+  const dealer = dealerCode ? await Dealer.findOne({ dealerCode }).lean().catch(() => null) : null;
+  const auditId = clean(input.auditId || (dealer ? dealer.currentAuditId : '') || '');
+
+  if (!dealerCode || !partNumber || !auditId || !currentBin) {
+    return {
+      dealerCode,
+      auditId,
+      partNumber,
+      currentBin,
+      suggestedBin: currentBin,
+      existingBins: [],
+      totalQty: 0,
+      existingBinCount: 0,
+      sameBinExists: false,
+      shouldPrompt: false,
+      message: ''
+    };
+  }
+
+  const nonEmptyBinClause = {
+    $or: [
+      { binLocation: { $nin: [null, ''] } },
+      { bin: { $nin: [null, ''] } }
+    ]
+  };
+  const primaryFilter = applyTestScanMode({
+    dealerCode,
+    auditId,
+    partNumber,
+    binLocation: { $nin: [null, ''] }
+  }, 'real');
+  let scans = await Inventory.find(primaryFilter)
+    .select('dealerCode auditId partNumber normalizedPartNumber partDescription partName binLocation bin scanType type qty quantity timestamp scanTime createdAt updatedAt userName loginId username staffName smartBinReason smartBinDecisionReason reason remarks syncStatus scanStatus status deletedAt')
+    .sort({ timestamp: 1, createdAt: 1, _id: 1 })
+    .lean();
+  if (!scans.length) {
+    const fallbackFilter = applyTestScanMode({
+      dealerCode,
+      auditId,
+      $and: [
+        {
+          $or: [
+            { normalizedPartNumber: partNumber },
+            { partNumber },
+            { part: partNumber }
+          ]
+        },
+        nonEmptyBinClause
+      ]
+    }, 'real');
+    scans = await Inventory.find(fallbackFilter)
+      .select('dealerCode auditId partNumber normalizedPartNumber partDescription partName binLocation bin scanType type qty quantity timestamp scanTime createdAt updatedAt userName loginId username staffName smartBinReason smartBinDecisionReason reason remarks syncStatus scanStatus status deletedAt')
+      .sort({ timestamp: 1, createdAt: 1, _id: 1 })
+      .lean();
+  }
+  const suggestion = buildSmartBinSuggestion(scans, currentBin);
+  return {
+    ...suggestion,
+    dealerCode,
+    auditId,
+    partNumber,
+    currentBin,
+    suggestedBin: suggestion.suggestedBin || currentBin
   };
 }
 
@@ -2950,8 +3049,24 @@ async function duplicateCheckHandler(req, res) {
   }
 }
 
+async function smartBinCheckHandler(req, res) {
+  try {
+    const suggestion = await smartBinSuggestionForScan(req.body || {});
+    return res.json({
+      success: true,
+      ...suggestion
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to check smart bin suggestion'
+    });
+  }
+}
+
 router.post('/duplicate-check', auth.requireAuth, duplicateCheckHandler);
 router.post('/check-duplicate', auth.requireAuth, duplicateCheckHandler);
+router.post('/smart-bin-check', auth.optionalAuth, smartBinCheckHandler);
 
 router.post('/process', auth.optionalAuth, processScanRequest);
 router.post('/process-scan', auth.optionalAuth, processScanRequest);

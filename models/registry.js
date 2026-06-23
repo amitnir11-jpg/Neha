@@ -240,6 +240,7 @@ const inventoryIndexes = [
   [{ dealerCode: 1, auditId: 1, upiCode: 1, movementType: 1, activeInventory: 1 }, { name: 'inventory_active_upi_lookup_idx' }],
   [{ dealerCode: 1, auditId: 1, upiNo: 1 }, { name: 'inventory_upi_scope_lookup_idx' }],
   [{ dealerCode: 1, auditId: 1, partNumber: 1 }, { name: 'scan_part_scope_lookup' }],
+  [{ dealerCode: 1, auditId: 1, partNumber: 1, binLocation: 1 }, { name: 'inventory_dealer_audit_part_bin_idx' }],
   [{ dealerCode: 1, auditId: 1, timestamp: -1, createdAt: -1 }, { name: 'scan_history_scope_time' }]
 ];
 
@@ -252,7 +253,8 @@ const scanIndexes = [
   [{ scanStatus: 1 }, { name: 'scan_scan_status_idx' }],
   [{ upiCode: 1 }, { name: 'scan_upi_code_idx' }],
   [{ dealerCode: 1, auditId: 1, upiCode: 1, movementType: 1, activeInventory: 1 }, { name: 'scan_active_upi_lookup_idx' }],
-  [{ dealerCode: 1, auditId: 1, partNumber: 1 }, { name: 'scan_part_scope_lookup' }]
+  [{ dealerCode: 1, auditId: 1, partNumber: 1 }, { name: 'scan_part_scope_lookup' }],
+  [{ dealerCode: 1, auditId: 1, partNumber: 1, binLocation: 1 }, { name: 'scan_dealer_audit_part_bin_idx' }]
 ];
 
 module.exports = {

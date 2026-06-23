@@ -118,6 +118,7 @@
             <div class="metric mini"><span>Pending</span><strong id="homePendingSync">0</strong></div>
             <div class="metric mini"><span>Failed</span><strong id="homeFailedSync">0</strong></div>
             <div class="metric mini"><span>Live Inventory</span><strong id="dashInventoryCount">0</strong></div>
+            <div class="metric mini"><span>Parts Stored in Multiple Locations</span><strong id="dashMultiBinParts">0</strong></div>
             <div class="metric mini"><span>Connected Scanners</span><strong id="dashConnectedScanners">0</strong></div>
             <div class="metric mini"><span>Offline Devices</span><strong id="dashOfflineDevices">0</strong></div>
             <div class="metric mini"><span>Failed Scans</span><strong id="dashFailedScans">0</strong></div>
@@ -304,6 +305,7 @@
               <option value="raw-upi">Raw UPI Report</option>
               <option value="scan-register">Scan Register Report</option>
               <option value="invalid-scan-report">Invalid Scan Report</option>
+              <option value="multiple-bin-location-alert">Multiple Bin Location Alert Report</option>
               <option value="stock-summary">Stock Summary</option>
               <option value="short">Short Report</option>
               <option value="excess">Excess Report</option>
@@ -903,6 +905,12 @@
                 <button id="dedupeBtn" class="btn light admin-only" type="button">Deduplication Tool</button>
                 <label class="toggle admin-only"><input id="allowUnknownToggle" type="checkbox">Allow UNKNOWN save prompt</label>
               </div>
+              <div class="toolbar smart-bin-settings-toolbar">
+                <label class="toggle admin-only"><input id="smartBinSuggestionToggle" type="checkbox">Smart Bin Suggestion</label>
+                <label class="toggle admin-only"><input id="smartBinRequireReasonToggle" type="checkbox">Require reason when same part is saved in new bin</label>
+                <span id="smartBinSettingsStatus" class="muted smart-bin-settings-status">ON · Reason required</span>
+              </div>
+              <p class="muted smart-bin-settings-note">This affects only interactive scan confirmations. Default: ON with reason required.</p>
             </section>
           </section>
 
@@ -1270,6 +1278,33 @@
           <span id="scanEditMessage" class="form-message"></span>
         </div>
       </form>
+    </div>
+  </div>
+  <div id="smartBinSuggestionModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="smartBinSuggestionTitle">
+    <div class="modal-card smart-bin-suggestion-card">
+      <div class="modal-head smart-bin-suggestion-head">
+        <div>
+          <h2 id="smartBinSuggestionTitle">Smart Bin Location Suggestion</h2>
+          <p id="smartBinSuggestionMessage" class="muted">Part already available in another bin.</p>
+        </div>
+      </div>
+      <div class="smart-bin-suggestion-body">
+        <div id="smartBinExistingBins" class="smart-bin-existing-list"></div>
+        <label id="smartBinExistingBinSelectWrap" class="smart-bin-existing-select-wrap">
+          <span>Use Existing Bin</span>
+          <select id="smartBinExistingBinSelect"></select>
+        </label>
+        <label class="smart-bin-reason">
+          <span>Reason</span>
+          <textarea id="smartBinReasonInput" rows="2" placeholder="Qty overflow / bin full"></textarea>
+        </label>
+        <p id="smartBinSuggestionHint" class="muted smart-bin-suggestion-hint">Reason is required when saving the part in a new bin.</p>
+      </div>
+      <div class="modal-actions smart-bin-actions">
+        <button id="smartBinUseExistingBtn" class="btn primary" type="button">Use Existing Location</button>
+        <button id="smartBinContinueNewBtn" class="btn light" type="button">Continue with New Location</button>
+        <button id="smartBinAddLocationBtn" class="btn light" type="button">Add Additional Location</button>
+      </div>
     </div>
   </div>
   <div id="reportFilterSettingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="reportFilterSettingsTitle">

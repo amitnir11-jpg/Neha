@@ -6,6 +6,8 @@ const autoTableModule = require('jspdf-autotable');
 const nodemailer = require('nodemailer');
 const reportModule = require('./report');
 const reconciliationRoute = require('./reconciliation');
+const Inventory = require('../models/Inventory');
+const Dealer = require('../models/Dealer');
 const router = reportModule;
 const auth = require('./auth');
 const { applyCacheHeaders, getCachedResponse } = require('../utils/reportCache');
@@ -16,6 +18,8 @@ const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
 const { reportTotals, signedScanQuantity } = require('../utils/reportTotals');
 const { stockValuationTotals } = require('../utils/stockValuation');
+const { buildMultipleBinLocationAlertRows } = require('../utils/smartBinSuggestion');
+const { applyTestScanMode } = require('./inventory');
 const categoryResolver = require('../utils/categoryResolver');
 const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
   ? categoryResolver.canonicalizePartCategory
@@ -208,6 +212,76 @@ async function rejectedReportRows(query = {}) {
     dealer: row.dealerCode || '',
     source: row.source || row.scanMode || row.entryMode || ''
   }));
+}
+
+const MULTIPLE_BIN_LOCATION_ALERT_COLUMNS = [
+  { header: 'DEALER CODE', key: 'dealerCode', width: 18 },
+  { header: 'AUDIT ID', key: 'auditId', width: 20 },
+  { header: 'PART NUMBER', key: 'partNumber', width: 18 },
+  { header: 'PART DESCRIPTION', key: 'partDescription', width: 34 },
+  { header: 'EXISTING BIN LOCATIONS', key: 'existingBinLocations', width: 34 },
+  { header: 'QUANTITY IN EACH BIN', key: 'quantityInEachBin', width: 26 },
+  { header: 'TOTAL QUANTITY', key: 'totalQty', width: 14 },
+  { header: 'LAST SCANNED BY', key: 'lastScannedBy', width: 22 },
+  { header: 'LAST SCAN DATE/TIME', key: 'lastScanDateTime', width: 24 },
+  { header: 'REASON FOR MULTIPLE LOCATION', key: 'reasonForMultipleLocation', width: 34 }
+];
+
+async function multipleBinLocationAlertRows(query = {}) {
+  const dealerCode = selectedDealerCode(query);
+  if (!dealerCode) return null;
+  const dealerRecord = await Dealer.findOne({ dealerCode }).lean().catch(() => null);
+  const resolvedAuditId = clean(query.auditId || query.audit || (dealerRecord ? dealerRecord.currentAuditId : '') || '');
+  const filter = {
+    dealerCode
+  };
+  if (resolvedAuditId) filter.auditId = resolvedAuditId;
+  if (query.partNumber) {
+    const text = clean(query.partNumber);
+    filter.$and = (filter.$and || []).concat([{
+      $or: [
+        { normalizedPartNumber: { $regex: text, $options: 'i' } },
+        { partNumber: { $regex: text, $options: 'i' } },
+        { part: { $regex: text, $options: 'i' } }
+      ]
+    }]);
+  }
+  if (query.binLocation || query.bin) {
+    const text = clean(query.binLocation || query.bin);
+    filter.$and = (filter.$and || []).concat([{
+      $or: [
+        { binLocation: { $regex: text, $options: 'i' } },
+        { bin: { $regex: text, $options: 'i' } }
+      ]
+    }]);
+  }
+  if (query.auditDate && !(query.fromDate || query.dateFrom || query.from || query.toDate || query.dateTo || query.to)) {
+    filter.timestamp = {};
+    const auditDateFrom = parseFilterDate(query.auditDate);
+    const auditDateTo = parseFilterDate(query.auditDate, true);
+    if (auditDateFrom && !Number.isNaN(auditDateFrom.getTime())) filter.timestamp.$gte = auditDateFrom;
+    if (auditDateTo && !Number.isNaN(auditDateTo.getTime())) filter.timestamp.$lte = auditDateTo;
+  } else if (query.fromDate || query.dateFrom || query.from || query.toDate || query.dateTo || query.to) {
+    filter.timestamp = {};
+    const from = parseFilterDate(query.fromDate || query.dateFrom || query.from || '');
+    const to = parseFilterDate(query.toDate || query.dateTo || query.to || '', true);
+    if (from && !Number.isNaN(from.getTime())) filter.timestamp.$gte = from;
+    if (to && !Number.isNaN(to.getTime())) filter.timestamp.$lte = to;
+  }
+  const scopedFilter = applyTestScanMode(filter, query.testScanMode || 'real');
+
+  const rows = await Inventory.find(scopedFilter)
+    .select('dealerCode auditId partNumber normalizedPartNumber partDescription partName binLocation bin scanType type qty quantity timestamp scanTime createdAt updatedAt userName loginId username staffName reason remarks smartBinReason smartBinDecisionReason syncStatus scanStatus status deletedAt')
+    .sort({ timestamp: 1, createdAt: 1, _id: 1 })
+    .lean();
+  const report = buildMultipleBinLocationAlertRows(rows);
+  return {
+    ...report,
+    title: 'Multiple Bin Location Alert Report',
+    columns: MULTIPLE_BIN_LOCATION_ALERT_COLUMNS,
+    totalRows: report.rows.length,
+    message: report.rows.length ? '' : 'No parts found in multiple bin locations for selected filter'
+  };
 }
 
 const INVALID_SCAN_COLUMNS = [
@@ -2814,6 +2888,7 @@ function columnsForReport(type, rows) {
   if (type === 'device-wise') return DEVICE_COLUMNS;
   if (type === 'duplicate-scans') return DUPLICATE_COLUMNS;
   if (type === 'invalid-scan-report' || type === 'wrong-not-found-master') return INVALID_SCAN_COLUMNS;
+  if (type === 'multiple-bin-location-alert') return MULTIPLE_BIN_LOCATION_ALERT_COLUMNS;
   return columnsForRows(rows);
 }
 
@@ -2979,6 +3054,26 @@ async function handleReport(req, res, type, title) {
     if (type === 'scan-register' && /\/valid-scans$/i.test(req.path)) query.scanStatus = 'Accepted';
     if (type === 'scan-register' && /\/duplicate-scans$/i.test(req.path)) query.scanStatus = 'Duplicate';
     if (!selectedDealerCode(query)) return requireDealerSelection(res);
+    if (type === 'multiple-bin-location-alert') {
+      const report = await multipleBinLocationAlertRows(query);
+      if (!report) return requireDealerSelection(res);
+      const rows = report.rows || [];
+      if (query.format === 'excel') return sendExcel(res, report.title, rows, type, query);
+      if (query.format === 'pdf') return sendPdf(res, report.title, rows, type, query);
+      const paged = pageRows(rows, query);
+      return res.json({
+        success: true,
+        type,
+        title: report.title,
+        summary: { ...report.summary, totalRows: rows.length, visibleRows: rows.length, pageRows: paged.rows.length },
+        reconciliation: null,
+        columns: columnsForReport(type, paged.rows.length ? paged.rows : rows).map(({ header, key }) => ({ header, key })),
+        rows: paged.rows,
+        totalRows: rows.length,
+        pagination: { page: paged.page, limit: paged.limit, skip: paged.skip, totalRows: paged.totalRows, totalPages: paged.totalPages },
+        message: report.message || (rows.length ? '' : 'No multiple bin location alerts found for selected filter')
+      });
+    }
     const reconciliation = await reportModule.validateValuationReports(query);
     if (type === 'scan-register') {
       const rows = await scanRegisterRows(query);
@@ -3036,6 +3131,46 @@ async function handleReport(req, res, type, title) {
 async function emailReport(req, res, type, title) {
   try {
     if (!selectedDealerCode(req.body.filters || {})) return requireDealerSelection(res);
+    if (type === 'multiple-bin-location-alert') {
+      const report = await multipleBinLocationAlertRows(req.body.filters || {});
+      if (!report) return requireDealerSelection(res);
+      const rows = report.rows || [];
+      const to = String(req.body.to || req.body.email || '').trim();
+      const cc = String(req.body.cc || '').trim();
+      const subject = String(req.body.subject || `Daksh Inventory - ${report.title}`).trim();
+      const message = String(req.body.message || `Please find attached the ${report.title}.`).trim();
+      const attachmentType = String(req.body.attachmentType || 'Excel').trim().toLowerCase();
+      if (!to) return res.status(400).json({ success: false, message: 'Email To is required' });
+      if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+        return res.status(400).json({ success: false, message: 'SMTP_USER and SMTP_PASS must be configured in .env' });
+      }
+
+      const attachments = [];
+      if (attachmentType === 'excel' || attachmentType === 'both') {
+        attachments.push({ filename: `${report.title.replace(/[^a-z0-9]/gi, '_')}.xlsx`, content: await buildExcelBuffer(report.title, rows, type) });
+      }
+      if (attachmentType === 'pdf' || attachmentType === 'both') {
+        attachments.push({ filename: `${report.title.replace(/[^a-z0-9]/gi, '_')}.pdf`, content: buildPdfBuffer(report.title, rows, type) });
+      }
+
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT || 587),
+        secure: Number(process.env.SMTP_PORT || 587) === 465,
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+      });
+
+      await transporter.sendMail({
+        from: process.env.REPORT_EMAIL || process.env.SMTP_USER,
+        to,
+        cc: cc || undefined,
+        subject,
+        text: message,
+        attachments
+      });
+
+      return res.json({ success: true, message: 'Report email sent' });
+    }
     await reportModule.validateValuationReports(req.body.filters || {});
     const to = String(req.body.to || req.body.email || '').trim();
     const cc = String(req.body.cc || '').trim();
@@ -3175,6 +3310,8 @@ async function handleCompleteAuditPack(req, res) {
 router.get('/invalid-scan-report', auth.requireAuth, handleInvalidScanReport);
 router.get('/wrong-not-found-master', auth.requireAuth, handleInvalidScanReport);
 router.post('/download-complete-audit-pack', auth.requireAuth, handleCompleteAuditPack);
+router.get('/multiple-bin-location-alert', auth.requireAuth, (req, res) => handleReport(req, res, 'multiple-bin-location-alert', 'Multiple Bin Location Alert Report'));
+router.post('/multiple-bin-location-alert/email', auth.requireAuth, auth.requireAdmin, (req, res) => emailReport(req, res, 'multiple-bin-location-alert', 'Multiple Bin Location Alert Report'));
 
 router.get('/duplicate-scans', auth.requireAuth, (req, res) => handleScanRegisterAlias(req, res, 'Duplicate'));
 router.post('/duplicate-scans/email', auth.requireAuth, auth.requireAdmin, (req, res) => emailScanRegisterAlias(req, res, 'Duplicate'));

@@ -19,6 +19,8 @@ const FILTER_KEYS = [
   'entryChannel',
   'entrySource',
   'binLocation',
+  'audit',
+  'auditDate',
   'partNumber',
   'productCategory',
   'model'
@@ -26,7 +28,8 @@ const FILTER_KEYS = [
 
 const DEFAULT_FILTERS = ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'syncStatus'];
 const DEFAULT_FILTERS_BY_REPORT = {
-  'scan-register': ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'deviceName', 'syncStatus', 'entryMode']
+  'scan-register': ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'deviceName', 'syncStatus', 'entryMode'],
+  'multiple-bin-location-alert': ['dealer', 'audit', 'dateRange', 'partNumber', 'binLocation', 'userName']
 };
 
 function cleanReportName(value) {
