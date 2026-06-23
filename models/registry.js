@@ -29,6 +29,11 @@ function uppercaseFields(data, fields) {
   });
 }
 
+function numberValue(value, fallback = 0) {
+  const parsed = Number(String(value === undefined || value === null || value === '' ? fallback : value).replace(/,/g, '').trim());
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function lowercaseFields(data, fields) {
   fields.forEach((field) => {
     if (data[field] !== undefined && data[field] !== null && data[field] !== '') data[field] = lower(data[field]);
@@ -204,6 +209,25 @@ function prepareInventory(data) {
   if (data.isSynced === undefined) data.isSynced = false;
 }
 
+function preparePartBinLocation(data) {
+  syncAliases(data, [
+    ['partNumber', 'part'],
+    ['normalizedPartNumber', 'partNumber'],
+    ['binLocation', 'bin']
+  ]);
+  const partNo = normalizePartNumber(data.normalizedPartNumber || data.partNumber || data.part || '');
+  if (partNo) {
+    data.partNumber = partNo;
+    data.normalizedPartNumber = partNo;
+  }
+  uppercaseFields(data, ['dealerCode', 'auditId', 'partNumber', 'normalizedPartNumber', 'binLocation', 'locationType']);
+  data.locationType = upper(data.locationType || 'SECONDARY') === 'PRIMARY' ? 'PRIMARY' : 'SECONDARY';
+  data.quantity = numberValue(data.quantity, 0);
+  if (!data.createdDate) data.createdDate = new Date();
+  if (!data.createdAt) data.createdAt = data.createdDate;
+  if (!data.updatedAt) data.updatedAt = new Date();
+}
+
 function cryptoRandom() {
   return require('crypto').randomUUID();
 }
@@ -273,6 +297,17 @@ module.exports = {
   DuplicateScanLog: model('DuplicateScanLog', 'duplicateScanLog', 'duplicatescanlogs', { prepare: prepareCommonLog }),
   FailedScan: model('FailedScan', 'failedScan', 'failedscans', { prepare: prepareCommonLog }),
   Inventory: model('Inventory', 'inventory', 'inventories', { prepare: prepareInventory, indexes: inventoryIndexes }),
+  PartBinLocation: model('PartBinLocation', 'partBinLocation', 'part_bin_locations', {
+    prepare: preparePartBinLocation,
+    indexes: [
+      [{ dealerCode: 1, auditId: 1, normalizedPartNumber: 1, binLocation: 1 }, { unique: true, name: 'part_bin_locations_unique_part_bin' }],
+      [{ dealerCode: 1 }, { name: 'part_bin_locations_dealer_idx' }],
+      [{ auditId: 1 }, { name: 'part_bin_locations_audit_idx' }],
+      [{ normalizedPartNumber: 1 }, { name: 'part_bin_locations_part_idx' }],
+      [{ binLocation: 1 }, { name: 'part_bin_locations_bin_idx' }],
+      [{ locationType: 1 }, { name: 'part_bin_locations_location_type_idx' }]
+    ]
+  }),
   MasterCatalogue: model('MasterCatalogue', 'masterCatalogue', 'mastercatalogues', { prepare: prepareMasterCatalogue }),
   MasterPart: model('MasterPart', 'masterPart', 'masterparts', { prepare: prepareMasterPart }),
   OfflineQueue: model('OfflineQueue', 'offlineQueue', 'offlinequeues', { prepare: prepareCommonLog }),

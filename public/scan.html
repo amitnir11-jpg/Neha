@@ -247,6 +247,54 @@
     </form>
   </dialog>
 
+  <dialog id="smartBinSuggestionDialog" class="smart-bin-dialog" aria-modal="true" aria-labelledby="smartBinSuggestionTitle">
+    <div class="dialog-card smart-bin-dialog-card">
+      <div class="dialog-head">
+        <div>
+          <span class="panel-tag">Part Location Alert</span>
+          <h3 id="smartBinSuggestionTitle">Smart Bin Location Suggestion</h3>
+        </div>
+      </div>
+
+      <p id="smartBinSuggestionMessage" class="field-message smart-bin-message">Part already available in another bin.</p>
+      <div id="smartBinExistingBins" class="smart-bin-existing-list"></div>
+
+      <label id="smartBinExistingBinSelectWrap" class="field smart-bin-existing-select-wrap">
+        <span>Preferred existing bin</span>
+        <select id="smartBinExistingBinSelect"></select>
+      </label>
+
+      <label class="field smart-bin-reason">
+        <span>Reason for new location</span>
+        <textarea id="smartBinReasonInput" rows="3" placeholder="Bin Full / Overflow Qty / Secondary Storage / Other"></textarea>
+      </label>
+      <p id="smartBinSuggestionHint" class="muted smart-bin-suggestion-hint">Reason is required when saving the part in a new bin.</p>
+
+      <div class="dialog-actions smart-bin-actions">
+        <button id="smartBinUseExistingBtn" class="btn btn-primary" type="button">USE EXISTING</button>
+        <button id="smartBinAddLocationBtn" class="btn btn-secondary" type="button">ADD NEW LOCATION</button>
+        <button id="smartBinContinueNewBtn" class="btn btn-secondary" type="button">CONTINUE CURRENT BIN</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="duplicateAlertDialog" class="duplicate-dialog" aria-modal="true" aria-labelledby="duplicateAlertTitle">
+    <div class="dialog-card duplicate-dialog-card">
+      <div class="dialog-head">
+        <div>
+          <span class="panel-tag">Duplicate Alert</span>
+          <h3 id="duplicateAlertTitle">Part already scanned</h3>
+        </div>
+      </div>
+
+      <p id="duplicateAlertMessage" class="field-message duplicate-message">Part already scanned in this bin.</p>
+
+      <div class="dialog-actions duplicate-actions">
+        <button id="duplicateAlertOkBtn" class="btn btn-primary" type="button">OK</button>
+      </div>
+    </div>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="/config.js"></script>

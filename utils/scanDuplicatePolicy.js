@@ -13,9 +13,26 @@ function upper(value) {
   return clean(value).toUpperCase();
 }
 
+function boolValue(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return Boolean(fallback);
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const text = clean(value).toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(text)) return false;
+  return Boolean(fallback);
+}
+
 function scanType(input = {}) {
   const type = upper(input.scanType || input.type || input.action || 'INWARD');
   return type === 'VERIFY' ? 'VERIFICATION' : type;
+}
+
+function smartBinDecisionAllowsDuplicate(input = {}) {
+  const decision = upper(input.smartBinDecision || input.smartBinAction || input.smartBinOverride || '');
+  const allowMultipleLocations = boolValue(input.smartBinAllowMultipleLocations, true);
+  if (!allowMultipleLocations) return decision === 'USE_EXISTING';
+  return ['USE_EXISTING', 'CONTINUE_NEW', 'ADD_ADDITIONAL'].includes(decision);
 }
 
 function scanPartNumber(input = {}) {
@@ -82,9 +99,11 @@ function globalUpiKey(input = {}) {
 }
 
 function activeUpiDuplicateFilter(input = {}) {
+  if (smartBinDecisionAllowsDuplicate(input)) return null;
   const upi = canonicalUpiValue(input);
   const dealerCode = scanDealerCode(input);
   const auditId = scanAuditId(input);
+  const binLocation = upper(input.binLocation || input.bin || input.location || '');
   const globalKey = clean(input.globalUpiKey || globalUpiKey(input));
   if (!upi && !globalKey) return null;
   const terms = [];
@@ -98,6 +117,14 @@ function activeUpiDuplicateFilter(input = {}) {
   };
   if (dealerCode) filter.dealerCode = dealerCode;
   if (auditId) filter.auditId = auditId;
+  if (binLocation) {
+    filter.$and = (filter.$and || []).concat([{
+      $or: [
+        { binLocation },
+        { bin: binLocation }
+      ]
+    }]);
+  }
   return filter;
 }
 
@@ -211,5 +238,6 @@ module.exports = {
   scanIdentityId,
   scanPartNumber,
   scanSyncKey,
-  scanType
+  scanType,
+  smartBinDecisionAllowsDuplicate
 };

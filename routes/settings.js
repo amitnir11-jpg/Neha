@@ -6,7 +6,9 @@ const router = express.Router();
 const SMART_BIN_KEY = 'smart-bin-suggestion';
 const DEFAULT_SETTINGS = {
   enabled: true,
-  requireReason: true
+  allowMultipleLocations: true,
+  requireReason: true,
+  maxAllowedLocationsPerPart: 3
 };
 
 function clean(value) {
@@ -23,13 +25,20 @@ function toBoolean(value, fallback) {
   return Boolean(fallback);
 }
 
+function toInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value === undefined || value === null || value === '' ? fallback : value), 10);
+  return Number.isFinite(parsed) ? parsed : Number.parseInt(String(fallback), 10);
+}
+
 function normalizeSettings(input = {}) {
   const source = input && typeof input === 'object'
     ? (input.data && typeof input.data === 'object' ? { ...input.data, ...input } : { ...input })
     : {};
   return {
     enabled: toBoolean(source.enabled, DEFAULT_SETTINGS.enabled),
-    requireReason: toBoolean(source.requireReason, DEFAULT_SETTINGS.requireReason)
+    allowMultipleLocations: toBoolean(source.allowMultipleLocations, DEFAULT_SETTINGS.allowMultipleLocations),
+    requireReason: toBoolean(source.requireReason, DEFAULT_SETTINGS.requireReason),
+    maxAllowedLocationsPerPart: Math.max(1, toInteger(source.maxAllowedLocationsPerPart, DEFAULT_SETTINGS.maxAllowedLocationsPerPart) || DEFAULT_SETTINGS.maxAllowedLocationsPerPart)
   };
 }
 
@@ -63,10 +72,12 @@ router.post('/smart-bin-suggestion', auth.requireAuth, auth.requireAdmin, async 
     const updated = await Setting.findOneAndUpdate(
       { key: SMART_BIN_KEY },
       {
-        $set: {
+      $set: {
           key: SMART_BIN_KEY,
           enabled: payload.enabled,
+          allowMultipleLocations: payload.allowMultipleLocations,
           requireReason: payload.requireReason,
+          maxAllowedLocationsPerPart: payload.maxAllowedLocationsPerPart,
           updatedBy: clean(req.user && (req.user.username || req.user.email || req.user.name || req.user.id)),
           updatedByName: clean(req.user && (req.user.name || req.user.username || req.user.email))
         }
@@ -91,3 +102,6 @@ router.post('/smart-bin-suggestion', auth.requireAuth, auth.requireAdmin, async 
 });
 
 module.exports = router;
+module.exports.readSettings = readSettings;
+module.exports.normalizeSettings = normalizeSettings;
+module.exports.DEFAULT_SETTINGS = DEFAULT_SETTINGS;

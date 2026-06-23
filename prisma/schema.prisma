@@ -674,6 +674,35 @@ model Inventory {
   @@map("inventories")
 }
 
+model PartBinLocation {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  dealerCode           String
+  auditId              String
+  partNumber           String
+  normalizedPartNumber String
+  binLocation          String
+  quantity             Float     @default(0)
+  locationType         String    @default("SECONDARY")
+  createdBy            String?
+  createdDate          DateTime  @default(now())
+  reason               String?
+  lastScanDate         DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([auditId])
+  @@index([partNumber])
+  @@index([normalizedPartNumber])
+  @@index([binLocation])
+  @@index([locationType])
+  @@index([dealerCode, auditId, normalizedPartNumber])
+  @@index([dealerCode, auditId, normalizedPartNumber, binLocation])
+  @@unique([dealerCode, auditId, normalizedPartNumber, binLocation])
+  @@map("part_bin_locations")
+}
+
 model MasterCatalogue {
   id                   String    @id @default(cuid())
   data                 Json      @default("{}")

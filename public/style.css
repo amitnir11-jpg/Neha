@@ -1066,6 +1066,25 @@ body:not(.dashboard-view-active) .topbar {
   gap: 8px;
 }
 
+.smart-bin-limit-field {
+  display: inline-grid;
+  gap: 4px;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: #475569;
+}
+
+.smart-bin-limit-field input {
+  width: 96px;
+  min-height: 36px;
+  border: 1px solid #d7e2ee;
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #fff;
+  color: #0f172a;
+}
+
 .smart-bin-settings-status {
   margin-left: auto;
   font-size: 11px;
@@ -2457,14 +2476,16 @@ textarea:focus {
 }
 
 .smart-bin-suggestion-card {
-  width: min(860px, 94vw);
-  max-height: min(720px, 88vh);
+  width: min(920px, 94vw);
+  min-height: min(620px, 84vh);
+  max-height: min(820px, 90vh);
   display: flex;
   flex-direction: column;
 }
 
 .smart-bin-suggestion-head p {
   margin: 4px 0 0;
+  white-space: pre-line;
 }
 
 .smart-bin-suggestion-body {
@@ -2479,6 +2500,21 @@ textarea:focus {
 .smart-bin-existing-list {
   display: grid;
   gap: 8px;
+}
+
+.smart-bin-location-type {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  vertical-align: middle;
 }
 
 .smart-bin-bin-row {
@@ -2535,6 +2571,15 @@ textarea:focus {
 
 .smart-bin-actions {
   flex-wrap: wrap;
+}
+
+.smart-bin-actions .btn,
+.smart-bin-limit-field input {
+  box-shadow: none;
+}
+
+.smart-bin-actions .btn {
+  min-width: min(240px, 100%);
 }
 
 .scan-edit-form {

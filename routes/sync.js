@@ -23,6 +23,9 @@ const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
 const {
+  recordPartBinLocationFromScan
+} = require('../services/PartBinLocationService');
+const {
   activeInventoryValue,
   movementTypeValue,
   recomputeUpiInventoryState,
@@ -518,7 +521,11 @@ function optionalNumber(value) {
 }
 
 function booleanFlag(value) {
-  return value === true || value === 1 || String(value).trim().toLowerCase() === 'true' || String(value).trim() === '1';
+  if (value === undefined || value === null || value === '') return false;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const text = String(value).trim().toLowerCase();
+  return ['true', '1', 'yes', 'y', 'on'].includes(text);
 }
 
 function numericValue(value, fallback = 0) {
@@ -824,6 +831,15 @@ function normalizeScan(item = {}) {
     item.bin ||
     ''
   );
+  const smartBinAllowMultipleLocations = item.smartBinAllowMultipleLocations === undefined
+    ? undefined
+    : booleanFlag(item.smartBinAllowMultipleLocations);
+  const smartBinMaxAllowedLocationsPerPart = item.smartBinMaxAllowedLocationsPerPart === undefined
+    ? undefined
+    : Math.max(1, numberValue(item.smartBinMaxAllowedLocationsPerPart, 3) || 3);
+  const smartBinReasonRequired = item.smartBinReasonRequired === undefined
+    ? undefined
+    : booleanFlag(item.smartBinReasonRequired);
   return {
     source: item,
     serverReceivedAt,
@@ -876,6 +892,9 @@ function normalizeScan(item = {}) {
     smartBinSelectedBin,
     smartBinCurrentBin,
     smartBinExistingBins,
+    smartBinAllowMultipleLocations,
+    smartBinMaxAllowedLocationsPerPart,
+    smartBinReasonRequired,
     smartBinCheckedAt: clean(item.smartBinCheckedAt || ''),
     smartBinDecisionAt: clean(item.smartBinDecisionAt || ''),
     smartBinDecisionBy: clean(item.smartBinDecisionBy || item.userName || item.staffName || item.loginId || item.username || ''),
@@ -889,6 +908,9 @@ function normalizeScan(item = {}) {
           selectedBin: smartBinSelectedBin,
           currentBin: smartBinCurrentBin,
           existingBins: smartBinExistingBins,
+          allowMultipleLocations: smartBinAllowMultipleLocations,
+          maxAllowedLocationsPerPart: smartBinMaxAllowedLocationsPerPart,
+          reasonRequired: smartBinReasonRequired,
           checkedAt: clean(item.smartBinCheckedAt || ''),
           decisionAt: clean(item.smartBinDecisionAt || ''),
           decisionBy: clean(item.smartBinDecisionBy || item.userName || item.staffName || item.loginId || item.username || '')
@@ -905,6 +927,9 @@ function smartBinAuditFields(scan = {}) {
     clean(scan.smartBinDecision || '') ||
     clean(scan.smartBinReason || '') ||
     clean(scan.smartBinSuggestedBin || '') ||
+    scan.smartBinAllowMultipleLocations !== undefined ||
+    scan.smartBinMaxAllowedLocationsPerPart !== undefined ||
+    scan.smartBinReasonRequired !== undefined ||
     clean(scan.smartBinCheckedAt || '') ||
     clean(scan.smartBinDecisionAt || '') ||
     decisionBy ||
@@ -922,6 +947,9 @@ function smartBinAuditFields(scan = {}) {
         selectedBin,
         currentBin,
         existingBins,
+        allowMultipleLocations: scan.smartBinAllowMultipleLocations,
+        maxAllowedLocationsPerPart: scan.smartBinMaxAllowedLocationsPerPart,
+        reasonRequired: scan.smartBinReasonRequired,
         checkedAt: clean(scan.smartBinCheckedAt || ''),
         decisionAt: clean(scan.smartBinDecisionAt || ''),
         decisionBy
@@ -934,6 +962,9 @@ function smartBinAuditFields(scan = {}) {
     smartBinSelectedBin: selectedBin,
     smartBinCurrentBin: currentBin,
     smartBinExistingBins: existingBins,
+    smartBinAllowMultipleLocations: scan.smartBinAllowMultipleLocations,
+    smartBinMaxAllowedLocationsPerPart: scan.smartBinMaxAllowedLocationsPerPart,
+    smartBinReasonRequired: scan.smartBinReasonRequired,
     smartBinCheckedAt: clean(scan.smartBinCheckedAt || ''),
     smartBinDecisionAt: clean(scan.smartBinDecisionAt || ''),
     smartBinDecisionBy: decisionBy,
@@ -1424,6 +1455,7 @@ async function saveNormalizedScan(scan, req) {
   logSync('DB insert success', { id: doc._id, deviceId: doc.deviceId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, syncKey: doc.syncKey });
   logSync('saved valid scan', { id: doc._id, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'mobile' });
   await recomputeUpiInventoryState(Inventory, doc).catch(() => undefined);
+  await recordPartBinLocationFromScan(doc).catch(() => undefined);
   invalidateScanCaches(doc);
   await emitEnterpriseRealtime(req.io || req.app.get('io'), [doc]);
   return { status: 'synced', scan: doc, error: '' };
@@ -2160,6 +2192,7 @@ async function pushHandler(req, res) {
       const meta = metaByScanId.get(clean(scan.uniqueScanId || scan.scanId)) || ackMetaFromScan(scan);
       ackList(meta).forEach((ack) => logs.push(syncLogFromAck(scan, ack, 'inserted', '')));
     });
+    await Promise.all(savedScans.map((scan) => recordPartBinLocationFromScan(scan).catch(() => undefined)));
 
     const duplicateCount = logs.filter((log) => log.status === 'duplicate').length;
     const failedCount = failedRows.filter((row) => row.status !== 'invalid').length;

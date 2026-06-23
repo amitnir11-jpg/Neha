@@ -26,6 +26,11 @@ const { canonicalizePartCategory, resolveCategoryFromMaster } = require('../util
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { reportTotals } = require('../utils/reportTotals');
 const { buildSmartBinSuggestion, normalizeBinLocation } = require('../utils/smartBinSuggestion');
+const smartBinSettingsRoute = require('./settings');
+const {
+  getSmartBinSuggestion: getPartBinLocationSuggestion,
+  recordPartBinLocationFromScan
+} = require('../services/PartBinLocationService');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
 const {
   activeInventoryValue,
@@ -1520,6 +1525,7 @@ async function addManualQuantity(existing = {}, input = {}, req) {
   }
 
   const publicRow = publicScan(updated);
+  await recordPartBinLocationFromScan(updated).catch(() => undefined);
   invalidateInventoryCaches(scanDashboardScope(publicRow), ['price']);
   if (req.io && !alreadyApplied) {
     req.io.emit('scan:saved', publicRow);
@@ -1628,6 +1634,9 @@ async function smartBinSuggestionForScan(input = {}) {
   const currentBin = normalizeBinLocation(input.binLocation || input.bin || '');
   const dealer = dealerCode ? await Dealer.findOne({ dealerCode }).lean().catch(() => null) : null;
   const auditId = clean(input.auditId || (dealer ? dealer.currentAuditId : '') || '');
+  const smartBinSettings = smartBinSettingsRoute.readSettings
+    ? await smartBinSettingsRoute.readSettings().catch(() => null)
+    : null;
 
   if (!dealerCode || !partNumber || !auditId || !currentBin) {
     return {
@@ -1645,50 +1654,43 @@ async function smartBinSuggestionForScan(input = {}) {
     };
   }
 
-  const nonEmptyBinClause = {
-    $or: [
-      { binLocation: { $nin: [null, ''] } },
-      { bin: { $nin: [null, ''] } }
-    ]
-  };
-  const primaryFilter = applyTestScanMode({
+  const suggestion = await getPartBinLocationSuggestion({
     dealerCode,
     auditId,
     partNumber,
-    binLocation: { $nin: [null, ''] }
-  }, 'real');
-  let scans = await Inventory.find(primaryFilter)
-    .select('dealerCode auditId partNumber normalizedPartNumber partDescription partName binLocation bin scanType type qty quantity timestamp scanTime createdAt updatedAt userName loginId username staffName smartBinReason smartBinDecisionReason reason remarks syncStatus scanStatus status deletedAt')
-    .sort({ timestamp: 1, createdAt: 1, _id: 1 })
-    .lean();
-  if (!scans.length) {
-    const fallbackFilter = applyTestScanMode({
-      dealerCode,
-      auditId,
-      $and: [
-        {
-          $or: [
-            { normalizedPartNumber: partNumber },
-            { partNumber },
-            { part: partNumber }
-          ]
-        },
-        nonEmptyBinClause
-      ]
-    }, 'real');
-    scans = await Inventory.find(fallbackFilter)
-      .select('dealerCode auditId partNumber normalizedPartNumber partDescription partName binLocation bin scanType type qty quantity timestamp scanTime createdAt updatedAt userName loginId username staffName smartBinReason smartBinDecisionReason reason remarks syncStatus scanStatus status deletedAt')
-      .sort({ timestamp: 1, createdAt: 1, _id: 1 })
-      .lean();
-  }
-  const suggestion = buildSmartBinSuggestion(scans, currentBin);
+    binLocation: currentBin
+  }, {
+    refresh: false,
+    settings: smartBinSettings || {}
+  }).catch(() => ({
+    dealerCode,
+    auditId,
+    partNumber,
+    currentBin,
+    suggestedBin: currentBin,
+    existingBins: [],
+    totalQty: 0,
+    existingBinCount: 0,
+    sameBinExists: false,
+    shouldPrompt: false,
+    message: ''
+  }));
   return {
     ...suggestion,
     dealerCode,
     auditId,
     partNumber,
     currentBin,
-    suggestedBin: suggestion.suggestedBin || currentBin
+    suggestedBin: suggestion.suggestedBin || currentBin,
+    smartBinEnabled: Boolean(smartBinSettings ? smartBinSettings.enabled : true),
+    allowMultipleLocations: smartBinSettings && smartBinSettings.allowMultipleLocations !== undefined
+      ? Boolean(smartBinSettings.allowMultipleLocations)
+      : true,
+    requireReason: smartBinSettings && smartBinSettings.requireReason !== undefined
+      ? Boolean(smartBinSettings.requireReason)
+      : true,
+    maxAllowedLocationsPerPart: Number(smartBinSettings?.maxAllowedLocationsPerPart || 3),
+    shouldPrompt: Boolean(suggestion.shouldPrompt && (smartBinSettings ? smartBinSettings.enabled !== false : true))
   };
 }
 
@@ -2712,6 +2714,7 @@ async function saveScanRequest(req, res) {
     scanDebug("Matched category:", scan.category || '');
     scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
     await refreshInventoryUpiState(scan).catch(() => undefined);
+    await recordPartBinLocationFromScan(scan).catch(() => undefined);
     emitScanUpdate(req, scan).catch((error) => console.warn('[MANUAL SCAN] realtime refresh failed', error.message));
     res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
   } catch (error) {

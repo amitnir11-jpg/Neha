@@ -666,11 +666,48 @@ a {
   background: rgba(15, 23, 42, 0.3);
 }
 
+.smart-bin-dialog,
+.duplicate-dialog {
+  width: min(920px, calc(100vw - 20px));
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.smart-bin-dialog::backdrop,
+.duplicate-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(8px);
+}
+
 .dialog-card {
   border-radius: 26px;
   padding: 22px;
   display: grid;
   gap: 14px;
+}
+
+.smart-bin-dialog-card {
+  min-height: min(620px, 84vh);
+  max-height: min(820px, 90vh);
+  overflow: auto;
+}
+
+.duplicate-dialog-card {
+  min-height: min(300px, 48vh);
+  max-height: min(420px, 60vh);
+  text-align: center;
+  align-items: center;
+  overflow: auto;
+}
+
+.duplicate-dialog-card .dialog-head {
+  justify-content: center;
+  text-align: center;
+}
+
+.duplicate-dialog-card .duplicate-message {
+  text-align: center;
 }
 
 .dialog-head {
@@ -683,6 +720,95 @@ a {
 .dialog-head h3 {
   margin-top: 6px;
   font-size: 1.5rem;
+}
+
+.smart-bin-message,
+.duplicate-message {
+  white-space: pre-line;
+  text-align: left;
+}
+
+.smart-bin-existing-list {
+  display: grid;
+  gap: 10px;
+  max-height: 210px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.smart-bin-bin-row {
+  appearance: none;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  background: rgba(37, 99, 235, 0.05);
+  color: var(--text);
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.smart-bin-bin-row.active {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.smart-bin-bin-row strong {
+  font-size: 1rem;
+}
+
+.smart-bin-bin-row span {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.smart-bin-location-type {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.smart-bin-existing-select-wrap,
+.smart-bin-reason {
+  display: grid;
+  gap: 8px;
+}
+
+.smart-bin-existing-select-wrap select,
+.smart-bin-reason textarea {
+  width: 100%;
+}
+
+.smart-bin-reason textarea {
+  min-height: 88px;
+}
+
+.smart-bin-suggestion-hint {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.smart-bin-actions,
+.duplicate-actions {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.smart-bin-actions .btn {
+  min-width: min(240px, 100%);
+}
+
+.duplicate-actions .btn {
+  min-width: 150px;
 }
 
 .icon-btn {

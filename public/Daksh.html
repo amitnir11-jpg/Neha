@@ -907,10 +907,12 @@
               </div>
               <div class="toolbar smart-bin-settings-toolbar">
                 <label class="toggle admin-only"><input id="smartBinSuggestionToggle" type="checkbox">Smart Bin Suggestion</label>
+                <label class="toggle admin-only"><input id="smartBinAllowMultipleLocationsToggle" type="checkbox">Allow multiple locations per part</label>
                 <label class="toggle admin-only"><input id="smartBinRequireReasonToggle" type="checkbox">Require reason when same part is saved in new bin</label>
+                <label class="smart-bin-limit-field admin-only">Max locations per part<input id="smartBinMaxLocationsInput" type="number" min="1" step="1" inputmode="numeric" value="3"></label>
                 <span id="smartBinSettingsStatus" class="muted smart-bin-settings-status">ON · Reason required</span>
               </div>
-              <p class="muted smart-bin-settings-note">This affects only interactive scan confirmations. Default: ON with reason required.</p>
+              <p class="muted smart-bin-settings-note">This affects interactive scan confirmations only. Default: ON, multiple locations allowed, with reason required.</p>
             </section>
           </section>
 
@@ -1296,7 +1298,7 @@
         </label>
         <label class="smart-bin-reason">
           <span>Reason</span>
-          <textarea id="smartBinReasonInput" rows="2" placeholder="Qty overflow / bin full"></textarea>
+          <textarea id="smartBinReasonInput" rows="2" placeholder="Bin Full / Overflow Qty / Secondary Storage / Other"></textarea>
         </label>
         <p id="smartBinSuggestionHint" class="muted smart-bin-suggestion-hint">Reason is required when saving the part in a new bin.</p>
       </div>
