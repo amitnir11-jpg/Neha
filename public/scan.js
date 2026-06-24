@@ -821,13 +821,11 @@
       closeSmartBinSuggestionModal(null);
       return null;
     }
-
     const decision = {
       action: useExisting ? 'USE_EXISTING_BIN' : 'SAVE_NEW_BIN',
       currentBin,
       selectedBin: useExisting ? selectedExistingBin : currentBin,
       suggestedBin,
-      reason: useExisting ? 'User selected existing bin' : 'User confirmed separate bin',
       existingBins: Array.isArray(payload.existingBins) ? payload.existingBins : [],
       decisionBy: clean(state.session && (state.session.user?.name || state.session.user?.username || state.session.user?.email || state.session.user?.id || '')),
       decisionAt: nowIso(),
