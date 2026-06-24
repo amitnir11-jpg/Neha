@@ -811,8 +811,9 @@
 
   async function resolveSmartBinSuggestionAction(action, payload = {}) {
     const { select } = smartBinPromptNodes();
-    const currentBin = clean(payload.currentBin || '');
-    const selectedBin = clean((select && select.value) || payload.suggestedBin || currentBin || '');
+    const currentBin = clean(payload.currentBin || payload.binLocation || '');
+    const suggestedBin = clean(payload.suggestedBin || (payload.existingBins && payload.existingBins[0] && payload.existingBins[0].binLocation) || '');
+    const selectedExistingBin = clean((select && select.value) || suggestedBin || '');
     const useExisting = action === 'USE_EXISTING_BIN';
     const saveNew = action === 'SAVE_NEW_BIN';
 
@@ -822,8 +823,11 @@
     }
 
     const decision = {
-      action,
-      selectedBin,
+      action: useExisting ? 'USE_EXISTING_BIN' : 'SAVE_NEW_BIN',
+      currentBin,
+      selectedBin: useExisting ? selectedExistingBin : currentBin,
+      suggestedBin,
+      reason: useExisting ? 'User selected existing bin' : 'User confirmed separate bin',
       existingBins: Array.isArray(payload.existingBins) ? payload.existingBins : [],
       decisionBy: clean(state.session && (state.session.user?.name || state.session.user?.username || state.session.user?.email || state.session.user?.id || '')),
       decisionAt: nowIso(),
