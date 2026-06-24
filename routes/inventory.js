@@ -2288,6 +2288,829 @@ async function saveScanRequest(req, res) {
     let duplicateMessage = '';
     let upiDuplicate = false;
     let manualBinDuplicate = false;
+
+    // Smart Bin Check
+    const smartBinDecision = String(req.body.smartBinDecision || '').trim().toUpperCase();
+    if (!smartBinDecision) {
+      const smartBinState = await smartBinSuggestionForScan({
+        ...req.body,
+        dealerCode,
+        auditId,
+        partNumber: part,
+        binLocation
+      });
+      if (smartBinState.shouldPrompt) {
+        return res.status(409).json({
+          success: false,
+          smartBinWarning: true,
+          message: smartBinState.message,
+          smartBinSuggestion: smartBinState
+        });
+      }
+    }
+
+    if (manualEntryMode && ['INWARD', 'DAMAGE'].includes(type) && binLocation) {
+      const manualDuplicateFilter = duplicatePolicy.manualBinDuplicateFilter({
+        dealerCode,
+        auditId,
+        partNumber: part,
+        scanType: type,
+        binLocation
+      });
+      existing = manualDuplicateFilter
+        ? await Inventory.findOne(manualDuplicateFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
+        : null;
+      manualBinDuplicate = Boolean(existing);
+    }
+    if (!existing && type === 'FITTED' && regdNo && jobCardNo) {
+      existing = await Inventory.findOne(fittedIdentityFilter({ dealerCode, partNumber: part, regdNo, jobCardNo, auditId })).lean();
+    } else if (!existing) {
+      existing = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
+    }
+    if (!existing && type === 'INWARD') {
+      const backendDuplicate = await findBackendDuplicate({
+        ...req.body,
+        uniqueScanId,
+        scanId: uniqueScanId,
+        syncKey,
+        rawUpiHash,
+        qrFingerprint: finalQrFingerprint,
+        partNumber: part,
+        dealerCode,
+        auditId,
+        scanType: type,
+        rawScan: rawScanText,
+        rawScanString: rawScanText,
+        rawUpi: rawScanText,
+        upiNo,
+        upiId
+      });
+      if (backendDuplicate) {
+        existing = backendDuplicate.existing;
+        duplicateReason = backendDuplicate.reason;
+        duplicateMessage = backendDuplicate.message;
+        upiDuplicate = Boolean(backendDuplicate.upiDuplicate);
+      }
+    }
+    if (!upiDuplicate && existing && movementType === 'INWARD') {
+      const activeFilter = duplicatePolicy.activeUpiDuplicateFilter({
+        dealerCode,
+        auditId,
+        upiCode,
+        upiNo,
+        upiId,
+        rawScanString: rawScanText,
+        rawScan: rawScanText
+      });
+      const activeExisting = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+      if (activeExisting) {
+        existing = activeExisting;
+        upiDuplicate = true;
+        duplicateReason = 'Active inward duplicate UPI';
+        duplicateMessage = duplicatePolicy.duplicateUpiMessage(activeExisting);
+      }
+    }
+    if (existing) {
+      if (manualBinDuplicate) {
+        if (manualAddRequestId && existing.lastManualAddRequestId === manualAddRequestId) {
+          const publicRow = publicScan(existing);
+          const currentQty = numberValue(publicRow.qty !== undefined ? publicRow.qty : publicRow.quantity, 0);
+          return res.json({
+            success: true,
+            updated: true,
+            duplicate: false,
+            alreadyApplied: true,
+            addedQuantity: 0,
+            newQuantity: currentQty,
+            message: `This manual save was already applied. Current quantity: ${currentQty}.`,
+            scan: publicRow
+          });
+        }
+        if (booleanFlag(req.body.addManualQuantity || req.body.confirmAddQuantity)) {
+          const result = await addManualQuantity(existing, { ...req.body, qty: preQty }, req);
+          if (result.error) return res.status(400).json({ success: false, message: result.error });
+          const newQty = numberValue(result.updated.qty !== undefined ? result.updated.qty : result.updated.quantity, 0);
+          return res.json({
+            success: true,
+            updated: true,
+            duplicate: false,
+            alreadyApplied: result.alreadyApplied,
+            addedQuantity: result.addQty,
+            newQuantity: newQty,
+            message: result.alreadyApplied
+              ? `Quantity was already added. Current quantity: ${newQty}.`
+              : `Added ${result.addQty} more. New quantity: ${newQty}.`,
+            scan: result.updated
+          });
+        }
+        return res.status(409).json({
+          success: false,
+          duplicate: true,
+          skipped: true,
+          ...manualDuplicatePayload(existing, preQty),
+          scan: publicScan(existing)
+        });
+      }
+      existing = await backfillDuplicateMrp(existing, {
+        partNumber: part,
+        rawScanText,
+          masterPrice: await getMasterPrice(part, dealerCode, null),
+          qty: preQty,
+        });
+      if (type === 'FITTED') {
+        if (booleanFlag(req.body.addFittedQuantity || req.body.confirmAddQuantity)) {
+          const addQty = numberValue(firstValue(req.body, ['qty', 'quantity', 'count']) || parsed.qty, 1);
+          const updated = await Inventory.findByIdAndUpdate(existing._id, {
+            $inc: { qty: addQty, quantity: addQty, fittedQty: addQty },
+            $set: {
+              fittedLocation: 'VEHICLE',
+              status: 'FITTED_ON_VEHICLE',
+              syncStatus: 'synced',
+              synced: true,
+              isSynced: true
+            }
+          }, { new: true }).lean();
+          if (req.io) {
+            req.io.emit('scan:saved', publicScan(updated || existing));
+            req.io.emit('stats:update');
+          }
+          return res.json({
+            success: true,
+            updated: true,
+            duplicate: false,
+            message: 'Fitted part quantity updated for this vehicle/job card',
+            scan: updated || existing
+          });
+        }
+        return res.status(409).json({
+          success: false,
+          duplicate: true,
+          fittedDuplicate: true,
+          message: 'This fitted part already exists for this vehicle/job card. Add quantity?',
+          scan: existing
+        });
+      }
+      logDuplicateScan({
+        ...req.body,
+        uniqueScanId,
+        scanId: uniqueScanId,
+        qrFingerprint: finalQrFingerprint,
+        rawUpiHash,
+        partNumber: part,
+        dealerCode,
+        binLocation,
+        scanType: type,
+        rawScan: rawScanText,
+        upiNo
+      }, existing).catch(() => undefined);
+      if (req.io) {
+        req.io.emit('scan:duplicate', publicScan(existing));
+        req.io.emit('stats:update');
+      }
+      return res.status(409).json({
+        success: false,
+        skipped: true,
+        duplicate: true,
+        upiDuplicate,
+        message: duplicateMessage || `${duplicatePolicy.DUPLICATE_PART_MESSAGE} First scanned by ${existing.userName || existing.staffName || existing.loginId || 'Unknown'}, at ${formatIstDateTime(existing.timestamp) || '-'}, Bin ${existing.binLocation || existing.bin || '-'}.`,
+        reason: duplicateReason || duplicatePolicy.DUPLICATE_PART_MESSAGE,
+        scan: existing
+      });
+    }
+
+    if (!validation) {
+      validation = await masterValidation.validatePartAgainstMaster({
+        partNumber: normalizedPartNumber,
+        dealerCode,
+        rawScannedValue: rawScanInput || parsed.rawScan || part,
+        logger: SCAN_VERBOSE_LOGS ? console : null
+      });
+      master = validation.master;
+    }
+    if (!master) {
+      await logValidationFailure({
+        ...req.body,
+        partNumber: part,
+        dealerCode,
+        auditId,
+        rawScan: rawScanText,
+        scanType: type,
+        source: entrySource,
+        defaultScanMode: manualEntryMode ? 'Manual' : 'Barcode/Web Scan',
+        originalScanId: uniqueScanId
+      }, INVALID_PART_MESSAGE, timestamp).catch(() => undefined);
+      return res.status(400).json({ success: false, message: INVALID_PART_MESSAGE });
+    }
+
+    if (!part) {
+      scanDebug('[MANUAL SCAN] validation failed', { reason: 'Part number is required', parsed });
+      return res.status(400).json({ success: false, message: 'Part number is required' });
+    }
+    if (!isValidPartNumber(part)) {
+      scanDebug('[MANUAL SCAN] validation failed', { reason: 'Invalid part number format', part, rawScanInput });
+      return res.status(400).json({ success: false, message: 'Invalid part number format' });
+    }
+    if (['INWARD', 'DAMAGE'].includes(type) && !binLocation) {
+      scanDebug('[MANUAL SCAN] validation failed', { reason: BIN_REQUIRED_MESSAGE, part });
+      return res.status(400).json({ success: false, message: BIN_REQUIRED_MESSAGE });
+    }
+    if (type === 'FITTED' && (!regdNo || !jobCardNo)) {
+      const message = 'Regd No and Job Card No are required for fitted parts.';
+      scanDebug('[MANUAL SCAN] validation failed', { reason: message, part });
+      return res.status(400).json({ success: false, message });
+    }
+    if (!dealerCode) {
+      scanDebug('[MANUAL SCAN] validation failed', { reason: 'Dealer code is required', part });
+      return res.status(400).json({ success: false, message: 'Dealer code is required' });
+    }
+    if (!dealer) {
+      scanDebug('[MANUAL SCAN] validation failed', { reason: 'Invalid dealer code', dealerCode, part });
+      return res.status(400).json({ success: false, message: 'Valid dealer code is required' });
+    }
+    if (!VALID_TYPES.includes(type)) {
+      scanDebug('[MANUAL SCAN] validation failed', { reason: 'Invalid scan type', type, part, dealerCode });
+      return res.status(400).json({ success: false, message: 'Invalid scan type' });
+    }
+    const role = String(req.body.role || (req.user ? req.user.role : '') || '').trim().toLowerCase();
+    const roleError = roleScanError(role, type);
+    if (roleError) return res.status(403).json({ success: false, message: roleError });
+
+    const qty = preQty;
+    const masterPrice = master ? await getMasterPrice(part, dealerCode, master) : null;
+    if (master && masterPriceMissing(masterPrice)) {
+      return missingMasterPriceResponse(res, part);
+    }
+    const valueFields = valuationFields({ masterPrice, master, qty });
+    const finalMRP = Number(valueFields.valuationMRP || 0);
+    const finalDlc = Number(valueFields.dlc || 0);
+    const candidate = {
+      part,
+      dealerCode,
+      auditId,
+      rawScan: rawScanText,
+      rawScanProvided: Boolean(rawScanInput || parsed.rawScan),
+      mrp: finalMRP,
+      mrpProvided: finalMRP > 0,
+      dlc: finalDlc,
+      dlcProvided: finalDlc > 0
+    };
+
+    const warnings = await validateScan(candidate, master, timestamp);
+    if (!master && manualEntryMode) {
+      warnings.push('Manual part saved without master catalogue match');
+    }
+    let scan;
+    try {
+      scan = await Inventory.create({
+      uniqueScanId,
+      scanId: uniqueScanId,
+      qrFingerprint: finalQrFingerprint,
+      rawUpiHash,
+      globalUpiKey,
+      part,
+      partNumber: part,
+      normalizedPartNumber,
+      partName: master ? master.partName : String(req.body.partName || ''),
+      partDescription: master ? (master.partDescription || master.partName || '') : String(req.body.partDescription || req.body.partName || ''),
+      model: master ? master.model : String(req.body.model || ''),
+      year: master ? (master.manufacturingYear || master.year) : String(req.body.manufacturingYear || req.body.year || ''),
+      manufacturingYear: master ? (master.manufacturingYear || master.year) : String(req.body.manufacturingYear || req.body.year || ''),
+      category: resolveCategoryFromMaster(master || { productCategory: req.body.productCategory || req.body.category || '' }),
+      productCategory: resolveCategoryFromMaster(master || { productCategory: req.body.productCategory || req.body.category || '' }),
+      productGroup: master ? master.productGroup || '' : String(req.body.productGroup || '').toUpperCase(),
+      productType: master ? master.productType || '' : String(req.body.productType || '').toUpperCase(),
+      superceededBy: master ? master.superceededBy || '' : String(req.body.superceededBy || '').toUpperCase(),
+      partGroup: master ? master.partGroup || '' : String(req.body.partGroup || '').toUpperCase(),
+      partSubGroup: master ? master.partSubGroup || '' : String(req.body.partSubGroup || '').toUpperCase(),
+      gstCategory: master ? master.gstCategory || '' : String(req.body.gstCategory || '').toUpperCase(),
+      qty,
+      quantity: qty,
+      mrp: valueFields.mrp,
+      scanMRP: valueFields.scanMRP,
+      manualMRP: valueFields.manualMRP,
+      valuationMRP: valueFields.valuationMRP,
+      valuationSource: valueFields.valuationSource,
+      finalInventoryValue: valueFields.finalInventoryValue,
+      defaultMRP: valueFields.defaultMRP,
+      finalMRP,
+      mrpStatus: valueFields.mrpStatus,
+      mrpPendingUpdatedAt: valueFields.mrpPendingUpdatedAt,
+      currentCatalogueMRP: valueFields.currentCatalogueMRP,
+      currentCatalogueDLC: valueFields.currentCatalogueDLC || valueFields.dlc || 0,
+      priceHistoryId: valueFields.priceHistoryId,
+      pricePeriodFrom: valueFields.pricePeriodFrom,
+      pricePeriodTo: valueFields.pricePeriodTo,
+      pricePeriodMatched: valueFields.pricePeriodMatched,
+      pricePeriodStatus: valueFields.pricePeriodStatus,
+      dlc: valueFields.currentCatalogueDLC || valueFields.dlc || 0,
+      dlc: finalDlc,
+      upiCode,
+      bin: binLocation,
+      binLocation,
+      autoDetectedBin,
+      binSelectionMode,
+      regdNo,
+      jobCardNo,
+      movementType,
+      activeInventory: type === 'INWARD',
+      remainingQty: type === 'INWARD' ? qty : 0,
+      isFitted: type === 'FITTED',
+      fittedQty: type === 'FITTED' ? qty : 0,
+      fittedLocation: type === 'FITTED' ? 'VEHICLE' : '',
+      status: type === 'FITTED' ? 'FITTED_ON_VEHICLE' : type === 'DAMAGE' ? 'DAMAGE_STOCK' : '',
+      stockDeductedFromBin,
+      type,
+      scanType: type,
+      upiId,
+      upiNo: upiCode || upiNo,
+      dealerCode,
+      dealerName: dealer ? dealer.dealerName : String(req.body.dealerName || ''),
+      auditId,
+      rawScan: candidate.rawScan,
+      rawScanString: candidate.rawScan,
+      rawBarcode: candidate.rawScan,
+      rawQR: candidate.rawScan,
+      rawUpi: candidate.rawScan,
+      source: entrySource,
+      scanMode: req.body.scanMode || (entrySource === 'manual' ? 'Manual' : 'Barcode/Web Scan'),
+      deviceId: String(req.body.deviceId || ''),
+      deviceName: String(req.body.deviceName || req.body.device || ''),
+      userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || ''),
+      loginId: String(req.body.loginId || req.body.userId || (req.user ? req.user.username || req.user.email : '') || ''),
+      staffName: String(req.body.staffName || parsed.staffName || (req.user ? req.user.name : '') || ''),
+      userName: String(req.body.userName || req.body.staffName || parsed.userName || parsed.staffName || (req.user ? req.user.name || req.user.username : '') || ''),
+      role,
+      timestamp,
+      scanTime: timestamp,
+      serverReceivedAt: timestamp,
+      mobileReceivedTime: mobileTime || '',
+      mobileReceivedTimeUtc: validDate(mobileTime)?.toISOString() || '',
+      synced: serverSavedSynced,
+      isSynced: serverSavedSynced,
+      syncStatus: serverSavedStatus,
+      scanStatus: type === 'OUTWARD' ? 'OUTWARD_DONE' : 'ACCEPTED',
+      syncError: '',
+      syncKey,
+      lastManualAddRequestId: manualAddRequestId,
+      warnings,
+      remarks: warnings.join(', '),
+      masterFound: Boolean(master),
+      masterMatch: Boolean(master),
+      isMasterMatched: Boolean(master),
+      overrideBy: warnings.length && req.user ? req.user.username || req.user.name : ''
+      });
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+      let duplicate = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
+      if (!duplicate) {
+        const backendDuplicate = await findBackendDuplicate({
+          ...req.body,
+          uniqueScanId,
+          scanId: uniqueScanId,
+          syncKey,
+          rawUpiHash,
+          globalUpiKey,
+          qrFingerprint: finalQrFingerprint,
+          partNumber: part,
+          dealerCode,
+          auditId,
+          scanType: type,
+          rawScan: rawScanText,
+          rawScanString: rawScanText,
+          rawUpi: rawScanText,
+          upiNo,
+          upiId
+        });
+          duplicate = backendDuplicate && backendDuplicate.existing;
+          upiDuplicate = Boolean(backendDuplicate && backendDuplicate.upiDuplicate);
+      }
+      if (duplicate) {
+        duplicate = await backfillDuplicateMrp(duplicate, {
+          partNumber: part,
+          rawScanText,
+          masterPrice,
+          qty,
+        });
+        logDuplicateScan({
+          ...req.body,
+          uniqueScanId,
+          scanId: uniqueScanId,
+          qrFingerprint: finalQrFingerprint,
+          rawUpiHash,
+          partNumber: part,
+          dealerCode,
+          binLocation,
+          scanType: type,
+          rawScan: candidate.rawScan
+        }, duplicate).catch(() => undefined);
+        if (req.io) {
+          req.io.emit('scan:duplicate', publicScan(duplicate));
+          req.io.emit('stats:update');
+        }
+        return res.status(409).json({
+          success: false,
+          skipped: true,
+          duplicate: true,
+          upiDuplicate,
+          message: upiDuplicate ? duplicatePolicy.duplicateUpiMessage(duplicate) : duplicatePolicy.DUPLICATE_PART_MESSAGE,
+          reason: upiDuplicate ? 'Active inward duplicate UPI' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
+          scan: duplicate
+        });
+      }
+      throw error;
+    }
+
+    scanDebug('[SCAN TIME] saved PostgreSQL timestamp verified', {
+      id: scan._id,
+      partNumber: scan.partNumber,
+      dealerCode: scan.dealerCode,
+      scanType: scan.scanType,
+      deviceId: scan.deviceId,
+      ...dateDebugPayload({
+        serverTime: timestamp,
+        mobileTime,
+        savedTime: scan.timestamp || scan.createdAt
+      })
+    });
+    scanDebug('[MANUAL SCAN] DB insert success', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode, scanType: scan.scanType, deviceId: scan.deviceId });
+    scanDebug('SAVED_VALID_SCAN', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode });
+    scanDebug("Matched category:", scan.category || '');
+    scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
+    await refreshInventoryUpiState(scan).catch(() => undefined);
+    await recordPartBinLocationFromScan(scan).catch(() => undefined);
+    emitScanUpdate(req, scan).catch((error) => console.warn('[MANUAL SCAN] realtime refresh failed', error.message));
+    res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
+  } catch (error) {
+    console.error('[MANUAL SCAN] save failed', { message: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+function isManualScanRecord(scan = {}) {
+  const source = normalizeSource(scan.source || scan.scanSource || scan.scanMode || scan.entryMode, '');
+  const text = [scan.source, scan.scanSource, scan.scanMode, scan.entryMode, scan.scanSourceLabel]
+    .map((value) => String(value || '').toLowerCase())
+    .join(' ');
+  const rawText = scanRawText(scan);
+  return source === 'manual'
+    || /\bmanual\b/.test(text)
+    || /^MANUAL:/i.test(rawText)
+    || /MANUAL_ENTERED_MRP/i.test(String(scan.valuationSource || ''))
+    || numberValue(scan.manualMRP, 0) > 0;
+}
+
+async function updateManualMrp(req, res) {
+  try {
+    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+    if (!scan) return res.status(404).json({ success: false, message: 'Scan record not found' });
+    const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part || '');
+    const masterPrice = await getMasterPrice(partNumber, scan.dealerCode, null);
+    if (masterPriceMissing(masterPrice)) return missingMasterPriceResponse(res, partNumber);
+
+    const now = new Date();
+    const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 1);
+    const oldMrp = numberValue(scan.manualMRP || scan.valuationMRP || scan.mrp || 0, 0);
+    const oldDlc = numberValue(scan.dlc, 0);
+    const update = {
+      ...valuationFields({ masterPrice, qty }),
+      mrpPendingUpdatedAt: now
+    };
+    const updated = await Inventory.findByIdAndUpdate(scan._id, { $set: update }, { new: true }).lean();
+    const actor = req.user || {};
+    await AuditLog.create({
+      eventType: 'scan_pricing.updated',
+      module: 'inventory',
+      severity: 'info',
+      message: `Scan pricing updated for ${scan.partNumber || scan.part || ''}`,
+      actorId: String(actor.id || actor._id || actor.username || actor.email || ''),
+      actorName: String(actor.name || actor.username || actor.email || ''),
+      actorRole: String(actor.role || ''),
+      deviceId: String(req.body.deviceId || scan.deviceId || ''),
+      ipAddress: req.ip || '',
+      userAgent: req.headers['user-agent'] || '',
+      dealerCode: scan.dealerCode || '',
+      auditId: scan.auditId || '',
+      scanId: scan.scanId || scan.uniqueScanId || String(scan._id),
+      partNumber: scan.partNumber || scan.part || '',
+      metadata: {
+        old_mrp: oldMrp,
+        new_mrp: update.mrp,
+        old_dlc: oldDlc,
+        new_dlc: update.dlc,
+        updated_by: String(actor.username || actor.name || actor.email || actor.id || ''),
+        updated_at: now
+      }
+    }).catch(() => undefined);
+
+    const publicRow = publicScan(updated);
+    invalidateInventoryCaches(scanDashboardScope(publicRow), ['price']);
+    if (req.io) {
+      req.io.emit('mrp:updated', publicRow);
+      req.io.emit('scan:saved', publicRow);
+      req.io.emit('reports:update', {
+        reason: 'scan-pricing-update',
+        scan: publicRow,
+        dealerCode: publicRow.dealerCode || '',
+        auditId: publicRow.auditId || '',
+        at: now
+      });
+    }
+    return res.json({ success: true, scan: publicRow, message: 'MRP/DLC refreshed from Part Master' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function updateScanDetails(req, res) {
+  try {
+    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+    if (!scan) return res.status(404).json({ success: false, message: 'Scan record not found' });
+
+    const oldPartNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part || '');
+    const partNumber = normalizePartNumber(firstValue(req.body || {}, ['partNumber', 'part', 'partNo']) || oldPartNumber);
+    const qty = optionalNumber(firstValue(req.body || {}, ['qty', 'quantity']));
+    const binLocation = upper(firstValue(req.body || {}, ['binLocation', 'bin']));
+    const scanType = normalizeScanType(scan.scanType || scan.type || 'INWARD');
+
+    if (!partNumber) return res.status(400).json({ success: false, message: 'Part number is required.' });
+    if (!(Number(qty) > 0)) return res.status(400).json({ success: false, message: 'Quantity must be greater than zero.' });
+    if (['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType) && !binLocation) {
+      return res.status(400).json({ success: false, message: 'Bin location is required for this scan type.' });
+    }
+
+    const partChanged = partNumber !== oldPartNumber;
+    const master = await findMasterPart(partNumber, scan.dealerCode);
+    if (partChanged && !master) {
+      return res.status(400).json({ success: false, message: INVALID_PART_MESSAGE });
+    }
+    const masterPrice = master ? await getMasterPrice(partNumber, scan.dealerCode, master) : null;
+    if (masterPriceMissing(masterPrice)) return missingMasterPriceResponse(res, partNumber);
+    const now = new Date();
+    const priceFields = valuationFields({ masterPrice, master, qty });
+    const update = {
+      part: partNumber,
+      partNumber,
+      normalizedPartNumber: partNumber,
+      qty,
+      quantity: qty,
+      ...priceFields,
+      bin: scanType === 'FITTED' ? '' : binLocation,
+      binLocation: scanType === 'FITTED' ? '' : binLocation,
+      mrpPendingUpdatedAt: now
+    };
+    if (scanType === 'FITTED') update.fittedQty = qty;
+    if (scanType === 'OUTWARD') {
+      update.autoDetectedBin = false;
+      update.binSelectionMode = 'MANUAL';
+      update.stockDeductedFromBin = binLocation;
+    } else if (['INWARD', 'DAMAGE'].includes(scanType)) {
+      update.autoDetectedBin = false;
+      update.binSelectionMode = 'MANUAL';
+    }
+    if (master) {
+      update.partName = master.partName || master.partDescription || '';
+      update.partDescription = master.partDescription || master.partName || '';
+      update.model = master.model || '';
+      update.year = master.manufacturingYear || master.year || '';
+      update.manufacturingYear = master.manufacturingYear || master.year || '';
+      update.category = resolveCategoryFromMaster(master);
+      update.productCategory = resolveCategoryFromMaster(master);
+      update.productGroup = upper(master.productGroup || '');
+      update.productType = upper(master.productType || '');
+      update.partGroup = upper(master.partGroup || '');
+      update.partSubGroup = upper(master.partSubGroup || '');
+      update.gstCategory = upper(master.gstCategory || '');
+      update.superceededBy = upper(master.superceededBy || '');
+      update.masterFound = true;
+      update.masterMatch = true;
+      update.isMasterMatched = true;
+      update.warnings = (Array.isArray(scan.warnings) ? scan.warnings : []).filter((warning) => !/not\s+found\s+in\s+master|unknown\s+part|invalid\s+part/i.test(String(warning || '')));
+      update.remarks = String(scan.remarks || '')
+        .split(',')
+        .map((remark) => remark.trim())
+        .filter((remark) => remark && !/not\s+found\s+in\s+master|unknown\s+part|invalid\s+part/i.test(remark))
+        .join(', ');
+    }
+
+    const updated = await Inventory.findByIdAndUpdate(scan._id, { $set: update }, { new: true, runValidators: true }).lean();
+    const actor = req.user || {};
+    await AuditLog.create({
+      eventType: 'scan.details.updated',
+      module: 'inventory',
+      severity: 'info',
+      message: `Scan details updated for ${partNumber}`,
+      actorId: String(actor.id || actor._id || actor.username || actor.email || ''),
+      actorName: String(actor.name || actor.username || actor.email || ''),
+      actorRole: String(actor.role || ''),
+      deviceId: String(req.body.deviceId || scan.deviceId || ''),
+      ipAddress: req.ip || '',
+      userAgent: req.headers['user-agent'] || '',
+      dealerCode: scan.dealerCode || '',
+      auditId: scan.auditId || '',
+      scanId: scan.scanId || scan.uniqueScanId || String(scan._id),
+      partNumber,
+      metadata: {
+        old_part_number: oldPartNumber,
+        new_part_number: partNumber,
+        old_quantity: numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0),
+        new_quantity: qty,
+        old_mrp: numberValue(scan.valuationMRP || scan.mrp, 0),
+        new_mrp: priceFields.mrp,
+        old_dlc: numberValue(scan.dlc, 0),
+        new_dlc: priceFields.dlc,
+        old_bin_location: upper(scan.binLocation || scan.bin),
+        new_bin_location: scanType === 'FITTED' ? '' : binLocation,
+        updated_by: String(actor.username || actor.name || actor.email || actor.id || ''),
+        updated_at: now
+      }
+    }).catch(() => undefined);
+
+    const publicRow = publicScan(updated);
+    invalidateInventoryCaches(scanDashboardScope(publicRow), ['price']);
+    await refreshInventoryUpiState(publicRow).catch(() => undefined);
+    if (req.io) {
+      req.io.emit('scan:saved', publicRow);
+      req.io.emit('inventory:update', { reason: 'scan-details-update', scan: publicRow, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: now });
+      req.io.emit('reports:update', { reason: 'scan-details-update', scan: publicRow, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: now });
+      req.io.emit('stats:update');
+    }
+    return res.json({ success: true, scan: publicRow, message: 'Part details updated successfully' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function saveScanRequest(req, res) {
+  try {
+    const rawScanInput = firstValue(req.body, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText']);
+    scanDebug('[MANUAL SCAN] request received', {
+      bodyKeys: Object.keys(req.body || {}).slice(0, 30),
+      partNumber: req.body.partNumber || req.body.partNo || req.body.part || '',
+      dealerCode: req.body.dealerCode || req.body.dealer || '',
+      scanType: req.body.scanType || req.body.action || req.body.type || '',
+      qty: req.body.qty || req.body.quantity || '',
+      deviceId: req.body.deviceId || '',
+      hasRawScan: Boolean(rawScanInput)
+    });
+    const parsed = parseRawScan(rawScanInput);
+    const explicitPartInput = firstValue(req.body, ['part', 'partNumber', 'partNo', 'sku', 'itemCode']);
+    const part = upper(parsed.part || explicitPartInput);
+    const normalizedPartNumber = normalizePartNumber(part);
+    const requestedDealerCode = upper(req.body.dealerCode || req.body.dealer || parsed.dealerCode || '');
+    let validation = null;
+    let master = null;
+    if (!requestedDealerCode) {
+      validation = await masterValidation.validatePartAgainstMaster({
+        partNumber: normalizedPartNumber,
+        dealerCode: '',
+        rawScannedValue: rawScanInput || parsed.rawScan || part,
+        logger: SCAN_VERBOSE_LOGS ? console : null
+      });
+      master = validation.master;
+    }
+
+    const dealerCode = requestedDealerCode || upper(master ? master.dealerCode : '');
+    const dealer = dealerCode ? await Dealer.findOne({ dealerCode }).lean() : null;
+    const auditId = String(req.body.auditId || parsed.auditId || (dealer ? dealer.currentAuditId : '') || '').trim();
+    
+    // Check if audit is completed - prevent scanning
+    if (auditId) {
+      const audit = await Audit.findOne({ auditId }).lean();
+      if (audit && isCompletedAudit(audit)) {
+        return res.status(403).json({ 
+          success: false, 
+          message: 'Scanning is not allowed for completed audits. Only admin can reopen this audit.',
+          auditCompleted: true
+        });
+      }
+    }
+
+    const type = normalizeScanType(req.body.type || req.body.scanType || req.body.action || parsed.type || 'INWARD');
+    const timestamp = new Date();
+    if (type === 'VERIFICATION') {
+      if (!part) return res.status(400).json({ success: false, message: 'Part number is required' });
+      const result = await verifyPartOnly({
+        rawScan: String(rawScanInput || parsed.rawScan || part),
+        partNumber: part,
+        dealerCode,
+        auditId
+      });
+      return res.json(result);
+    }
+    const mobileTime = firstValue(req.body, ['timestamp', 'scanTime', 'scannedAt', 'scanDateTime', 'dateTime', 'createdAt', 'localCreatedAt', 'localTimestamp']);
+    scanDebug('[SCAN TIME] web/server scan received', {
+      deviceId: req.body.deviceId || '',
+      partNumber: part,
+      dealerCode,
+      scanType: type,
+      ...dateDebugPayload({
+        serverTime: timestamp,
+        mobileTime,
+        savedTime: timestamp
+      })
+    });
+    let binLocation = String(firstValue(req.body, ['binLocation', 'bin', 'location']) || parsed.bin || '').trim().toUpperCase();
+    const regdNo = upper(firstValue(req.body, ['regdNo', 'regNo', 'registrationNo', 'vehicleRegNo']));
+    const jobCardNo = upper(firstValue(req.body, ['jobCardNo', 'jobcardNo', 'jobCard', 'jobNo']));
+    let autoDetectedBin = false;
+    let binSelectionMode = ['INWARD', 'DAMAGE'].includes(type) ? 'MANUAL' : '';
+    let stockDeductedFromBin = '';
+    if (type === 'FITTED') {
+      binLocation = '';
+      binSelectionMode = '';
+    }
+    if (type === 'OUTWARD') {
+      const detected = await autoDetectOutwardBin({ dealerCode, auditId, partNumber: part });
+      if (!detected || !detected.binLocation) {
+        return res.status(409).json({ success: false, message: NO_OUTWARD_STOCK_MESSAGE });
+      }
+      binLocation = detected.binLocation;
+      autoDetectedBin = true;
+      binSelectionMode = 'AUTO';
+      stockDeductedFromBin = detected.binLocation;
+    }
+    const rawPartOnlyManualEntry = sourceLooksManual(req.body)
+      && rawScanInput
+      && explicitPartInput
+      && normalizePartNumber(rawScanInput) === normalizePartNumber(explicitPartInput);
+    const rawScanText = rawPartOnlyManualEntry ? '' : String(rawScanInput || parsed.rawScan || '');
+    const upiId = extractUpiId(req.body, parsed);
+    const upiNo = upiId;
+    const upiCode = inventoryUpiCode({
+      ...req.body,
+      upiCode: upiNo,
+      upiNo,
+      upiId,
+      rawScanString: rawScanText,
+      rawScan: rawScanText
+    });
+    const movementType = inventoryMovementType({ scanType: type, type });
+    const entrySource = normalizeSource(
+      firstValue(req.body, ['entryMode', 'scanMode', 'scanSource', 'source']),
+      rawScanText || upiId ? 'barcode' : 'manual'
+    );
+    const manualEntryMode = isManualEntryMode(req.body, rawScanText, upiId);
+    const qtyInput = firstValue(req.body, ['qty', 'quantity', 'count']);
+    const qtyCandidate = qtyInput !== undefined && qtyInput !== null && String(qtyInput).trim() !== ''
+      ? optionalNumber(qtyInput)
+      : optionalNumber(parsed.qty);
+    const preQty = qtyCandidate !== undefined ? qtyCandidate : 1;
+    if (qtyInput !== undefined && qtyInput !== null && String(qtyInput).trim() !== '' && qtyCandidate === undefined) {
+      return res.status(400).json({ success: false, message: 'Quantity must be numeric.' });
+    }
+    if (!(Number(preQty) > 0)) {
+      return res.status(400).json({ success: false, message: 'Quantity must be greater than zero.' });
+    }
+    const duplicateIdentityRaw = rawScanText || upiNo;
+    const serverSavedStatus = normalizedSyncStatus({
+      ...req.body,
+      source: entrySource,
+      scanMode: req.body.scanMode || (entrySource === 'manual' ? 'Manual' : 'Barcode/Web Scan')
+    });
+    const requestUser = {
+      userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || '').trim(),
+      loginId: String(req.body.loginId || req.body.userId || (req.user ? req.user.username || req.user.email : '') || '').trim(),
+      staffName: String(req.body.staffName || parsed.staffName || (req.user ? req.user.name : '') || '').trim(),
+      userName: String(req.body.userName || req.body.staffName || parsed.userName || parsed.staffName || (req.user ? req.user.name || req.user.username : '') || '').trim()
+    };
+    const duplicateUserKey = requestUser.userId || requestUser.loginId || requestUser.userName || requestUser.staffName;
+    const serverSavedSynced = serverSavedStatus === 'synced';
+    const syncKey = String(req.body.syncKey || buildSyncKey({ dealerCode, upiId, partNumber: part, scanType: type, timestamp })).trim();
+    const uniqueScanId = scanIdentity({ ...req.body, syncKey }, parsed);
+    const manualAddRequestId = manualEntryMode
+      ? clean(req.body.manualAddRequestId || uniqueScanId)
+      : '';
+    const rawUpiHash = duplicatePolicy.rawUpiHash({
+      ...req.body,
+      dealerCode,
+      auditId,
+      scanType: type,
+      partNumber: part,
+      rawScanString: rawScanText,
+      upiId,
+      upiNo
+    });
+    const globalUpiKey = duplicatePolicy.globalUpiKey({ ...req.body, rawScanString: rawScanText, upiId, upiNo });
+    const qrFingerprint = duplicateIdentityRaw ? makeQrFingerprint({
+      ...req.body,
+      dealerCode,
+      auditId,
+      scanType: type,
+      partNumber: part,
+      upiId,
+      rawScanString: rawScanText,
+      binLocation,
+      userId: requestUser.userId,
+      loginId: requestUser.loginId,
+      userName: requestUser.userName || requestUser.staffName
+    }) : '';
+    const finalQrFingerprint = type === 'FITTED' ? '' : (type === 'OUTWARD' && qrFingerprint ? `OUTWARD:${qrFingerprint}` : qrFingerprint);
+    const duplicateQuery = duplicateScanFilter(uniqueScanId, finalQrFingerprint, dealerCode, rawScanText, upiNo, binLocation, auditId, duplicateUserKey, type);
+    let existing = null;
+    let duplicateReason = '';
+    let duplicateMessage = '';
+    let upiDuplicate = false;
+    let manualBinDuplicate = false;
     if (manualEntryMode && ['INWARD', 'DAMAGE'].includes(type) && binLocation) {
       const manualDuplicateFilter = duplicatePolicy.manualBinDuplicateFilter({
         dealerCode,

@@ -247,7 +247,7 @@ function buildSuggestionPayload(rows = [], scope = {}, settings = {}) {
   const locationLimitReached = existingBins.length >= maxAllowedLocationsPerPart;
   const canAddNewLocation = allowMultipleLocations && !locationLimitReached;
   const canContinueCurrent = allowMultipleLocations && !locationLimitReached;
-  const shouldPrompt = Boolean(existingBins.length && currentBin && !sameBinExists);
+  const shouldPrompt = Boolean(existingBins.length > 0 && currentBin && !sameBinExists);
   const message = existingBins.length === 1
     ? `Part: ${normalized.partNumber}\nAlready available in Bin: ${existingBins[0].binLocation}\n\nWould you like to continue using existing location?`
     : `Part: ${normalized.partNumber}\nAlready available in Bins: ${existingBins.map((row) => row.binLocation).join(', ')}\n\nWould you like to continue using existing location?`;

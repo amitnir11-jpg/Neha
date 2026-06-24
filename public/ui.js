@@ -3925,6 +3925,7 @@
     let smartBinPrompted = false;
     if (smartBinSettings.enabled && smartBinEligibleScan && normalized.dealerCode && normalized.auditId && normalized.partNumber && normalized.binLocation) {
       try {
+        // API call for Smart Bin Check
         const suggestion = await api('/api/scans/smart-bin-check', {
           method: 'POST',
           body: {
@@ -3939,6 +3940,7 @@
           timeoutMs: 1800
         });
         if (suggestion && suggestion.shouldPrompt) {
+          // Show the popup if needed
           smartBinPrompted = true;
           const decision = await openSmartBinSuggestionModal({
             ...suggestion,
@@ -3947,6 +3949,7 @@
           });
           if (!decision) return;
           normalized.smartBinEnabled = Boolean(smartBinSettings.enabled);
+          // Apply user's decision to the scan payload
           normalized.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || suggestion.suggestedBin || normalized.binLocation || '');
           normalized.smartBinCurrentBin = cleanDealerCode(decision.currentBin || suggestion.currentBin || normalized.binLocation || '');
           normalized.smartBinSelectedBin = cleanDealerCode(decision.selectedBin || normalized.binLocation || '');
@@ -4026,6 +4029,7 @@
     try {
       const data = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 });
       if (data && data.scan) {
+        // Handle successful save
         const savedScan = data.scan || {};
         addSyncLog({
           partNumber: savedScan.partNumber || savedScan.part || normalized.partNumber,
@@ -4055,6 +4059,7 @@
       queueRealtimeReportRefresh(isBarcodeForm ? 'barcode scan' : 'manual scan');
     } catch (error) {
       if (error.status === 409 && error.data?.smartBinWarning) {
+        // Handle the smart bin warning returned from the server
         const smartBinPayload = error.data.smartBinSuggestion || error.data || {};
         const decision = await openSmartBinSuggestionModal({
           ...smartBinPayload,
@@ -4073,6 +4078,7 @@
           return;
         }
         normalized.smartBinEnabled = true;
+        // Apply user's decision from the popup
         normalized.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || smartBinPayload.suggestedBin || normalized.binLocation || '');
         normalized.smartBinCurrentBin = cleanDealerCode(decision.currentBin || smartBinPayload.currentBin || normalized.binLocation || '');
         normalized.smartBinSelectedBin = cleanDealerCode(decision.selectedBin || normalized.binLocation || '');
@@ -5142,6 +5148,9 @@
       message.textContent = pendingMessage;
     }
     updateReportButtons();
+    if (state.reportAbortController) {
+      state.reportAbortController.abort('new-report-scheduled');
+    }
     state.reportAutoLoadTimer = setTimeout(() => {
       state.reportAutoLoadTimer = null;
       loadReport().catch((error) => toast(error.message, 'error'));
@@ -6333,9 +6342,15 @@
     state.lastReportType = reportType;
     saveReportState(true);
     $('#reportTitle').textContent = REPORT_TITLES[reportType];
+    const reportTitle = REPORT_TITLES[reportType] || 'Report';
+    $('#reportTitle').textContent = reportTitle;
     if (showLoading && message) {
       message.className = 'form-message loading';
       message.textContent = 'Loading report...';
+    }
+    if (state.reportAbortController) {
+      state.reportAbortController.abort('manual-report-load');
+      state.reportAbortController = null;
     }
     if (showLoading && !state.reportLoaded) {
       $('#reportHead').innerHTML = '';
@@ -6345,12 +6360,16 @@
     $('#reportShow').disabled = true;
     try {
       const data = await api(url, { signal: state.reportAbortController.signal });
+      const controller = new AbortController();
+      state.reportAbortController = controller;
+      const data = await api(url, { signal: controller.signal });
       if (state.reportLoadRequestId !== requestId) return;
       rememberReportCache(cacheKey, data);
       applyReportData(data, reportType);
     } catch (error) {
       if (state.reportLoadRequestId !== requestId) return;
       if (error.name === 'AbortError') return;
+      if (error.name === 'AbortError' && error.message !== 'new-report-scheduled' && error.message !== 'manual-report-load') return;
       state.reportLoaded = Boolean(state.reportTableRows.length);
       state.reportHasRun = Boolean(state.reportTableRows.length);
       if (!state.reportTableRows.length) {

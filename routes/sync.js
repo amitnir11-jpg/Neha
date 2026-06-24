@@ -1501,6 +1501,13 @@ async function saveNormalizedScan(scan, req) {
   scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
   const smartBinState = await smartBinWarningForScan(scan);
   if (smartBinState) {
+    // If the client has already made a decision, apply it and proceed.
+    // Otherwise, return the warning to the client to prompt the user.
+    const smartBinDecision = smartBinDecisionAction(scan);
+    if (!smartBinDecisionUsesExisting(smartBinDecision) && !smartBinDecisionAllowsNewLocation(smartBinDecision)) {
+      return smartBinState;
+    }
+    // If decision is present, apply it to the scan object and continue processing.
     const decision = applySmartBinDecision(scan, smartBinState.smartBinSuggestion || smartBinState, scan.smartBinDecision || '');
     if (!smartBinDecisionUsesExisting(decision.action) && !smartBinDecisionAllowsNewLocation(decision.action)) {
       return smartBinState;

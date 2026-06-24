@@ -1,6 +1,5 @@
 const ExcelJS = require('exceljs');
 const fs = require('fs');
-const path = require('path');
 const { jsPDF } = require('jspdf');
 const autoTableModule = require('jspdf-autotable');
 const nodemailer = require('nodemailer');
@@ -16,14 +15,6 @@ const VerificationLog = require('../models/VerificationLog');
 const { formatDateLikeFields, formatIstDateTime, parseIstFilterDate } = require('../utils/time');
 const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
-const { reportTotals, signedScanQuantity } = require('../utils/reportTotals');
-const { stockValuationTotals } = require('../utils/stockValuation');
-const { buildMultipleBinLocationAlertRows } = require('../utils/smartBinSuggestion');
-const { applyTestScanMode } = require('./inventory');
-const categoryResolver = require('../utils/categoryResolver');
-const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
-  ? categoryResolver.canonicalizePartCategory
-  : (value, options = {}) => String(value || '').trim() || options.uncategorized || 'Uncategorized';
 
 const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 
@@ -31,14 +22,6 @@ const autoTable = autoTableModule.default || autoTableModule;
 const DAKSH_REPORT_LOGO_PNG = path.resolve(__dirname, '..', 'public', 'brand', 'logo-report.png');
 const DAKSH_REPORT_LOGO_BUFFER = fs.readFileSync(DAKSH_REPORT_LOGO_PNG);
 const workbookLogoIds = new WeakMap();
-
-function packGetDakshReportLogoId(workbook) {
-  if (!workbook) return null;
-  if (workbookLogoIds.has(workbook)) return workbookLogoIds.get(workbook);
-  const imageId = workbook.addImage({ buffer: DAKSH_REPORT_LOGO_BUFFER, extension: 'png' });
-  workbookLogoIds.set(workbook, imageId);
-  return imageId;
-}
 
 function reportErrorStatus(error) {
   const status = Number(error && (error.statusCode || error.status));

@@ -1,5 +1,6 @@
 const express = require('express');
 const ExcelJS = require('exceljs');
+const { performance } = require('perf_hooks');
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
@@ -2109,6 +2110,11 @@ async function enrichScanUsers(scans = []) {
 
 async function buildReportData(query = {}) {
   query = normalizeReportQuery(query);
+  if (isAggregationReport(query.reportType)) {
+    const error = new Error(`Report type "${query.reportType}" must use its dedicated aggregation builder.`);
+    error.statusCode = 400;
+    throw error;
+  }
   const scanLimit = Math.min(5000, Math.max(0, Number.parseInt(query._scanLimit || query.scanLimit || '0', 10) || 0));
   const scanSkip = Math.max(0, Number.parseInt(query._scanSkip || query.scanSkip || '0', 10) || 0);
   const dealerStockFilter = query.dealerCode
@@ -2525,6 +2531,11 @@ function applyPartwiseFilters(rows, query = {}) {
 }
 
 async function buildPartwiseInventoryAuditReport(query = {}) {
+  const startTime = performance.now();
+  const log = (stage, extra = {}) => {
+    const elapsed = (performance.now() - startTime).toFixed(2);
+    console.log(`[PERF] Partwise (${elapsed}ms): ${stage}`, extra);
+  };
   query = normalizeReportQuery(query);
   const scanFilter = scanBasedFilter({ ...query, category: '', productCategory: '' });
   const includeFullMaster = showFullMasterWithZeroScan(query);
@@ -2535,6 +2546,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     MasterCatalogue.countDocuments({})
   ]);
   const rawScanCountBeforeDedupe = rawScans.length;
+  log('Initial data fetched', { rawScans: rawScans.length, dealers: dealers.length, audits: audits.length, catalogueCount: allCatalogueCount });
   rawScans = applyMovementCountRules(uniqueReportScans(rawScans.map(inventoryRoute.publicScan)));
 
   const groups = new Map();
@@ -2629,6 +2641,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     }]);
   }
   const [systemParts, dealerStockRows] = await Promise.all([
+    // This can be slow if systemFilter is broad.
     MasterPart.find(systemFilter).lean(),
     stockFilter ? DealerStock.find(stockFilter).lean() : []
   ]);
@@ -2649,6 +2662,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   const priceByPart = allParts.length
     ? await getPricesFromPartMaster(allParts, query.dealerCode)
     : new Map();
+  log('Prices resolved', { parts: allParts.length, prices: priceByPart.size });
   groups.forEach((group) => {
     const price = priceByPart.get(group.partNo) || null;
     group.scans = group.scans.map((scan) => scanWithPartMasterPrice(scan, price));
@@ -2673,6 +2687,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   const zeroScanRows = includeFullMaster
     ? allParts.filter((partNo) => !scannedParts.includes(partNo)).map((partNo) => partwiseRowFrom(partNo, { partNo, scans: [], physicalQty: 0 }, priceByPart.get(partNo), systemByPart.get(partNo)))
     : [];
+  log('Rows grouped', { withScans: groupedRows.length, zeroScans: zeroScanRows.length });
   const rows = applyPartwiseFilters(groupedRows.concat(zeroScanRows), query)
     .filter((row) => row.status !== 'MASTER NOT FOUND')
     .sort(sortPartwiseInventoryRows);
@@ -2725,6 +2740,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     pricingCoverage
   };
 
+  log('Report build complete', { finalRows: rows.length });
   return { rows, columns: partwiseInventoryAuditColumns(), summary, validationLog, selectedDealer, selectedAudit, pricingIssues };
 }
 
