@@ -688,8 +688,10 @@ a {
 }
 
 .smart-bin-dialog-card {
-  min-height: min(620px, 84vh);
-  max-height: min(820px, 90vh);
+  width: min(860px, calc(100vw - 20px));
+  aspect-ratio: 1 / 1;
+  min-height: min(760px, calc(100vh - 20px));
+  max-height: min(860px, calc(100vh - 20px));
   overflow: auto;
 }
 
@@ -805,6 +807,23 @@ a {
 
 .smart-bin-actions .btn {
   min-width: min(240px, 100%);
+}
+
+@media (max-width: 720px) {
+  .smart-bin-dialog-card {
+    width: calc(100vw - 20px);
+    aspect-ratio: 1 / 1;
+    min-height: min(94vw, 640px);
+    max-height: calc(100vh - 20px);
+  }
+
+  .dialog-head h3 {
+    font-size: 1.25rem;
+  }
+
+  .smart-bin-actions .btn {
+    min-width: min(220px, 100%);
+  }
 }
 
 .duplicate-actions .btn {

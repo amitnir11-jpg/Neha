@@ -2476,24 +2476,33 @@ textarea:focus {
 }
 
 .smart-bin-suggestion-card {
-  width: min(920px, 94vw);
-  min-height: min(620px, 84vh);
-  max-height: min(820px, 90vh);
+  width: min(860px, 94vw);
+  aspect-ratio: 1 / 1;
+  min-height: min(760px, 90vh);
+  max-height: min(860px, 90vh);
   display: flex;
   flex-direction: column;
+  border-radius: 18px;
+}
+
+.smart-bin-suggestion-head h2 {
+  font-size: 1.65rem;
+  letter-spacing: 0.04em;
 }
 
 .smart-bin-suggestion-head p {
   margin: 4px 0 0;
   white-space: pre-line;
+  font-size: 0.98rem;
+  color: #475569;
 }
 
 .smart-bin-suggestion-body {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 18px;
+  padding: 20px;
   display: grid;
-  gap: 14px;
+  gap: 16px;
   background: linear-gradient(180deg, #f8fbff 0%, #ffffff 56%);
 }
 
@@ -2571,6 +2580,8 @@ textarea:focus {
 
 .smart-bin-actions {
   flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
 }
 
 .smart-bin-actions .btn,
@@ -2580,6 +2591,27 @@ textarea:focus {
 
 .smart-bin-actions .btn {
   min-width: min(240px, 100%);
+}
+
+@media (max-width: 720px) {
+  .smart-bin-suggestion-card {
+    width: min(94vw, 640px);
+    aspect-ratio: 1 / 1;
+    min-height: min(94vw, 640px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .smart-bin-suggestion-head h2 {
+    font-size: 1.3rem;
+  }
+
+  .smart-bin-suggestion-body {
+    padding: 16px;
+  }
+
+  .smart-bin-actions .btn {
+    min-width: min(220px, 100%);
+  }
 }
 
 .scan-edit-form {

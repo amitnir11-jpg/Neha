@@ -123,6 +123,21 @@ async function processScan(input = {}, options = {}) {
     alreadyApplied: Boolean(result.alreadyApplied),
     addedQuantity: result.addedQuantity,
     newQuantity: result.newQuantity,
+    smartBinWarning: Boolean(result.smartBinWarning),
+    smartBinSuggestion: result.smartBinSuggestion ? {
+      ...result.smartBinSuggestion,
+      partDescription: result.smartBinSuggestion.partDescription || scan.partDescription || scan.partName || ''
+    } : undefined,
+    smartBinDecision: result.smartBinDecision || scan.smartBinDecision || '',
+    smartBinReason: result.smartBinReason || scan.smartBinReason || '',
+    smartBinExistingBins: Array.isArray(result.smartBinExistingBins)
+      ? result.smartBinExistingBins
+      : (Array.isArray(result.existingBins) ? result.existingBins : []),
+    smartBinCurrentBin: result.smartBinCurrentBin || scan.smartBinCurrentBin || scan.binLocation || scan.bin || '',
+    smartBinSelectedBin: result.smartBinSelectedBin || scan.smartBinSelectedBin || scan.binLocation || scan.bin || '',
+    smartBinLocationType: result.smartBinLocationType || scan.smartBinLocationType || '',
+    smartBinIsSecondaryLocation: result.smartBinIsSecondaryLocation,
+    partDescription: result.partDescription || scan.partDescription || scan.partName || '',
     logs: [log],
     insertedRecords: status === 'synced' && !updated ? [scan] : [],
     insertedCount: status === 'synced' && !updated ? 1 : 0,

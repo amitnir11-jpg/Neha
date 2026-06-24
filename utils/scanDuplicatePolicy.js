@@ -31,8 +31,8 @@ function scanType(input = {}) {
 function smartBinDecisionAllowsDuplicate(input = {}) {
   const decision = upper(input.smartBinDecision || input.smartBinAction || input.smartBinOverride || '');
   const allowMultipleLocations = boolValue(input.smartBinAllowMultipleLocations, true);
-  if (!allowMultipleLocations) return decision === 'USE_EXISTING';
-  return ['USE_EXISTING', 'CONTINUE_NEW', 'ADD_ADDITIONAL'].includes(decision);
+  if (!allowMultipleLocations) return decision === 'USE_EXISTING_BIN' || decision === 'USE_EXISTING';
+  return ['USE_EXISTING', 'USE_EXISTING_BIN', 'SAVE_NEW_BIN', 'CONTINUE_NEW', 'ADD_ADDITIONAL'].includes(decision);
 }
 
 function scanPartNumber(input = {}) {

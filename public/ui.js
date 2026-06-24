@@ -3931,6 +3931,7 @@
             dealerCode: normalized.dealerCode,
             auditId: normalized.auditId,
             partNumber: normalized.partNumber,
+            partDescription: normalized.partDescription || normalized.partName || '',
             binLocation: normalized.binLocation,
             scanType: normalized.scanType,
             qty: normalized.qty
@@ -3958,11 +3959,32 @@
             ? true
             : Boolean(suggestion.reasonRequired);
           normalized.smartBinDecision = String(decision.action || '').trim().toUpperCase();
-          normalized.smartBinReason = String(decision.reason || '').trim();
+          normalized.smartBinReason = normalized.smartBinDecision === 'SAVE_NEW_BIN'
+            ? 'User confirmed separate bin'
+            : String(decision.reason || 'User selected existing bin').trim();
           normalized.smartBinCheckedAt = String(decision.checkedAt || new Date().toISOString());
           normalized.smartBinDecisionAt = String(decision.decisionAt || new Date().toISOString());
           normalized.smartBinDecisionBy = String(decision.decisionBy || state.user?.name || state.user?.username || state.user?.email || '').trim();
-          if (normalized.smartBinDecision === 'USE_EXISTING') {
+          normalized.smartBinLocationType = normalized.smartBinDecision === 'SAVE_NEW_BIN' ? 'SECONDARY' : 'PRIMARY';
+          normalized.smartBinIsSecondaryLocation = normalized.smartBinDecision === 'SAVE_NEW_BIN';
+          normalized.smartBinAuditTrail = {
+            enabled: Boolean(smartBinSettings.enabled),
+            decision: normalized.smartBinDecision,
+            reason: normalized.smartBinReason,
+            suggestedBin: normalized.smartBinSuggestedBin,
+            selectedBin: normalized.smartBinSelectedBin,
+            currentBin: normalized.smartBinCurrentBin,
+            existingBins: normalized.smartBinExistingBins,
+            allowMultipleLocations: normalized.smartBinAllowMultipleLocations,
+            maxAllowedLocationsPerPart: normalized.smartBinMaxAllowedLocationsPerPart,
+            reasonRequired: normalized.smartBinReasonRequired,
+            checkedAt: normalized.smartBinCheckedAt,
+            decisionAt: normalized.smartBinDecisionAt,
+            decisionBy: normalized.smartBinDecisionBy,
+            locationType: normalized.smartBinLocationType,
+            isSecondaryLocation: normalized.smartBinIsSecondaryLocation
+          };
+          if (normalized.smartBinDecision === 'USE_EXISTING_BIN') {
             const selectedBin = cleanDealerCode(normalized.smartBinSelectedBin || suggestion.suggestedBin || normalized.binLocation || '');
             if (selectedBin) {
               normalized.binLocation = selectedBin;
@@ -4032,6 +4054,98 @@
       }
       queueRealtimeReportRefresh(isBarcodeForm ? 'barcode scan' : 'manual scan');
     } catch (error) {
+      if (error.status === 409 && error.data?.smartBinWarning) {
+        const smartBinPayload = error.data.smartBinSuggestion || error.data || {};
+        const decision = await openSmartBinSuggestionModal({
+          ...smartBinPayload,
+          partDescription: normalized.partDescription || normalized.partName || error.data.partDescription || '',
+          currentBin: smartBinPayload.currentBin || normalized.binLocation || '',
+          requireReason: false
+        });
+        if (!decision) {
+          if (isBarcodeForm) {
+            setLivePill('barcodeReadyStatus', 'Ready for Scan', true);
+            resetBarcodeScanFields(form, normalized, options.expectedRaw);
+            setTimeout(() => $('#barcodeRaw')?.focus(), 700);
+          } else {
+            resetManualScanFields(form);
+          }
+          return;
+        }
+        normalized.smartBinEnabled = true;
+        normalized.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || smartBinPayload.suggestedBin || normalized.binLocation || '');
+        normalized.smartBinCurrentBin = cleanDealerCode(decision.currentBin || smartBinPayload.currentBin || normalized.binLocation || '');
+        normalized.smartBinSelectedBin = cleanDealerCode(decision.selectedBin || normalized.binLocation || '');
+        normalized.smartBinExistingBins = Array.isArray(decision.existingBins) ? decision.existingBins : (Array.isArray(smartBinPayload.existingBins) ? smartBinPayload.existingBins : []);
+        normalized.smartBinAllowMultipleLocations = smartBinPayload.allowMultipleLocations === undefined
+          ? true
+          : Boolean(smartBinPayload.allowMultipleLocations);
+        normalized.smartBinMaxAllowedLocationsPerPart = Math.max(1, Number.parseInt(String(smartBinPayload.maxAllowedLocationsPerPart || 3), 10) || 3);
+        normalized.smartBinReasonRequired = false;
+        normalized.smartBinDecision = String(decision.action || '').trim().toUpperCase();
+        normalized.smartBinReason = normalized.smartBinDecision === 'SAVE_NEW_BIN'
+          ? 'User confirmed separate bin'
+          : String(decision.reason || 'User selected existing bin').trim();
+        normalized.smartBinCheckedAt = String(decision.checkedAt || new Date().toISOString());
+        normalized.smartBinDecisionAt = String(decision.decisionAt || new Date().toISOString());
+        normalized.smartBinDecisionBy = String(decision.decisionBy || state.user?.name || state.user?.username || state.user?.email || '').trim();
+        normalized.smartBinLocationType = normalized.smartBinDecision === 'SAVE_NEW_BIN' ? 'SECONDARY' : 'PRIMARY';
+        normalized.smartBinIsSecondaryLocation = normalized.smartBinDecision === 'SAVE_NEW_BIN';
+        normalized.smartBinAuditTrail = {
+          enabled: true,
+          decision: normalized.smartBinDecision,
+          reason: normalized.smartBinReason,
+          suggestedBin: normalized.smartBinSuggestedBin,
+          selectedBin: normalized.smartBinSelectedBin,
+          currentBin: normalized.smartBinCurrentBin,
+          existingBins: normalized.smartBinExistingBins,
+          allowMultipleLocations: normalized.smartBinAllowMultipleLocations,
+          maxAllowedLocationsPerPart: normalized.smartBinMaxAllowedLocationsPerPart,
+          reasonRequired: normalized.smartBinReasonRequired,
+          checkedAt: normalized.smartBinCheckedAt,
+          decisionAt: normalized.smartBinDecisionAt,
+          decisionBy: normalized.smartBinDecisionBy,
+          locationType: normalized.smartBinLocationType,
+          isSecondaryLocation: normalized.smartBinIsSecondaryLocation
+        };
+        if (normalized.smartBinDecision === 'USE_EXISTING_BIN') {
+          const selectedBin = cleanDealerCode(normalized.smartBinSelectedBin || smartBinPayload.suggestedBin || normalized.binLocation || '');
+          if (selectedBin) {
+            normalized.binLocation = selectedBin;
+            normalized.bin = selectedBin;
+          }
+        }
+        const retryData = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 });
+        if (retryData && retryData.scan) {
+          const savedScan = retryData.scan || {};
+          addSyncLog({
+            partNumber: savedScan.partNumber || savedScan.part || normalized.partNumber,
+            upiId: savedScan.upiId || savedScan.upiNo || normalized.upiId,
+            dealer: savedScan.dealerCode || normalized.dealerCode,
+            status: retryData.duplicate ? 'duplicate' : 'synced',
+            errorMessage: retryData.duplicate ? 'Duplicate scan skipped' : ''
+          });
+          rememberLastSyncTime(retryData.completedAt || retryData.lastSyncTime || retryData.lastSync || new Date().toISOString());
+          handleNewScan(retryData.scan, { showSuccess: !retryData.duplicate }).catch((error) => console.warn('[SCAN] latest row update failed', error));
+        }
+        playScanTone(retryData.duplicate ? 'duplicate' : 'success');
+        if (isBarcodeForm) {
+          localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
+          lockBarcodeScan(retryData.scan || normalized, 1800);
+          state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
+          state.barcodeLastAt = Date.now();
+          resetBarcodeScanFields(form, normalized, options.expectedRaw);
+          setLivePill('barcodeReadyStatus', retryData.duplicate ? 'Duplicate skipped' : 'Saved - Ready Next', true);
+          setTimeout(() => {
+            setLivePill('barcodeReadyStatus', 'Ready for Scan', true);
+            $('#barcodeRaw')?.focus();
+          }, 900);
+        } else {
+          resetManualScanFields(form);
+        }
+        queueRealtimeReportRefresh(isBarcodeForm ? 'barcode scan' : 'manual scan');
+        return;
+      }
       if (
         error.status === 409
         && (isBarcodeForm || error.data?.duplicate || error.data?.upiDuplicate)
@@ -4207,7 +4321,7 @@
 
       for (const record of records) {
         const recordKey = record.syncKey || record.localId || record.uniqueScanId || record.scanId;
-        const outbound = normalizeScanPayload(applyActiveAuditToPayload({
+        let outbound = normalizeScanPayload(applyActiveAuditToPayload({
           ...record,
           uniqueScanId: record.uniqueScanId || record.localId || record.scanId,
           scanId: record.scanId || record.localId || record.uniqueScanId,
@@ -4229,6 +4343,112 @@
           });
         } catch (error) {
           const message = error.message || 'Scan could not be synced';
+          if (Number(error.status) === 409 && error.data?.smartBinWarning) {
+            const smartBinPayload = error.data.smartBinSuggestion || error.data;
+            const decision = await openSmartBinSuggestionModal({
+              ...smartBinPayload,
+              partDescription: outbound.partDescription || outbound.partName || error.data.partDescription || '',
+              currentBin: smartBinPayload.currentBin || outbound.binLocation || outbound.bin || '',
+              requireReason: false
+            });
+            if (!decision) {
+              outcomes.set(recordKey, { status: 'rejected', message: 'Smart bin confirmation cancelled' });
+              rejectedCount += 1;
+              logs.push({
+                partNumber: record.partNumber || record.part,
+                upiId: record.upiId,
+                dealer: record.dealerCode,
+                status: 'rejected',
+                errorMessage: 'Smart bin confirmation cancelled'
+              });
+              continue;
+            }
+            const decisionAction = String(decision.action || '').trim().toUpperCase();
+            const selectedBin = cleanDealerCode(decision.selectedBin || outbound.binLocation || outbound.bin || '');
+            outbound.smartBinEnabled = true;
+            outbound.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || smartBinPayload.suggestedBin || outbound.binLocation || '');
+            outbound.smartBinCurrentBin = cleanDealerCode(decision.currentBin || smartBinPayload.currentBin || outbound.binLocation || '');
+            outbound.smartBinSelectedBin = selectedBin || cleanDealerCode(outbound.binLocation || '');
+            outbound.smartBinExistingBins = Array.isArray(decision.existingBins) ? decision.existingBins : (Array.isArray(smartBinPayload.existingBins) ? smartBinPayload.existingBins : []);
+            outbound.smartBinAllowMultipleLocations = smartBinPayload.allowMultipleLocations === undefined
+              ? true
+              : Boolean(smartBinPayload.allowMultipleLocations);
+            outbound.smartBinMaxAllowedLocationsPerPart = Math.max(1, Number.parseInt(String(smartBinPayload.maxAllowedLocationsPerPart || 3), 10) || 3);
+            outbound.smartBinReasonRequired = false;
+            outbound.smartBinDecision = decisionAction;
+            outbound.smartBinReason = decisionAction === 'SAVE_NEW_BIN'
+              ? 'User confirmed separate bin'
+              : 'User selected existing bin';
+            outbound.smartBinCheckedAt = String(decision.checkedAt || new Date().toISOString());
+            outbound.smartBinDecisionAt = String(decision.decisionAt || new Date().toISOString());
+            outbound.smartBinDecisionBy = String(decision.decisionBy || state.user?.name || state.user?.username || state.user?.email || '').trim();
+            outbound.smartBinLocationType = decisionAction === 'SAVE_NEW_BIN' ? 'SECONDARY' : 'PRIMARY';
+            outbound.smartBinIsSecondaryLocation = decisionAction === 'SAVE_NEW_BIN';
+            outbound.smartBinAuditTrail = {
+              enabled: true,
+              decision: outbound.smartBinDecision,
+              reason: outbound.smartBinReason,
+              suggestedBin: outbound.smartBinSuggestedBin,
+              selectedBin: outbound.smartBinSelectedBin,
+              currentBin: outbound.smartBinCurrentBin,
+              existingBins: outbound.smartBinExistingBins,
+              allowMultipleLocations: outbound.smartBinAllowMultipleLocations,
+              maxAllowedLocationsPerPart: outbound.smartBinMaxAllowedLocationsPerPart,
+              reasonRequired: outbound.smartBinReasonRequired,
+              checkedAt: outbound.smartBinCheckedAt,
+              decisionAt: outbound.smartBinDecisionAt,
+              decisionBy: outbound.smartBinDecisionBy,
+              locationType: outbound.smartBinLocationType,
+              isSecondaryLocation: outbound.smartBinIsSecondaryLocation
+            };
+            if (decisionAction === 'USE_EXISTING_BIN') {
+              if (selectedBin) {
+                outbound.binLocation = selectedBin;
+                outbound.bin = selectedBin;
+              }
+            }
+            try {
+              const retryResult = await api('/api/scans/process', { method: 'POST', body: outbound, timeoutMs: 20000 });
+              const saved = retryResult.scan || outbound;
+              outcomes.set(recordKey, { remove: true });
+              syncedCount += 1;
+              insertedRecords.push(saved);
+              logs.push({
+                partNumber: saved.partNumber || saved.part || record.partNumber || record.part,
+                upiId: saved.upiId || saved.upiNo || record.upiId,
+                dealer: saved.dealerCode || record.dealerCode,
+                status: 'synced',
+                errorMessage: ''
+              });
+              continue;
+            } catch (retryError) {
+              const retryMessage = retryError.message || 'Scan could not be synced';
+              const retryDuplicate = Number(retryError.status) === 409 || retryError.data?.duplicate || retryError.data?.upiDuplicate;
+              if (retryDuplicate) {
+                outcomes.set(recordKey, { remove: true });
+                duplicateCount += 1;
+                logs.push({
+                  partNumber: record.partNumber || record.part,
+                  upiId: record.upiId,
+                  dealer: record.dealerCode,
+                  status: 'duplicate',
+                  errorMessage: retryMessage
+                });
+                handleBarcodeDuplicate(record, retryError.data || { message: retryMessage });
+              } else {
+                outcomes.set(recordKey, { status: 'failed', message: retryMessage });
+                failedCount += 1;
+                logs.push({
+                  partNumber: record.partNumber || record.part,
+                  upiId: record.upiId,
+                  dealer: record.dealerCode,
+                  status: 'failed',
+                  errorMessage: retryMessage
+                });
+              }
+              continue;
+            }
+          }
           const duplicate = Number(error.status) === 409 || error.data?.duplicate || error.data?.upiDuplicate;
           if (duplicate) {
             outcomes.set(recordKey, { remove: true });
@@ -4503,11 +4723,9 @@
       bins: $('#smartBinExistingBins'),
       selectWrap: $('#smartBinExistingBinSelectWrap'),
       select: $('#smartBinExistingBinSelect'),
-      reason: $('#smartBinReasonInput'),
-      hint: $('#smartBinSuggestionHint'),
       useExisting: $('#smartBinUseExistingBtn'),
-      continueNew: $('#smartBinContinueNewBtn'),
-      addLocation: $('#smartBinAddLocationBtn')
+      saveNew: $('#smartBinSaveNewBtn'),
+      cancel: $('#smartBinCancelBtn')
     };
   }
 
@@ -4533,59 +4751,43 @@
   }
 
   function refreshSmartBinActionLabels(payload = {}) {
-    const { useExisting, continueNew, addLocation, select } = smartBinPromptNodes();
-    const selectedBin = cleanDealerCode((select && select.value) || payload.suggestedBin || (payload.existingBins && payload.existingBins[0] && payload.existingBins[0].binLocation) || payload.currentBin || '');
-    const currentBin = cleanDealerCode(payload.currentBin || '');
-    if (useExisting) useExisting.textContent = `USE ${selectedBin || '-'}`;
-    if (continueNew) continueNew.textContent = `CONTINUE ${currentBin || '-'}`;
-    if (addLocation) addLocation.textContent = 'ADD NEW LOCATION';
+    const { useExisting, saveNew, cancel } = smartBinPromptNodes();
+    if (useExisting) useExisting.textContent = 'USE EXISTING BIN';
+    if (saveNew) saveNew.textContent = 'OK - SAVE IN NEW BIN';
+    if (cancel) cancel.textContent = 'CANCEL';
   }
 
   function renderSmartBinSuggestionModal(payload = {}) {
-    const { modal, title, message, bins, selectWrap, select, reason, hint } = smartBinPromptNodes();
+    const { modal, title, message, bins, selectWrap, select } = smartBinPromptNodes();
     if (!modal) return;
     const existingBins = Array.isArray(payload.existingBins) ? payload.existingBins : [];
     const suggestedBin = cleanDealerCode(payload.suggestedBin || (existingBins[0] && existingBins[0].binLocation) || payload.currentBin || '');
     const currentBin = cleanDealerCode(payload.currentBin || '');
     const partNumber = cleanDealerCode(payload.partNumber || '');
+    const partDescription = cleanDealerCode(payload.partDescription || payload.partName || '');
     const primaryBin = cleanDealerCode(payload.primaryBin || suggestedBin || currentBin || (existingBins[0] && existingBins[0].binLocation) || '');
-    const secondaryBins = Array.isArray(payload.secondaryBins) ? payload.secondaryBins.filter(Boolean) : existingBins.slice(1).map((bin) => bin.binLocation).filter(Boolean);
-    const allowMultipleLocations = payload.allowMultipleLocations === undefined
-      ? Boolean(state.smartBinSettings ? state.smartBinSettings.allowMultipleLocations : true)
-      : Boolean(payload.allowMultipleLocations);
-    const locationLimitReached = Boolean(payload.locationLimitReached);
-    const canContinueCurrent = payload.canContinueCurrent === undefined
-      ? allowMultipleLocations && !locationLimitReached
-      : Boolean(payload.canContinueCurrent);
-    const canAddNewLocation = payload.canAddNewLocation === undefined
-      ? allowMultipleLocations && !locationLimitReached
-      : Boolean(payload.canAddNewLocation);
     const showSelect = existingBins.length > 1;
     smartBinPromptPayload = {
       ...payload,
       suggestedBin,
       currentBin,
       primaryBin,
-      secondaryBins,
       existingBins,
-      allowMultipleLocations,
-      canContinueCurrent,
-      canAddNewLocation,
-      locationLimitReached
+      partDescription
     };
     if (title) {
-      title.textContent = 'PART LOCATION ALERT';
+      title.textContent = 'PART LOCATION WARNING';
     }
     if (message) {
-      const secondaryLine = secondaryBins.length ? `Secondary Locations: ${secondaryBins.join(', ')}` : '';
-      const limitLine = locationLimitReached ? `Location limit reached (${Number(payload.maxAllowedLocationsPerPart || state.smartBinSettings?.maxAllowedLocationsPerPart || 3)}).` : '';
       message.textContent = [
-        `Part: ${partNumber || '-'}`,
-        `Already available in Bin: ${primaryBin || '-'}`,
-        secondaryLine,
-        limitLine,
-        'Would you like to continue using existing location?'
-      ].filter(Boolean).join('\n');
+        `Part Number: ${partNumber || '-'}`,
+        `Description: ${partDescription || '-'}`,
+        '',
+        'This part is already available in:',
+        existingBins.map((bin) => cleanDealerCode(bin.binLocation || '')).filter(Boolean).join(' / ') || primaryBin || '-',
+        '',
+        'Do you still want to save this part in new bin?'
+      ].join('\n');
     }
     if (bins) bins.innerHTML = smartBinExistingBinMarkup(existingBins);
     if (selectWrap) selectWrap.classList.toggle('hidden', !showSelect);
@@ -4593,28 +4795,9 @@
       select.innerHTML = existingBins.map((bin) => `<option value="${escapeHtml(bin.binLocation)}">${escapeHtml(bin.binLocation)} · Qty ${escapeHtml(wholeNumber(bin.qty || 0))}</option>`).join('');
       select.value = suggestedBin || (existingBins[0] ? existingBins[0].binLocation : '');
     }
-    if (reason) {
-      reason.value = '';
-      reason.placeholder = 'Bin Full / Overflow Qty / Secondary Storage / Other';
-      reason.parentElement?.classList.toggle('hidden', !canContinueCurrent && !canAddNewLocation);
-    }
-    if (hint) {
-      if (!allowMultipleLocations) {
-        hint.textContent = 'Multiple locations are disabled. Use the suggested bin only.';
-      } else if (locationLimitReached) {
-        hint.textContent = `Maximum ${Number(payload.maxAllowedLocationsPerPart || state.smartBinSettings?.maxAllowedLocationsPerPart || 3)} locations per part has been reached.`;
-      } else {
-        hint.textContent = state.smartBinSettings && state.smartBinSettings.requireReason
-          ? 'Reason is required when you save the part in a new bin.'
-          : 'Reason is optional, but recommended for audit trail.';
-      }
-    }
     if (useExisting) useExisting.hidden = false;
-    if (continueNew) continueNew.hidden = !canContinueCurrent;
-    if (addLocation) addLocation.hidden = !canAddNewLocation;
     refreshSmartBinActionLabels({ ...smartBinPromptPayload, suggestedBin });
     modal.classList.remove('hidden');
-    setTimeout(() => reason?.focus(), 0);
   }
 
   function openSmartBinSuggestionModal(payload = {}) {
@@ -4626,43 +4809,21 @@
   }
 
   async function resolveSmartBinSuggestionAction(action, payload = {}) {
-    const { reason } = smartBinPromptNodes();
+    const { select } = smartBinPromptNodes();
     const currentBin = cleanDealerCode(payload.currentBin || '');
-    const selectedBin = cleanDealerCode((smartBinPromptNodes().select && smartBinPromptNodes().select.value) || payload.suggestedBin || currentBin || '');
-    const useExisting = action === 'USE_EXISTING';
-    const addAdditional = action === 'ADD_ADDITIONAL';
-    const continueCurrent = action === 'CONTINUE_NEW';
-    const requireReason = Boolean(state.smartBinSettings && state.smartBinSettings.requireReason);
-    const allowMultipleLocations = payload.allowMultipleLocations === undefined
-      ? Boolean(state.smartBinSettings ? state.smartBinSettings.allowMultipleLocations : true)
-      : Boolean(payload.allowMultipleLocations);
-    const locationLimitReached = Boolean(payload.locationLimitReached);
-    const enteredReason = String(reason?.value || '').trim();
-    const finalReason = addAdditional && !enteredReason
-      ? 'Qty overflow / bin full'
-      : enteredReason;
-    if (!useExisting && !allowMultipleLocations) {
-      toast('Multiple locations are disabled for this part.', 'error');
-      return null;
-    }
-    if (!useExisting && locationLimitReached) {
-      toast(`Maximum ${Number(payload.maxAllowedLocationsPerPart || state.smartBinSettings?.maxAllowedLocationsPerPart || 3)} locations per part has been reached.`, 'error');
-      return null;
-    }
-    if ((continueCurrent || addAdditional) && requireReason && !finalReason) {
-      toast('Reason is required when saving the part in a new bin.', 'error');
-      reason?.focus();
-      return null;
-    }
-    if (continueCurrent && !window.confirm('Are you sure you want multiple locations for same part?')) {
+    const selectedBin = cleanDealerCode((select && select.value) || payload.suggestedBin || currentBin || '');
+    const normalizedAction = String(action || '').trim().toUpperCase();
+    const useExisting = ['USE_EXISTING', 'USE_EXISTING_BIN'].includes(normalizedAction);
+    if (normalizedAction === 'CANCEL') {
+      closeSmartBinSuggestionModal(null);
       return null;
     }
     const decision = {
-      action,
+      action: useExisting ? 'USE_EXISTING_BIN' : 'SAVE_NEW_BIN',
       currentBin,
       selectedBin: useExisting ? selectedBin : currentBin,
       suggestedBin: cleanDealerCode(payload.suggestedBin || selectedBin || currentBin || ''),
-      reason: useExisting ? '' : finalReason,
+      reason: useExisting ? 'User selected existing bin' : 'User confirmed separate bin',
       existingBins: Array.isArray(payload.existingBins) ? payload.existingBins : [],
       decisionBy: clean(state.user && (state.user.name || state.user.username || state.user.email || state.user.id || '')),
       decisionAt: new Date().toISOString(),
@@ -11092,9 +11253,9 @@
     $('#smartBinRequireReasonToggle')?.addEventListener('change', () => saveSmartBinSuggestionSettings().catch((error) => toast(error.message, 'error')));
     $('#smartBinMaxLocationsInput')?.addEventListener('change', () => saveSmartBinSuggestionSettings().catch((error) => toast(error.message, 'error')));
     $('#smartBinExistingBinSelect')?.addEventListener('change', () => refreshSmartBinActionLabels(smartBinPromptPayload || {}));
-    $('#smartBinUseExistingBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('USE_EXISTING', smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
-    $('#smartBinContinueNewBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('CONTINUE_NEW', smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
-    $('#smartBinAddLocationBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('ADD_ADDITIONAL', smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
+    $('#smartBinUseExistingBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('USE_EXISTING_BIN', smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
+    $('#smartBinSaveNewBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('SAVE_NEW_BIN', smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
+    $('#smartBinCancelBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('CANCEL', smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
   }
 
   function bindSocket() {

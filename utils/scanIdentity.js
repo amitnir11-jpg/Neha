@@ -24,7 +24,9 @@ function makeQrFingerprint(input = {}) {
     input.dealerCode || input.dealer || '',
     input.auditId || input.audit || '',
     input.scanType || input.type || '',
-    identity
+    identity,
+    // Include bin so the same scan can exist in multiple bins without colliding.
+    input.binLocation || input.bin || input.location || ''
   ].map(normalizeToken).filter(Boolean).join('|');
 
   return createHash('sha256').update(scope).digest('hex');

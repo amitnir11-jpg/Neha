@@ -17,7 +17,7 @@
   const BATCH_SIZE = 50;
   const DEDUPE_MS = 2600;
   const DUPLICATE_NOTICE_MS = 3000;
-  const SMART_BIN_DECISIONS = new Set(['USE_EXISTING', 'CONTINUE_NEW', 'ADD_ADDITIONAL']);
+  const SMART_BIN_DECISIONS = new Set(['USE_EXISTING', 'USE_EXISTING_BIN', 'SAVE_NEW_BIN', 'CONTINUE_NEW', 'ADD_ADDITIONAL']);
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
   const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
   const NATIVE_DETECTOR_FORMATS = [
@@ -656,11 +656,9 @@
       bins: byId('smartBinExistingBins'),
       selectWrap: byId('smartBinExistingBinSelectWrap'),
       select: byId('smartBinExistingBinSelect'),
-      reason: byId('smartBinReasonInput'),
-      hint: byId('smartBinSuggestionHint'),
       useExisting: byId('smartBinUseExistingBtn'),
-      continueNew: byId('smartBinContinueNewBtn'),
-      addLocation: byId('smartBinAddLocationBtn')
+      saveNew: byId('smartBinSaveNewBtn'),
+      cancel: byId('smartBinCancelBtn')
     };
   }
 
@@ -712,12 +710,10 @@
   }
 
   function refreshSmartBinActionLabels(payload = {}) {
-    const { useExisting, continueNew, addLocation, select } = smartBinPromptNodes();
-    const selectedBin = clean((select && select.value) || payload.suggestedBin || (payload.existingBins && payload.existingBins[0] && payload.existingBins[0].binLocation) || payload.currentBin || '');
-    const currentBin = clean(payload.currentBin || '');
-    if (useExisting) useExisting.textContent = `USE ${selectedBin || '-'}`;
-    if (continueNew) continueNew.textContent = `CONTINUE ${currentBin || '-'}`;
-    if (addLocation) addLocation.textContent = 'ADD NEW LOCATION';
+    const { useExisting, saveNew, cancel } = smartBinPromptNodes();
+    if (useExisting) useExisting.textContent = 'USE EXISTING BIN';
+    if (saveNew) saveNew.textContent = 'OK - SAVE IN NEW BIN';
+    if (cancel) cancel.textContent = 'CANCEL';
   }
 
   function renderDuplicateAlert(message = '', existing = {}) {
@@ -743,57 +739,37 @@
   }
 
   function renderSmartBinSuggestionModal(payload = {}) {
-    const { dialog, title, message, bins, selectWrap, select, reason, hint } = smartBinPromptNodes();
+    const { dialog, title, message, bins, selectWrap, select } = smartBinPromptNodes();
     if (!dialog) return;
     const existingBins = Array.isArray(payload.existingBins) ? payload.existingBins : [];
     const suggestedBin = clean(payload.suggestedBin || (existingBins[0] && existingBins[0].binLocation) || payload.currentBin || '');
     const currentBin = clean(payload.currentBin || '');
     const partNumber = clean(payload.partNumber || '');
+    const partDescription = clean(payload.partDescription || payload.partName || '');
     const primaryBin = clean(payload.primaryBin || suggestedBin || currentBin || (existingBins[0] && existingBins[0].binLocation) || '');
-    const secondaryBins = Array.isArray(payload.secondaryBins) ? payload.secondaryBins.filter(Boolean) : existingBins.slice(1).map((bin) => bin.binLocation).filter(Boolean);
-    const allowMultipleLocations = payload.allowMultipleLocations === undefined
-      ? Boolean(state.smartBinSettings ? state.smartBinSettings.allowMultipleLocations : true)
-      : Boolean(payload.allowMultipleLocations);
-    const locationLimitReached = Boolean(payload.locationLimitReached);
-    const canContinueCurrent = payload.canContinueCurrent === undefined
-      ? allowMultipleLocations && !locationLimitReached
-      : Boolean(payload.canContinueCurrent);
-    const canAddNewLocation = payload.canAddNewLocation === undefined
-      ? allowMultipleLocations && !locationLimitReached
-      : Boolean(payload.canAddNewLocation);
-    const reasonRequired = payload.reasonRequired === undefined
-      ? Boolean(state.smartBinSettings ? state.smartBinSettings.requireReason : true)
-      : Boolean(payload.reasonRequired);
     const selectedExistingBin = suggestedBin || (existingBins[0] ? existingBins[0].binLocation : '');
     state.smartBinPromptPayload = {
       ...payload,
       suggestedBin,
       currentBin,
       primaryBin,
-      secondaryBins,
       existingBins,
-      allowMultipleLocations,
-      canContinueCurrent,
-      canAddNewLocation,
-      locationLimitReached,
-      reasonRequired,
+      partDescription,
       selectedBin: selectedExistingBin
     };
     state.smartBinPromptOpen = true;
 
-    if (title) title.textContent = 'PART LOCATION ALERT';
+    if (title) title.textContent = 'PART LOCATION WARNING';
     if (message) {
-      const secondaryLine = secondaryBins.length ? `Secondary Locations: ${secondaryBins.join(', ')}` : '';
-      const limitLine = locationLimitReached
-        ? `Location limit reached (${Number(payload.maxAllowedLocationsPerPart || state.smartBinSettings?.maxAllowedLocationsPerPart || 3)}).`
-        : '';
       message.textContent = [
-        `Part: ${partNumber || '-'}`,
-        `Already available in Bin: ${primaryBin || '-'}`,
-        secondaryLine,
-        limitLine,
-        'Would you like to continue using existing location?'
-      ].filter(Boolean).join('\n');
+        `Part Number: ${partNumber || '-'}`,
+        `Description: ${partDescription || '-'}`,
+        '',
+        'This part is already available in:',
+        existingBins.map((bin) => clean(bin.binLocation || '')).filter(Boolean).join(' / ') || primaryBin || '-',
+        '',
+        'Do you still want to save this part in new bin?'
+      ].join('\n');
     }
     if (bins) {
       bins.innerHTML = smartBinExistingBinMarkup(existingBins, selectedExistingBin);
@@ -816,29 +792,10 @@
         refreshSmartBinActionLabels(state.smartBinPromptPayload || {});
       };
     }
-    if (reason) {
-      reason.value = '';
-      reason.placeholder = 'Bin Full / Overflow Qty / Secondary Storage / Other';
-      reason.parentElement?.classList.toggle('hidden', !canContinueCurrent && !canAddNewLocation);
-    }
-    if (hint) {
-      if (!allowMultipleLocations) {
-        hint.textContent = 'Multiple locations are disabled. Use the suggested bin only.';
-      } else if (locationLimitReached) {
-        hint.textContent = `Maximum ${Number(payload.maxAllowedLocationsPerPart || state.smartBinSettings?.maxAllowedLocationsPerPart || 3)} locations per part has been reached.`;
-      } else {
-        hint.textContent = reasonRequired
-          ? 'Reason is required when you save the part in a new bin.'
-          : 'Reason is optional, but recommended for audit trail.';
-      }
-    }
     if (useExisting) useExisting.hidden = false;
-    if (continueNew) continueNew.hidden = !canContinueCurrent;
-    if (addLocation) addLocation.hidden = !canAddNewLocation;
     refreshSmartBinActionLabels(state.smartBinPromptPayload || {});
     if (!dialog.open) {
       dialog.showModal();
-      setTimeout(() => reason?.focus(), 0);
     }
     beep('duplicate');
     vibrate([20, 30, 20]);
@@ -853,44 +810,26 @@
   }
 
   async function resolveSmartBinSuggestionAction(action, payload = {}) {
-    const { reason } = smartBinPromptNodes();
+    const { select } = smartBinPromptNodes();
     const currentBin = clean(payload.currentBin || '');
-    const selectedBin = clean((smartBinPromptNodes().select && smartBinPromptNodes().select.value) || payload.suggestedBin || currentBin || '');
-    const useExisting = action === 'USE_EXISTING';
-    const addAdditional = action === 'ADD_ADDITIONAL';
-    const continueCurrent = action === 'CONTINUE_NEW';
-    const requireReason = Boolean(payload.reasonRequired ?? state.smartBinSettings?.requireReason ?? true);
-    const allowMultipleLocations = payload.allowMultipleLocations === undefined
-      ? Boolean(state.smartBinSettings ? state.smartBinSettings.allowMultipleLocations : true)
-      : Boolean(payload.allowMultipleLocations);
-    const locationLimitReached = Boolean(payload.locationLimitReached);
-    const enteredReason = String(reason?.value || '').trim();
-    const finalReason = addAdditional && !enteredReason
-      ? 'Qty overflow / bin full'
-      : enteredReason;
-
-    if (!useExisting && !allowMultipleLocations) {
-      toast('Multiple locations are disabled for this part.', 'error');
+    const selectedBin = clean((select && select.value) || payload.suggestedBin || currentBin || '');
+    const normalizedAction = String(action || '').trim().toUpperCase();
+    const useExisting = ['USE_EXISTING', 'USE_EXISTING_BIN'].includes(normalizedAction);
+    const saveNew = ['SAVE_NEW_BIN', 'CONTINUE_NEW', 'ADD_ADDITIONAL'].includes(normalizedAction);
+    if (normalizedAction === 'CANCEL') {
+      closeSmartBinSuggestionModal(null);
       return null;
     }
-    if (!useExisting && locationLimitReached) {
-      toast(`Maximum ${Number(payload.maxAllowedLocationsPerPart || state.smartBinSettings?.maxAllowedLocationsPerPart || 3)} locations per part has been reached.`, 'error');
-      return null;
-    }
-    if ((continueCurrent || addAdditional) && requireReason && !finalReason) {
-      toast('Reason is required when saving the part in a new bin.', 'error');
-      reason?.focus();
-      return null;
-    }
-    if (continueCurrent && !window.confirm('Are you sure you want multiple locations for same part?')) {
+    if (!useExisting && !saveNew) {
+      closeSmartBinSuggestionModal(null);
       return null;
     }
     const decision = {
-      action,
+      action: useExisting ? 'USE_EXISTING_BIN' : 'SAVE_NEW_BIN',
       currentBin,
       selectedBin: useExisting ? selectedBin : currentBin,
       suggestedBin: clean(payload.suggestedBin || selectedBin || currentBin || ''),
-      reason: useExisting ? '' : finalReason,
+      reason: useExisting ? 'User selected existing bin' : 'User confirmed separate bin',
       existingBins: Array.isArray(payload.existingBins) ? payload.existingBins : [],
       decisionBy: clean(state.session && (state.session.user?.name || state.session.user?.username || state.session.user?.email || state.session.user?.id || '')),
       decisionAt: nowIso(),
@@ -2004,7 +1943,8 @@
   function applySmartBinDecisionToRecord(record = {}, suggestion = {}, decision = {}) {
     const currentBin = clean(record.binLocation || record.bin || suggestion.currentBin || '');
     const selectedBin = clean(decision.selectedBin || decision.currentBin || suggestion.suggestedBin || suggestion.primaryBin || currentBin || '');
-    const finalBin = decision.action === 'USE_EXISTING' && selectedBin ? selectedBin : currentBin;
+    const normalizedAction = clean(decision.action || '').toUpperCase();
+    const finalBin = ['USE_EXISTING', 'USE_EXISTING_BIN'].includes(normalizedAction) && selectedBin ? selectedBin : currentBin;
     const existingBins = Array.isArray(decision.existingBins)
       ? decision.existingBins
       : Array.isArray(suggestion.existingBins)
@@ -2030,8 +1970,10 @@
       binLocation: finalBin,
       bin: finalBin,
       smartBinEnabled: suggestion.smartBinEnabled === undefined ? true : Boolean(suggestion.smartBinEnabled),
-      smartBinDecision: clean(decision.action || ''),
-      smartBinReason: clean(decision.reason || ''),
+      smartBinDecision: normalizedAction || '',
+      smartBinReason: normalizedAction === 'SAVE_NEW_BIN'
+        ? 'User confirmed separate bin'
+        : clean(decision.reason || 'User selected existing bin'),
       smartBinSuggestedBin: clean(suggestion.suggestedBin || suggestion.primaryBin || currentBin || ''),
       smartBinSelectedBin: finalBin,
       smartBinCurrentBin: currentBin,
@@ -2042,6 +1984,8 @@
       smartBinCheckedAt: checkedAt,
       smartBinDecisionAt: decisionAt,
       smartBinDecisionBy: decisionBy,
+      smartBinLocationType: normalizedAction === 'SAVE_NEW_BIN' ? 'SECONDARY' : 'PRIMARY',
+      smartBinIsSecondaryLocation: normalizedAction === 'SAVE_NEW_BIN',
       smartBinAuditTrail: trail
     };
   }
@@ -2116,7 +2060,7 @@
 
   function smartBinPreflightEligible(record = {}) {
     const scanType = upper(record.scanType || record.type || currentScanType());
-    return ['INWARD', 'DAMAGE'].includes(scanType)
+    return ['INWARD', 'DAMAGE', 'AUDIT'].includes(scanType)
       && Boolean(clean(record.dealerCode || activeDealerCode()))
       && Boolean(clean(record.auditId || activeAuditId()))
       && Boolean(clean(record.partNumber || record.part || ''))
@@ -2139,6 +2083,7 @@
           dealerCode: normalized.dealerCode || activeDealerCode(),
           auditId: normalized.auditId || activeAuditId(),
           partNumber: normalized.partNumber || normalized.part || '',
+          partDescription: normalized.partDescription || normalized.partName || '',
           binLocation: normalized.binLocation || normalized.bin || '',
           scanType: normalized.scanType || normalized.type || currentScanType(),
           qty: normalized.qty ?? normalized.quantity ?? 1
@@ -2534,6 +2479,8 @@
         ? undefined
         : Math.max(1, Number.parseInt(String(row.smartBinMaxAllowedLocationsPerPart), 10) || 3),
       smartBinReasonRequired: row.smartBinReasonRequired === undefined ? undefined : Boolean(row.smartBinReasonRequired),
+      smartBinLocationType: row.smartBinLocationType || '',
+      smartBinIsSecondaryLocation: row.smartBinIsSecondaryLocation === undefined ? undefined : Boolean(row.smartBinIsSecondaryLocation),
       smartBinCheckedAt: row.smartBinCheckedAt || '',
       smartBinDecisionAt: row.smartBinDecisionAt || '',
       smartBinDecisionBy: row.smartBinDecisionBy || '',
@@ -3041,6 +2988,50 @@
           }
           const data = error.data || {};
           const message = clean(data.message || error.message || 'Sync failed');
+          if (Number(error.status) === 409 && data.smartBinWarning) {
+            const smartBinPayload = data.smartBinSuggestion || data;
+            const decision = await openSmartBinSuggestionModal({
+              ...smartBinPayload,
+              partDescription: row.partDescription || row.partName || data.partDescription || '',
+              currentBin: smartBinPayload.currentBin || row.binLocation || row.bin || '',
+              requireReason: false
+            });
+            if (!decision) {
+              const next = {
+                ...row,
+                status: 'rejected',
+                syncStatus: 'rejected',
+                syncError: 'Smart bin confirmation cancelled',
+                retryCount: Number(row.retryCount || 0) + 1
+              };
+              await putRecord(next);
+              upsertStateRow(next);
+              rejectedCount += 1;
+              continue;
+            }
+            const updatedRow = applySmartBinDecisionToRecord(row, smartBinPayload, decision);
+            await putRecord(updatedRow);
+            upsertStateRow(updatedRow);
+            try {
+              await saveRecordToServer(updatedRow, { refreshRecent: false });
+              syncedCount += 1;
+              continue;
+            } catch (retryError) {
+              const retryData = retryError.data || {};
+              const retryMessage = clean(retryData.message || retryError.message || 'Sync failed');
+              const next = {
+                ...updatedRow,
+                status: 'failed',
+                syncStatus: 'failed',
+                syncError: retryMessage,
+                retryCount: Number(updatedRow.retryCount || 0) + 1
+              };
+              await putRecord(next);
+              upsertStateRow(next);
+              failedCount += 1;
+              continue;
+            }
+          }
           const duplicate = Number(error.status) === 409 || data.duplicate || data.upiDuplicate;
           if (duplicate) {
             duplicateCount += 1;
@@ -3406,9 +3397,9 @@
     byId('smartBinSuggestionDialog')?.addEventListener('cancel', (event) => event.preventDefault());
     byId('duplicateAlertDialog')?.addEventListener('cancel', (event) => event.preventDefault());
     byId('duplicateAlertOkBtn')?.addEventListener('click', () => closeDuplicateAlert());
-    byId('smartBinUseExistingBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('USE_EXISTING', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
-    byId('smartBinContinueNewBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('CONTINUE_NEW', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
-    byId('smartBinAddLocationBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('ADD_ADDITIONAL', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
+    byId('smartBinUseExistingBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('USE_EXISTING_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
+    byId('smartBinSaveNewBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('SAVE_NEW_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
+    byId('smartBinCancelBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('CANCEL', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
     window.addEventListener('online', () => {
       renderConnectionBadge();
       renderUrlState();

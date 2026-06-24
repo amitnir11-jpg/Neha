@@ -251,8 +251,8 @@
     <div class="dialog-card smart-bin-dialog-card">
       <div class="dialog-head">
         <div>
-          <span class="panel-tag">Part Location Alert</span>
-          <h3 id="smartBinSuggestionTitle">Smart Bin Location Suggestion</h3>
+          <span class="panel-tag">Part Location Warning</span>
+          <h3 id="smartBinSuggestionTitle">PART LOCATION WARNING</h3>
         </div>
       </div>
 
@@ -264,16 +264,10 @@
         <select id="smartBinExistingBinSelect"></select>
       </label>
 
-      <label class="field smart-bin-reason">
-        <span>Reason for new location</span>
-        <textarea id="smartBinReasonInput" rows="3" placeholder="Bin Full / Overflow Qty / Secondary Storage / Other"></textarea>
-      </label>
-      <p id="smartBinSuggestionHint" class="muted smart-bin-suggestion-hint">Reason is required when saving the part in a new bin.</p>
-
       <div class="dialog-actions smart-bin-actions">
-        <button id="smartBinUseExistingBtn" class="btn btn-primary" type="button">USE EXISTING</button>
-        <button id="smartBinAddLocationBtn" class="btn btn-secondary" type="button">ADD NEW LOCATION</button>
-        <button id="smartBinContinueNewBtn" class="btn btn-secondary" type="button">CONTINUE CURRENT BIN</button>
+        <button id="smartBinSaveNewBtn" class="btn btn-primary" type="button">OK - SAVE IN NEW BIN</button>
+        <button id="smartBinUseExistingBtn" class="btn btn-secondary" type="button">USE EXISTING BIN</button>
+        <button id="smartBinCancelBtn" class="btn btn-secondary" type="button">CANCEL</button>
       </div>
     </div>
   </dialog>
