@@ -710,10 +710,10 @@
   }
 
   function refreshSmartBinActionLabels(payload = {}) {
-    const { useExisting, saveNew, cancel } = smartBinPromptNodes();
-    if (useExisting) useExisting.textContent = 'USE EXISTING BIN';
-    if (saveNew) saveNew.textContent = 'OK - SAVE IN NEW BIN';
-    if (cancel) cancel.textContent = 'CANCEL';
+    const { useExisting, saveNew } = smartBinPromptNodes();
+    const suggestedBin = payload.suggestedBin || 'existing bin';
+    if (useExisting) useExisting.textContent = `OK - USE BIN ${suggestedBin}`;
+    if (saveNew) saveNew.textContent = 'CANCEL';
   }
 
   function renderDuplicateAlert(message = '', existing = {}) {
@@ -761,15 +761,15 @@
 
     if (title) title.textContent = 'PART LOCATION WARNING';
     if (message) {
-      message.textContent = [
+      message.innerHTML = [
         `Part Number: ${partNumber || '-'}`,
         `Description: ${partDescription || '-'}`,
-        '',
+        '<br>',
         'This part is already available in:',
         existingBins.map((bin) => clean(bin.binLocation || '')).filter(Boolean).join(' / ') || primaryBin || '-',
-        '',
-        'Do you still want to save this part in new bin?'
-      ].join('\n');
+        '<br>',
+        `Do you want to add this part to bin <strong>${escapeHtml(suggestedBin)}</strong> instead?`
+      ].join('<br>');
     }
     if (bins) {
       bins.innerHTML = smartBinExistingBinMarkup(existingBins, selectedExistingBin);
@@ -792,7 +792,7 @@
         refreshSmartBinActionLabels(state.smartBinPromptPayload || {});
       };
     }
-    if (useExisting) useExisting.hidden = false;
+    if (useExisting) useExisting.hidden = !suggestedBin;
     refreshSmartBinActionLabels(state.smartBinPromptPayload || {});
     if (!dialog.open) {
       dialog.showModal();
@@ -813,23 +813,17 @@
     const { select } = smartBinPromptNodes();
     const currentBin = clean(payload.currentBin || '');
     const selectedBin = clean((select && select.value) || payload.suggestedBin || currentBin || '');
-    const normalizedAction = String(action || '').trim().toUpperCase();
-    const useExisting = ['USE_EXISTING', 'USE_EXISTING_BIN'].includes(normalizedAction);
-    const saveNew = ['SAVE_NEW_BIN', 'CONTINUE_NEW', 'ADD_ADDITIONAL'].includes(normalizedAction);
-    if (normalizedAction === 'CANCEL') {
-      closeSmartBinSuggestionModal(null);
-      return null;
-    }
+    const useExisting = action === 'USE_EXISTING_BIN';
+    const saveNew = action === 'SAVE_NEW_BIN';
+
     if (!useExisting && !saveNew) {
       closeSmartBinSuggestionModal(null);
       return null;
     }
+
     const decision = {
-      action: useExisting ? 'USE_EXISTING_BIN' : 'SAVE_NEW_BIN',
-      currentBin,
-      selectedBin: useExisting ? selectedBin : currentBin,
-      suggestedBin: clean(payload.suggestedBin || selectedBin || currentBin || ''),
-      reason: useExisting ? 'User selected existing bin' : 'User confirmed separate bin',
+      action,
+      selectedBin,
       existingBins: Array.isArray(payload.existingBins) ? payload.existingBins : [],
       decisionBy: clean(state.session && (state.session.user?.name || state.session.user?.username || state.session.user?.email || state.session.user?.id || '')),
       decisionAt: nowIso(),
@@ -3397,9 +3391,9 @@
     byId('smartBinSuggestionDialog')?.addEventListener('cancel', (event) => event.preventDefault());
     byId('duplicateAlertDialog')?.addEventListener('cancel', (event) => event.preventDefault());
     byId('duplicateAlertOkBtn')?.addEventListener('click', () => closeDuplicateAlert());
-    byId('smartBinUseExistingBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('USE_EXISTING_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
-    byId('smartBinSaveNewBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('SAVE_NEW_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
-    byId('smartBinCancelBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('CANCEL', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
+    byId('smartBinUseExistingBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('USE_EXISTING_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error'))); // This is now "OK"
+    byId('smartBinSaveNewBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('SAVE_NEW_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error'))); // This is now "Cancel"
+    byId('smartBinCancelBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('ABORT', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error'))); // This is the hidden, true cancel
     window.addEventListener('online', () => {
       renderConnectionBadge();
       renderUrlState();

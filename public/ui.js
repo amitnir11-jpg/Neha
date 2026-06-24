@@ -3949,6 +3949,7 @@
           });
           if (!decision) return;
           normalized.smartBinEnabled = Boolean(smartBinSettings.enabled);
+
           // Apply user's decision to the scan payload
           normalized.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || suggestion.suggestedBin || normalized.binLocation || '');
           normalized.smartBinCurrentBin = cleanDealerCode(decision.currentBin || suggestion.currentBin || normalized.binLocation || '');
@@ -4078,6 +4079,7 @@
           return;
         }
         normalized.smartBinEnabled = true;
+
         // Apply user's decision from the popup
         normalized.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || smartBinPayload.suggestedBin || normalized.binLocation || '');
         normalized.smartBinCurrentBin = cleanDealerCode(decision.currentBin || smartBinPayload.currentBin || normalized.binLocation || '');
@@ -4757,10 +4759,10 @@
   }
 
   function refreshSmartBinActionLabels(payload = {}) {
-    const { useExisting, saveNew, cancel } = smartBinPromptNodes();
-    if (useExisting) useExisting.textContent = 'USE EXISTING BIN';
-    if (saveNew) saveNew.textContent = 'OK - SAVE IN NEW BIN';
-    if (cancel) cancel.textContent = 'CANCEL';
+    const { useExisting, saveNew } = smartBinPromptNodes();
+    const suggestedBin = payload.suggestedBin || 'existing bin';
+    if (useExisting) useExisting.textContent = `OK - USE BIN ${suggestedBin}`;
+    if (saveNew) saveNew.textContent = 'CANCEL';
   }
 
   function renderSmartBinSuggestionModal(payload = {}) {
@@ -4785,15 +4787,15 @@
       title.textContent = 'PART LOCATION WARNING';
     }
     if (message) {
-      message.textContent = [
+      message.innerHTML = [
         `Part Number: ${partNumber || '-'}`,
         `Description: ${partDescription || '-'}`,
-        '',
+        '<br>',
         'This part is already available in:',
         existingBins.map((bin) => cleanDealerCode(bin.binLocation || '')).filter(Boolean).join(' / ') || primaryBin || '-',
-        '',
-        'Do you still want to save this part in new bin?'
-      ].join('\n');
+        '<br>',
+        `Do you want to add this part to bin <strong>${escapeHtml(suggestedBin)}</strong> instead?`
+      ].join('<br>');
     }
     if (bins) bins.innerHTML = smartBinExistingBinMarkup(existingBins);
     if (selectWrap) selectWrap.classList.toggle('hidden', !showSelect);
@@ -4801,7 +4803,7 @@
       select.innerHTML = existingBins.map((bin) => `<option value="${escapeHtml(bin.binLocation)}">${escapeHtml(bin.binLocation)} · Qty ${escapeHtml(wholeNumber(bin.qty || 0))}</option>`).join('');
       select.value = suggestedBin || (existingBins[0] ? existingBins[0].binLocation : '');
     }
-    if (useExisting) useExisting.hidden = false;
+    if (useExisting) useExisting.hidden = !suggestedBin;
     refreshSmartBinActionLabels({ ...smartBinPromptPayload, suggestedBin });
     modal.classList.remove('hidden');
   }
@@ -4818,23 +4820,15 @@
     const { select } = smartBinPromptNodes();
     const currentBin = cleanDealerCode(payload.currentBin || '');
     const selectedBin = cleanDealerCode((select && select.value) || payload.suggestedBin || currentBin || '');
-    const normalizedAction = String(action || '').trim().toUpperCase();
-    const useExisting = ['USE_EXISTING', 'USE_EXISTING_BIN'].includes(normalizedAction);
-    if (normalizedAction === 'CANCEL') {
+    const useExisting = action === 'USE_EXISTING_BIN';
+    const saveNew = action === 'SAVE_NEW_BIN';
+
+    if (!useExisting && !saveNew) {
       closeSmartBinSuggestionModal(null);
       return null;
     }
-    const decision = {
-      action: useExisting ? 'USE_EXISTING_BIN' : 'SAVE_NEW_BIN',
-      currentBin,
-      selectedBin: useExisting ? selectedBin : currentBin,
-      suggestedBin: cleanDealerCode(payload.suggestedBin || selectedBin || currentBin || ''),
-      reason: useExisting ? 'User selected existing bin' : 'User confirmed separate bin',
-      existingBins: Array.isArray(payload.existingBins) ? payload.existingBins : [],
-      decisionBy: clean(state.user && (state.user.name || state.user.username || state.user.email || state.user.id || '')),
-      decisionAt: new Date().toISOString(),
-      checkedAt: payload.checkedAt || new Date().toISOString()
-    };
+
+    const decision = { action, currentBin, selectedBin };
     closeSmartBinSuggestionModal(decision);
     return decision;
   }
