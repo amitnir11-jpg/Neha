@@ -6354,9 +6354,6 @@
     $('#reportShow').disabled = true;
     try {
       const data = await api(url, { signal: state.reportAbortController.signal });
-      const controller = new AbortController();
-      state.reportAbortController = controller;
-      const data = await api(url, { signal: controller.signal });
       if (state.reportLoadRequestId !== requestId) return;
       rememberReportCache(cacheKey, data);
       applyReportData(data, reportType);
