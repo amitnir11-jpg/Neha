@@ -3102,21 +3102,21 @@
       cameraState('Ready to scan');
       return;
     }
-    const record = createScanRecord({
+    let record = createScanRecord({
       rawText: raw,
       manual: false,
       partNumber: parsePartCandidate(raw),
       binLocation: requiresBin() ? loadActiveBin() : ''
     });
     try {
-      const readyRecord = await preflightSmartBinDecision(record);
-      if (!readyRecord) {
+      record = await preflightSmartBinDecision(record);
+      if (!record) {
         cameraState('Ready to scan');
         return;
       }
-      const duplicateReadyRecord = await preflightDuplicateDecision(readyRecord);
-      if (!duplicateReadyRecord) return;
-      await saveRecord(duplicateReadyRecord, { silent: true, deferSync: false });
+      record = await preflightDuplicateDecision(record);
+      if (!record) return;
+      await saveRecord(record, { silent: true, deferSync: false });
       byId('manualRawPreview').hidden = true;
       cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
       beep('ok');
@@ -3469,7 +3469,7 @@
     }
 
     const rawText = state.manualRaw || `MANUAL:${partNumber}`;
-    const record = createScanRecord({
+    let record = createScanRecord({
       rawText,
       manual: true,
       partNumber,
@@ -3479,11 +3479,11 @@
       jobCardNo
     });
     try {
-      const readyRecord = await preflightSmartBinDecision(record);
-      if (!readyRecord) return;
-      const duplicateReadyRecord = await preflightDuplicateDecision(readyRecord);
-      if (!duplicateReadyRecord) return;
-      await saveRecord(duplicateReadyRecord, { silent: true, deferSync: false });
+      record = await preflightSmartBinDecision(record);
+      if (!record) return;
+      record = await preflightDuplicateDecision(record);
+      if (!record) return;
+      await saveRecord(record, { silent: true, deferSync: false });
       closeManualDialog();
       cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
       toast(navigator.onLine ? 'Queued' : 'Network pending', navigator.onLine ? 'success' : 'warning');

@@ -42,6 +42,8 @@ prisma migrate deploy
 
 If `DATABASE_URL` is missing, PostgreSQL cannot connect, or migrations fail, startup exits and the service is not marked ready.
 
+Railway health checks should use `/api/ready`, not `/health`, so the service is only marked ready after PostgreSQL is connected.
+
 ## First Login
 
 After deployment is ready:
