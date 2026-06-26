@@ -6536,8 +6536,9 @@
     const message = $('#reportMessage');
     const requestId = Date.now();
     state.reportLoadRequestId = requestId;
-    if (state.reportAbortController) state.reportAbortController.abort();
-    state.reportAbortController = new AbortController();
+    if (state.reportAbortController) state.reportAbortController.abort('new-report-load');
+    const reportController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    state.reportAbortController = reportController;
     state.reportLoading = true;
     state.lastReportType = reportType;
     saveReportState(true);
@@ -6548,10 +6549,6 @@
       message.className = 'form-message loading';
       message.textContent = 'Loading report...';
     }
-    if (state.reportAbortController) {
-      state.reportAbortController.abort('manual-report-load');
-      state.reportAbortController = null;
-    }
     if (showLoading && !state.reportLoaded) {
       $('#reportHead').innerHTML = '';
       $('#reportRows').innerHTML = '<tr><td class="muted" colspan="12">Loading report...</td></tr>';
@@ -6559,7 +6556,7 @@
     }
     $('#reportShow').disabled = true;
     try {
-      const data = await api(url, { signal: state.reportAbortController.signal });
+      const data = await api(url, reportController ? { signal: reportController.signal } : {});
       if (state.reportLoadRequestId !== requestId) return;
       rememberReportCache(cacheKey, data);
       applyReportData(data, reportType);
@@ -6581,7 +6578,7 @@
     } finally {
       if (state.reportLoadRequestId === requestId) {
         state.reportLoading = false;
-        state.reportAbortController = null;
+        if (state.reportAbortController === reportController) state.reportAbortController = null;
       }
       updateReportButtons();
     }
