@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Mobile Scanner v1.2.2';
-  const CACHE_VERSION = '20260626-smart-bin-warning-fix';
+  const CACHE_VERSION = '20260626-smart-bin-cross-bin-local-fix';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -1125,6 +1125,154 @@
     return normalizePartCandidateValue(row.partNumber || row.normalizedPartNumber || row.part || row.parsedPartNumber || '');
   }
 
+  function smartBinGroupSort(a = {}, b = {}) {
+    const qtyDiff = Number(b.qty || 0) - Number(a.qty || 0);
+    if (qtyDiff) return qtyDiff;
+    const timeA = new Date(a.lastScanDate || a.createdDate || a.updatedAt || 0).getTime();
+    const timeB = new Date(b.lastScanDate || b.createdDate || b.updatedAt || 0).getTime();
+    if (timeA !== timeB) return timeB - timeA;
+    return String(a.binLocation || '').localeCompare(String(b.binLocation || ''), undefined, { numeric: true, sensitivity: 'base' });
+  }
+
+  function smartBinCountedRow(row = {}) {
+    if (!row || row.deletedAt) return false;
+    const status = rowStatus(row);
+    if (['duplicate', 'failed-duplicate', 'failed', 'invalid', 'deleted', 'rejected'].includes(status)) return false;
+    if (row.serverDuplicateState === 'free') return false;
+    if (row.activeInventory === false) return false;
+    if (Number(row.remainingQty ?? row.qty ?? row.quantity ?? 0) <= 0) return false;
+    return ['INWARD', 'AUDIT'].includes(rowMovementType(row));
+  }
+
+  function buildLocalSmartBinSuggestion(record = {}) {
+    if (!smartBinPreflightEligible(record)) return null;
+
+    const partNumber = duplicatePartKey(record);
+    const currentBin = rowBin(record);
+    if (!partNumber || !currentBin) return null;
+
+    const currentDealer = upper(record.dealerCode || activeDealerCode());
+    const currentAudit = clean(record.auditId || activeAuditId());
+    const currentKey = recordKey(record);
+    const currentIdentity = scanIdentityKey(record);
+    const bins = new Map();
+
+    duplicateLookupRows().forEach((row) => {
+      if (!row || !smartBinCountedRow(row)) return;
+      if (currentDealer && upper(row.dealerCode || row.dealer || '') !== currentDealer) return;
+      if (currentAudit && clean(row.auditId || row.audit || '') !== currentAudit) return;
+
+      const rowPart = duplicatePartKey(row);
+      const rowBinLocation = rowBin(row);
+      if (!rowPart || rowPart !== partNumber || !rowBinLocation) return;
+      if ((currentKey && recordKey(row) === currentKey) || (currentIdentity && scanIdentityKey(row) === currentIdentity)) return;
+
+      const binKey = upper(rowBinLocation);
+      const qty = Math.abs(Number(row.qty ?? row.quantity ?? 0) || 0);
+      if (!qty) return;
+
+      const rowMoment = new Date(row.smartBinDecisionAt || row.smartBinCheckedAt || row.mobileCreatedAt || row.timestamp || row.createdAt || row.scanTime || 0).getTime();
+      const entry = bins.get(binKey) || {
+        binLocation: binKey,
+        qty: 0,
+        locationType: 'SECONDARY',
+        createdBy: '',
+        createdDate: '',
+        lastScanDate: '',
+        reason: '',
+        partDescription: '',
+        lastScanMoment: 0
+      };
+
+      entry.qty += qty;
+      entry.dealerCode = entry.dealerCode || upper(row.dealerCode || row.dealer || '');
+      entry.auditId = entry.auditId || clean(row.auditId || row.audit || '');
+      entry.partNumber = entry.partNumber || rowPart;
+      if (!entry.partDescription) {
+        entry.partDescription = clean(row.partDescription || row.partName || row.description || '');
+      }
+      if (!entry.createdBy) {
+        entry.createdBy = clean(row.smartBinDecisionBy || row.userName || row.staffName || row.loginId || row.username || row.userId || row.deviceName || '');
+      }
+      if (!entry.reason) {
+        entry.reason = clean(row.smartBinReason || row.reason || row.remarks || row.comment || row.comments || '');
+      }
+      if (rowMoment >= entry.lastScanMoment) {
+        entry.lastScanMoment = rowMoment;
+        entry.lastScanDate = rowMoment ? new Date(rowMoment).toISOString() : clean(row.smartBinDecisionAt || row.smartBinCheckedAt || row.mobileCreatedAt || row.timestamp || row.createdAt || row.scanTime || '');
+        entry.createdDate = clean(row.createdAt || row.timestamp || row.scanTime || row.mobileCreatedAt || row.smartBinCheckedAt || row.smartBinDecisionAt || '');
+        entry.createdBy = clean(row.smartBinDecisionBy || row.userName || row.staffName || row.loginId || row.username || row.userId || row.deviceName || entry.createdBy || '');
+      }
+      bins.set(binKey, entry);
+    });
+
+    const existingBins = Array.from(bins.values())
+      .sort(smartBinGroupSort)
+      .map((row, index) => ({
+        binLocation: row.binLocation,
+        qty: Number(row.qty || 0),
+        locationType: index === 0 ? 'PRIMARY' : 'SECONDARY',
+        createdBy: row.createdBy || '',
+        createdDate: row.createdDate || '',
+        lastScanDate: row.lastScanDate || '',
+        reason: row.reason || '',
+        partDescription: row.partDescription || ''
+      }));
+
+    if (!existingBins.length) return null;
+    const sameBinExists = existingBins.some((row) => upper(row.binLocation || '') === currentBin);
+    if (sameBinExists) return null;
+
+    const primaryBin = existingBins[0] ? existingBins[0].binLocation : currentBin;
+    const descriptionSource = existingBins.find((row) => clean(row.partDescription || '')) || {};
+    const partDescription = clean(descriptionSource.partDescription || '');
+    const totalQty = existingBins.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+    const allowMultipleLocations = state.smartBinSettings?.allowMultipleLocations === undefined
+      ? true
+      : Boolean(state.smartBinSettings.allowMultipleLocations);
+    const maxAllowedLocationsPerPart = Math.max(1, Number.parseInt(String(state.smartBinSettings?.maxAllowedLocationsPerPart || 3), 10) || 3);
+    const locationLimitReached = existingBins.length >= maxAllowedLocationsPerPart;
+    const promptTitle = 'PART ALREADY AVAILABLE IN OTHER BIN';
+    const message = [
+      promptTitle,
+      '',
+      `Part: ${partNumber || '-'}`,
+      `Description: ${partDescription || '-'}`,
+      `Existing Bin: ${primaryBin || '-'}`,
+      `New Bin: ${currentBin || '-'}`,
+      '',
+      `Do you still want to keep this part in ${currentBin || 'this bin'}?`
+    ].join('\n');
+
+    return {
+      dealerCode: currentDealer,
+      auditId: currentAudit,
+      partNumber,
+      partDescription,
+      currentBin,
+      existingBin: primaryBin || currentBin,
+      newBin: currentBin,
+      primaryBin: primaryBin || currentBin,
+      primaryLocation: primaryBin || currentBin,
+      secondaryBins: existingBins.slice(1).map((row) => row.binLocation),
+      existingBins,
+      existingBinCount: existingBins.length,
+      totalQty,
+      suggestedBin: primaryBin || currentBin,
+      sameBinExists: false,
+      shouldPrompt: true,
+      canUseExisting: Boolean(existingBins.length),
+      canAddNewLocation: allowMultipleLocations && !locationLimitReached,
+      canContinueCurrent: allowMultipleLocations && !locationLimitReached,
+      locationLimitReached,
+      allowMultipleLocations,
+      maxAllowedLocationsPerPart,
+      reasonRequired: Boolean(state.smartBinSettings?.requireReason ?? true),
+      promptTitle,
+      message
+    };
+  }
+
   function duplicateLookupRows() {
     const rows = [];
     const seen = new Set();
@@ -2082,9 +2230,31 @@
 
   async function preflightSmartBinDecision(record = {}) {
     const normalized = { ...record };
-    if (!smartBinPreflightEligible(normalized) || !navigator.onLine || !state.session?.token) {
-      return normalized;
+    if (clean(normalized.smartBinDecision || '')) return normalized;
+
+    const localExisting = localDuplicateForRecord(normalized);
+    if (localExisting) {
+      showDuplicateOnce(normalized, localExisting, duplicateScanMessage(localExisting));
+      cameraState('Duplicate blocked');
+      return null;
     }
+
+    if (smartBinPreflightEligible(normalized)) {
+      const localSmartBinSuggestion = buildLocalSmartBinSuggestion(normalized);
+      if (localSmartBinSuggestion?.shouldPrompt) {
+        const decision = await openSmartBinSuggestionModal({
+          ...localSmartBinSuggestion,
+          currentBin: localSmartBinSuggestion.currentBin || normalized.binLocation || normalized.bin || '',
+          newBin: localSmartBinSuggestion.newBin || normalized.binLocation || normalized.bin || '',
+          existingBin: localSmartBinSuggestion.existingBin || (Array.isArray(localSmartBinSuggestion.existingBins) && localSmartBinSuggestion.existingBins[0] && localSmartBinSuggestion.existingBins[0].binLocation) || ''
+        });
+        if (!decision) return null;
+        return applySmartBinDecisionToRecord(normalized, localSmartBinSuggestion, decision);
+      }
+    }
+
+    if (!navigator.onLine || !state.session?.token) return normalized;
+    if (!smartBinPreflightEligible(normalized)) return normalized;
 
     try {
       const suggestion = await api('/api/scans/smart-bin-check', {
