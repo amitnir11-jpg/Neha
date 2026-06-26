@@ -2801,6 +2801,7 @@
     });
     renderDealerMaster();
     state.dealersLoadedAt = Date.now();
+    syncReportDealerAfterDealerRefresh();
     return state.dealers;
     })();
     try {
@@ -5110,15 +5111,28 @@
     return /^all(\s|$)/i.test(text) ? '' : text;
   }
 
+  function normalizeReportDealerCode(value) {
+    const code = cleanDealerCode(value || '');
+    if (!code || code === 'ALL') return '';
+    if (/^(SELECT DEALER|ALL DEALERS|ACTIVE AUDIT|DEALER CODE)$/.test(code)) return '';
+    return code;
+  }
+
+  function selectedReportDealerCode() {
+    const form = $('#reportFilters');
+    const dealerSelect = $('[name="dealerCode"]', form);
+    const selectedDealerCode = normalizeReportDealerCode(dealerSelect?.value || '')
+      || normalizeReportDealerCode(selectedOptionText(dealerSelect))
+      || normalizeReportDealerCode(currentDealerCode());
+    const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === selectedDealerCode);
+    return selectedDealer?.dealerCode || selectedDealerCode || '';
+  }
+
   function reportParams() {
     const form = $('#reportFilters');
     const formData = formObject(form);
     const reportType = activeReportType();
-    const dealerSelect = $('[name="dealerCode"]', form);
-    const selectedDealerCode = reportFilterValue(cleanDealerCode(dealerSelect?.value || ''))
-      || reportFilterValue(cleanDealerCode(selectedOptionText(dealerSelect)));
-    const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === selectedDealerCode);
-    const dealerCode = selectedDealer?.dealerCode || selectedDealerCode || '';
+    const dealerCode = selectedReportDealerCode();
     const params = compactParams({
       reportType,
       dealerCode,
@@ -5322,6 +5336,25 @@
       state.reportAutoLoadTimer = null;
       loadReport().catch((error) => toast(error.message, 'error'));
     }, delay);
+  }
+
+  function syncReportDealerAfterDealerRefresh() {
+    const form = $('#reportFilters');
+    if (!form || !$('#reports')?.classList.contains('active')) return;
+    const dealerCode = selectedReportDealerCode();
+    const dealerSelect = $('[name="dealerCode"]', form);
+    if (dealerCode && dealerSelect && normalizeReportDealerCode(dealerSelect.value) !== cleanDealerCode(dealerCode)) {
+      setDealerSelectValue(dealerSelect, dealerCode);
+      syncDealerSelectDisplay(dealerSelect);
+    }
+    if (!dealerCode || !activeReportType()) return;
+    const message = $('#reportMessage');
+    if (message && /select dealer code first/i.test(message.textContent || '')) {
+      resetReportPreview('Select filters to load report automatically.');
+    }
+    if (!state.reportLoading && !state.reportLoaded) {
+      scheduleReportLoad(220, 'Loading report...');
+    }
   }
 
   function queueDashboardRefresh(delay = 1200) {
