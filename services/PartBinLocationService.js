@@ -240,23 +240,36 @@ function buildSuggestionPayload(rows = [], scope = {}, settings = {}) {
     .filter((row) => row.binLocation);
 
   const primaryBin = existingBins[0] ? existingBins[0].binLocation : currentBin;
+  const existingBin = primaryBin || currentBin;
+  const newBin = currentBin;
   const secondaryBins = existingBins.slice(1).map((row) => row.binLocation);
-  const sameBinExists = Boolean(currentBin && existingBins.some((row) => row.binLocation === currentBin));
+  const sameBinExists = Boolean(newBin && existingBins.some((row) => row.binLocation === newBin));
   const allowMultipleLocations = settings.allowMultipleLocations === undefined ? true : Boolean(settings.allowMultipleLocations);
   const maxAllowedLocationsPerPart = Math.max(1, Number(settings.maxAllowedLocationsPerPart || 3) || 3);
   const locationLimitReached = existingBins.length >= maxAllowedLocationsPerPart;
   const canAddNewLocation = allowMultipleLocations && !locationLimitReached;
   const canContinueCurrent = allowMultipleLocations && !locationLimitReached;
-  const shouldPrompt = Boolean(existingBins.length > 0 && currentBin && !sameBinExists);
-  const message = existingBins.length === 1
-    ? `Part: ${normalized.partNumber}\nAlready available in Bin: ${existingBins[0].binLocation}\n\nWould you like to continue using existing location?`
-    : `Part: ${normalized.partNumber}\nAlready available in Bins: ${existingBins.map((row) => row.binLocation).join(', ')}\n\nWould you like to continue using existing location?`;
+  const shouldPrompt = Boolean(existingBins.length > 0 && newBin && !sameBinExists);
+  const partDescription = clean(existingBins[0] ? existingBins[0].partDescription : '');
+  const promptTitle = 'PART ALREADY AVAILABLE IN OTHER BIN';
+  const message = [
+    promptTitle,
+    '',
+    `Part: ${normalized.partNumber || '-'}`,
+    `Description: ${partDescription || '-'}`,
+    `Existing Bin: ${existingBin || '-'}`,
+    `New Bin: ${newBin || '-'}`,
+    '',
+    `Do you still want to keep this part in ${newBin || 'this bin'}?`
+  ].join('\n');
 
   return {
     dealerCode: normalized.dealerCode,
     auditId: normalized.auditId,
     partNumber: normalized.partNumber,
     currentBin,
+    existingBin,
+    newBin,
     primaryBin,
     primaryLocation: primaryBin,
     secondaryBins,
@@ -273,6 +286,8 @@ function buildSuggestionPayload(rows = [], scope = {}, settings = {}) {
     allowMultipleLocations,
     maxAllowedLocationsPerPart,
     reasonRequired: Boolean(settings.requireReason),
+    promptTitle,
+    partDescription,
     message
   };
 }

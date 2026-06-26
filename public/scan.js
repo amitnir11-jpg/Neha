@@ -1,6 +1,6 @@
 (function () {
   const APP_VERSION = 'Daksh Mobile Scanner v1.2.2';
-  const CACHE_VERSION = '20260623-smart-bin-alerts-v2';
+  const CACHE_VERSION = '20260626-smart-bin-warning-fix';
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -710,10 +710,11 @@
   }
 
   function refreshSmartBinActionLabels(payload = {}) {
-    const { useExisting, saveNew } = smartBinPromptNodes();
-    const suggestedBin = payload.suggestedBin || 'existing bin';
-    if (useExisting) useExisting.textContent = `OK - USE BIN ${suggestedBin}`;
-    if (saveNew) saveNew.textContent = 'CANCEL';
+    const { useExisting, saveNew, select } = smartBinPromptNodes();
+    const existingBin = clean((select && select.value) || payload.selectedBin || payload.existingBin || payload.suggestedBin || payload.primaryBin || '');
+    const newBin = clean(payload.newBin || payload.currentBin || payload.binLocation || '');
+    if (useExisting) useExisting.textContent = existingBin ? `USE EXISTING BIN ${existingBin}` : 'USE EXISTING BIN';
+    if (saveNew) saveNew.textContent = newBin ? `OK - SAVE IN ${newBin}` : 'OK - SAVE IN NEW BIN';
   }
 
   function renderDuplicateAlert(message = '', existing = {}) {
@@ -747,7 +748,10 @@
     const partNumber = clean(payload.partNumber || '');
     const partDescription = clean(payload.partDescription || payload.partName || '');
     const primaryBin = clean(payload.primaryBin || suggestedBin || currentBin || (existingBins[0] && existingBins[0].binLocation) || '');
-    const selectedExistingBin = suggestedBin || (existingBins[0] ? existingBins[0].binLocation : '');
+    const selectedExistingBin = clean(payload.selectedBin || suggestedBin || (existingBins[0] ? existingBins[0].binLocation : '') || '');
+    const existingBin = clean(payload.existingBin || selectedExistingBin || primaryBin || '');
+    const newBin = clean(payload.newBin || currentBin || '');
+    const promptTitle = clean(payload.promptTitle || 'PART ALREADY AVAILABLE IN OTHER BIN');
     state.smartBinPromptPayload = {
       ...payload,
       suggestedBin,
@@ -755,28 +759,36 @@
       primaryBin,
       existingBins,
       partDescription,
-      selectedBin: selectedExistingBin
+      existingBin,
+      newBin,
+      selectedBin: selectedExistingBin,
+      promptTitle
     };
     state.smartBinPromptOpen = true;
 
-    if (title) title.textContent = 'PART LOCATION WARNING';
+    if (title) title.textContent = promptTitle;
     if (message) {
-      message.innerHTML = [
-        `Part Number: ${partNumber || '-'}`,
+      message.textContent = [
+        promptTitle,
+        '',
+        `Part: ${partNumber || '-'}`,
         `Description: ${partDescription || '-'}`,
-        '<br>',
-        'This part is already available in:',
-        existingBins.map((bin) => clean(bin.binLocation || '')).filter(Boolean).join(' / ') || primaryBin || '-',
-        '<br>',
-        `Do you want to add this part to bin <strong>${escapeHtml(suggestedBin)}</strong> instead?`
-      ].join('<br>');
+        `Existing Bin: ${existingBin || '-'}`,
+        `New Bin: ${newBin || '-'}`,
+        '',
+        `Do you still want to keep this part in ${newBin || 'this bin'}?`
+      ].join('\n');
     }
     if (bins) {
-      bins.innerHTML = smartBinExistingBinMarkup(existingBins, selectedExistingBin);
+      bins.innerHTML = smartBinExistingBinMarkup(existingBins, selectedExistingBin || existingBin);
       qsa('[data-bin]', bins).forEach((button) => {
         button.addEventListener('click', () => {
           if (select) select.value = clean(button.dataset.bin || '');
           qsa('[data-bin]', bins).forEach((row) => row.classList.toggle('active', row === button));
+          state.smartBinPromptPayload = {
+            ...(state.smartBinPromptPayload || {}),
+            selectedBin: clean(button.dataset.bin || '')
+          };
           refreshSmartBinActionLabels(state.smartBinPromptPayload || {});
         });
       });
@@ -786,13 +798,18 @@
       select.innerHTML = existingBins.map((bin) => `<option value="${escapeHtml(bin.binLocation)}">${escapeHtml(bin.binLocation)} · Qty ${escapeHtml(fmtNumber(Number(bin.qty || 0)))}</option>`).join('');
       select.value = selectedExistingBin || (existingBins[0] ? existingBins[0].binLocation : '');
       select.onchange = () => {
+        const selected = clean(select.value || '');
+        state.smartBinPromptPayload = {
+          ...(state.smartBinPromptPayload || {}),
+          selectedBin: selected
+        };
         if (bins) {
-          qsa('[data-bin]', bins).forEach((row) => row.classList.toggle('active', upper(row.dataset.bin || '') === upper(select.value || '')));
+          qsa('[data-bin]', bins).forEach((row) => row.classList.toggle('active', upper(row.dataset.bin || '') === upper(selected || '')));
         }
         refreshSmartBinActionLabels(state.smartBinPromptPayload || {});
       };
     }
-    if (useExisting) useExisting.hidden = !suggestedBin;
+    if (useExisting) useExisting.hidden = !existingBin;
     refreshSmartBinActionLabels(state.smartBinPromptPayload || {});
     if (!dialog.open) {
       dialog.showModal();
@@ -1950,7 +1967,7 @@
     const checkedAt = decision.checkedAt || suggestion.checkedAt || nowIso();
     const decisionBy = clean(decision.decisionBy || state.session?.user?.name || state.session?.user?.username || state.session?.user?.email || '');
     const trail = {
-      enabled: suggestion.smartBinEnabled === undefined ? true : Boolean(suggestion.smartBinEnabled),
+      enabled: true,
       decision: clean(decision.action || ''),
       reason: clean(decision.reason || ''),
       suggestedBin: clean(suggestion.suggestedBin || suggestion.primaryBin || selectedBin || currentBin || ''),
@@ -1965,10 +1982,10 @@
       ...record,
       binLocation: finalBin,
       bin: finalBin,
-      smartBinEnabled: suggestion.smartBinEnabled === undefined ? true : Boolean(suggestion.smartBinEnabled),
+      smartBinEnabled: true,
       smartBinDecision: normalizedAction || '',
       smartBinReason: normalizedAction === 'SAVE_NEW_BIN'
-        ? 'User confirmed separate bin'
+        ? 'User confirmed different bin'
         : clean(decision.reason || 'User selected existing bin'),
       smartBinSuggestedBin: clean(suggestion.suggestedBin || suggestion.primaryBin || currentBin || ''),
       smartBinSelectedBin: finalBin,
@@ -2065,10 +2082,7 @@
 
   async function preflightSmartBinDecision(record = {}) {
     const normalized = { ...record };
-    const smartBinEnabled = state.smartBinSettingsLoaded
-      ? state.smartBinSettings.enabled !== false
-      : true;
-    if (!smartBinEnabled || !smartBinPreflightEligible(normalized) || !navigator.onLine || !state.session?.token) {
+    if (!smartBinPreflightEligible(normalized) || !navigator.onLine || !state.session?.token) {
       return normalized;
     }
 
@@ -2975,7 +2989,21 @@
     try {
       for (const row of batch) {
         try {
-          await saveRecordToServer(row, { refreshRecent: false });
+          const readyRow = await preflightSmartBinDecision(row);
+          if (!readyRow) {
+            const next = {
+              ...row,
+              status: 'rejected',
+              syncStatus: 'rejected',
+              syncError: 'Smart bin confirmation cancelled',
+              retryCount: Number(row.retryCount || 0) + 1
+            };
+            await putRecord(next);
+            upsertStateRow(next);
+            rejectedCount += 1;
+            continue;
+          }
+          await saveRecordToServer(readyRow, { refreshRecent: false });
           syncedCount += 1;
         } catch (error) {
           if (authExpired(error)) {
@@ -2990,6 +3018,8 @@
               ...smartBinPayload,
               partDescription: row.partDescription || row.partName || data.partDescription || '',
               currentBin: smartBinPayload.currentBin || row.binLocation || row.bin || '',
+              newBin: smartBinPayload.newBin || row.binLocation || row.bin || '',
+              existingBin: smartBinPayload.existingBin || (Array.isArray(smartBinPayload.existingBins) && smartBinPayload.existingBins[0] && smartBinPayload.existingBins[0].binLocation) || '',
               requireReason: false
             });
             if (!decision) {

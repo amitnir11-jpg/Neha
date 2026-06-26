@@ -992,20 +992,21 @@ function smartBinDecisionUsesExisting(action = '') {
   return ['USE_EXISTING', 'USE_EXISTING_BIN'].includes(upper(action));
 }
 
-function smartBinPromptMessage({ partNumber = '', partDescription = '', existingBins = [] } = {}) {
+function smartBinPromptMessage({ partNumber = '', partDescription = '', existingBins = [], existingBin = '', newBin = '' } = {}) {
   const bins = Array.isArray(existingBins)
     ? existingBins.map((row) => clean(row && row.binLocation ? row.binLocation : '')).filter(Boolean)
     : [];
-  const binLine = bins.length ? bins.join(' / ') : '-';
+  const existingBinLabel = clean(existingBin || bins[0] || '') || '-';
+  const newBinLabel = clean(newBin || '') || '-';
   return [
-    'PART LOCATION WARNING',
-    `Part Number: ${partNumber || '-'}`,
+    'PART ALREADY AVAILABLE IN OTHER BIN',
+    '',
+    `Part: ${partNumber || '-'}`,
     `Description: ${partDescription || '-'}`,
+    `Existing Bin: ${existingBinLabel}`,
+    `New Bin: ${newBinLabel}`,
     '',
-    'This part is already available in:',
-    binLine,
-    '',
-    'Do you still want to save this part in new bin?'
+    `Do you still want to keep this part in ${newBinLabel !== '-' ? newBinLabel : 'this bin'}?`
   ].join('\n');
 }
 
@@ -1023,7 +1024,6 @@ async function smartBinWarningForScan(scan = {}) {
   const settings = smartBinSettingsRoute.readSettings
     ? await smartBinSettingsRoute.readSettings().catch(() => null)
     : null;
-  if (settings && settings.enabled === false) return null;
 
   const suggestion = await getSmartBinSuggestion({
     dealerCode,
@@ -1037,7 +1037,9 @@ async function smartBinWarningForScan(scan = {}) {
   if (!suggestion || !suggestion.shouldPrompt) return null;
   const existingBins = Array.isArray(suggestion.existingBins) ? suggestion.existingBins : [];
   const partDescription = clean(scan.partDescription || scan.partName || scan.description || '');
-  const message = smartBinPromptMessage({ partNumber, partDescription, existingBins });
+  const existingBin = clean(suggestion.existingBin || (existingBins[0] && existingBins[0].binLocation) || currentBin || '');
+  const newBin = clean(suggestion.newBin || currentBin || '');
+  const message = smartBinPromptMessage({ partNumber, partDescription, existingBins, existingBin, newBin });
   return {
     smartBinWarning: true,
     status: 'smart_bin',
@@ -1051,6 +1053,9 @@ async function smartBinWarningForScan(scan = {}) {
     dealerCode,
     auditId,
     currentBin,
+    existingBin,
+    newBin,
+    promptTitle: 'PART ALREADY AVAILABLE IN OTHER BIN',
     suggestedBin: clean(suggestion.suggestedBin || currentBin || ''),
     existingBins,
     existingBinCount: existingBins.length,
@@ -1063,6 +1068,9 @@ async function smartBinWarningForScan(scan = {}) {
       partNumber,
       partDescription,
       currentBin,
+      existingBin,
+      newBin,
+      promptTitle: 'PART ALREADY AVAILABLE IN OTHER BIN',
       suggestedBin: clean(suggestion.suggestedBin || currentBin || ''),
       existingBins,
       existingBinCount: existingBins.length,
@@ -1139,7 +1147,7 @@ function applySmartBinDecision(scan = {}, suggestion = {}, actionInput = '') {
 
   if (smartBinDecisionAllowsNewLocation(action)) {
     scan.smartBinDecision = 'SAVE_NEW_BIN';
-    scan.smartBinReason = clean(scan.smartBinReason || 'User confirmed separate bin') || 'User confirmed separate bin';
+    scan.smartBinReason = clean(scan.smartBinReason || 'User confirmed different bin') || 'User confirmed different bin';
     scan.smartBinSuggestedBin = clean(suggestion.suggestedBin || currentBin || '');
     scan.smartBinSelectedBin = currentBin;
     scan.smartBinCurrentBin = currentBin;
@@ -1155,7 +1163,7 @@ function applySmartBinDecision(scan = {}, suggestion = {}, actionInput = '') {
     scan.smartBinAuditTrail = {
       ...trailBase,
       decision: 'SAVE_NEW_BIN',
-      reason: clean(scan.smartBinReason || 'User confirmed separate bin') || 'User confirmed separate bin',
+      reason: clean(scan.smartBinReason || 'User confirmed different bin') || 'User confirmed different bin',
       selectedBin: currentBin,
       locationType: 'SECONDARY',
       isSecondaryLocation: true

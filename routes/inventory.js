@@ -1645,12 +1645,15 @@ async function smartBinSuggestionForScan(input = {}) {
       auditId,
       partNumber,
       currentBin,
+      existingBin: currentBin,
+      newBin: currentBin,
       suggestedBin: currentBin,
       existingBins: [],
       totalQty: 0,
       existingBinCount: 0,
       sameBinExists: false,
       shouldPrompt: false,
+      promptTitle: 'PART ALREADY AVAILABLE IN OTHER BIN',
       message: ''
     };
   }
@@ -1683,6 +1686,8 @@ async function smartBinSuggestionForScan(input = {}) {
     partNumber,
     partDescription,
     currentBin,
+    existingBin: clean(suggestion.existingBin || (Array.isArray(suggestion.existingBins) && suggestion.existingBins[0] && suggestion.existingBins[0].binLocation) || ''),
+    newBin: clean(suggestion.newBin || currentBin || ''),
     suggestedBin: suggestion.suggestedBin || currentBin,
     smartBinEnabled: Boolean(smartBinSettings ? smartBinSettings.enabled : true),
     allowMultipleLocations: smartBinSettings && smartBinSettings.allowMultipleLocations !== undefined
@@ -1692,7 +1697,9 @@ async function smartBinSuggestionForScan(input = {}) {
       ? Boolean(smartBinSettings.requireReason)
       : true,
     maxAllowedLocationsPerPart: Number(smartBinSettings?.maxAllowedLocationsPerPart || 3),
-    shouldPrompt: Boolean(suggestion.shouldPrompt && (smartBinSettings ? smartBinSettings.enabled !== false : true))
+    shouldPrompt: Boolean(suggestion.shouldPrompt),
+    promptTitle: suggestion.promptTitle || 'PART ALREADY AVAILABLE IN OTHER BIN',
+    message: suggestion.message || ''
   };
 }
 

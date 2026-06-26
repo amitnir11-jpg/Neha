@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260620-dashboard-stream-camera-fix';
+  const UI_BOOT_VERSION = '20260626-smart-bin-warning-fix';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -236,6 +236,9 @@
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+  const clean = (value) => String(value ?? '').trim();
+  const cleanId = (value) => String(value || '').trim();
+  let deleteModalResolver = null;
   const SYNC_QUEUE_KEY = 'dakshInventorySyncQueue';
   const SYNC_LOG_KEY = 'dakshInventorySyncLog';
   const CONNECTION_LOG_KEY = 'dakshInventoryConnectionLog';
@@ -1691,7 +1694,7 @@
     if (dealerCode && auditId && upiId) return [dealerCode, auditId, upiId, binLocation || 'NO-BIN'].join('|');
     const raw = normalizePartText(scan.rawScan || scan.rawScanString || scan.rawBarcode || scan.rawScanValue || scan.barcodeValue || scan.scanText || '');
     if (raw) return [dealerCode || 'NO-DEALER', auditId || 'NO-AUDIT', binLocation || 'NO-BIN', 'RAW', raw].join('|');
-    const id = clean(scan.uniqueScanId || scan.scanId || scan.syncKey || scan.localId || '');
+    const id = cleanId(scan.id || scan._id || scan.uniqueScanId || scan.scanId || scan.syncKey || scan.localId || '');
     return id ? [dealerCode || 'NO-DEALER', auditId || 'NO-AUDIT', binLocation || 'NO-BIN', 'ID', id].join('|') : '';
   }
 
@@ -1746,18 +1749,25 @@
   function scanHistoryRecordKey(scan = {}) {
     const upiKey = barcodeScanKey(scan);
     if (upiKey) return upiKey;
-    const explicit = clean(scan.scanId || scan.uniqueScanId || scan.syncKey || scan.localId || '');
+    const explicit = cleanId(scan.id || scan._id || scan.scanId || scan.uniqueScanId || scan.syncKey || scan.localId || '');
     if (explicit) return explicit;
     return normalizePartText(scan.rawScan || scan.rawScanString || scan.rawBarcode || scan.rawScanValue || '');
   }
 
+  function scanHistoryRecordId(scan = {}) {
+    return cleanId(scan.id || scan.rowId || scan.scanId || scan.uniqueScanId || scan.localId || scan._id || '');
+  }
+
   function scanHistoryRecordIdentity(scan = {}) {
+    const id = scanHistoryRecordId(scan);
     return {
       key: scanHistoryRecordKey(scan),
       barcodeKey: barcodeScanKey(scan),
-      scanId: clean(scan.scanId || scan.uniqueScanId || scan._id || ''),
-      syncKey: clean(scan.syncKey || ''),
-      localId: clean(scan.localId || '')
+      id,
+      scanId: cleanId(scan.scanId || scan.uniqueScanId || scan._id || ''),
+      uniqueScanId: cleanId(scan.uniqueScanId || scan.scanId || scan._id || ''),
+      syncKey: cleanId(scan.syncKey || ''),
+      localId: cleanId(scan.localId || '')
     };
   }
 
@@ -1767,6 +1777,8 @@
     if (left.key && right.key && left.key === right.key) return true;
     if (left.barcodeKey && right.barcodeKey && left.barcodeKey === right.barcodeKey) return true;
     if (left.scanId && right.scanId && left.scanId === right.scanId) return true;
+    if (left.uniqueScanId && right.uniqueScanId && left.uniqueScanId === right.uniqueScanId) return true;
+    if (left.id && right.id && left.id === right.id) return true;
     if (left.syncKey && right.syncKey && left.syncKey === right.syncKey) return true;
     if (left.localId && right.localId && left.localId === right.localId) return true;
     return false;
@@ -3013,7 +3025,7 @@
         <td>${escapeHtml(compactDateTime(scan.timestamp))}</td>
         <td>${partLink(scan.partNumber || scan.part, 'table-link', {
           removeMode: isAdminUser() ? 'scan' : '',
-          scanId: scan.scanId || scan.uniqueScanId || scan.localId || scan._id || '',
+          scanId: scanHistoryRecordId(scan),
           dealerCode: scan.dealerCode || '',
           auditId: scan.auditId || '',
           copyLabel: 'Part number'
@@ -3037,7 +3049,7 @@
         <td>${escapeHtml(compactDateTime(scan.timestamp || scan.scanTime || scan.createdAt || ''))}</td>
         <td>${partLink(scan.partNumber || scan.part || scan.normalizedPartNumber || '', 'table-link', {
           removeMode: isAdminUser() ? 'scan' : '',
-          scanId: scan.scanId || scan.uniqueScanId || scan.localId || scan._id || '',
+          scanId: scanHistoryRecordId(scan),
           dealerCode: scan.dealerCode || '',
           auditId: scan.auditId || '',
           copyLabel: 'Part number'
@@ -3425,9 +3437,14 @@
   }
 
   function scanHistoryRecord(scanId = '') {
+    const targetId = cleanId(scanId);
+    if (!targetId) return null;
     return (state.scanHistoryRecords || []).find((scan) => {
-      const id = scan.scanId || scan.uniqueScanId || scan.localId || scan._id || '';
-      return String(id) === String(scanId);
+      const id = scanHistoryRecordId(scan);
+      return id === targetId
+        || cleanId(scan.scanId || scan.uniqueScanId || scan._id || '') === targetId
+        || cleanId(scan.syncKey || '') === targetId
+        || cleanId(scan.localId || '') === targetId;
     }) || null;
   }
 
@@ -3439,6 +3456,51 @@
       message.className = 'form-message';
       message.textContent = '';
     }
+  }
+
+  function scanHistoryDeleteReference(scanId = '') {
+    const id = cleanId(scanId);
+    return {
+      id,
+      scanId: id,
+      uniqueScanId: id,
+      localId: id,
+      _id: id
+    };
+  }
+
+  function openDeleteModal(message = 'Are you sure you want to delete this scan?') {
+    const modal = $('#deleteModal');
+    if (!modal) return Promise.resolve(window.confirm(message));
+    const title = $('#deleteModalTitle');
+    const text = $('#deleteModalText');
+    if (deleteModalResolver) {
+      deleteModalResolver(false);
+      deleteModalResolver = null;
+    }
+    if (title) title.textContent = 'Confirm Delete';
+    if (text) text.textContent = message;
+    modal.classList.remove('hidden');
+    return new Promise((resolve) => {
+      deleteModalResolver = resolve;
+      $('#cancelDeleteButton')?.focus();
+    });
+  }
+
+  function closeDeleteModal(confirmed = false) {
+    const modal = $('#deleteModal');
+    if (modal) modal.classList.add('hidden');
+    const resolve = deleteModalResolver;
+    deleteModalResolver = null;
+    if (resolve) resolve(confirmed);
+  }
+
+  function confirmDeleteAction(message = 'Are you sure you want to delete this scan?') {
+    return openDeleteModal(message);
+  }
+
+  function deleteFailureError() {
+    return new Error('Unable to delete scan. Please try again.');
   }
 
   function openScanEditModal(scanId = '', focusField = 'partNumber') {
@@ -3468,7 +3530,7 @@
   }
 
   function scanHistoryRow(scan = {}) {
-    const id = scan.scanId || scan.uniqueScanId || scan.localId || scan._id || '';
+    const id = scanHistoryRecordId(scan);
     const partNumber = scan.partNumber || scan.part || scan.normalizedPartNumber || '';
     const partDescription = scan.partDescription || scan.partName || scan.description || partNumber || '-';
     const rowMrp = scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.valuationMRP ?? scan.mrp ?? 0;
@@ -3923,7 +3985,7 @@
       : { enabled: true, requireReason: true };
     const smartBinEligibleScan = ['INWARD', 'DAMAGE', 'AUDIT'].includes(normalized.scanType);
     let smartBinPrompted = false;
-    if (smartBinSettings.enabled && smartBinEligibleScan && normalized.dealerCode && normalized.auditId && normalized.partNumber && normalized.binLocation) {
+    if (smartBinEligibleScan && normalized.dealerCode && normalized.auditId && normalized.partNumber && normalized.binLocation) {
       try {
         // API call for Smart Bin Check
         const suggestion = await api('/api/scans/smart-bin-check', {
@@ -3939,21 +4001,23 @@
           },
           timeoutMs: 1800
         });
-        if (suggestion && suggestion.shouldPrompt) {
-          // Show the popup if needed
-          smartBinPrompted = true;
-          const decision = await openSmartBinSuggestionModal({
-            ...suggestion,
-            currentBin: suggestion.currentBin || normalized.binLocation,
-            requireReason: Boolean(smartBinSettings.requireReason)
-          });
-          if (!decision) return;
-          normalized.smartBinEnabled = Boolean(smartBinSettings.enabled);
+          if (suggestion && suggestion.shouldPrompt) {
+            // Show the popup if needed
+            smartBinPrompted = true;
+            const decision = await openSmartBinSuggestionModal({
+              ...suggestion,
+              currentBin: suggestion.currentBin || normalized.binLocation,
+              newBin: suggestion.newBin || normalized.binLocation,
+              existingBin: suggestion.existingBin || (Array.isArray(suggestion.existingBins) && suggestion.existingBins[0] && suggestion.existingBins[0].binLocation) || '',
+              requireReason: Boolean(smartBinSettings.requireReason)
+            });
+            if (!decision) return;
+            normalized.smartBinEnabled = true;
 
-          // Apply user's decision to the scan payload
-          normalized.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || suggestion.suggestedBin || normalized.binLocation || '');
-          normalized.smartBinCurrentBin = cleanDealerCode(decision.currentBin || suggestion.currentBin || normalized.binLocation || '');
-          normalized.smartBinSelectedBin = cleanDealerCode(decision.selectedBin || normalized.binLocation || '');
+            // Apply user's decision to the scan payload
+            normalized.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || suggestion.suggestedBin || normalized.binLocation || '');
+            normalized.smartBinCurrentBin = cleanDealerCode(decision.currentBin || suggestion.currentBin || normalized.binLocation || '');
+            normalized.smartBinSelectedBin = cleanDealerCode(decision.selectedBin || normalized.binLocation || '');
           normalized.smartBinExistingBins = Array.isArray(decision.existingBins) ? decision.existingBins : (Array.isArray(suggestion.existingBins) ? suggestion.existingBins : []);
           normalized.smartBinAllowMultipleLocations = suggestion.allowMultipleLocations === undefined
             ? true
@@ -3964,19 +4028,19 @@
             : Boolean(suggestion.reasonRequired);
           normalized.smartBinDecision = String(decision.action || '').trim().toUpperCase();
           normalized.smartBinReason = normalized.smartBinDecision === 'SAVE_NEW_BIN'
-            ? 'User confirmed separate bin'
+            ? 'User confirmed different bin'
             : String(decision.reason || 'User selected existing bin').trim();
           normalized.smartBinCheckedAt = String(decision.checkedAt || new Date().toISOString());
           normalized.smartBinDecisionAt = String(decision.decisionAt || new Date().toISOString());
           normalized.smartBinDecisionBy = String(decision.decisionBy || state.user?.name || state.user?.username || state.user?.email || '').trim();
           normalized.smartBinLocationType = normalized.smartBinDecision === 'SAVE_NEW_BIN' ? 'SECONDARY' : 'PRIMARY';
           normalized.smartBinIsSecondaryLocation = normalized.smartBinDecision === 'SAVE_NEW_BIN';
-          normalized.smartBinAuditTrail = {
-            enabled: Boolean(smartBinSettings.enabled),
-            decision: normalized.smartBinDecision,
-            reason: normalized.smartBinReason,
-            suggestedBin: normalized.smartBinSuggestedBin,
-            selectedBin: normalized.smartBinSelectedBin,
+            normalized.smartBinAuditTrail = {
+              enabled: true,
+              decision: normalized.smartBinDecision,
+              reason: normalized.smartBinReason,
+              suggestedBin: normalized.smartBinSuggestedBin,
+              selectedBin: normalized.smartBinSelectedBin,
             currentBin: normalized.smartBinCurrentBin,
             existingBins: normalized.smartBinExistingBins,
             allowMultipleLocations: normalized.smartBinAllowMultipleLocations,
@@ -4092,7 +4156,7 @@
         normalized.smartBinReasonRequired = false;
         normalized.smartBinDecision = String(decision.action || '').trim().toUpperCase();
         normalized.smartBinReason = normalized.smartBinDecision === 'SAVE_NEW_BIN'
-          ? 'User confirmed separate bin'
+          ? 'User confirmed different bin'
           : String(decision.reason || 'User selected existing bin').trim();
         normalized.smartBinCheckedAt = String(decision.checkedAt || new Date().toISOString());
         normalized.smartBinDecisionAt = String(decision.decisionAt || new Date().toISOString());
@@ -4336,6 +4400,90 @@
           clientScanId: record.clientScanId || record.localId || record.scanId,
           clientSyncKey: record.clientSyncKey || record.syncKey
         }));
+        const smartBinEligibleScan = ['INWARD', 'DAMAGE', 'AUDIT'].includes(outbound.scanType);
+        if (smartBinEligibleScan && outbound.dealerCode && outbound.auditId && outbound.partNumber && outbound.binLocation) {
+          try {
+            const suggestion = await api('/api/scans/smart-bin-check', {
+              method: 'POST',
+              body: {
+                dealerCode: outbound.dealerCode,
+                auditId: outbound.auditId,
+                partNumber: outbound.partNumber,
+                partDescription: outbound.partDescription || outbound.partName || '',
+                binLocation: outbound.binLocation,
+                scanType: outbound.scanType,
+                qty: outbound.qty
+              },
+              timeoutMs: 1800
+            });
+            if (suggestion && suggestion.shouldPrompt) {
+              const decision = await openSmartBinSuggestionModal({
+                ...suggestion,
+                currentBin: suggestion.currentBin || outbound.binLocation || outbound.bin || '',
+                newBin: suggestion.newBin || outbound.binLocation || outbound.bin || '',
+                existingBin: suggestion.existingBin || (Array.isArray(suggestion.existingBins) && suggestion.existingBins[0] && suggestion.existingBins[0].binLocation) || '',
+                requireReason: Boolean(state.smartBinSettings?.requireReason ?? true)
+              });
+              if (!decision) {
+                outcomes.set(recordKey, { status: 'rejected', message: 'Smart bin confirmation cancelled' });
+                rejectedCount += 1;
+                logs.push({
+                  partNumber: record.partNumber || record.part,
+                  upiId: record.upiId,
+                  dealer: record.dealerCode,
+                  status: 'rejected',
+                  errorMessage: 'Smart bin confirmation cancelled'
+                });
+                continue;
+              }
+              const decisionAction = String(decision.action || '').trim().toUpperCase();
+              const selectedBin = cleanDealerCode(decision.selectedBin || outbound.binLocation || outbound.bin || '');
+              outbound.smartBinEnabled = true;
+              outbound.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || suggestion.suggestedBin || outbound.binLocation || '');
+              outbound.smartBinCurrentBin = cleanDealerCode(decision.currentBin || suggestion.currentBin || outbound.binLocation || '');
+              outbound.smartBinSelectedBin = selectedBin || cleanDealerCode(outbound.binLocation || '');
+              outbound.smartBinExistingBins = Array.isArray(decision.existingBins) ? decision.existingBins : (Array.isArray(suggestion.existingBins) ? suggestion.existingBins : []);
+              outbound.smartBinAllowMultipleLocations = suggestion.allowMultipleLocations === undefined
+                ? true
+                : Boolean(suggestion.allowMultipleLocations);
+              outbound.smartBinMaxAllowedLocationsPerPart = Math.max(1, Number.parseInt(String(suggestion.maxAllowedLocationsPerPart || 3), 10) || 3);
+              outbound.smartBinReasonRequired = Boolean(suggestion.reasonRequired === undefined ? true : suggestion.reasonRequired);
+              outbound.smartBinDecision = decisionAction;
+              outbound.smartBinReason = decisionAction === 'SAVE_NEW_BIN'
+                ? 'User confirmed different bin'
+                : 'User selected existing bin';
+              outbound.smartBinCheckedAt = String(decision.checkedAt || new Date().toISOString());
+              outbound.smartBinDecisionAt = String(decision.decisionAt || new Date().toISOString());
+              outbound.smartBinDecisionBy = String(decision.decisionBy || state.user?.name || state.user?.username || state.user?.email || '').trim();
+              outbound.smartBinLocationType = decisionAction === 'SAVE_NEW_BIN' ? 'SECONDARY' : 'PRIMARY';
+              outbound.smartBinIsSecondaryLocation = decisionAction === 'SAVE_NEW_BIN';
+              outbound.smartBinAuditTrail = {
+                enabled: true,
+                decision: outbound.smartBinDecision,
+                reason: outbound.smartBinReason,
+                suggestedBin: outbound.smartBinSuggestedBin,
+                selectedBin: outbound.smartBinSelectedBin,
+                currentBin: outbound.smartBinCurrentBin,
+                existingBins: outbound.smartBinExistingBins,
+                allowMultipleLocations: outbound.smartBinAllowMultipleLocations,
+                maxAllowedLocationsPerPart: outbound.smartBinMaxAllowedLocationsPerPart,
+                reasonRequired: outbound.smartBinReasonRequired,
+                checkedAt: outbound.smartBinCheckedAt,
+                decisionAt: outbound.smartBinDecisionAt,
+                decisionBy: outbound.smartBinDecisionBy,
+                locationType: outbound.smartBinLocationType,
+                isSecondaryLocation: outbound.smartBinIsSecondaryLocation
+              };
+              if (decisionAction === 'USE_EXISTING_BIN' && selectedBin) {
+                outbound.binLocation = selectedBin;
+                outbound.bin = selectedBin;
+              }
+            }
+          } catch (error) {
+            console.warn('[SMART BIN] preflight skipped', error.message);
+            addConnectionLog(`Smart bin preflight skipped: ${error.message}`, 'warning');
+          }
+        }
         try {
           const result = await api('/api/scans/process', { method: 'POST', body: outbound, timeoutMs: 20000 });
           const saved = result.scan || outbound;
@@ -4385,7 +4533,7 @@
             outbound.smartBinReasonRequired = false;
             outbound.smartBinDecision = decisionAction;
             outbound.smartBinReason = decisionAction === 'SAVE_NEW_BIN'
-              ? 'User confirmed separate bin'
+              ? 'User confirmed different bin'
               : 'User selected existing bin';
             outbound.smartBinCheckedAt = String(decision.checkedAt || new Date().toISOString());
             outbound.smartBinDecisionAt = String(decision.decisionAt || new Date().toISOString());
@@ -4759,10 +4907,11 @@
   }
 
   function refreshSmartBinActionLabels(payload = {}) {
-    const { useExisting, saveNew } = smartBinPromptNodes();
-    const suggestedBin = payload.suggestedBin || 'existing bin';
-    if (useExisting) useExisting.textContent = `OK - USE BIN ${suggestedBin}`;
-    if (saveNew) saveNew.textContent = 'CANCEL';
+    const { useExisting, saveNew, select } = smartBinPromptNodes();
+    const existingBin = cleanDealerCode((select && select.value) || payload.selectedBin || payload.existingBin || payload.suggestedBin || payload.primaryBin || '');
+    const newBin = cleanDealerCode(payload.newBin || payload.currentBin || payload.binLocation || '');
+    if (useExisting) useExisting.textContent = existingBin ? `USE EXISTING BIN ${existingBin}` : 'USE EXISTING BIN';
+    if (saveNew) saveNew.textContent = newBin ? `OK - SAVE IN ${newBin}` : 'OK - SAVE IN NEW BIN';
   }
 
   function renderSmartBinSuggestionModal(payload = {}) {
@@ -4775,36 +4924,57 @@
     const partDescription = cleanDealerCode(payload.partDescription || payload.partName || '');
     const primaryBin = cleanDealerCode(payload.primaryBin || suggestedBin || currentBin || (existingBins[0] && existingBins[0].binLocation) || '');
     const showSelect = existingBins.length > 1;
+    const existingBin = cleanDealerCode(payload.existingBin || suggestedBin || primaryBin || '');
+    const newBin = cleanDealerCode(payload.newBin || currentBin || '');
+    const promptTitle = cleanDealerCode(payload.promptTitle || 'PART ALREADY AVAILABLE IN OTHER BIN');
     smartBinPromptPayload = {
       ...payload,
       suggestedBin,
       currentBin,
       primaryBin,
       existingBins,
-      partDescription
+      partDescription,
+      existingBin,
+      newBin,
+      selectedBin: cleanDealerCode(payload.selectedBin || suggestedBin || existingBin || ''),
+      promptTitle
     };
     if (title) {
-      title.textContent = 'PART LOCATION WARNING';
+      title.textContent = promptTitle;
     }
     if (message) {
-      message.innerHTML = [
-        `Part Number: ${partNumber || '-'}`,
+      message.textContent = [
+        promptTitle,
+        '',
+        `Part: ${partNumber || '-'}`,
         `Description: ${partDescription || '-'}`,
-        '<br>',
-        'This part is already available in:',
-        existingBins.map((bin) => cleanDealerCode(bin.binLocation || '')).filter(Boolean).join(' / ') || primaryBin || '-',
-        '<br>',
-        `Do you want to add this part to bin <strong>${escapeHtml(suggestedBin)}</strong> instead?`
-      ].join('<br>');
+        `Existing Bin: ${existingBin || '-'}`,
+        `New Bin: ${newBin || '-'}`,
+        '',
+        `Do you still want to keep this part in ${newBin || 'this bin'}?`
+      ].join('\n');
     }
     if (bins) bins.innerHTML = smartBinExistingBinMarkup(existingBins);
     if (selectWrap) selectWrap.classList.toggle('hidden', !showSelect);
     if (select) {
       select.innerHTML = existingBins.map((bin) => `<option value="${escapeHtml(bin.binLocation)}">${escapeHtml(bin.binLocation)} · Qty ${escapeHtml(wholeNumber(bin.qty || 0))}</option>`).join('');
-      select.value = suggestedBin || (existingBins[0] ? existingBins[0].binLocation : '');
+      select.value = cleanDealerCode(payload.selectedBin || suggestedBin || (existingBins[0] ? existingBins[0].binLocation : ''));
+      select.onchange = () => {
+        const selected = cleanDealerCode(select.value || '');
+        smartBinPromptPayload = {
+          ...(smartBinPromptPayload || {}),
+          selectedBin: selected
+        };
+        if (bins) {
+          $$('#smartBinExistingBins [data-bin]').forEach((row) => {
+            row.classList.toggle('active', cleanDealerCode(row.dataset.bin || '') === selected);
+          });
+        }
+        refreshSmartBinActionLabels(smartBinPromptPayload || {});
+      };
     }
-    if (useExisting) useExisting.hidden = !suggestedBin;
-    refreshSmartBinActionLabels({ ...smartBinPromptPayload, suggestedBin });
+    if (useExisting) useExisting.hidden = !existingBin;
+    refreshSmartBinActionLabels(smartBinPromptPayload || {});
     modal.classList.remove('hidden');
   }
 
@@ -8721,7 +8891,7 @@
   const DELETE_CONFIRM_TEXT = 'Are you sure you want to delete this data? This action cannot be undone.';
 
   function selectedScanIds() {
-    return $$('.scan-history-checkbox:checked').map((box) => box.value).filter(Boolean);
+    return $$('.scan-history-checkbox:checked').map((box) => cleanId(box.value)).filter(Boolean);
   }
 
   function cleanupCriteriaFromForm() {
@@ -8759,8 +8929,9 @@
   }
 
   async function refreshAfterDelete() {
+    queueRealtimeReportRefresh('delete');
     queueDashboardRefresh(250);
-    await Promise.all([loadScanHistory(), loadDealers(), loadCategories(), loadSyncStatus()].map((job) => job.catch ? job : Promise.resolve(job)));
+    await Promise.allSettled([loadScanHistory(), loadDealers(), loadCategories(), loadSyncStatus()]);
   }
 
   async function saveEditedScan(event) {
@@ -8802,13 +8973,18 @@
   }
 
   async function deleteSingleScan(scanId) {
-    if (!scanId) {
+    const id = cleanId(scanId);
+    if (!id) {
       toast('Select a scan first', 'error');
       return;
     }
-    if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
-    const scan = scanHistoryRecord(scanId) || { scanId, uniqueScanId: scanId, localId: scanId };
-    await api(`/api/admin/scans/${encodeURIComponent(scanId)}`, { method: 'DELETE', body: {} });
+    if (!(await confirmDeleteAction('Are you sure you want to delete this scan?'))) return;
+    const scan = scanHistoryRecord(id) || scanHistoryDeleteReference(id);
+    try {
+      await api(`/api/admin/scans/${encodeURIComponent(id)}`, { method: 'DELETE', body: {} });
+    } catch (error) {
+      throw deleteFailureError();
+    }
     removeScanHistoryRecords([scan]);
     toast('Scan deleted');
     await refreshAfterDelete();
@@ -8825,18 +9001,23 @@
       toast('Select a dealer first', 'error');
       return;
     }
-    if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
+    if (!(await confirmDeleteAction(`Are you sure you want to delete all scans for part ${part}?`))) return;
     const payload = {
       dealerCode,
       parts: part,
       deleteType: 'single-part'
     };
     if (options.auditId) payload.auditId = String(options.auditId).trim();
-    const data = await api('/api/admin/scans/delete-by-parts', { method: 'POST', body: payload });
+    let data;
+    try {
+      data = await api('/api/admin/scans/delete-by-parts', { method: 'POST', body: payload });
+    } catch (error) {
+      throw deleteFailureError();
+    }
     toast(`Part deleted: ${data.deletedCount || 0} scan(s) removed`);
     queueDashboardRefresh(250);
     if (state.reportHasRun && activeReportType()) {
-      await loadReport({ forceRefresh: true, showLoading: false });
+      loadReport({ forceRefresh: true, showLoading: false }).catch(() => undefined);
     }
     await refreshAfterDelete();
   }
@@ -8847,19 +9028,27 @@
       toast('Select scans first', 'error');
       return;
     }
-    if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
-    const scans = ids.map((id) => scanHistoryRecord(id) || { scanId: id, uniqueScanId: id, localId: id });
-    await api('/api/admin/scans/delete-selected', { method: 'POST', body: { ids } });
+    if (!(await confirmDeleteAction('Are you sure you want to delete the selected scans?'))) return;
+    const scans = ids.map((id) => scanHistoryRecord(id) || scanHistoryDeleteReference(id));
+    try {
+      await api('/api/admin/scans/delete-selected', { method: 'POST', body: { ids } });
+    } catch (error) {
+      throw deleteFailureError();
+    }
     removeScanHistoryRecords(scans);
     toast('Selected scans deleted');
     await refreshAfterDelete();
   }
 
   async function cleanUnknownParts(criteria = {}) {
-    if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
-    await api('/api/admin/cleanup-unknown-parts', { method: 'POST', body: criteria });
+    if (!(await confirmDeleteAction('Are you sure you want to delete unknown part scans?'))) return;
+    try {
+      await api('/api/admin/cleanup-unknown-parts', { method: 'POST', body: criteria });
+    } catch (error) {
+      throw deleteFailureError();
+    }
     removeLocalMatching(criteria);
-    toast('Unknown part scans cleaned');
+    toast('Unknown part scans deleted');
     await refreshAfterDelete();
   }
 
@@ -8869,8 +9058,12 @@
       toast('Dealer code is required', 'error');
       return;
     }
-    if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
-    await api(`/api/admin/dealer/${encodeURIComponent(dealer)}/scans`, { method: 'DELETE', body: {} });
+    if (!(await confirmDeleteAction(`Are you sure you want to delete all scans for dealer ${dealer}?`))) return;
+    try {
+      await api(`/api/admin/dealer/${encodeURIComponent(dealer)}/scans`, { method: 'DELETE', body: {} });
+    } catch (error) {
+      throw deleteFailureError();
+    }
     removeLocalMatching({ dealerCode: dealer });
     toast('Dealer scan data deleted');
     await refreshAfterDelete();
@@ -10217,6 +10410,10 @@
     }, true);
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
+        if ($('#deleteModal') && !$('#deleteModal')?.classList.contains('hidden')) {
+          closeDeleteModal(false);
+          return;
+        }
         setUserMenuOpen(false);
         closeScanEditModal();
       }
@@ -10592,6 +10789,11 @@
     $('#scanHistoryDeleteSelectedBtn')?.addEventListener('click', () => deleteSelectedScans().catch((error) => toast(error.message, 'error')));
     $('#scanHistoryDeleteUnknownBtn')?.addEventListener('click', () => cleanUnknownParts({}).catch((error) => toast(error.message, 'error')));
     $('#scanHistoryDeleteDealerBtn')?.addEventListener('click', () => deleteByDealerCode().catch((error) => toast(error.message, 'error')));
+    $('#cancelDeleteButton')?.addEventListener('click', () => closeDeleteModal(false));
+    $('#confirmDeleteButton')?.addEventListener('click', () => closeDeleteModal(true));
+    $('#deleteModal')?.addEventListener('click', (event) => {
+      if (event.target.id === 'deleteModal') closeDeleteModal(false);
+    });
     $('#validatorRefreshBtn')?.addEventListener('click', () => loadMasterScanValidator().catch((error) => toast(error.message, 'error')));
     $('#recheckInvalidPartsBtn')?.addEventListener('click', () => runValidatorAction('/api/master/scan-validator/normalize-scans', 'Invalid parts rechecked').catch((error) => toast(error.message, 'error')));
     $('#exportMissingMasterBtn')?.addEventListener('click', () => {

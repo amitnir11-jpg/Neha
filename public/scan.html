@@ -9,7 +9,7 @@
   <title>Daksh Scan</title>
   <link rel="icon" href="/brand/favicon.ico" type="image/x-icon">
   <link rel="apple-touch-icon" sizes="512x512" href="/brand/app-icon.png">
-  <link rel="stylesheet" href="/scan.css?v=20260623-smart-bin-alerts-v2">
+  <link rel="stylesheet" href="/scan.css?v=20260626-smart-bin-warning-fix">
 </head>
 <body class="scan-page">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -252,11 +252,11 @@
       <div class="dialog-head">
         <div>
           <span class="panel-tag">Part Location Warning</span>
-          <h3 id="smartBinSuggestionTitle">PART LOCATION WARNING</h3>
+          <h3 id="smartBinSuggestionTitle">PART ALREADY AVAILABLE IN OTHER BIN</h3>
         </div>
       </div>
 
-      <p id="smartBinSuggestionMessage" class="field-message smart-bin-message">Part already available in another bin.</p>
+      <p id="smartBinSuggestionMessage" class="field-message smart-bin-message">PART ALREADY AVAILABLE IN OTHER BIN</p>
       <div id="smartBinExistingBins" class="smart-bin-existing-list"></div>
 
       <label id="smartBinExistingBinSelectWrap" class="field smart-bin-existing-select-wrap">
@@ -292,6 +292,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="/config.js"></script>
-  <script src="/scan.js?v=20260623-smart-bin-alerts-v2"></script>
+  <script src="/scan.js?v=20260626-smart-bin-warning-fix"></script>
 </body>
 </html>
