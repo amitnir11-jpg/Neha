@@ -76,6 +76,10 @@
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+  function clean(value) {
+    return String(value ?? '').trim();
+  }
+  if (typeof window.clean !== 'function') window.clean = clean;
   const REPORT_FILTER_DEFAULTS = ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'syncStatus'];
   const REPORT_FILTER_OPTIONS = [
     ['dealer', 'Dealer'],

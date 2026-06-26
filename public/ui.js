@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260626-smart-bin-warning-fix';
+  const UI_BOOT_VERSION = '20260626-delete-clean-fix';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -236,7 +236,10 @@
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
-  const clean = (value) => String(value ?? '').trim();
+  function clean(value) {
+    return String(value ?? '').trim();
+  }
+  if (typeof window.clean !== 'function') window.clean = clean;
   const cleanId = (value) => String(value || '').trim();
   let deleteModalResolver = null;
   const SYNC_QUEUE_KEY = 'dakshInventorySyncQueue';
