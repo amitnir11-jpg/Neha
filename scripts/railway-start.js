@@ -15,6 +15,7 @@ const IS_RAILWAY = Boolean(process.env.RAILWAY_STATIC_URL || process.env.RAILWAY
 const IS_RENDER = Boolean(process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_EXTERNAL_HOSTNAME);
 const ALLOW_LOCAL_FALLBACK = !IS_PRODUCTION && !IS_RAILWAY && !IS_RENDER;
 const SKIP_MIGRATIONS = String(process.env.DAKSH_SKIP_MIGRATIONS || '').trim().toLowerCase() === 'true';
+const PRESTART_MIGRATIONS = String(process.env.DAKSH_PRESTART_MIGRATIONS || '').trim().toLowerCase() === 'true';
 
 function runApiMigrations() {
   if (role !== 'api') return;
@@ -49,7 +50,11 @@ function runApiMigrations() {
   console.log('Prisma migration completed');
 }
 
-runApiMigrations();
+if (PRESTART_MIGRATIONS) {
+  runApiMigrations();
+} else if (role === 'api') {
+  console.log('Skipping pre-start Prisma migrations; server.js will initialize PostgreSQL in background.');
+}
 
 const child = spawn(process.execPath, [entryPath], {
   stdio: 'inherit',

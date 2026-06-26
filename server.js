@@ -4,7 +4,7 @@ const dgram = require('dgram');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const express = require('express');
@@ -118,6 +118,7 @@ const IS_RAILWAY = DEPLOY_TARGET === 'railway' ||
 const DEPLOYMENT_NAME = IS_RENDER ? 'Render' : (IS_RAILWAY ? 'Railway' : (IS_PRODUCTION ? 'hosting provider' : 'local PC'));
 const ALLOW_LOCAL_DB_FALLBACK = !IS_RENDER && !IS_RAILWAY && !IS_PRODUCTION;
 const SKIP_MIGRATIONS = String(process.env.DAKSH_SKIP_MIGRATIONS || '').trim().toLowerCase() === 'true';
+const DATABASE_INIT_RETRY_MS = Math.max(5000, Number(process.env.DAKSH_DATABASE_INIT_RETRY_MS || 15000));
 const DATABASE_URL_SOURCE = databaseUrlSource();
 const MOBILE_DISCOVERY_PORT = Number(process.env.MOBILE_DISCOVERY_PORT || PORT);
 const MOBILE_DISCOVERY_REQUEST = 'DAKSH_DISCOVER_V1';
@@ -182,11 +183,26 @@ function currentDatabasePayload() {
     db: connected ? 'connected' : 'disconnected',
     acceptedDatabaseEnvVars: acceptedDatabaseEnvVars(),
     configuredDatabaseEnvVar: databaseUrlSource() || DATABASE_URL_SOURCE,
+    databaseStartupStatus: databaseStartupState.status,
+    databaseStartupAttempts: databaseStartupState.attempts,
+    databaseStartupLastAttemptAt: databaseStartupState.lastAttemptAt,
+    databaseStartupLastSuccessAt: databaseStartupState.lastSuccessAt,
+    databaseStartupLastError: databaseStartupState.lastError,
     ...databaseHealthDetails()
   };
 }
 
 let mobileDiscoverySocket = null;
+let databaseInitTimer = null;
+let databaseStartupPromise = null;
+const databaseStartupState = {
+  status: 'pending',
+  attempts: 0,
+  initializing: false,
+  lastAttemptAt: '',
+  lastSuccessAt: '',
+  lastError: ''
+};
 
 function mobileDiscoveryPayload(activePort, remoteAddress = '') {
   const info = serverInfo(activePort, remoteAddress);
@@ -797,7 +813,7 @@ async function runPostgresStartupTasks() {
   await createDefaultAdmin();
 }
 
-function runPrismaMigrations() {
+async function runPrismaMigrations() {
   if (String(process.env.DAKSH_MIGRATIONS_COMPLETED || '').toLowerCase() === 'true') return;
   if (SKIP_MIGRATIONS) {
     console.log('Skipping Prisma migrations because DAKSH_SKIP_MIGRATIONS=true');
@@ -810,14 +826,26 @@ function runPrismaMigrations() {
   }
   console.log(`Running Prisma migrations using ${resolvedDatabase.source}: ${maskDatabaseUrl(resolvedDatabase.url)}`);
   const prismaCli = require.resolve('prisma/build/index.js');
-  const result = spawnSync(process.execPath, [prismaCli, 'migrate', 'deploy'], {
-    stdio: 'inherit',
-    env: process.env
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [prismaCli, 'migrate', 'deploy'], {
+      stdio: 'inherit',
+      env: process.env
+    });
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(
+        signal
+          ? `Prisma migration failed with signal ${signal}`
+          : `Prisma migration failed with exit code ${code || 1}`
+      ));
+    });
   });
-  if (result.status !== 0) {
-    throw new Error(`Prisma migration failed with exit code ${result.status || 1}`);
-  }
   console.log('Prisma migration completed');
+  process.env.DAKSH_MIGRATIONS_COMPLETED = 'true';
 }
 
 async function listenOnConfiguredPort(port) {
@@ -836,23 +864,56 @@ async function listenOnConfiguredPort(port) {
   });
 }
 
-async function start() {
-  try {
-    runPrismaMigrations();
-    await connectDatabase();
-    console.log('PostgreSQL connected successfully');
-    await runPostgresStartupTasks();
-    console.log('Database seed completed');
-  } catch (error) {
-    if (!ALLOW_LOCAL_DB_FALLBACK) {
-      console.error('PostgreSQL startup failed. Server not started.');
+function scheduleDatabaseInitialization(delayMs = 0) {
+  if (isDatabaseReady() || databaseStartupState.initializing) return;
+  if (databaseInitTimer) clearTimeout(databaseInitTimer);
+  const waitMs = Math.max(0, Number(delayMs) || 0);
+  databaseInitTimer = setTimeout(() => {
+    databaseInitTimer = null;
+    initializeDatabaseInBackground().catch((error) => {
+      console.error('Database background initialization crashed.');
       console.error(error.stack || error.message);
-      process.exit(1);
-      return;
-    }
-    console.warn(`Starting in local fallback mode: ${error.message}`);
-  }
+    });
+  }, waitMs);
+  if (typeof databaseInitTimer.unref === 'function') databaseInitTimer.unref();
+}
 
+async function initializeDatabaseInBackground() {
+  if (isDatabaseReady()) return true;
+  if (databaseStartupPromise) return databaseStartupPromise;
+
+  databaseStartupState.initializing = true;
+  databaseStartupState.attempts += 1;
+  databaseStartupState.status = databaseStartupState.attempts === 1 ? 'starting' : 'retrying';
+  databaseStartupState.lastAttemptAt = new Date().toISOString();
+
+  databaseStartupPromise = (async () => {
+    try {
+      await runPrismaMigrations();
+      await connectDatabase();
+      console.log('PostgreSQL connected successfully');
+      await runPostgresStartupTasks();
+      console.log('Database seed completed');
+      databaseStartupState.status = 'connected';
+      databaseStartupState.lastSuccessAt = new Date().toISOString();
+      databaseStartupState.lastError = '';
+      return true;
+    } catch (error) {
+      databaseStartupState.status = 'retrying';
+      databaseStartupState.lastError = error.message || String(error);
+      console.error(`PostgreSQL startup attempt ${databaseStartupState.attempts} failed: ${databaseStartupState.lastError}`);
+      scheduleDatabaseInitialization(DATABASE_INIT_RETRY_MS);
+      return false;
+    } finally {
+      databaseStartupState.initializing = false;
+      databaseStartupPromise = null;
+    }
+  })();
+
+  return databaseStartupPromise;
+}
+
+async function start() {
   const activePort = await listenOnConfiguredPort(PORT);
   app.locals.activePort = activePort;
   fs.writeFileSync(path.join(__dirname, 'server_port.txt'), String(activePort));
@@ -881,9 +942,14 @@ async function start() {
   };
   startHealthBroadcast();
   if (!isDatabaseReady()) {
-    console.warn('Server started without PostgreSQL. API routes will return 503 until DATABASE_URL is configured.');
+    console.warn('Server started before PostgreSQL was ready. /health is live, while API routes may return 503 until database startup completes.');
   }
   console.log(`Server started successfully on port ${activePort}`);
+  scheduleDatabaseInitialization(0);
 }
 
-start();
+start().catch((error) => {
+  console.error('Server bootstrap failed.');
+  console.error(error.stack || error.message);
+  process.exit(1);
+});

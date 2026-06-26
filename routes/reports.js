@@ -1,5 +1,6 @@
 const ExcelJS = require('exceljs');
 const fs = require('fs');
+const path = require('path');
 const { jsPDF } = require('jspdf');
 const autoTableModule = require('jspdf-autotable');
 const nodemailer = require('nodemailer');
