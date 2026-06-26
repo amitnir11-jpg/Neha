@@ -16,7 +16,7 @@ class LocalDatabase {
     final path = p.join(await getDatabasesPath(), 'daksh_mobile_scanner.db');
     _database = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE scans (
@@ -34,7 +34,8 @@ class LocalDatabase {
             status TEXT NOT NULL,
             source TEXT NOT NULL DEFAULT 'mobile',
             serverSyncId TEXT DEFAULT '',
-            errorMessage TEXT DEFAULT ''
+            errorMessage TEXT DEFAULT '',
+            metadata TEXT NOT NULL DEFAULT '{}'
           )
         ''');
         await db.execute(
@@ -46,6 +47,10 @@ class LocalDatabase {
         if (oldVersion < 2) {
           await db.execute(
               "ALTER TABLE scans ADD COLUMN source TEXT NOT NULL DEFAULT 'mobile'");
+        }
+        if (oldVersion < 3) {
+          await db.execute(
+              "ALTER TABLE scans ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'");
         }
       },
     );

@@ -181,6 +181,31 @@ class ApiClient {
     return _request('/api/mobile/status$query', auth: false);
   }
 
+  Future<Map<String, dynamic>> smartBinCheck({
+    required String dealerCode,
+    required String auditId,
+    required String partNumber,
+    required String binLocation,
+    required String scanType,
+    String partDescription = '',
+    int qty = 1,
+  }) {
+    return _request(
+      '/api/scans/smart-bin-check',
+      method: 'POST',
+      auth: false,
+      body: {
+        'dealerCode': dealerCode.trim().toUpperCase(),
+        'auditId': auditId.trim(),
+        'partNumber': partNumber.trim().toUpperCase(),
+        'partDescription': partDescription.trim(),
+        'binLocation': binLocation.trim().toUpperCase(),
+        'scanType': scanType.trim().toUpperCase(),
+        'qty': qty,
+      },
+    );
+  }
+
   Future<UserSession> login({
     required String username,
     required String password,
@@ -213,7 +238,11 @@ class ApiClient {
         .toList();
   }
 
-  Future<Map<String, dynamic>> config() => _request('/api/mobile/config');
+  Future<Map<String, dynamic>> config({String dealerCode = ''}) async {
+    final code = dealerCode.trim().toUpperCase();
+    final query = code.isEmpty ? '' : '?dealerCode=${Uri.encodeComponent(code)}';
+    return _request('/api/mobile/config$query', auth: false);
+  }
 
   Future<Map<String, dynamic>> registerDevice({
     required String deviceId,

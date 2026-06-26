@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class ScanRecord {
   ScanRecord({
     required this.localId,
@@ -15,6 +17,7 @@ class ScanRecord {
     this.source = 'mobile',
     this.serverSyncId = '',
     this.errorMessage = '',
+    this.metadata = const {},
   });
 
   final String localId;
@@ -32,15 +35,20 @@ class ScanRecord {
   final String source;
   final String serverSyncId;
   final String errorMessage;
+  final Map<String, dynamic> metadata;
 
   ScanRecord copyWith(
-      {String? status, String? serverSyncId, String? errorMessage}) {
+      {String? status,
+      String? serverSyncId,
+      String? errorMessage,
+      String? binLocation,
+      Map<String, dynamic>? metadata}) {
     return ScanRecord(
       localId: localId,
       rawValue: rawValue,
       partNumber: partNumber,
       quantity: quantity,
-      binLocation: binLocation,
+      binLocation: binLocation ?? this.binLocation,
       scanType: scanType,
       dealerCode: dealerCode,
       userId: userId,
@@ -51,6 +59,7 @@ class ScanRecord {
       source: source,
       serverSyncId: serverSyncId ?? this.serverSyncId,
       errorMessage: errorMessage ?? this.errorMessage,
+      metadata: metadata ?? this.metadata,
     );
   }
 
@@ -70,6 +79,7 @@ class ScanRecord {
         'source': source,
         'serverSyncId': serverSyncId,
         'errorMessage': errorMessage,
+        'metadata': jsonEncode(metadata),
       };
 
   factory ScanRecord.fromMap(Map<String, Object?> map) {
@@ -90,6 +100,7 @@ class ScanRecord {
       source: (map['source'] ?? 'mobile').toString(),
       serverSyncId: (map['serverSyncId'] ?? '').toString(),
       errorMessage: (map['errorMessage'] ?? '').toString(),
+      metadata: _metadataMap(map['metadata']),
     );
   }
 
@@ -131,6 +142,7 @@ class ScanRecord {
       source: _string(map['source'] ?? map['scanMode'] ?? map['entryMode'] ?? 'mobile'),
       serverSyncId: _string(map['syncKey'] ?? map['scanId'] ?? map['uniqueScanId'] ?? ''),
       errorMessage: _string(map['reason'] ?? ''),
+      metadata: _serverMetadata(map),
     );
   }
 
@@ -166,6 +178,7 @@ class ScanRecord {
         'scanMode':
             source == 'manual' ? 'Mobile Manual Entry' : 'Mobile Scanner',
         'syncStatus': status.toLowerCase(),
+        ...metadata,
       };
 }
 
@@ -175,6 +188,49 @@ int _int(Object? value, int fallback) => int.tryParse(_string(value)) ?? fallbac
 
 DateTime _dateTime(Object? value) =>
     DateTime.tryParse(_string(value)) ?? DateTime.now();
+
+Map<String, dynamic> _metadataMap(Object? value) {
+  if (value is Map<String, dynamic>) return Map<String, dynamic>.from(value);
+  if (value is Map) {
+    return value.map((key, entry) => MapEntry(key.toString(), entry));
+  }
+  if (value is String && value.isNotEmpty) {
+    try {
+      final parsed = jsonDecode(value);
+      if (parsed is Map) {
+        return parsed.map((key, entry) => MapEntry(key.toString(), entry));
+      }
+    } catch (_) {}
+  }
+  return <String, dynamic>{};
+}
+
+Map<String, dynamic> _serverMetadata(Map<String, dynamic> map) {
+  final metadata = <String, dynamic>{};
+  final direct = _metadataMap(map['metadata']);
+  metadata.addAll(direct);
+  for (final key in [
+    'smartBinDecision',
+    'smartBinReason',
+    'smartBinSuggestedBin',
+    'smartBinSelectedBin',
+    'smartBinCurrentBin',
+    'smartBinAllowMultipleLocations',
+    'smartBinMaxAllowedLocationsPerPart',
+    'smartBinReasonRequired',
+    'smartBinCheckedAt',
+    'smartBinDecisionAt',
+    'smartBinDecisionBy',
+    'smartBinLocationType',
+    'smartBinIsSecondaryLocation',
+    'smartBinAuditTrail'
+  ]) {
+    if (map.containsKey(key) && map[key] != null) {
+      metadata[key] = map[key];
+    }
+  }
+  return metadata;
+}
 
 String _serverStatus(Map<String, dynamic> map) {
   final syncStatus = _string(map['syncStatus']).toLowerCase();

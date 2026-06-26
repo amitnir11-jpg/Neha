@@ -70,6 +70,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   String _userId = '';
   String _userName = '';
   String _role = '';
+  String _activeAuditId = '';
   String _lastScannedCode = '';
   String _currentlyVisibleCode = '';
   DateTime _lastHealthCheckAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -205,6 +206,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     await _refreshLocalState();
     await _refreshRecentScans(forceServer: _online);
     if (_online) {
+      await _refreshAuditContext();
+    }
+    if (_online) {
       await _testServer(silent: true);
       await _registerDevice();
     }
@@ -221,6 +225,21 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     if (refreshRecent) {
       await _refreshRecentScans(forceServer: true);
     }
+  }
+
+  Future<void> _refreshAuditContext() async {
+    if (_dealerCode.isEmpty) return;
+    try {
+      final data = await ApiClient(_settings).config(dealerCode: _dealerCode);
+      final activeAudit = data['activeAudit'];
+      final auditId = activeAudit is Map
+          ? (activeAudit['auditId'] ?? activeAudit['_id'] ?? '')
+          : (data['auditId'] ?? '');
+      if (!mounted) return;
+      setState(() {
+        _activeAuditId = auditId.toString().trim();
+      });
+    } catch (_) {}
   }
 
   Future<void> _refreshRecentScans({bool forceServer = false}) async {
@@ -390,13 +409,64 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     }
 
     try {
+      if (_isSmartBinEligible(_scanType) && _online && _activeAuditId.isEmpty) {
+        await _refreshAuditContext();
+      }
+
+      final currentBin = _upper(draft.binLocation);
+      final api = ApiClient(_settings);
+      Map<String, dynamic>? smartBinSuggestion;
+      if (_isSmartBinEligible(_scanType) &&
+          _online &&
+          _activeAuditId.isNotEmpty) {
+        try {
+          smartBinSuggestion = await api.smartBinCheck(
+            dealerCode: _dealerCode,
+            auditId: _activeAuditId,
+            partNumber: draft.partNumber,
+            partDescription: '',
+            binLocation: currentBin,
+            scanType: _scanType,
+            qty: draft.quantity,
+          );
+        } catch (_) {
+          smartBinSuggestion = null;
+        }
+      }
+
+      var resolvedBin = currentBin;
+      var metadata = <String, dynamic>{};
+      if (smartBinSuggestion != null &&
+          smartBinSuggestion['shouldPrompt'] == true) {
+        final decision =
+            await _showSmartBinPrompt(smartBinSuggestion, currentBin);
+        if (decision == null) {
+          _setStatus('Smart bin confirmation cancelled', Colors.orange);
+          return;
+        }
+        final existingBins = _smartBinExistingBins(smartBinSuggestion);
+        final selectedExistingBin = _upper(smartBinSuggestion['existingBin'] ??
+            (existingBins.isNotEmpty ? existingBins.first['binLocation'] : '') ??
+            currentBin);
+        resolvedBin = decision == 'USE_EXISTING_BIN' &&
+                selectedExistingBin.isNotEmpty
+            ? selectedExistingBin
+            : currentBin;
+        metadata = _smartBinMetadata(
+          smartBinSuggestion,
+          decision: decision,
+          currentBin: currentBin,
+          selectedBin: resolvedBin,
+        );
+      }
+
       final now = DateTime.now();
       final record = ScanRecord(
         localId: 'MOB-${const Uuid().v4()}',
         rawValue: draft.rawValue,
         partNumber: draft.partNumber,
         quantity: draft.quantity,
-        binLocation: draft.binLocation,
+        binLocation: resolvedBin,
         scanType: _scanType,
         dealerCode: _dealerCode,
         userId: _userId,
@@ -405,6 +475,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         createdAt: now,
         status: 'Pending',
         source: source,
+        metadata: metadata,
       );
 
       _showInstantScan(record);
@@ -463,6 +534,145 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     }
   }
 
+  bool _isSmartBinEligible(String scanType) {
+    final type = scanType.trim().toUpperCase();
+    return type == 'INWARD' || type == 'DAMAGE';
+  }
+
+  List<Map<String, dynamic>> _smartBinExistingBins(
+      Map<String, dynamic> suggestion) {
+    final rawBins = suggestion['existingBins'];
+    if (rawBins is! List) return [];
+    return rawBins
+        .map((entry) {
+          if (entry is Map<String, dynamic>) {
+            return Map<String, dynamic>.from(entry);
+          }
+          if (entry is Map) {
+            return entry.map((key, value) =>
+                MapEntry(key.toString(), value));
+          }
+          return <String, dynamic>{'binLocation': entry.toString()};
+        })
+        .map((entry) => {
+              ...entry,
+              'binLocation': _upper(entry['binLocation']),
+              'qty': entry['qty'] ?? entry['quantity'] ?? 0,
+            })
+        .where((entry) => (entry['binLocation'] ?? '').toString().isNotEmpty)
+        .toList();
+  }
+
+  Map<String, dynamic> _smartBinMetadata(
+    Map<String, dynamic> suggestion, {
+    required String decision,
+    required String currentBin,
+    required String selectedBin,
+  }) {
+    final now = DateTime.now().toUtc().toIso8601String();
+    return {
+      'smartBinDecision': decision,
+      'smartBinReason': decision == 'SAVE_NEW_BIN'
+          ? 'User confirmed different bin'
+          : 'User selected existing bin',
+      'smartBinSuggestedBin':
+          _upper(suggestion['suggestedBin'] ?? currentBin),
+      'smartBinSelectedBin': _upper(selectedBin),
+      'smartBinCurrentBin': _upper(currentBin),
+      'smartBinExistingBins': _smartBinExistingBins(suggestion),
+      'smartBinAllowMultipleLocations':
+          suggestion['allowMultipleLocations'] ?? true,
+      'smartBinMaxAllowedLocationsPerPart':
+          suggestion['maxAllowedLocationsPerPart'] ?? 3,
+      'smartBinReasonRequired': suggestion['reasonRequired'] ?? true,
+      'smartBinCheckedAt': (suggestion['checkedAt'] ?? now).toString(),
+      'smartBinDecisionAt': now,
+      'smartBinDecisionBy': _userName.isNotEmpty ? _userName : _userId,
+      'smartBinLocationType':
+          decision == 'SAVE_NEW_BIN' ? 'SECONDARY' : 'PRIMARY',
+      'smartBinIsSecondaryLocation': decision == 'SAVE_NEW_BIN',
+    };
+  }
+
+  Future<String?> _showSmartBinPrompt(
+      Map<String, dynamic> suggestion, String currentBin) async {
+    final existingBins = _smartBinExistingBins(suggestion);
+    final existingBin = _upper(suggestion['existingBin'] ??
+        (existingBins.isNotEmpty ? existingBins.first['binLocation'] : '') ??
+        currentBin);
+    final partNumber = _upper(suggestion['partNumber']);
+    final partDescription = (suggestion['partDescription'] ?? suggestion['partName'] ?? '')
+        .toString()
+        .trim();
+    final title = (suggestion['promptTitle'] ?? 'PART ALREADY AVAILABLE IN OTHER BIN')
+        .toString()
+        .trim();
+    final message = (suggestion['message'] ?? '')
+        .toString()
+        .trim();
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(message.isNotEmpty
+                    ? message
+                    : 'Part $partNumber is already available in another bin.'),
+                const SizedBox(height: 12),
+                if (partDescription.isNotEmpty)
+                  Text('Description: $partDescription'),
+                if (existingBins.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Existing bins:',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  ...existingBins.map((bin) {
+                    final binLocation = _upper(bin['binLocation']);
+                    final qty = bin['qty'] ?? bin['quantity'] ?? 0;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text('• $binLocation  Qty ${qty.toString()}'),
+                    );
+                  }),
+                ],
+                const SizedBox(height: 8),
+                Text('Current bin: $currentBin'),
+                if (existingBin.isNotEmpty) Text('Existing bin: $existingBin'),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 'SAVE_NEW_BIN'),
+              child: const Text('Save New Bin'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, 'USE_EXISTING_BIN'),
+              child: Text(
+                existingBin.isNotEmpty
+                    ? 'Use Existing Bin $existingBin'
+                    : 'Use Existing Bin',
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   void _setStatus(String text, Color color) {
     if (!mounted) return;
     setState(() {
@@ -514,6 +724,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     if (_serverConnected) {
       await _refreshLocalState();
       await _refreshRecentScans(forceServer: true);
+      await _refreshAuditContext();
       await _registerDevice();
     }
   }
