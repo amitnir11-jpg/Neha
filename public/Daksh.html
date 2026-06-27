@@ -22,24 +22,100 @@
   <script>
     if (document.documentElement.classList.contains('sidebar-wide-initial')) document.body.classList.add('sidebar-wide');
   </script>
+  <svg aria-hidden="true" focusable="false" style="position:absolute;width:0;height:0;overflow:hidden">
+    <symbol id="icon-dashboard" viewBox="0 0 24 24">
+      <rect x="3" y="3" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <rect x="14" y="3" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <rect x="3" y="14" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <rect x="14" y="14" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    </symbol>
+    <symbol id="icon-scan" viewBox="0 0 24 24">
+      <path d="M7 4H4v3M17 4h3v3M7 20H4v-3M17 20h3v-3M9 12h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="8.25" y="8.25" width="7.5" height="7.5" rx="1.75" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    </symbol>
+    <symbol id="icon-reports" viewBox="0 0 24 24">
+      <path d="M7 3.5h7l4 4V20.5a1 1 0 0 1-1 1H7.5a1 1 0 0 1-1-1v-16a1 1 0 0 1 .5-.9Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M14 3.5V8h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M8 12h8M8 16h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-transfer" viewBox="0 0 24 24">
+      <path d="M4 8h12M13 5l3 3-3 3M20 16H8M11 13l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-reconcile" viewBox="0 0 24 24">
+      <path d="M5 7h14M5 17h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M8 7v10M16 7v10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M8 7l-2 3m2-3l2 3m6 7l-2-3m2 3l2-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-master" viewBox="0 0 24 24">
+      <path d="M12 4 19 8v8l-7 4-7-4V8l7-4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M12 4v16M5 8l7 4 7-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-validator" viewBox="0 0 24 24">
+      <path d="M12 3 19 6v5c0 4.9-3.1 8.7-7 10-3.9-1.3-7-5.1-7-10V6l7-3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="m8.5 12 2.2 2.2L15.6 9.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-qr" viewBox="0 0 24 24">
+      <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M16 14h4v4h-4zM12 12h2M12 16h2M16 12h2M18 16h2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-devices" viewBox="0 0 24 24">
+      <rect x="7" y="3.5" width="10" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M10 7h4M10 17h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-sync" viewBox="0 0 24 24">
+      <path d="M7.5 7.5A7 7 0 0 1 18 10M16.5 4.5V10h-5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M16.5 16.5A7 7 0 0 1 6 14M7.5 19.5V14H13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-archive" viewBox="0 0 24 24">
+      <rect x="4" y="5" width="16" height="4" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M6 9.5h12v10.5H6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M10 13h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-user" viewBox="0 0 24 24">
+      <circle cx="12" cy="8.5" r="3.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M5 20c1.7-3 4-4.5 7-4.5s5.3 1.5 7 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-logout" viewBox="0 0 24 24">
+      <path d="M10 4.5H6.5A2.5 2.5 0 0 0 4 7v10a2.5 2.5 0 0 0 2.5 2.5H10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M14 8l4 4-4 4M18 12H9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-pencil" viewBox="0 0 24 24">
+      <path d="m4 20 4.5-1 10-10a1.8 1.8 0 0 0 0-2.5l-1-1a1.8 1.8 0 0 0-2.5 0l-10 10L4 20Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M13 6l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-play" viewBox="0 0 24 24">
+      <path d="M8 6.5v11l10-5.5-10-5.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-wrench" viewBox="0 0 24 24">
+      <path d="M14.5 6.5a4.5 4.5 0 0 0-6.3 5.7L4.5 16a1.5 1.5 0 0 0 2.1 2.1l3.8-3.7a4.5 4.5 0 0 0 5.7-6.3l-2.2 2.2-2.2-2.2 2.8-1.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    </symbol>
+  </svg>
   <div class="app">
     <aside class="side">
       <div class="side-brand">
         <img class="brand-logo" src="/brand/logo-app.svg" alt="Daksh Inventory Pro">
       </div>
       <nav class="side-nav">
-        <button class="side-link active" data-view="dashboard">Dashboard</button>
-        <button class="side-link" data-view="scan">Scan</button>
-        <button class="side-link" data-view="reports">Reports</button>
-        <button class="side-link" data-view="binTransfer">Bin Transfer</button>
-        <button class="side-link" data-view="reconciliation">Reconciliation</button>
-        <button class="side-link" data-view="master">Master Data</button>
-        <button class="side-link" data-view="validator">Validator</button>
-        <button class="side-link" data-view="qr">QR / Barcode</button>
-        <button class="side-link" data-view="devices">Device Control</button>
-        <button class="side-link" data-view="syncCenter">Sync Report</button>
-        <button class="side-link admin-only" data-view="archiveRestore">Archive & Restore Center</button>
+        <button class="side-link active" data-view="dashboard" data-icon="dashboard"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span>Dashboard</span></button>
+        <button class="side-link" data-view="scan" data-icon="scan"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-scan"></use></svg><span>Scan</span></button>
+        <button class="side-link" data-view="reports" data-icon="reports"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-reports"></use></svg><span>Reports</span></button>
+        <button class="side-link" data-view="binTransfer" data-icon="transfer"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-transfer"></use></svg><span>Bin Transfer</span></button>
+        <button class="side-link" data-view="reconciliation" data-icon="reconcile"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-reconcile"></use></svg><span>Reconciliation</span></button>
+        <button class="side-link" data-view="master" data-icon="master"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-master"></use></svg><span>Master Data</span></button>
+        <button class="side-link" data-view="validator" data-icon="validator"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-validator"></use></svg><span>Validator</span></button>
+        <button class="side-link" data-view="qr" data-icon="qr"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-qr"></use></svg><span>QR / Barcode</span></button>
+        <button class="side-link" data-view="devices" data-icon="devices"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-devices"></use></svg><span>Device Control</span></button>
+        <button class="side-link" data-view="syncCenter" data-icon="sync"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sync"></use></svg><span>Sync Report</span></button>
+        <button class="side-link admin-only" data-view="archiveRestore" data-icon="archive"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-archive"></use></svg><span>Archive & Restore Center</span></button>
       </nav>
+      <div class="side-footer">
+        <div class="side-active-card">
+          <span class="side-card-label">Active Audit</span>
+          <strong id="sideActiveAuditDealer">Checking...</strong>
+          <span id="sideActiveAuditStatus">Checking...</span>
+        </div>
+        <div class="side-version">Version 2.0.0</div>
+      </div>
       <button id="sideResizeHandle" class="side-resize-handle" type="button" aria-label="Adjust menu width" title="Adjust menu width"></button>
     </aside>
 
@@ -50,158 +126,156 @@
           <span id="systemSubline" class="muted"></span>
         </div>
         <div class="top-actions">
-          <span id="topServerStatus" class="live-pill red-dot">Server: Checking</span>
-          <span id="topDeviceStatus" class="live-pill red-dot">Devices: 0 Connected</span>
-          <span id="topScannerStatus" class="live-pill red-dot">Scanners: 0 Active</span>
-          <span id="topSyncStatus" class="live-pill green-dot">Sync: Auto ON / Synced</span>
-          <span id="topPendingStatus" class="live-pill green-dot">Pending: 0</span>
-          <span id="topOfflineStatus" class="live-pill green-dot">Offline: 0</span>
-          <span id="topRealtimeStatus" class="live-pill red-dot">Realtime: Waiting</span>
-          <span id="activeAuditBadge" class="live-pill red-dot">No active audit</span>
-          <select id="activeDealerSwitch" class="dealerSelect active-dealer-switch" aria-label="Selected dealer" hidden></select>
-          <div id="userMenu" class="user-menu">
-            <button id="userMenuButton" class="user-menu-button" type="button" aria-haspopup="true" aria-expanded="false">
-              <span id="userBadge">Administrator - admin</span>
-              <span class="user-menu-caret" aria-hidden="true">v</span>
-            </button>
-            <div id="userDropdown" class="user-dropdown" role="menu" hidden>
-              <div class="user-dropdown-meta">
-                <span>Logged in as: <strong id="userDropdownLogin">admin</strong></span>
-                <span>Role: <strong id="userDropdownRole">Administrator</strong></span>
-              </div>
-              <button id="logoutBtn" class="user-dropdown-logout" type="button" role="menuitem">Logout</button>
+          <div class="topbar-dealer">
+            <label class="sr-only" for="dashboardDealerSelect">Dealer</label>
+            <select id="dashboardDealerSelect" class="dealerSelect dashboard-dealer-select"></select>
+          </div>
+          <div class="topbar-user">
+            <span class="topbar-user-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#icon-user"></use></svg></span>
+            <div class="topbar-user-meta">
+              <span id="userRoleLabel" class="topbar-user-role">Administrator</span>
+              <strong id="userBadge">admin</strong>
             </div>
+            <button id="logoutBtn" class="btn light topbar-logout-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-logout"></use></svg><span>Logout</span></button>
           </div>
         </div>
       </header>
 
       <section id="dashboard" class="view active dashboard-page">
-        <form id="dashboardDealerFilters" class="filter-grid dashboard-dealer-filters">
-          <label>Dealer<select id="dashboardDealerSelect" class="dealerSelect dashboard-dealer-select"></select></label>
-          <button id="dashboardViewReportBtn" class="btn light dashboard-view-report-btn" type="button">View Report</button>
-        </form>
-        <div class="dashboard-kpi-summary-wrap">
-          <table class="dashboard-kpi-summary-table" aria-label="Dashboard KPI summary">
-            <thead>
-              <tr>
-                <th>Total Scanned Today</th>
-                <th>Total Scan Qty</th>
-                <th>Actual Stock Value (DLC)</th>
-                <th>Last Scanned Part</th>
-                <th>Damage Count</th>
-                <th>Duplicate Scans</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td id="dashToday">0</td>
-                <td id="dashTotalScanQty">0</td>
-                <td id="dashStockValueDlc">0.00</td>
-                <td id="dashLastScannedPart">-</td>
-                <td id="dashDamage">0</td>
-                <td id="dashDuplicates">0</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="dashboard-kpi-grid metric-grid six">
+          <div class="metric dashboard-kpi dashboard-kpi-scan">
+            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-scan"></use></svg></span><span>Total Scanned Today</span></div>
+            <strong id="dashToday">0</strong>
+          </div>
+          <div class="metric dashboard-kpi dashboard-kpi-qty">
+            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-play"></use></svg></span><span>Total Scan Qty</span></div>
+            <strong id="dashTotalScanQty">0</strong>
+          </div>
+          <div class="metric dashboard-kpi dashboard-kpi-stock">
+            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-reports"></use></svg></span><span>Actual Stock Value</span></div>
+            <strong id="dashStockValueDlc">₹ 0.00</strong>
+          </div>
+          <div class="metric dashboard-kpi dashboard-kpi-damage">
+            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-validator"></use></svg></span><span>Damage Count</span></div>
+            <strong id="dashDamage">0</strong>
+          </div>
+          <div class="metric dashboard-kpi dashboard-kpi-duplicate">
+            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-sync"></use></svg></span><span>Duplicate Scans</span></div>
+            <strong id="dashDuplicates">0</strong>
+          </div>
+          <div class="metric dashboard-kpi dashboard-kpi-multi">
+            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-transfer"></use></svg></span><span>Parts in Multiple Locations</span></div>
+            <strong id="dashMultiBinParts">0</strong>
+          </div>
         </div>
-        <section class="card dashboard-sync-card">
-          <div class="card-head dashboard-sync-head">
-            <h2>Sync Snapshot</h2>
-            <div class="actions dashboard-sync-toolbar">
-              <span id="homeSyncBadge" class="live-pill green-dot">Sync: Auto ON / Synced</span>
-              <button id="homeManualSyncBtn" class="btn primary" type="button">Manual Sync</button>
-              <button id="repairSyncStatusBtn" class="btn light admin-only" type="button">Repair Sync Status</button>
+
+        <div class="dashboard-upper-grid">
+          <section class="card dashboard-sync-card">
+            <div class="card-head dashboard-sync-head">
+              <h2>Sync Snapshot</h2>
+              <div class="actions dashboard-sync-toolbar">
+                <span id="homeSyncBadge" class="live-pill green-dot">Sync: Auto ON / Synced</span>
+                <button id="homeManualSyncBtn" class="btn primary" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sync"></use></svg><span>Manual Sync</span></button>
+              </div>
             </div>
-          </div>
-          <div class="metric-grid four dashboard-sync-grid">
-            <div class="metric mini"><span>Last Sync</span><strong id="homeLastSync">Never</strong></div>
-            <div class="metric mini"><span>Pending</span><strong id="homePendingSync">0</strong></div>
-            <div class="metric mini"><span>Failed</span><strong id="homeFailedSync">0</strong></div>
-            <div class="metric mini"><span>Live Inventory</span><strong id="dashInventoryCount">0</strong></div>
-            <div class="metric mini"><span>Parts Stored in Multiple Locations</span><strong id="dashMultiBinParts">0</strong></div>
-            <div class="metric mini"><span>Connected Scanners</span><strong id="dashConnectedScanners">0</strong></div>
-            <div class="metric mini"><span>Offline Devices</span><strong id="dashOfflineDevices">0</strong></div>
-            <div class="metric mini"><span>Failed Scans</span><strong id="dashFailedScans">0</strong></div>
-          </div>
-        </section>
-        <div class="dashboard-main-grid">
-          <section class="card dashboard-card">
+            <div class="metric-grid dashboard-sync-grid">
+              <div class="metric mini dashboard-sync-metric">
+                <span class="dashboard-sync-icon"><svg viewBox="0 0 24 24"><use href="#icon-master"></use></svg></span>
+                <div><span>Live Inventory</span><strong id="dashInventoryCount">0</strong></div>
+              </div>
+              <div class="metric mini dashboard-sync-metric">
+                <span class="dashboard-sync-icon"><svg viewBox="0 0 24 24"><use href="#icon-play"></use></svg></span>
+                <div><span>Pending</span><strong id="homePendingSync">0</strong></div>
+              </div>
+              <div class="metric mini dashboard-sync-metric">
+                <span class="dashboard-sync-icon"><svg viewBox="0 0 24 24"><use href="#icon-validator"></use></svg></span>
+                <div><span>Failed</span><strong id="homeFailedSync">0</strong></div>
+              </div>
+              <div class="metric mini dashboard-sync-metric">
+                <span class="dashboard-sync-icon"><svg viewBox="0 0 24 24"><use href="#icon-devices"></use></svg></span>
+                <div><span>Connected Scanners</span><strong id="dashConnectedScanners">0</strong></div>
+              </div>
+              <div class="metric mini dashboard-sync-metric">
+                <span class="dashboard-sync-icon"><svg viewBox="0 0 24 24"><use href="#icon-scan"></use></svg></span>
+                <div><span>Offline Devices</span><strong id="dashOfflineDevices">0</strong></div>
+              </div>
+              <div class="metric mini dashboard-sync-metric">
+                <span class="dashboard-sync-icon"><svg viewBox="0 0 24 24"><use href="#icon-sync"></use></svg></span>
+                <div><span>Last Sync Time</span><strong id="homeLastSync">Never</strong></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="card dashboard-chart-card">
+            <div class="card-head">
+              <h2>Quick Overview</h2>
+              <span class="muted">Scan mix today</span>
+            </div>
+            <div class="dashboard-overview">
+              <div class="dashboard-overview-chart">
+                <div id="dashboardOverviewRing" class="dashboard-overview-ring">
+                  <div class="dashboard-overview-center">
+                    <strong id="dashboardOverviewTotal">0</strong>
+                    <span>Total Scans</span>
+                  </div>
+                </div>
+              </div>
+              <div class="dashboard-overview-legend">
+                <div class="dashboard-overview-item inward">
+                  <span class="dashboard-overview-dot"></span>
+                  <div><strong>INWARD</strong><span id="dashboardOverviewInward">0 (0%)</span></div>
+                </div>
+                <div class="dashboard-overview-item outward">
+                  <span class="dashboard-overview-dot"></span>
+                  <div><strong>OUTWARD</strong><span id="dashboardOverviewOutward">0 (0%)</span></div>
+                </div>
+                <div class="dashboard-overview-item manual">
+                  <span class="dashboard-overview-dot"></span>
+                  <div><strong>MANUAL</strong><span id="dashboardOverviewManual">0 (0%)</span></div>
+                </div>
+                <div class="dashboard-overview-item failed">
+                  <span class="dashboard-overview-dot"></span>
+                  <div><strong>FAILED</strong><span id="dashboardOverviewFailed">0 (0%)</span></div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="dashboard-lower-grid">
+          <section class="card dashboard-card dashboard-stream-card">
             <div class="card-head">
               <h2>Real-Time Scan Stream</h2>
               <span class="muted">Last 12</span>
             </div>
             <div class="table-wrap compact-table dashboard-table-wrap dashboard-stream-wrap">
               <table class="dashboard-data-table dashboard-stream-table">
-                <thead><tr><th data-col-key="time">Time</th><th data-col-key="part-number">Part Number</th><th data-col-key="qty">Qty</th><th data-col-key="mrp">MRP</th><th data-col-key="scan-type">Scan Type</th><th data-col-key="bin-location">Bin Location</th><th data-col-key="dealer-code">Dealer Code</th><th data-col-key="entry-source">Entry Source</th><th data-col-key="device-id">Device ID</th><th data-col-key="sync-status">Sync Status</th></tr></thead>
+                <thead><tr><th data-col-key="time">Time</th><th data-col-key="part-number">Part Number</th><th data-col-key="description">Description</th><th data-col-key="qty">Qty</th><th data-col-key="mrp">MRP</th><th data-col-key="bin-location">Bin Location</th><th data-col-key="entry-source">Entry Source</th><th data-col-key="device-id">Device ID</th><th data-col-key="status">Status</th></tr></thead>
                 <tbody id="streamRows">
-                  <tr class="dashboard-skeleton-row"><td colspan="10"><span></span></td></tr>
-                  <tr class="dashboard-skeleton-row"><td colspan="10"><span></span></td></tr>
-                  <tr class="dashboard-skeleton-row"><td colspan="10"><span></span></td></tr>
-                  <tr class="dashboard-skeleton-row"><td colspan="10"><span></span></td></tr>
+                  <tr class="dashboard-skeleton-row"><td colspan="9"><span></span></td></tr>
+                  <tr class="dashboard-skeleton-row"><td colspan="9"><span></span></td></tr>
+                  <tr class="dashboard-skeleton-row"><td colspan="9"><span></span></td></tr>
+                  <tr class="dashboard-skeleton-row"><td colspan="9"><span></span></td></tr>
                 </tbody>
               </table>
             </div>
           </section>
+
+          <section class="card dashboard-actions-card">
+            <div class="card-head">
+              <h2>Quick Actions</h2>
+              <span class="muted">Common tasks</span>
+            </div>
+            <div class="dashboard-actions-grid">
+              <button id="quickActionStartScan" class="btn dashboard-action-btn action-blue" type="button"><svg viewBox="0 0 24 24"><use href="#icon-play"></use></svg><span>Start Scan</span></button>
+              <button id="quickActionManualEntry" class="btn dashboard-action-btn action-green" type="button"><svg viewBox="0 0 24 24"><use href="#icon-pencil"></use></svg><span>Manual Entry</span></button>
+              <button id="quickActionViewReports" class="btn dashboard-action-btn action-purple" type="button"><svg viewBox="0 0 24 24"><use href="#icon-reports"></use></svg><span>View Reports</span></button>
+              <button id="quickActionBinTransfer" class="btn dashboard-action-btn action-orange" type="button"><svg viewBox="0 0 24 24"><use href="#icon-transfer"></use></svg><span>Bin Transfer</span></button>
+              <button id="quickActionSyncNow" class="btn dashboard-action-btn action-cyan" type="button"><svg viewBox="0 0 24 24"><use href="#icon-sync"></use></svg><span>Sync Now</span></button>
+              <button id="quickActionRepairSync" class="btn dashboard-action-btn action-red" type="button"><svg viewBox="0 0 24 24"><use href="#icon-wrench"></use></svg><span>Repair Sync</span></button>
+            </div>
+          </section>
         </div>
-        <section class="card dashboard-card product-summary-card">
-          <div class="card-head">
-            <h2>Product Group Summary</h2>
-            <div class="actions dashboard-summary-actions">
-              <span id="productGroupSummaryCount" class="muted">0 groups</span>
-              <input id="productGroupSearch" class="dashboard-summary-search" type="search" placeholder="Search group or subgroup">
-              <button id="productGroupExportBtn" class="btn light" type="button">Export Excel</button>
-            </div>
-          </div>
-          <div class="table-wrap dashboard-table-wrap dashboard-summary-wrap">
-            <table class="dashboard-data-table product-group-summary-table">
-              <thead>
-                <tr>
-                  <th data-col-key="product-group">Product Group</th>
-                  <th data-col-key="product-sub-group">Product Sub Group</th>
-                  <th data-col-key="total-scans">Total Scans</th>
-                  <th data-col-key="total-quantity">Total Quantity</th>
-                  <th data-col-key="unique-parts">Unique Parts</th>
-                  <th data-col-key="total-dlc-value">Actual Stock Value (DLC)</th>
-                  <th data-col-key="total-mrp-value">MRP Value (Reference)</th>
-                </tr>
-              </thead>
-              <tbody id="productGroupSummaryRows">
-                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
-                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
-                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
-                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div id="productGroupDetailPanel" class="product-group-detail-panel" hidden>
-            <div class="card-head product-group-detail-head">
-              <h3 id="productGroupDetailTitle">Product Group Details</h3>
-              <div class="actions">
-                <span id="productGroupDetailTotals" class="muted"></span>
-                <button id="productGroupDetailExportBtn" class="btn light" type="button">Export Detail Excel</button>
-              </div>
-            </div>
-            <div class="table-wrap dashboard-table-wrap product-group-detail-wrap">
-              <table class="dashboard-data-table product-group-detail-table">
-                <thead>
-                  <tr>
-                    <th>Part Number</th>
-                    <th>Part Description</th>
-                    <th>Qty</th>
-                    <th>Bin Location</th>
-                    <th>DLC</th>
-                    <th>Actual Stock Value (DLC)</th>
-                    <th>MRP (Reference)</th>
-                    <th>MRP Value (Reference)</th>
-                  </tr>
-                </thead>
-                <tbody id="productGroupDetailRows">
-                  <tr><td colspan="8" class="muted">Click a product group to view parts</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </section>
       </section>
 
       <section id="scan" class="view">
@@ -346,6 +420,65 @@
             <label class="toggle hidden" data-report-filter-key="scanModeOptions"><input name="showFullMasterWithZeroScan" type="checkbox">Full Master With Zero Scan</label>
           </form>
           <div id="reportMessage" class="form-message">Select filters to load report automatically.</div>
+        </section>
+        <section class="card product-summary-card report-product-summary-card">
+          <div class="card-head">
+            <h2>Product Group Summary</h2>
+            <div class="actions dashboard-summary-actions">
+              <span id="productGroupSummaryCount" class="muted">0 groups</span>
+              <input id="productGroupSearch" class="dashboard-summary-search" type="search" placeholder="Search group or subgroup">
+              <button id="productGroupExportBtn" class="btn light" type="button">Export Excel</button>
+            </div>
+          </div>
+          <div class="table-wrap dashboard-table-wrap dashboard-summary-wrap">
+            <table class="dashboard-data-table product-group-summary-table">
+              <thead>
+                <tr>
+                  <th data-col-key="product-group">Product Group</th>
+                  <th data-col-key="product-sub-group">Product Sub Group</th>
+                  <th data-col-key="total-scans">Total Scans</th>
+                  <th data-col-key="total-quantity">Total Quantity</th>
+                  <th data-col-key="unique-parts">Unique Parts</th>
+                  <th data-col-key="total-dlc-value">Actual Stock Value (DLC)</th>
+                  <th data-col-key="total-mrp-value">MRP Value (Reference)</th>
+                </tr>
+              </thead>
+              <tbody id="productGroupSummaryRows">
+                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
+                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
+                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
+                <tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="productGroupDetailPanel" class="product-group-detail-panel" hidden>
+            <div class="card-head product-group-detail-head">
+              <h3 id="productGroupDetailTitle">Product Group Details</h3>
+              <div class="actions">
+                <span id="productGroupDetailTotals" class="muted"></span>
+                <button id="productGroupDetailExportBtn" class="btn light" type="button">Export Detail Excel</button>
+              </div>
+            </div>
+            <div class="table-wrap dashboard-table-wrap product-group-detail-wrap">
+              <table class="dashboard-data-table product-group-detail-table">
+                <thead>
+                  <tr>
+                    <th>Part Number</th>
+                    <th>Part Description</th>
+                    <th>Qty</th>
+                    <th>Bin Location</th>
+                    <th>DLC</th>
+                    <th>Actual Stock Value (DLC)</th>
+                    <th>MRP (Reference)</th>
+                    <th>MRP Value (Reference)</th>
+                  </tr>
+                </thead>
+                <tbody id="productGroupDetailRows">
+                  <tr><td colspan="8" class="muted">Click a product group to view parts</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </section>
         <section id="reportPreviewCard" class="card report-preview-card">
           <div class="card-head report-preview-head">
@@ -1114,13 +1247,13 @@
         </section>
 
         <section class="card">
-          <div class="card-head">
-            <h2>Device Sync / Data Sync Center</h2>
-            <div class="actions">
-              <button id="syncCenterManualBtn" class="btn primary" type="button">Manual Sync Now</button>
-              <button id="syncCenterRetryBtn" class="btn light" type="button">Retry Failed</button>
+            <div class="card-head">
+              <h2>Device Sync / Data Sync Center</h2>
+              <div class="actions">
+                <button id="syncCenterManualBtn" class="btn primary" type="button">Manual Sync Now</button>
+                <button id="syncCenterRetryBtn" class="btn light" type="button">Repair Sync</button>
+              </div>
             </div>
-          </div>
           <div class="sync-status-grid">
             <div class="status-tile"><span>Server Status</span><strong id="syncServerStatus" class="live-pill red-dot">Offline</strong></div>
             <div class="status-tile"><span>PostgreSQL Status</span><strong id="syncDatabaseStatus" class="live-pill red-dot">Offline</strong></div>

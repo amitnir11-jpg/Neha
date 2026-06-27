@@ -138,6 +138,7 @@
     dashboardAbortController: null,
     dashboardLoaded: false,
     dashboardLastLoadedAt: 0,
+    dashboardStats: {},
     scanRefreshTimer: null,
     scanRefreshInFlight: false,
     scanRefreshQueued: false,
@@ -513,19 +514,12 @@
     document.body.appendChild(measurer);
     const textWidth = Math.ceil(measurer.getBoundingClientRect().width);
     measurer.remove();
-    const wrapper = $('#dashboardDealerFilters');
-    const left = (wrapper || select).getBoundingClientRect().left || 0;
-    const button = $('#dashboardViewReportBtn');
-    const gap = 10;
-    const actionWidth = Math.ceil((button?.getBoundingClientRect().width || 132) + gap);
-    const viewportRoom = Math.max(280, window.innerWidth - left - 24);
-    const maxSelectWidth = Math.max(220, Math.min(760 - actionWidth, viewportRoom - actionWidth));
-    const width = Math.min(Math.max(300, textWidth + 64), maxSelectWidth);
+    const left = select.getBoundingClientRect().left || 0;
+    const viewportRoom = Math.max(280, window.innerWidth - left - 32);
+    const maxSelectWidth = Math.max(240, Math.min(420, viewportRoom));
+    const width = Math.min(Math.max(280, textWidth + 64), maxSelectWidth);
     select.style.width = `${width}px`;
     select.style.maxWidth = '100%';
-    if (wrapper) {
-      wrapper.style.width = `min(${width + actionWidth}px, 100%)`;
-    }
   }
 
   function syncDealerSelectDisplay(select) {
@@ -1487,12 +1481,16 @@
       setDashboardKpiValue('dashActiveAuditDealer', formatDealerDisplay(selectedDealer));
       setText('pairingActiveAudit', formatDealerDisplay(selectedDealer));
       setText('pairingStatusText', 'Mobile sync enabled');
+      setText('sideActiveAuditDealer', formatDealerDisplay(selectedDealer));
+      setText('sideActiveAuditStatus', 'Mobile sync enabled');
     } else if (audit && audit.dealerCode) {
       setLivePill('activeAuditBadge', `Active Audit: ${formatDealerDisplay(audit)}`, true);
       setLivePill('pairingConnectionStatus', 'Ready', true);
       setDashboardKpiValue('dashActiveAuditDealer', formatDealerDisplay(audit));
       setText('pairingActiveAudit', formatDealerDisplay(audit));
       setText('pairingStatusText', 'Mobile sync enabled');
+      setText('sideActiveAuditDealer', formatDealerDisplay(audit));
+      setText('sideActiveAuditStatus', 'Mobile sync enabled');
       const createUserDealerAccess = $('#createUserForm [name="dealerAccess"]');
       if (createUserDealerAccess && !Array.from(createUserDealerAccess.selectedOptions || []).length) {
         setMultiSelectValues(createUserDealerAccess, [audit.dealerCode]);
@@ -1510,6 +1508,8 @@
       setDashboardKpiValue('dashActiveAuditDealer', '-');
       setText('pairingActiveAudit', 'No active audit');
       setText('pairingStatusText', 'Mobile sync disabled');
+      setText('sideActiveAuditDealer', 'No active audit');
+      setText('sideActiveAuditStatus', 'Mobile sync disabled');
     }
   }
 
@@ -2286,6 +2286,7 @@
     const connectedDevices = Number(status.connectedDevices ?? connectionStatus.connectedDevices ?? state.activeDeviceCount ?? 0);
     const totalSynced = Number(status.totalSynced ?? connectionStatus.totalSynced ?? $('#syncTotal')?.textContent ?? 0);
     state.activeDeviceCount = connectedDevices;
+    const offlineDevices = Number(status.offlineDevices ?? connectionStatus.offlineDevices ?? 0);
 
     const connectionOk = (!serverKnown || serverOnline) && (!databaseKnown || databaseOnline);
     const syncDetail = connectionOk ? (counts.total ? 'Pending' : 'Synced') : 'Failed';
@@ -2295,6 +2296,8 @@
     setHeaderDeviceStatus(connectedDevices);
     setHeaderSyncStatus(syncDetail, syncOk);
     setStatusPill('topPendingStatus', `Pending: ${counts.total}`, counts.total ? 'orange' : 'green');
+    setDashboardKpiValue('dashConnectedScanners', wholeNumber(connectedDevices));
+    setDashboardKpiValue('dashOfflineDevices', wholeNumber(offlineDevices));
     if (serverKnown) setLivePill('syncServerStatus', serverOnline ? 'Connected' : 'Offline', serverOnline);
     if (databaseKnown) setLivePill('syncDatabaseStatus', databaseOnline ? 'Connected' : 'Offline', databaseOnline);
     setLivePill('syncCenterAutoState', 'Auto ON', true);
@@ -2307,7 +2310,6 @@
 
     setText('homeLastSync', lastSync ? dashboardScanTime(lastSync) : 'Never');
     setText('homePendingSync', counts.total);
-    setText('homeConnectedDevices', connectedDevices);
     setText('homeFailedSync', counts.failed);
     setText('syncCenterLastSync', lastSync ? dateTime(lastSync) : 'Never');
     setText('syncCenterTotalSynced', totalSynced);
@@ -2480,13 +2482,13 @@
     const dashboardStreamWidths = {
       time: 160,
       'part-number': 150,
+      description: 260,
       qty: 70,
       mrp: 100,
-      'scan-type': 110,
       'bin-location': 120,
-      'dealer-code': 110,
+      'entry-source': 190,
       'device-id': 220,
-      'sync-status': 120
+      status: 120
     };
     const productSummaryWidths = {
       'product-group': 220,
@@ -2700,7 +2702,8 @@
     });
     const roleName = roleDisplayName(state.user && state.user.role);
     const loginName = userLoginName();
-    setText('userBadge', `${roleName} - ${loginName} | ${ensureDeviceId()}`);
+    setText('userRoleLabel', roleName);
+    setText('userBadge', loginName);
     setText('userDropdownLogin', loginName);
     setText('userDropdownRole', roleName);
     $$('.admin-only').forEach((node) => node.classList.toggle('hidden', !state.user || state.user.role !== 'admin'));
@@ -2908,16 +2911,98 @@
   function updateDashboardCards(stats = {}) {
     setDashboardKpiValue('dashToday', wholeNumber(stats.totalScannedToday || 0));
     setDashboardKpiValue('dashTotalScanQty', wholeNumber(stats.totalScannedQuantity || stats.totalScanQty || 0));
-    setDashboardKpiValue('dashStockValueDlc', groupSummaryValue(stats.actualStockValueDLC || stats.totalScannedValue || 0));
+    setDashboardKpiValue('dashStockValueDlc', `₹ ${money2(stats.actualStockValueDLC || stats.totalScannedValue || 0)}`);
     setDashboardKpiValue('dashDamage', wholeNumber(stats.damageCount || 0));
     setDashboardKpiValue('dashDuplicates', wholeNumber(stats.duplicateCount || 0));
-    setDashboardKpiValue('dashInventoryCount', wholeNumber(stats.totalScanRecords || stats.totalUniqueScannedParts || 0));
     setDashboardKpiValue('dashMultiBinParts', wholeNumber(stats.multipleBinPartCount || 0));
+    setDashboardKpiValue('dashInventoryCount', wholeNumber(stats.totalScanRecords || stats.totalUniqueScannedParts || 0));
     setDashboardKpiValue('dashConnectedScanners', wholeNumber(stats.activeDevices || 0));
-    setDashboardKpiValue('dashFailedScans', wholeNumber(stats.failedCount || stats.mismatchCount || 0));
-    setDashboardKpiValue('dashLastScanTime', stats.lastScanTime ? compactDateTime(stats.lastScanTime) : 'Never', { time: true });
-    setDashboardKpiValue('dashLastScannedPart', stats.lastScannedPart || '-');
+    setDashboardKpiValue('dashOfflineDevices', wholeNumber(stats.offlineDevices || 0));
     if (stats.activeDevices !== undefined) setHeaderDeviceStatus(Number(stats.activeDevices || 0));
+  }
+
+  function dashboardScanSourceText(scan = {}) {
+    return [
+      scan.source,
+      scan.scanSource,
+      scan.entryMode,
+      scan.entryChannel,
+      scan.entrySource,
+      scan.scanMode
+    ].map((value) => String(value || '').trim()).filter(Boolean).join(' ').toLowerCase();
+  }
+
+  function dashboardIsManualScan(scan = {}) {
+    return /manual/.test(dashboardScanSourceText(scan)) || /manual/.test(scanEntrySourceLabel(scan));
+  }
+
+  function dashboardIsFailedScan(scan = {}) {
+    if (normalizedDisplaySyncStatus(scan) === 'failed') return true;
+    return /fail|error|rejected/i.test([
+      scan.syncStatus,
+      scan.status,
+      scan.scanStatus,
+      scan.errorMessage
+    ].map((value) => String(value || '').trim()).filter(Boolean).join(' '));
+  }
+
+  function dashboardOverviewBucket(scan = {}) {
+    if (dashboardIsFailedScan(scan)) return 'failed';
+    if (dashboardIsManualScan(scan)) return 'manual';
+    const scanType = String(scan.scanType || scan.type || '').trim().toUpperCase();
+    if (scanType === 'OUTWARD') return 'outward';
+    return 'inward';
+  }
+
+  function dashboardOverviewCounts(stats = {}, scans = []) {
+    const streamRows = Array.isArray(scans) ? scans : [];
+    const inward = Math.max(0, Number(stats.totalInward || 0));
+    const outward = Math.max(0, Number(stats.totalOutward || 0));
+    const manualFromStats = Number(stats.manualCount || stats.manualScanCount || stats.manualScans || 0);
+    const failedFromStats = Number(stats.failedCount || stats.mismatchCount || 0);
+    const manualFromStream = streamRows.filter(dashboardIsManualScan).reduce((sum, scan) => sum + Number(scanQuantity(scan, 1) || 1), 0);
+    const failedFromStream = streamRows.filter(dashboardIsFailedScan).reduce((sum, scan) => sum + Number(scanQuantity(scan, 1) || 1), 0);
+    const manual = Math.max(manualFromStats, manualFromStream);
+    const failed = Math.max(failedFromStats, failedFromStream);
+    const total = (inward + outward + manual + failed) || Number(stats.totalScannedToday || streamRows.length || 0);
+    return { inward, outward, manual, failed, total };
+  }
+
+  function renderDashboardQuickOverview(stats = {}, scans = []) {
+    const ring = $('#dashboardOverviewRing');
+    if (!ring) return;
+    const counts = dashboardOverviewCounts(stats, scans);
+    const total = Math.max(0, Number(counts.total || 0));
+    const segments = [
+      { key: 'inward', value: counts.inward, color: '#2f80ed' },
+      { key: 'outward', value: counts.outward, color: '#f59e0b' },
+      { key: 'manual', value: counts.manual, color: '#14b8a6' },
+      { key: 'failed', value: counts.failed, color: '#ef4444' }
+    ].filter((segment) => Number(segment.value || 0) > 0);
+    if (segments.length && total > 0) {
+      let current = 0;
+      const parts = segments.map((segment, index) => {
+        const percent = index === segments.length - 1 ? Math.max(0, 100 - current) : (Number(segment.value || 0) / total) * 100;
+        const end = index === segments.length - 1 ? 100 : Math.min(100, current + percent);
+        const piece = `${segment.color} ${current.toFixed(2)}% ${end.toFixed(2)}%`;
+        current = end;
+        return piece;
+      });
+      ring.style.background = `radial-gradient(circle at center, rgba(255,255,255,0.98) 0 39%, rgba(255,255,255,0.88) 39% 43%, transparent 43%), conic-gradient(${parts.join(', ')})`;
+    } else {
+      ring.style.background = 'radial-gradient(circle at center, rgba(255,255,255,0.98) 0 39%, rgba(255,255,255,0.88) 39% 43%, transparent 43%), conic-gradient(rgba(148, 163, 184, 0.26) 0 100%)';
+    }
+    ring.classList.toggle('is-empty', total === 0);
+    setText('dashboardOverviewTotal', wholeNumber(total));
+    [
+      ['dashboardOverviewInward', counts.inward],
+      ['dashboardOverviewOutward', counts.outward],
+      ['dashboardOverviewManual', counts.manual],
+      ['dashboardOverviewFailed', counts.failed]
+    ].forEach(([id, value]) => {
+      const percent = total > 0 ? Math.round((Number(value || 0) / total) * 100) : 0;
+      setText(id, `${wholeNumber(value)} (${percent}%)`);
+    });
   }
 
   function scanQuantity(scan = {}, fallback = 0) {
@@ -3024,21 +3109,21 @@
 
   function scanStreamRow(scan = {}) {
     const syncStatus = normalizedDisplaySyncStatus(scan) || 'pending';
+    const partDescription = scan.partDescription || scan.partName || scan.description || scan.part || '-';
     return `
       <tr>
         <td>${escapeHtml(compactDateTime(scan.timestamp))}</td>
-        <td>${partLink(scan.partNumber || scan.part, 'table-link', {
+        <td>${partLink(scan.partNumber || scan.part || scan.normalizedPartNumber || '', 'table-link', {
           removeMode: isAdminUser() ? 'scan' : '',
           scanId: scanHistoryRecordId(scan),
           dealerCode: scan.dealerCode || '',
           auditId: scan.auditId || '',
           copyLabel: 'Part number'
         })}</td>
+        <td>${escapeHtml(partDescription)}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? 0))}</td>
-        <td>${escapeHtml(scan.scanType || scan.type)}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin)}</td>
-        <td>${escapeHtml(scan.dealerCode || '')}</td>
         <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
         <td>${deviceLink(scan.deviceId)}</td>
         <td>${syncStatusBadge(syncStatus)}</td>
@@ -3048,6 +3133,7 @@
 
   function safeScanStreamRow(scan = {}) {
     const syncStatus = normalizedDisplaySyncStatus(scan) || 'pending';
+    const partDescription = scan.partDescription || scan.partName || scan.description || scan.part || '-';
     return `
       <tr>
         <td>${escapeHtml(compactDateTime(scan.timestamp || scan.scanTime || scan.createdAt || ''))}</td>
@@ -3058,11 +3144,10 @@
           auditId: scan.auditId || '',
           copyLabel: 'Part number'
         })}</td>
+        <td>${escapeHtml(partDescription)}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.mrp ?? 0))}</td>
-        <td>${escapeHtml(scan.scanType || scan.type || '-')}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin || '-')}</td>
-        <td>${escapeHtml(scan.dealerCode || '-')}</td>
         <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
         <td>${escapeHtml(scan.deviceId || '-')}</td>
         <td>${syncStatusBadge(syncStatus)}</td>
@@ -3076,6 +3161,7 @@
       const merged = mergeScanStreamRecords(scans);
       const rows = options.skipActiveAuditFilter === true ? merged : filterActiveAuditScans(merged);
       state.scanStreamRecords = rows;
+      renderDashboardQuickOverview(state.dashboardStats || {}, rows);
       if (body) {
         const emptyLabel = rows.length
           ? ''
@@ -3094,7 +3180,7 @@
               return safeScanStreamRow(scan);
             }
           }).join('')
-          : `<tr><td colspan="10" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
+          : `<tr><td colspan="9" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
       }
       if (!rows.length && Array.isArray(merged) && merged.length && options.skipActiveAuditFilter !== true) {
         console.warn('[DASHBOARD] stream filtered to zero rows', {
@@ -3112,7 +3198,8 @@
     } catch (error) {
       console.warn('[DASHBOARD] stream render failed', error.message);
       state.scanStreamRecords = [];
-      if (body) body.innerHTML = '<tr><td colspan="10" class="muted">No scans yet</td></tr>';
+      renderDashboardQuickOverview(state.dashboardStats || {}, []);
+      if (body) body.innerHTML = '<tr><td colspan="9" class="muted">No scans yet</td></tr>';
       return [];
     }
   }
@@ -3309,6 +3396,18 @@
     const currentScanQty = Number(String(($('#dashTotalScanQty') || {}).textContent || 0).replace(/,/g, ''));
     const scanQty = Number(scanQuantity(scan, 1));
     if (Number.isFinite(currentScanQty)) setDashboardKpiValue('dashTotalScanQty', wholeNumber(currentScanQty + (Number.isFinite(scanQty) ? scanQty : 1)));
+    const scanBucket = dashboardOverviewBucket(scan);
+    const bucketQty = Number.isFinite(scanQty) ? scanQty : 1;
+    const nextDashboardStats = { ...(state.dashboardStats || {}) };
+    if (scanBucket === 'inward') nextDashboardStats.totalInward = Number(nextDashboardStats.totalInward || 0) + bucketQty;
+    else if (scanBucket === 'outward') nextDashboardStats.totalOutward = Number(nextDashboardStats.totalOutward || 0) + bucketQty;
+    else if (scanBucket === 'manual') nextDashboardStats.manualCount = Number(nextDashboardStats.manualCount || 0) + bucketQty;
+    else if (scanBucket === 'failed') nextDashboardStats.failedCount = Number(nextDashboardStats.failedCount || 0) + bucketQty;
+    state.dashboardStats = {
+      ...nextDashboardStats,
+      totalScannedToday: Number.isFinite(currentToday) ? currentToday + 1 : Number(state.dashboardStats?.totalScannedToday || 0) + 1,
+      totalScannedQuantity: Number.isFinite(currentScanQty) ? currentScanQty + (Number.isFinite(scanQty) ? scanQty : 1) : Number(state.dashboardStats?.totalScannedQuantity || state.dashboardStats?.totalScanQty || 0) + (Number.isFinite(scanQty) ? scanQty : 1)
+    };
     setDashboardKpiValue('dashLastScanTime', compactDateTime(scan.timestamp || new Date()), { time: true });
     setDashboardKpiValue('dashLastScannedPart', scan.partNumber || scan.part || '-');
     setStatusPill('topRealtimeStatus', 'Realtime: Scan Received', 'blue');
@@ -3343,6 +3442,7 @@
           updateActiveAuditUi();
         }
         const stats = data.stats || {};
+        state.dashboardStats = stats;
         updateDashboardCards(stats);
         try {
           let recent = data.recent || data.records || data.scans || [];
@@ -3376,12 +3476,6 @@
         }
         state.dashboardLoaded = true;
         state.dashboardLastLoadedAt = Date.now();
-        loadDashboardProductGroupSummary({ force, signal: controller.signal }).catch((error) => {
-          if (error && error.name === 'AbortError') return;
-          if (state.dashboardLoadRequestId !== requestId) return;
-          const body = $('#productGroupSummaryRows');
-          if (body) body.innerHTML = `<tr><td colspan="7" class="muted">${escapeHtml(error.message)}</td></tr>`;
-        });
         return data;
       } catch (error) {
         if (error && error.name === 'AbortError') return null;
@@ -10284,6 +10378,7 @@
     }
     if (viewId === 'reports') {
       loadCategories().catch((error) => toast(error.message, 'error'));
+      loadDashboardProductGroupSummary({ force: true }).catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'master') {
       Promise.all([
@@ -10631,16 +10726,20 @@
     });
     $('#manualSyncBtn').addEventListener('click', runSync);
     $('#homeManualSyncBtn').addEventListener('click', runSync);
-    $('#dashboardViewReportBtn')?.addEventListener('click', () => {
-      const select = $('#dashboardDealerSelect');
-      state.dashboardDealerCode = cleanDealerCode((select && select.value) || state.dashboardDealerCode || '');
-      state.selectedProductGroupSummary = null;
-      state.productGroupDetailRows = [];
-      state.productGroupDetailTotals = null;
-      renderProductGroupDetails({ rows: [], totals: {} });
-      loadDashboard().catch((error) => toast(error.message, 'error'));
+    $('#quickActionStartScan')?.addEventListener('click', () => {
+      openView('scan');
+      $('#scan [data-subview="barcodeEntry"]')?.click();
+      setTimeout(() => $('#barcodeRaw')?.focus(), 0);
     });
-    $('#repairSyncStatusBtn')?.addEventListener('click', () => repairSyncStatus().catch((error) => toast(error.message, 'error')));
+    $('#quickActionManualEntry')?.addEventListener('click', () => {
+      openView('scan');
+      $('#scan [data-subview="manualEntry"]')?.click();
+      setTimeout(() => $('#manualScanForm [name="part"]')?.focus(), 0);
+    });
+    $('#quickActionViewReports')?.addEventListener('click', () => openView('reports'));
+    $('#quickActionBinTransfer')?.addEventListener('click', () => openView('binTransfer'));
+    $('#quickActionSyncNow')?.addEventListener('click', () => runSync().catch((error) => toast(error.message, 'error')));
+    $('#quickActionRepairSync')?.addEventListener('click', () => repairSyncStatus().catch((error) => toast(error.message, 'error')));
     $('#syncCenterManualBtn').addEventListener('click', runSync);
     $('#syncCenterRetryBtn').addEventListener('click', () => syncPendingQueue({ includeFailed: true }).catch((error) => toast(error.message, 'error')));
     $('#syncDebugRefreshBtn')?.addEventListener('click', () => loadLatestSyncDebug().catch((error) => toast(error.message, 'error')));
@@ -10668,7 +10767,10 @@
           state.productGroupDetailTotals = null;
           renderProductGroupDetails({ rows: [], totals: {} });
           state.reportCache.clear();
-          loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
+          const jobs = [];
+          if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
+          if ($('#reports')?.classList.contains('active')) jobs.push(loadDashboardProductGroupSummary({ force: true }));
+          Promise.all(jobs.map((job) => job.catch((error) => toast(error.message, 'error'))));
           return;
         }
         if (select.closest('#binLabelForm')) {
