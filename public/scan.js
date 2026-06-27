@@ -2251,7 +2251,8 @@
           partDescription: normalized.partDescription || normalized.partName || '',
           binLocation: normalized.binLocation || normalized.bin || '',
           scanType: normalized.scanType || normalized.type || currentScanType(),
-          qty: normalized.qty ?? normalized.quantity ?? 1
+          qty: normalized.qty ?? normalized.quantity ?? 1,
+          refresh: true
         },
         timeoutMs: 5500
       });
@@ -3578,9 +3579,9 @@
     byId('smartBinSuggestionDialog')?.addEventListener('cancel', (event) => event.preventDefault());
     byId('duplicateAlertDialog')?.addEventListener('cancel', (event) => event.preventDefault());
     byId('duplicateAlertOkBtn')?.addEventListener('click', () => closeDuplicateAlert());
-    byId('smartBinUseExistingBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('USE_EXISTING_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error'))); // This is now "OK"
-    byId('smartBinSaveNewBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('SAVE_NEW_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error'))); // This is now "Cancel"
-    byId('smartBinCancelBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('ABORT', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error'))); // This is the hidden, true cancel
+    byId('smartBinUseExistingBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('USE_EXISTING_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
+    byId('smartBinSaveNewBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('SAVE_NEW_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
+    byId('smartBinCancelBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('ABORT', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
     window.addEventListener('online', () => {
       renderConnectionBadge();
       renderUrlState();

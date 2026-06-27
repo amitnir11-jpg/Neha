@@ -1024,6 +1024,7 @@ async function smartBinWarningForScan(scan = {}) {
     partNumber,
     binLocation: currentBin
   }, {
+    refresh: true,
     settings: settings || {}
   }).catch(() => null);
 

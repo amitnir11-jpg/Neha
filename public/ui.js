@@ -4190,7 +4190,8 @@
             partDescription: normalized.partDescription || normalized.partName || '',
             binLocation: normalized.binLocation,
             scanType: normalized.scanType,
-            qty: normalized.qty
+            qty: normalized.qty,
+            refresh: true
           },
           timeoutMs: 1800
         });
@@ -4605,7 +4606,8 @@
                 partDescription: outbound.partDescription || outbound.partName || '',
                 binLocation: outbound.binLocation,
                 scanType: outbound.scanType,
-                qty: outbound.qty
+                qty: outbound.qty,
+                refresh: true
               },
               timeoutMs: 1800
             });

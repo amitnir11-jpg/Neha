@@ -1673,7 +1673,7 @@ async function smartBinSuggestionForScan(input = {}) {
     partNumber,
     binLocation: currentBin
   }, {
-    refresh: false,
+    refresh: true,
     settings: smartBinSettings || {}
   }).catch(() => ({
     dealerCode,
