@@ -331,6 +331,7 @@
 
     const response = await fetch(apiUrl(path), {
       ...options,
+      cache: options.cache || 'no-store',
       headers,
       body: isFormData ? options.body : options.body ? JSON.stringify(options.body) : undefined
     });
@@ -353,6 +354,7 @@
 
   async function fetchBlob(path, fileName) {
     const response = await fetch(apiUrl(path), {
+      cache: 'no-store',
       headers: state.token ? { Authorization: `Bearer ${state.token}` } : {}
     });
     if (!response.ok) {
@@ -395,6 +397,11 @@
     storageRemove('dakshAssignedDealers');
     storageRemove(ACTIVE_DEALER_KEY);
     storageRemove(scopedActiveDealerKey);
+    try {
+      if (window.sessionStorage) sessionStorage.clear();
+    } catch (error) {
+      console.warn('Session storage clear failed:', error);
+    }
   }
 
   function saveSession(payload, dealerCode = '') {

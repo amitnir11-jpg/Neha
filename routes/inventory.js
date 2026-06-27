@@ -344,8 +344,12 @@ function duplicateLookupPayload(input = {}) {
 async function findBackendDuplicate(input = {}, options = {}) {
   const payload = duplicateLookupPayload(input);
   if (payload.scanType === 'VERIFICATION') return null;
+  const allowCrossBinDuplicate = duplicatePolicy.allowCrossBinDuplicate(payload);
   const activeFilter = payload.scanType === 'INWARD' ? duplicatePolicy.activeUpiDuplicateFilter(payload) : null;
-  const activeDuplicate = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  let activeDuplicate = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  if (activeDuplicate && allowCrossBinDuplicate && !duplicatePolicy.sameBinLocation(activeDuplicate, payload)) {
+    activeDuplicate = null;
+  }
   if (activeDuplicate) {
     return {
       existing: activeDuplicate,
@@ -355,7 +359,10 @@ async function findBackendDuplicate(input = {}, options = {}) {
     };
   }
   const partBinFilter = duplicatePolicy.partBinDuplicateFilter(payload);
-  const partBinDuplicate = partBinFilter ? await Inventory.findOne(partBinFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  let partBinDuplicate = partBinFilter ? await Inventory.findOne(partBinFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  if (partBinDuplicate && allowCrossBinDuplicate && !duplicatePolicy.sameBinLocation(partBinDuplicate, payload)) {
+    partBinDuplicate = null;
+  }
   if (partBinDuplicate) {
     return {
       existing: partBinDuplicate,
@@ -2291,6 +2298,21 @@ async function saveScanRequest(req, res) {
       upiNo
     });
     const globalUpiKey = duplicatePolicy.globalUpiKey({ ...req.body, rawScanString: rawScanText, upiId, upiNo });
+    const allowCrossBinDuplicate = duplicatePolicy.allowCrossBinDuplicate({
+      ...req.body,
+      dealerCode,
+      auditId,
+      scanType: type,
+      type,
+      partNumber: part,
+      binLocation,
+      bin: binLocation,
+      upiNo,
+      upiId
+    });
+    const storedUpiToken = allowCrossBinDuplicate && binLocation && (upiNo || upiCode)
+      ? `${upiNo || upiCode}::${binLocation}`
+      : (upiCode || upiNo);
     const qrFingerprint = duplicateIdentityRaw ? makeQrFingerprint({
       ...req.body,
       dealerCode,
@@ -2627,7 +2649,28 @@ async function saveScanRequest(req, res) {
       pricePeriodStatus: valueFields.pricePeriodStatus,
       dlc: valueFields.currentCatalogueDLC || valueFields.dlc || 0,
       dlc: finalDlc,
-      upiCode,
+      allowCrossBinDuplicate,
+      smartBinEnabled: booleanFlag(req.body.smartBinEnabled),
+      smartBinDecision: String(req.body.smartBinDecision || '').trim().toUpperCase(),
+      smartBinReason: String(req.body.smartBinReason || '').trim(),
+      smartBinSuggestedBin: String(req.body.smartBinSuggestedBin || '').trim().toUpperCase(),
+      smartBinSelectedBin: String(req.body.smartBinSelectedBin || binLocation || '').trim().toUpperCase(),
+      smartBinCurrentBin: String(req.body.smartBinCurrentBin || binLocation || '').trim().toUpperCase(),
+      smartBinExistingBins: Array.isArray(req.body.smartBinExistingBins) ? req.body.smartBinExistingBins : [],
+      smartBinAllowMultipleLocations: req.body.smartBinAllowMultipleLocations === undefined ? undefined : booleanFlag(req.body.smartBinAllowMultipleLocations),
+      smartBinMaxAllowedLocationsPerPart: req.body.smartBinMaxAllowedLocationsPerPart === undefined
+        ? undefined
+        : Math.max(1, numberValue(req.body.smartBinMaxAllowedLocationsPerPart, 3) || 3),
+      smartBinReasonRequired: req.body.smartBinReasonRequired === undefined ? undefined : booleanFlag(req.body.smartBinReasonRequired),
+      smartBinLocationType: String(req.body.smartBinLocationType || (allowCrossBinDuplicate ? 'SECONDARY' : 'PRIMARY')).trim().toUpperCase(),
+      smartBinIsSecondaryLocation: req.body.smartBinIsSecondaryLocation === undefined
+        ? allowCrossBinDuplicate
+        : booleanFlag(req.body.smartBinIsSecondaryLocation),
+      smartBinCheckedAt: String(req.body.smartBinCheckedAt || '').trim(),
+      smartBinDecisionAt: String(req.body.smartBinDecisionAt || '').trim(),
+      smartBinDecisionBy: String(req.body.smartBinDecisionBy || req.body.userName || req.body.staffName || '').trim(),
+      smartBinAuditTrail: req.body.smartBinAuditTrail && typeof req.body.smartBinAuditTrail === 'object' ? req.body.smartBinAuditTrail : undefined,
+      upiCode: storedUpiToken,
       bin: binLocation,
       binLocation,
       autoDetectedBin,
@@ -2645,7 +2688,7 @@ async function saveScanRequest(req, res) {
       type,
       scanType: type,
       upiId,
-      upiNo: upiCode || upiNo,
+      upiNo: storedUpiToken,
       dealerCode,
       dealerName: dealer ? dealer.dealerName : String(req.body.dealerName || ''),
       auditId,
@@ -2685,6 +2728,25 @@ async function saveScanRequest(req, res) {
     } catch (error) {
       if (!isDuplicateKeyError(error)) throw error;
       let duplicate = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
+      if (duplicate) {
+        duplicate = await backfillDuplicateMrp(duplicate, {
+          partNumber: part,
+          rawScanText,
+          masterPrice,
+          qty,
+        });
+        await refreshInventoryUpiState(duplicate).catch(() => undefined);
+        await recordPartBinLocationFromScan(duplicate).catch(() => undefined);
+        emitScanUpdate(req, duplicate).catch((emitError) => console.warn('[MANUAL SCAN] duplicate replay realtime failed', emitError.message));
+        return res.json({
+          success: true,
+          alreadyApplied: true,
+          updated: true,
+          duplicate: false,
+          scan: publicScan(duplicate),
+          message: 'Scan already saved successfully.'
+        });
+      }
       if (!duplicate) {
         const backendDuplicate = await findBackendDuplicate({
           ...req.body,

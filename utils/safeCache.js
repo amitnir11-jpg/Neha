@@ -261,10 +261,31 @@ async function getCachedResponse(namespace, query, builder, options = {}) {
     ttlMs: defaults.ttlMs,
     tags: defaults.tags,
     ignoreKeys: defaults.ignoreKeys,
+    skipCache: true,
     ...options
   };
   const prepared = cacheKey(namespace, query, mergedOptions);
   const ttlMs = Math.max(5_000, Number(mergedOptions.ttlMs || defaults.ttlMs || DEFAULT_TTL_MS));
+  if (mergedOptions.skipCache !== false) {
+    const dataVersion = currentDataVersion(prepared.tags, prepared.scope);
+    const payload = await Promise.resolve().then(() => builder(prepared.normalizedQuery, {
+      namespace,
+      scope: prepared.scope,
+      cacheVersion: DEFAULT_CACHE_VERSION,
+      dataVersion,
+      cacheHit: false,
+      cacheStatus: 'Fresh generated'
+    }));
+    return {
+      data: payload,
+      cacheHit: false,
+      cacheStatus: 'Fresh generated',
+      cacheVersion: DEFAULT_CACHE_VERSION,
+      dataVersion,
+      scope: prepared.scope,
+      key: prepared.key
+    };
+  }
   const existing = cache.get(prepared.key);
   const now = Date.now();
   if (existing && existing.expiresAt > now) {

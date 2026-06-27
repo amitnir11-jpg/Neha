@@ -1,6 +1,6 @@
 (function () {
-  const APP_VERSION = 'Daksh Mobile Scanner v1.2.2';
-  const CACHE_VERSION = '20260626-smart-bin-cross-bin-local-fix';
+  const APP_VERSION = '20260627-smart-cache-v2';
+  const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
   const SESSION_KEY = 'dakshFreshSession';
@@ -205,6 +205,9 @@
   function clearSession() {
     state.session = null;
     storageRemove(SESSION_KEY);
+    try {
+      if (window.sessionStorage) sessionStorage.clear();
+    } catch (_) {}
   }
 
   function loadMode() {
@@ -515,7 +518,7 @@
     renderLoginDealers();
     try {
       const data = await api('/api/mobile/config', { auth: false, timeoutMs: LOGIN_CONFIG_TIMEOUT_MS });
-      if (reloadForScannerBuild(data.webScannerBuild)) return null;
+      if (await reloadForScannerBuild(data.webScannerBuild)) return null;
       state.authReady = true;
       state.canonicalUrl = data.mobileScannerUrl || data.scanUrl || state.canonicalUrl;
       state.loginUrl = data.loginUrl || state.loginUrl;
@@ -541,24 +544,33 @@
     }
   }
 
-  function reloadForScannerBuild(serverBuild = '') {
+  async function reloadForScannerBuild(serverBuild = '') {
     const build = clean(serverBuild);
     if (!build || build === CACHE_VERSION) return false;
-    const reloadKey = `dakshScannerReload:${build}`;
     try {
-      if (sessionStorage.getItem(reloadKey) === '1') return false;
-      sessionStorage.setItem(reloadKey, '1');
-    } catch (_) {}
-    const nextUrl = new URL(window.location.href);
-    nextUrl.searchParams.set('build', build);
-    window.location.replace(nextUrl.toString());
+      if (window.DAKSH_RUNTIME && typeof window.DAKSH_RUNTIME.refreshForVersionMismatch === 'function') {
+        return await window.DAKSH_RUNTIME.refreshForVersionMismatch(build, { quiet: false });
+      }
+    } catch (error) {
+      console.warn('[VERSION] runtime refresh failed', error);
+    }
+    const confirmed = window.confirm('New update available. Please refresh application.');
+    if (!confirmed) return true;
+    try {
+      if (window.DAKSH_RUNTIME && typeof window.DAKSH_RUNTIME.clearClientCaches === 'function') {
+        await window.DAKSH_RUNTIME.clearClientCaches();
+      }
+    } catch (error) {
+      console.warn('[VERSION] cache clear fallback failed', error);
+    }
+    window.location.reload();
     return true;
   }
 
   async function checkScannerBuild() {
     try {
       const data = await api(`/api/mobile/version?t=${Date.now()}`, { auth: false, timeoutMs: 7000 });
-      reloadForScannerBuild(data.webScannerBuild);
+      await reloadForScannerBuild(data.webScannerBuild);
     } catch (_) {}
   }
 
@@ -580,6 +592,8 @@
       fetchOptions.signal = controller.signal;
       timeout = setTimeout(() => controller.abort(), Number(timeoutMs));
     }
+
+    fetchOptions.cache = fetchOptions.cache || 'no-store';
 
     return fetch(apiUrl(path), fetchOptions).then(async (response) => {
       const data = await response.json().catch(() => ({}));
@@ -976,7 +990,7 @@
   }
 
   function recordKey(row = {}) {
-    return clean(row.scanId || row.uniqueScanId || row.localId || row.clientScanId || row.syncKey || row.clientSyncKey || '');
+    return clean(row.uniqueLocalId || row.scanId || row.uniqueScanId || row.localId || row.clientScanId || row.syncKey || row.clientSyncKey || '');
   }
 
   function upsertStateRow(record = {}) {
@@ -992,8 +1006,8 @@
     state.allRows = rows;
   }
 
-  function removeStateRow(scanId = '') {
-    const key = recordKey({ scanId });
+  function removeStateRow(identifier = '') {
+    const key = typeof identifier === 'object' ? recordKey(identifier) : clean(identifier);
     if (!key) return;
     state.allRows = stateRows().filter((row) => recordKey(row) !== key);
   }
@@ -1261,40 +1275,35 @@
   function duplicateLookupRows() {
     const rows = [];
     const seen = new Set();
-    const push = (row = {}) => {
-      const key = recordKey(row)
-        || scanIdentityKey(row)
-        || `${upper(row.dealerCode || '')}|${clean(row.auditId || '')}|${rowUpiCode(row) || duplicateRawKey(row)}|${upper(rowBin(row))}`;
-      if (!key || seen.has(key)) return;
-      seen.add(key);
+    const pushRow = (row = {}) => {
+      const key = recordKey(row) || scanIdentityKey(row) || clean(row.scanId || row.uniqueScanId || row.localId || row.syncKey || '');
+      if (key && seen.has(key)) return;
+      if (key) seen.add(key);
       rows.push(row);
     };
-    sessionRows().forEach(push);
-    if (Array.isArray(state.liveRecentRows)) state.liveRecentRows.forEach(push);
+    sessionRows().forEach(pushRow);
+    if (Array.isArray(state.liveRecentRows)) state.liveRecentRows.forEach(pushRow);
     return rows;
   }
 
   function isSameBinDuplicateScan(record = {}, existing = {}) {
     if (!rowBlocksDuplicate(existing)) return false;
-    if (recordKey(record) && recordKey(record) === recordKey(existing)) return false;
     const recordDealer = upper(record.dealerCode || activeDealerCode());
     const existingDealer = upper(existing.dealerCode || existing.dealer || '');
     if (recordDealer && existingDealer && recordDealer !== existingDealer) return false;
-    const recordAudit = clean(record.auditId || activeAuditId());
-    const existingAudit = clean(existing.auditId || existing.audit || '');
-    if (recordAudit && existingAudit && recordAudit !== existingAudit) return false;
+    const recordType = rowMode(record);
+    const existingType = rowMode(existing);
+    if (recordType && existingType && recordType !== existingType) return false;
+    const recordKeyValue = recordKey(record);
+    const existingKeyValue = recordKey(existing);
+    if (recordKeyValue && existingKeyValue && recordKeyValue === existingKeyValue) return false;
     const recordBin = upper(rowBin(record));
     const existingBin = upper(rowBin(existing));
     if (!recordBin || !existingBin || recordBin !== existingBin) return false;
     const recordPart = duplicatePartKey(record);
     const existingPart = duplicatePartKey(existing);
     if (recordPart && existingPart && recordPart !== existingPart) return false;
-    const recordUpi = rowUpiCode(record) || extractUpiIdFromText(record);
-    const existingUpi = rowUpiCode(existing) || extractUpiIdFromText(existing);
-    if (recordUpi && existingUpi) return recordUpi === existingUpi;
-    const recordRaw = duplicateRawKey(record);
-    const existingRaw = duplicateRawKey(existing);
-    return Boolean(recordRaw && existingRaw && recordRaw === existingRaw);
+    return Boolean(recordDealer && existingDealer && recordType && existingType && recordPart && existingPart && recordBin && existingBin);
   }
 
   async function deleteHistoryRow(row = {}) {
@@ -2000,10 +2009,12 @@
     const scanType = currentScanType();
     const part = normalizeText(partNumber || parsePartCandidate(rawText));
     const scanId = `SCAN-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`.toUpperCase();
+    const uniqueLocalId = scanId;
     const sourceType = manual ? 'manual' : 'mobile';
     const record = {
       scanId,
       uniqueScanId: scanId,
+      uniqueLocalId,
       clientScanId: scanId,
       localId: scanId,
       syncKey: scanId,
@@ -2062,6 +2073,7 @@
       smartBinAllowMultipleLocations: undefined,
       smartBinMaxAllowedLocationsPerPart: undefined,
       smartBinReasonRequired: undefined,
+      allowCrossBinDuplicate: false,
       smartBinCheckedAt: '',
       smartBinDecisionAt: '',
       smartBinDecisionBy: '',
@@ -2115,6 +2127,7 @@
       ...record,
       binLocation: finalBin,
       bin: finalBin,
+      allowCrossBinDuplicate: normalizedAction === 'SAVE_NEW_BIN',
       smartBinEnabled: true,
       smartBinDecision: normalizedAction || '',
       smartBinReason: normalizedAction === 'SAVE_NEW_BIN'
@@ -2217,78 +2230,85 @@
     const normalized = { ...record };
     if (clean(normalized.smartBinDecision || '')) return normalized;
 
-    const localExisting = localDuplicateForRecord(normalized);
-    if (localExisting) {
-      showDuplicateOnce(normalized, localExisting, duplicateScanMessage(localExisting));
-      cameraState('Duplicate blocked');
-      return null;
-    }
-
-    if (smartBinPreflightEligible(normalized)) {
-      const localSmartBinSuggestion = buildLocalSmartBinSuggestion(normalized);
-      if (localSmartBinSuggestion?.shouldPrompt) {
-        const decision = await openSmartBinSuggestionModal({
-          ...localSmartBinSuggestion,
-          currentBin: localSmartBinSuggestion.currentBin || normalized.binLocation || normalized.bin || '',
-          newBin: localSmartBinSuggestion.newBin || normalized.binLocation || normalized.bin || '',
-          existingBin: localSmartBinSuggestion.existingBin || (Array.isArray(localSmartBinSuggestion.existingBins) && localSmartBinSuggestion.existingBins[0] && localSmartBinSuggestion.existingBins[0].binLocation) || ''
+    if (smartBinPreflightEligible(normalized) && navigator.onLine && state.session?.token) {
+      await refreshLiveRecentScans({ force: true, reason: 'smart-bin-preflight' }).catch(() => undefined);
+      try {
+        const suggestion = await api('/api/scans/smart-bin-check', {
+          method: 'POST',
+          body: {
+            dealerCode: normalized.dealerCode || activeDealerCode(),
+            auditId: normalized.auditId || activeAuditId(),
+            partNumber: normalized.partNumber || normalized.part || '',
+            partDescription: normalized.partDescription || normalized.partName || '',
+            binLocation: normalized.binLocation || normalized.bin || '',
+            scanType: normalized.scanType || normalized.type || currentScanType(),
+            qty: normalized.qty ?? normalized.quantity ?? 1,
+            refresh: true
+          },
+          timeoutMs: 5500,
+          cache: 'no-store'
         });
-        if (!decision) return null;
-        return applySmartBinDecisionToRecord(normalized, localSmartBinSuggestion, decision);
+        if (suggestion && suggestion.shouldPrompt) {
+          const decision = await openSmartBinSuggestionModal({
+            ...suggestion,
+            currentBin: suggestion.currentBin || normalized.binLocation || normalized.bin || '',
+            reasonRequired: Boolean(suggestion.reasonRequired ?? suggestion.requireReason ?? true)
+          });
+          if (!decision) return null;
+          return applySmartBinDecisionToRecord(normalized, suggestion, decision);
+        }
+        return normalized;
+      } catch (error) {
+        console.warn('[SMART BIN] server preflight skipped', error.message);
       }
     }
 
-    if (!navigator.onLine || !state.session?.token) return normalized;
-    if (!smartBinPreflightEligible(normalized)) return normalized;
-
-    try {
-      const suggestion = await api('/api/scans/smart-bin-check', {
-        method: 'POST',
-        body: {
-          dealerCode: normalized.dealerCode || activeDealerCode(),
-          auditId: normalized.auditId || activeAuditId(),
-          partNumber: normalized.partNumber || normalized.part || '',
-          partDescription: normalized.partDescription || normalized.partName || '',
-          binLocation: normalized.binLocation || normalized.bin || '',
-          scanType: normalized.scanType || normalized.type || currentScanType(),
-          qty: normalized.qty ?? normalized.quantity ?? 1,
-          refresh: true
-        },
-        timeoutMs: 5500
+    const localSmartBinSuggestion = buildLocalSmartBinSuggestion(normalized);
+    if (localSmartBinSuggestion?.shouldPrompt) {
+      const decision = await openSmartBinSuggestionModal({
+        ...localSmartBinSuggestion,
+        currentBin: localSmartBinSuggestion.currentBin || normalized.binLocation || normalized.bin || '',
+        newBin: localSmartBinSuggestion.newBin || normalized.binLocation || normalized.bin || '',
+        existingBin: localSmartBinSuggestion.existingBin || (Array.isArray(localSmartBinSuggestion.existingBins) && localSmartBinSuggestion.existingBins[0] && localSmartBinSuggestion.existingBins[0].binLocation) || ''
       });
-      if (suggestion && suggestion.shouldPrompt) {
-        const decision = await openSmartBinSuggestionModal({
-          ...suggestion,
-          currentBin: suggestion.currentBin || normalized.binLocation || normalized.bin || '',
-          reasonRequired: Boolean(suggestion.reasonRequired ?? suggestion.requireReason ?? true)
-        });
-        if (!decision) return null;
-        return applySmartBinDecisionToRecord(normalized, suggestion, decision);
-      }
-      return normalized;
-    } catch (error) {
-      console.warn('[SMART BIN] preflight skipped', error.message);
-      return normalized;
+      if (!decision) return null;
+      return applySmartBinDecisionToRecord(normalized, localSmartBinSuggestion, decision);
     }
+
+    return normalized;
   }
 
   async function preflightDuplicateDecision(record = {}) {
     const normalized = { ...record };
     if (rowMode(normalized) === 'VERIFICATION') return normalized;
+    const smartBinDecision = clean(normalized.smartBinDecision || '').toUpperCase();
+    if (smartBinDecision === 'SAVE_NEW_BIN' || normalized.allowCrossBinDuplicate) {
+      return normalized;
+    }
+
+    if (navigator.onLine && state.session?.token) {
+      await refreshLiveRecentScans({ force: true, reason: 'duplicate-preflight' }).catch(() => undefined);
+      const result = await checkBackendDuplicateBeforeSync(normalized, { timeoutMs: 5000 });
+      if (result?.duplicate) {
+        const existing = result.existing || normalized;
+        showDuplicateOnce(normalized, existing, result.message || duplicateScanMessage(existing));
+        cameraState('Duplicate blocked');
+        return null;
+      }
+      if (!result?.checkedOnline) {
+        const localExisting = localDuplicateForRecord(normalized);
+        if (localExisting) {
+          showDuplicateOnce(normalized, localExisting, duplicateScanMessage(localExisting));
+          cameraState('Duplicate blocked');
+          return null;
+        }
+      }
+      return normalized;
+    }
 
     const localExisting = localDuplicateForRecord(normalized);
     if (localExisting) {
       showDuplicateOnce(normalized, localExisting, duplicateScanMessage(localExisting));
-      cameraState('Duplicate blocked');
-      return null;
-    }
-
-    if (!navigator.onLine || !state.session?.token) return normalized;
-
-    const result = await checkBackendDuplicateBeforeSync(normalized, { timeoutMs: 5000 });
-    if (result?.duplicate) {
-      const existing = result.existing || normalized;
-      showDuplicateOnce(normalized, existing, result.message || duplicateScanMessage(existing));
       cameraState('Duplicate blocked');
       return null;
     }
@@ -2545,6 +2565,7 @@
 
   function syncIdentityKeys(row = {}) {
     const values = [
+      row.uniqueLocalId,
       row.scanId,
       row.uniqueScanId,
       row.clientScanId,
@@ -2577,6 +2598,7 @@
   function convertToSyncPayload(row = {}) {
     const timestamp = row.timestamp || row.scanTime || row.mobileCreatedAt || nowIso();
     return {
+      uniqueLocalId: row.uniqueLocalId || row.scanId,
       scanId: row.scanId,
       uniqueScanId: row.uniqueScanId || row.scanId,
       clientScanId: row.clientScanId || row.scanId,
@@ -2633,6 +2655,7 @@
       source: row.source || { source: row.scanSource || 'mobile', scanSource: row.scanSource || 'mobile' },
       entryMode: row.entryMode || 'camera',
       entryChannel: row.entryChannel || 'web',
+      allowCrossBinDuplicate: Boolean(row.allowCrossBinDuplicate || row.smartBinIsSecondaryLocation || row.smartBinDecision === 'SAVE_NEW_BIN'),
       smartBinEnabled: row.smartBinEnabled === undefined ? undefined : Boolean(row.smartBinEnabled),
       smartBinDecision: row.smartBinDecision || '',
       smartBinReason: row.smartBinReason || '',
@@ -2664,6 +2687,13 @@
     };
   }
 
+  async function removeStoredQueueRecord(record = {}) {
+    const key = clean(record.uniqueLocalId || record.scanId || record.uniqueScanId || record.localId || record.clientScanId || record.syncKey || '');
+    if (!key) return;
+    await deleteRecord(key).catch(() => undefined);
+    removeStateRow({ uniqueLocalId: key, scanId: key, uniqueScanId: key, localId: key, clientScanId: key, syncKey: key });
+  }
+
   async function saveRecordToServer(record = {}, options = {}) {
     const response = await api('/api/scans/process', {
       method: 'POST',
@@ -2678,8 +2708,7 @@
       retryCount: Number(record.retryCount || 0),
       serverAck: serverScan
     });
-    await putRecord(saved);
-    upsertStateRow(saved);
+    await removeStoredQueueRecord(record);
     applyRecordToUi(saved);
     void enrichStoredRecord(saved).catch(() => undefined);
     if (options.refreshRecent !== false) {
@@ -2689,26 +2718,23 @@
   }
 
   async function markDuplicateRecord(record = {}, existing = {}, message = '') {
-    const latest = await getRecord(record.scanId).catch(() => null);
+    const latest = await getRecord(record.uniqueLocalId || record.scanId || record.uniqueScanId || record.localId || '').catch(() => null);
     const source = latest || record;
     const duplicateMessage = message || duplicateScanMessage(existing || source);
-    const next = {
+    await removeStoredQueueRecord(source);
+    updateLastScan({
       ...source,
       status: 'duplicate',
       syncStatus: 'duplicate',
       syncError: duplicateMessage,
       serverDuplicateState: 'duplicate',
       serverDuplicateCheckedAt: nowIso(),
-      retryCount: Number(source.retryCount || 0),
       serverAck: existing || source
-    };
-    await putRecord(next);
-    upsertStateRow(next);
-    updateLastScan(next);
+    });
     renderQueueBadgeCounts();
     renderHistoryRows();
     cameraState('Duplicate blocked');
-    showDuplicateOnce(next, existing || next, duplicateMessage);
+    showDuplicateOnce(source, existing || source, duplicateMessage);
   }
 
   async function clearStaleDuplicateMarks(record = {}) {
@@ -2744,25 +2770,24 @@
       return { checkedOnline: false, duplicate: false, existing: null, message: '', cleared: 0 };
     }
     try {
+      const duplicatePayload = {
+        ...convertToSyncPayload(record),
+        allowCrossBinDuplicate: false,
+        smartBinAllowCrossBinDuplicate: false,
+        smartBinIsSecondaryLocation: false,
+        smartBinDecision: ''
+      };
       const data = await api('/api/scan/check-duplicate', {
         method: 'POST',
-        body: convertToSyncPayload(record),
+        body: duplicatePayload,
         timeoutMs: Number(options.timeoutMs || 10000)
       });
-      const latest = await getRecord(record.scanId).catch(() => null);
-      if (!latest || !['pending', 'failed'].includes(rowStatus(latest))) {
-        const existing = data?.existing || data?.scan || null;
-        const message = clean(data?.message || duplicateScanMessage(existing || latest || record));
-        const cleared = data && !data.duplicate ? await clearStaleDuplicateMarks(record).catch(() => 0) : 0;
-        return { checkedOnline: true, duplicate: Boolean(data && data.duplicate), existing, message, cleared };
-      }
+      const existing = data?.existing || data?.scan || null;
+      const message = clean(data?.message || duplicateScanMessage(existing || record));
       if (data && data.duplicate) {
-        const existing = data.existing || data.scan || {};
-        const message = clean(data.message) || duplicateScanMessage(existing || latest || record);
-        await markDuplicateRecord(latest, existing, message);
         return { checkedOnline: true, duplicate: true, existing, message, cleared: 0 };
       }
-      const cleared = await clearStaleDuplicateMarks(latest || record).catch(() => 0);
+      const cleared = await clearStaleDuplicateMarks(record).catch(() => 0);
       return { checkedOnline: true, duplicate: false, existing: null, message: '', cleared };
     } catch (error) {
       if (authExpired(error)) {
@@ -3147,15 +3172,7 @@
         try {
           const readyRow = await preflightSmartBinDecision(row);
           if (!readyRow) {
-            const next = {
-              ...row,
-              status: 'rejected',
-              syncStatus: 'rejected',
-              syncError: 'Smart bin confirmation cancelled',
-              retryCount: Number(row.retryCount || 0) + 1
-            };
-            await putRecord(next);
-            upsertStateRow(next);
+            await removeStoredQueueRecord(row);
             rejectedCount += 1;
             continue;
           }
@@ -3179,15 +3196,7 @@
               requireReason: false
             });
             if (!decision) {
-              const next = {
-                ...row,
-                status: 'rejected',
-                syncStatus: 'rejected',
-                syncError: 'Smart bin confirmation cancelled',
-                retryCount: Number(row.retryCount || 0) + 1
-              };
-              await putRecord(next);
-              upsertStateRow(next);
+              await removeStoredQueueRecord(row);
               rejectedCount += 1;
               continue;
             }
@@ -3237,15 +3246,19 @@
             || ['invalid', 'rejected'].includes(clean(data.status).toLowerCase());
           if (rejected) rejectedCount += 1;
           else failedCount += 1;
-          const next = {
-            ...row,
-            status: rejected ? 'rejected' : 'failed',
-            syncStatus: rejected ? 'rejected' : 'failed',
-            syncError: message,
-            retryCount: Number(row.retryCount || 0) + 1
-          };
-          await putRecord(next);
-          upsertStateRow(next);
+          if (rejected) {
+            await removeStoredQueueRecord(row);
+          } else {
+            const next = {
+              ...row,
+              status: 'failed',
+              syncStatus: 'failed',
+              syncError: message,
+              retryCount: Number(row.retryCount || 0) + 1
+            };
+            await putRecord(next);
+            upsertStateRow(next);
+          }
         }
       }
 

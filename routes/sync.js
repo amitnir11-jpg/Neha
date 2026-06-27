@@ -1154,6 +1154,7 @@ function applySmartBinDecision(scan = {}, suggestion = {}, actionInput = '') {
     scan.smartBinDecisionBy = decisionBy;
     scan.smartBinLocationType = 'SECONDARY';
     scan.smartBinIsSecondaryLocation = true;
+    scan.allowCrossBinDuplicate = true;
     scan.smartBinAuditTrail = {
       ...trailBase,
       decision: 'SAVE_NEW_BIN',
@@ -1327,8 +1328,12 @@ async function emitEnterpriseRealtime(io, scans = []) {
 
 async function scanPolicyResult(scan = {}) {
   scan.globalUpiKey = scan.globalUpiKey || duplicatePolicy.globalUpiKey(scan);
+  const allowCrossBinDuplicate = duplicatePolicy.allowCrossBinDuplicate(scan);
   const activeFilter = upper(scan.scanType || scan.type) === 'INWARD' ? duplicatePolicy.activeUpiDuplicateFilter(scan) : null;
-  const activeDuplicate = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  let activeDuplicate = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  if (activeDuplicate && allowCrossBinDuplicate && !duplicatePolicy.sameBinLocation(activeDuplicate, scan)) {
+    activeDuplicate = null;
+  }
   if (activeDuplicate) {
     return {
       ok: false,
@@ -1359,7 +1364,10 @@ async function scanPolicyResult(scan = {}) {
   }
   if (isManualEntry(scan) && ['INWARD', 'DAMAGE'].includes(scan.scanType)) {
     const manualFilter = duplicatePolicy.manualBinDuplicateFilter(scan);
-    const manualDuplicate = manualFilter ? await Inventory.findOne(manualFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+    let manualDuplicate = manualFilter ? await Inventory.findOne(manualFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+    if (manualDuplicate && allowCrossBinDuplicate && !duplicatePolicy.sameBinLocation(manualDuplicate, scan)) {
+      manualDuplicate = null;
+    }
     if (manualDuplicate) {
       const payload = manualDuplicatePayload(manualDuplicate, requestedQuantity(scan, 1));
       return {
@@ -1372,7 +1380,10 @@ async function scanPolicyResult(scan = {}) {
     }
   }
   const partBinFilter = duplicatePolicy.partBinDuplicateFilter(scan);
-  const partBinDuplicate = partBinFilter ? await Inventory.findOne(partBinFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  let partBinDuplicate = partBinFilter ? await Inventory.findOne(partBinFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  if (partBinDuplicate && allowCrossBinDuplicate && !duplicatePolicy.sameBinLocation(partBinDuplicate, scan)) {
+    partBinDuplicate = null;
+  }
   if (partBinDuplicate) {
     return {
       ok: false,
@@ -1513,6 +1524,10 @@ async function saveNormalizedScan(scan, req) {
   if (scan.scanType === 'FITTED') scan.qrFingerprint = '';
   if (scan.scanType === 'OUTWARD' && scan.qrFingerprint) scan.qrFingerprint = `OUTWARD:${scan.qrFingerprint}`;
   scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
+  let allowCrossBinDuplicate = duplicatePolicy.allowCrossBinDuplicate(scan);
+  let storedUpiToken = allowCrossBinDuplicate && scan.binLocation && (scan.upiNo || scan.upiId)
+    ? `${scan.upiNo || scan.upiId}::${scan.binLocation}`
+    : (scan.upiNo || scan.upiId);
   const smartBinState = await smartBinWarningForScan(scan);
   if (smartBinState) {
     // If the client has already made a decision, apply it and proceed.
@@ -1532,6 +1547,10 @@ async function saveNormalizedScan(scan, req) {
     scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
     scan.globalUpiKey = duplicatePolicy.globalUpiKey(scan);
   }
+  allowCrossBinDuplicate = duplicatePolicy.allowCrossBinDuplicate(scan);
+  storedUpiToken = allowCrossBinDuplicate && scan.binLocation && (scan.upiNo || scan.upiId)
+    ? `${scan.upiNo || scan.upiId}::${scan.binLocation}`
+    : (scan.upiNo || scan.upiId);
   const policy = await scanPolicyResult(scan);
   if (!policy.ok) {
     const confirmedUpdate = await confirmedDuplicateUpdate(policy, scan, req);
@@ -1626,7 +1645,8 @@ async function saveNormalizedScan(scan, req) {
     type: scan.scanType,
     scanType: scan.scanType,
     upiId: scan.upiId,
-    upiNo: scan.upiNo || scan.upiId,
+    upiCode: storedUpiToken,
+    upiNo: storedUpiToken,
     dealerCode: scan.dealerCode,
     dealerName: scan.dealerName || (dealer ? dealer.dealerName : ''),
     auditId: scan.auditId || (dealer ? dealer.currentAuditId : ''),
@@ -1665,11 +1685,23 @@ async function saveNormalizedScan(scan, req) {
     masterMatch: Boolean(master),
     isMasterMatched: Boolean(master)
     });
-  } catch (error) {
-    if (!isDuplicateKeyError(error)) throw error;
-    const smartBinDecision = smartBinDecisionAction(scan);
-    if (!smartBinDecision || (!smartBinDecisionUsesExisting(smartBinDecision) && !smartBinDecisionAllowsNewLocation(smartBinDecision))) {
-      const smartBinState = await smartBinWarningForScan(scan);
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+      const retryExisting = duplicateQuery(scan) ? await Inventory.findOne(duplicateQuery(scan)).lean() : null;
+      if (retryExisting) {
+        await refreshInventoryUpiState(retryExisting).catch(() => undefined);
+        await recordPartBinLocationFromScan(retryExisting).catch(() => undefined);
+        await emitEnterpriseRealtime(req.io || req.app.get('io'), [retryExisting]).catch(() => undefined);
+        return {
+          status: 'synced',
+          scan: retryExisting,
+          error: '',
+          alreadyApplied: true
+        };
+      }
+      const smartBinDecision = smartBinDecisionAction(scan);
+      if (!smartBinDecision || (!smartBinDecisionUsesExisting(smartBinDecision) && !smartBinDecisionAllowsNewLocation(smartBinDecision))) {
+        const smartBinState = await smartBinWarningForScan(scan);
       if (smartBinState) return smartBinState;
     }
     const activeFilter = upper(scan.scanType || scan.type) === 'INWARD' ? duplicatePolicy.activeUpiDuplicateFilter(scan) : null;

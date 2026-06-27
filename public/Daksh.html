@@ -136,6 +136,7 @@
               <span id="userRoleLabel" class="topbar-user-role">Administrator</span>
               <strong id="userBadge">admin</strong>
             </div>
+            <button id="clearCacheReloadBtn" class="btn light topbar-logout-btn admin-only" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sync"></use></svg><span>Clear Cache + Reload</span></button>
             <button id="logoutBtn" class="btn light topbar-logout-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-logout"></use></svg><span>Logout</span></button>
           </div>
         </div>
@@ -1545,7 +1546,8 @@
   <div id="toast" class="toast"></div>
 
   <script src="/config.js"></script>
+  <script src="/js/runtime.js?v=20260627-smart-cache-v2"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260626-delete-clean-fix"></script>
+  <script src="/ui.js?v=20260627-smart-cache-v2"></script>
 </body>
 </html>

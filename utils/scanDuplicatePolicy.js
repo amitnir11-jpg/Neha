@@ -161,6 +161,26 @@ function duplicateUpiMessage(existing = {}) {
   return `Part ${part} is already scanned in bin ${bin}. Scanned Date/Time: ${scannedAt}`;
 }
 
+function duplicateBinLocation(input = {}) {
+  return upper(input.binLocation || input.bin || input.location || '');
+}
+
+function sameBinLocation(left = {}, right = {}) {
+  const leftBin = duplicateBinLocation(left);
+  const rightBin = duplicateBinLocation(right);
+  return Boolean(leftBin && rightBin && leftBin === rightBin);
+}
+
+function allowCrossBinDuplicate(input = {}) {
+  const action = upper(input.smartBinDecision || input.smartBinAction || input.smartBinOverride || '');
+  return boolValue(
+    input.allowCrossBinDuplicate ||
+    input.smartBinAllowCrossBinDuplicate ||
+    input.smartBinIsSecondaryLocation ||
+    ['SAVE_NEW_BIN', 'CONTINUE_NEW', 'ADD_ADDITIONAL'].includes(action)
+  );
+}
+
 function businessDuplicateKey(input = {}) {
   const dealerCode = scanDealerCode(input);
   const auditId = scanAuditId(input);
@@ -264,6 +284,7 @@ module.exports = {
   businessDuplicateKey,
   canonicalUpiValue,
   duplicateUpiMessage,
+  allowCrossBinDuplicate,
   globalUpiDuplicateFilter,
   globalUpiKey,
   identityDuplicateFilter,
@@ -278,5 +299,6 @@ module.exports = {
   scanPartNumber,
   scanSyncKey,
   scanType,
+  sameBinLocation,
   smartBinDecisionAllowsDuplicate
 };

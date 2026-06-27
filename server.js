@@ -106,6 +106,9 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
+const APP_VERSION = '20260627-smart-cache-v2';
+const WEB_SCANNER_BUILD = APP_VERSION;
+const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.2.2';
 const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();
 const DEFAULT_ADMIN_PASSWORD = String(process.env.DEFAULT_ADMIN_PASSWORD || 'admin');
 const IS_PRODUCTION = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
@@ -123,6 +126,7 @@ const DATABASE_URL_SOURCE = databaseUrlSource();
 const MOBILE_DISCOVERY_PORT = Number(process.env.MOBILE_DISCOVERY_PORT || PORT);
 const MOBILE_DISCOVERY_REQUEST = 'DAKSH_DISCOVER_V1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const STATIC_CACHEABLE_EXTENSIONS = new Set(['.css', '.js', '.mjs', '.map', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.eot']);
 const activePort = () => app.locals.activePort || PORT;
 const scannerManager = new ScannerManager({ io, activeAuditProvider: getActiveAudit });
 const deviceDiscoveryService = new DeviceDiscoveryService({ portProvider: activePort });
@@ -153,6 +157,9 @@ app.set('deviceDiscoveryService', deviceDiscoveryService);
 app.set('socketRealtimeService', socketRealtimeService);
 app.set('qrPairService', qrPairService);
 app.set('offlineSyncService', offlineSyncService);
+app.locals.appVersion = APP_VERSION;
+app.locals.webScannerBuild = WEB_SCANNER_BUILD;
+app.locals.mobileAppVersion = MOBILE_APP_VERSION;
 app.set('trust proxy', 1);
 
 app.use(cors({ origin: '*' }));
@@ -270,18 +277,17 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   const normalizedPath = String(req.path || '').replace(/\/+$/, '') || '/';
   if (
-    /\.(html|js|css)$/i.test(req.path) ||
     normalizedPath === '/' ||
     normalizedPath === '/login' ||
     normalizedPath === '/dashboard' ||
     normalizedPath === '/report' ||
     normalizedPath === '/scan' ||
     normalizedPath === '/mobile' ||
-    normalizedPath === '/mobile-scanner'
+    normalizedPath === '/mobile-scanner' ||
+    normalizedPath === '/config.js' ||
+    normalizedPath.startsWith('/api/')
   ) {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
+    setNoStoreHeaders(res);
   }
   next();
 });
@@ -312,12 +318,26 @@ app.use((req, res, next) => {
 app.get('/config.js', (req, res) => {
   const apiBaseUrl = String(process.env.PUBLIC_API_BASE_URL || process.env.API_BASE_URL || '').trim().replace(/\/+$/, '');
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.send(`window.DAKSH_CONFIG=${JSON.stringify({ apiBaseUrl })};`);
+  setNoStoreHeaders(res);
+  res.send(`window.DAKSH_CONFIG=${JSON.stringify({
+    apiBaseUrl,
+    appVersion: APP_VERSION,
+    version: APP_VERSION,
+    webScannerBuild: WEB_SCANNER_BUILD,
+    mobileAppVersion: MOBILE_APP_VERSION
+  })};`);
 });
 
-app.use('/vendor/zxing', express.static(path.join(__dirname, 'node_modules', '@zxing', 'library', 'umd')));
-app.use(express.static(PUBLIC_DIR));
+app.use('/vendor/zxing', express.static(path.join(__dirname, 'node_modules', '@zxing', 'library', 'umd'), {
+  etag: true,
+  lastModified: true,
+  setHeaders: setStaticAssetHeaders
+}));
+app.use(express.static(PUBLIC_DIR, {
+  etag: true,
+  lastModified: true,
+  setHeaders: setStaticAssetHeaders
+}));
 
 app.get(['/apk', '/download-apk', '/api/apk/download'], (req, res) => {
   const apkPath = path.join(PUBLIC_DIR, 'downloads', 'daksh-mobile-scanner.apk');
@@ -358,6 +378,20 @@ app.get('/health', (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.status(200).json({ status: 'ok' });
+});
+
+app.get('/api/version', (req, res) => {
+  const info = serverInfo(req.app.locals.activePort || PORT, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
+  res.json({
+    success: true,
+    appVersion: APP_VERSION,
+    version: APP_VERSION,
+    webScannerBuild: WEB_SCANNER_BUILD,
+    mobileAppVersion: MOBILE_APP_VERSION,
+    deployConfigVersion: req.app.locals.deployConfigVersion || '',
+    reportRoutesVersion: req.app.locals.reportRoutesVersion || '',
+    serverUrl: info.serverUrl
+  });
 });
 
 app.get('/api/health', async (req, res) => {
@@ -862,6 +896,23 @@ async function listenOnConfiguredPort(port) {
     server.once('listening', onListening);
     server.listen(port, HOST);
   });
+}
+
+function setNoStoreHeaders(res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+}
+
+function setStaticAssetHeaders(res, filePath) {
+  const ext = path.extname(filePath || '').toLowerCase();
+  if (!ext || ext === '.html') {
+    setNoStoreHeaders(res);
+    return;
+  }
+  if (STATIC_CACHEABLE_EXTENSIONS.has(ext)) {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  }
 }
 
 function scheduleDatabaseInitialization(delayMs = 0) {
