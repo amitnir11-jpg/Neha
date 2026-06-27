@@ -12,7 +12,32 @@ const router = reportModule;
 const auth = require('./auth');
 const { applyCacheHeaders, getCachedResponse } = require('../utils/reportCache');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
-const { stockValuationTotals } = require('../utils/stockValuation');
+const stockValuationModule = require('../utils/stockValuation');
+const stockValuationTotals = typeof stockValuationModule.stockValuationTotals === 'function'
+  ? stockValuationModule.stockValuationTotals
+  : function stockValuationTotals(rows = []) {
+      const toNumber = (value) => {
+        const parsed = Number(String(value === undefined || value === null ? 0 : value).replace(/,/g, '').trim());
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+      const totals = (Array.isArray(rows) ? rows : []).reduce((summary, row = {}) => {
+        summary.actualDlcTotal += toNumber(row.actualStockValue ?? row.physicalValueOnDlc);
+        summary.dmsDlcTotal += toNumber(row.dmsStockValue ?? row.systemValueOnDlc ?? row.systemDlcValue ?? row.stockValueDlc ?? row.stockValue);
+        summary.varianceDlcTotal += toNumber(row.varianceStockValue ?? row.varianceOnDlc ?? row.differenceDlcValue);
+        summary.actualMrpTotal += toNumber(row.actualMrpValue ?? row.physicalValueOnMrp);
+        summary.dmsMrpTotal += toNumber(row.dmsMrpValue ?? row.systemValueOnMrp);
+        summary.varianceMrpTotal += toNumber(row.varianceMrpValue ?? row.varianceOnMrp ?? row.differenceMrpValue);
+        return summary;
+      }, {
+        actualDlcTotal: 0,
+        dmsDlcTotal: 0,
+        varianceDlcTotal: 0,
+        actualMrpTotal: 0,
+        dmsMrpTotal: 0,
+        varianceMrpTotal: 0
+      });
+      return Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, Math.round(Number(value || 0) * 100) / 100]));
+    };
 const categoryResolver = require('../utils/categoryResolver');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const VerificationLog = require('../models/VerificationLog');

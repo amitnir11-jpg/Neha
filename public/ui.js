@@ -262,6 +262,7 @@
     excess: ['dealer', 'dateRange', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
     movement_wise_stock_analysis: ['dealer', 'audit', 'binLocation', 'productCategory', 'partNumber', 'movementStatus'],
     damage: ['dealer', 'dateRange', 'scanType', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
+    'product-group-summary': ['dealer'],
     'multiple-bin-location-alert': ['dealer', 'audit', 'dateRange', 'partNumber', 'binLocation', 'userName']
   };
   const REPORT_FILTER_OPTIONS = [
@@ -371,6 +372,7 @@
     'wrong-not-found-master': 'Invalid Scan Report',
     'multiple-bin-location-alert': 'Multiple Bin Location Alert Report',
     'stock-summary': 'Stock Summary',
+    'product-group-summary': 'Product Group Summary',
     short: 'Short Report',
     excess: 'Excess Report',
     movement_wise_stock_analysis: 'Movement Wise Stock Analysis Report',
@@ -380,7 +382,7 @@
     'parts-inventory-refresh-template': 'Part Inventory Refresh Template'
   };
   const CSV_REPORT_TYPES = new Set();
-  const NO_PDF_EMAIL_REPORT_TYPES = new Set(['stock-summary', 'parts-inventory-refresh-template']);
+  const NO_PDF_EMAIL_REPORT_TYPES = new Set(['stock-summary', 'product-group-summary', 'parts-inventory-refresh-template']);
   const REPORT_LAYOUT_KEYS = {
     'partwise-inventory-audit': 'partwise_inventory_audit_report_layout_v2',
     short: 'short_report_layout',
@@ -3224,7 +3226,18 @@
     return `${String(productGroup || 'OTHERS').trim().toUpperCase()}::${String(partSubGroup || 'GENERAL').trim().toUpperCase()}`;
   }
 
-  function renderProductGroupSummary() {
+  function renderProductGroupSummary(options = {}) {
+    const loading = options === true || options.loading === true;
+    const body = $('#productGroupSummaryRows');
+    if (loading) {
+      if (body) {
+        body.innerHTML = Array.from({ length: 4 }, () => '<tr class="dashboard-skeleton-row"><td colspan="7"><span></span></td></tr>').join('');
+      }
+      setText('productGroupSummaryCount', 'Loading...');
+      enhanceCoreTables();
+      return;
+    }
+
     const search = dashboardProductGroupSearch();
     const selectedKey = state.selectedProductGroupSummary
       ? productGroupKey(state.selectedProductGroupSummary.productGroup, state.selectedProductGroupSummary.partSubGroup)
@@ -3237,7 +3250,6 @@
     const rows = search
       ? allRows.filter((item) => `${item.productGroup || ''} ${item.partSubGroup || item.productSubGroup || ''}`.toUpperCase().includes(search))
       : allRows;
-    const body = $('#productGroupSummaryRows');
     if (body) {
       body.innerHTML = rows.length ? rows.map((item) => {
         const totalScans = productGroupSummaryValue(item, 'totalScans', 'scanCount');
@@ -3260,6 +3272,24 @@
     }
     setText('productGroupSummaryCount', `${rows.length} of ${allRows.length} groups`);
     enhanceCoreTables();
+  }
+
+  function clearProductGroupSummaryState() {
+    state.dashboardProductGroupRows = [];
+    state.dashboardProductGroupLoadedAt = 0;
+    state.selectedProductGroupSummary = null;
+    state.productGroupDetailRows = [];
+    state.productGroupDetailTotals = null;
+    renderProductGroupSummary();
+    renderProductGroupDetails({ rows: [], totals: {} });
+  }
+
+  function setProductGroupSummaryLoading() {
+    state.selectedProductGroupSummary = null;
+    state.productGroupDetailRows = [];
+    state.productGroupDetailTotals = null;
+    renderProductGroupSummary({ loading: true });
+    renderProductGroupDetails({ rows: [], totals: {} });
   }
 
   async function loadDashboardProductGroupSummary(options = {}) {
@@ -4815,6 +4845,17 @@
     return REPORT_TITLES[selected] ? selected : '';
   }
 
+  function isProductGroupSummaryReport(reportType = activeReportType()) {
+    return reportType === 'product-group-summary';
+  }
+
+  function setReportProductGroupSummaryVisible(visible) {
+    const summaryCard = $('.report-product-summary-card');
+    const previewCard = $('#reportPreviewCard');
+    if (summaryCard) summaryCard.hidden = !visible;
+    if (previewCard) previewCard.hidden = Boolean(visible);
+  }
+
   function selectedReportFilterKeys(reportType = activeReportType()) {
     const saved = state.reportFilterSettings[reportType];
     const defaults = REPORT_FILTER_DEFAULTS_BY_TYPE[reportType] || REPORT_FILTER_DEFAULTS;
@@ -5477,7 +5518,11 @@
   }
 
   function reportDownloadName(extension) {
-    return `${(REPORT_TITLES[activeReportType()] || 'Report').replace(/\s+/g, '_')}.${extension}`;
+    const reportType = activeReportType();
+    if (isProductGroupSummaryReport(reportType)) {
+      return `Product_Group_Summary.${extension}`;
+    }
+    return `${(REPORT_TITLES[reportType] || 'Report').replace(/\s+/g, '_')}.${extension}`;
   }
 
   function updateReportButtons() {
@@ -5994,6 +6039,9 @@
     if (box) {
       box.className = 'form-message';
       box.textContent = message;
+    }
+    if (isProductGroupSummaryReport()) {
+      clearProductGroupSummaryState();
     }
     updateReportButtons();
   }
@@ -6610,6 +6658,64 @@
       state.reportHasRun = false;
       return;
     }
+    if (isProductGroupSummaryReport(reportType)) {
+      const message = $('#reportMessage');
+      const requestId = Date.now();
+      state.reportLoadRequestId = requestId;
+      if (state.reportAbortController) state.reportAbortController.abort('new-report-load');
+      const reportController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      state.reportAbortController = reportController;
+      state.reportLoading = true;
+      state.lastReportType = reportType;
+      saveReportState(true);
+      setReportProductGroupSummaryVisible(true);
+      state.reportTableRows = [];
+      state.reportTableColumns = [];
+      state.reportTableTotalRows = 0;
+      state.reportTableGrandTotal = null;
+      state.reportTableSummary = null;
+      state.reportTableSections = null;
+      setProductGroupSummaryLoading();
+      $('#reportHead').innerHTML = '';
+      $('#reportRows').innerHTML = '<tr><td class="muted" colspan="12">Loading product group summary...</td></tr>';
+      if ($('#reportTableSearch')) $('#reportTableSearch').value = '';
+      setText('reportCount', 'Loading...');
+      $('#reportShow').disabled = true;
+      if (showLoading && message) {
+        message.className = 'form-message loading';
+        message.textContent = 'Loading product group summary...';
+      }
+      try {
+        const rows = await loadDashboardProductGroupSummary({ force: true, signal: reportController ? reportController.signal : undefined });
+        if (state.reportLoadRequestId !== requestId) return;
+        state.reportLoaded = true;
+        state.reportHasRun = true;
+        renderProductGroupSummary();
+        renderProductGroupDetails({ rows: [], totals: {} });
+        if (message) {
+          message.className = 'form-message success';
+          message.textContent = `Loaded ${wholeNumber(Array.isArray(rows) ? rows.length : (state.dashboardProductGroupRows || []).length)} product group rows.`;
+        }
+      } catch (error) {
+        if (state.reportLoadRequestId !== requestId) return;
+        if (error.name === 'AbortError') return;
+        state.reportLoaded = false;
+        state.reportHasRun = false;
+        clearProductGroupSummaryState();
+        if (message) {
+          message.className = 'form-message error';
+          message.textContent = error.message || 'Product group summary failed';
+        }
+        toast(error.message || 'Product group summary failed', 'error');
+      } finally {
+        if (state.reportLoadRequestId === requestId) {
+          state.reportLoading = false;
+          if (state.reportAbortController === reportController) state.reportAbortController = null;
+        }
+        updateReportButtons();
+      }
+      return;
+    }
     let url = CSV_REPORT_TYPES.has(reportType) ? partsRefreshTemplatePreviewPath() : reportPath();
     if (forceRefresh) {
       const joiner = url.includes('?') ? '&' : '?';
@@ -6657,7 +6763,6 @@
     } catch (error) {
       if (state.reportLoadRequestId !== requestId) return;
       if (error.name === 'AbortError') return;
-      if (error.name === 'AbortError' && error.message !== 'new-report-scheduled' && error.message !== 'manual-report-load') return;
       state.reportLoaded = Boolean(state.reportTableRows.length);
       state.reportHasRun = Boolean(state.reportTableRows.length);
       if (!state.reportTableRows.length) {
@@ -6680,10 +6785,16 @@
 
   function setReportTab(type, options = {}) {
     if (!REPORT_TITLES[type]) return;
+    cancelScheduledReportLoad();
+    if (state.reportAbortController) state.reportAbortController.abort('report-tab-changed');
+    state.reportLoadRequestId = Date.now();
+    state.reportLoading = false;
+    state.reportAbortController = null;
     state.lastReportType = type;
     if ($('#reportTypeSelect')) $('#reportTypeSelect').value = type;
     $$('.report-tab').forEach((button) => button.classList.toggle('active', button.dataset.reportType === type));
     $('#reportTitle').textContent = REPORT_TITLES[type];
+    setReportProductGroupSummaryVisible(isProductGroupSummaryReport(type));
     ensureActiveReportTabVisible();
     applyReportScanModeDefaults();
     loadReportFilterSettings(type).catch((error) => console.warn('Report filter settings failed', error));
@@ -10378,7 +10489,10 @@
     }
     if (viewId === 'reports') {
       loadCategories().catch((error) => toast(error.message, 'error'));
-      loadDashboardProductGroupSummary({ force: true }).catch((error) => toast(error.message, 'error'));
+      setReportProductGroupSummaryVisible(isProductGroupSummaryReport());
+      if (isProductGroupSummaryReport()) {
+        loadReport({ forceRefresh: false }).catch((error) => toast(error.message, 'error'));
+      }
     }
     if (viewId === 'master') {
       Promise.all([
@@ -10413,6 +10527,9 @@
       restoreReportState();
       const reportType = params.get('reportType');
       if (reportType && REPORT_TITLES[reportType]) setReportTab(reportType, { persist: false });
+      if (isProductGroupSummaryReport()) {
+        loadReport({ forceRefresh: false }).catch((error) => toast(error.message, 'error'));
+      }
     }
     if (viewId === 'master') {
       const form = $('#partSearchForm');
@@ -10431,7 +10548,9 @@
 
   async function finishRestoredViewLoad(restored = {}) {
     if (restored.viewId === 'reports') {
-      resetReportPreview('Saved report filters loaded. Changes will load automatically.');
+      if (!isProductGroupSummaryReport()) {
+        resetReportPreview('Saved report filters loaded. Changes will load automatically.');
+      }
     }
     if (restored.viewId === 'master' && restored.hasPartSearch) {
       await loadParts();
@@ -10769,7 +10888,7 @@
           state.reportCache.clear();
           const jobs = [];
           if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
-          if ($('#reports')?.classList.contains('active')) jobs.push(loadDashboardProductGroupSummary({ force: true }));
+          if ($('#reports')?.classList.contains('active') && isProductGroupSummaryReport()) jobs.push(loadReport({ forceRefresh: true }));
           Promise.all(jobs.map((job) => job.catch((error) => toast(error.message, 'error'))));
           return;
         }
@@ -11075,6 +11194,10 @@
     });
     $('#reportExcel').addEventListener('click', () => {
       if (!validateReportSelection(true)) return;
+      if (isProductGroupSummaryReport()) {
+        exportProductGroupSummary().catch((error) => toast(error.message, 'error'));
+        return;
+      }
       downloadGet(reportPath('excel'), reportDownloadName('xlsx')).catch((error) => toast(error.message, 'error'));
     });
     $('#downloadCompleteAuditPackBtn')?.addEventListener('click', () => openAuditPackModal());
