@@ -998,16 +998,9 @@ function smartBinPromptMessage({ partNumber = '', partDescription = '', existing
     : [];
   const existingBinLabel = clean(existingBin || bins[0] || '') || '-';
   const newBinLabel = clean(newBin || '') || '-';
-  return [
-    'PART ALREADY AVAILABLE IN OTHER BIN',
-    '',
-    `Part: ${partNumber || '-'}`,
-    `Description: ${partDescription || '-'}`,
-    `Existing Bin: ${existingBinLabel}`,
-    `New Bin: ${newBinLabel}`,
-    '',
-    `Do you still want to keep this part in ${newBinLabel !== '-' ? newBinLabel : 'this bin'}?`
-  ].join('\n');
+  void partDescription;
+  void partNumber;
+  return `This part is already available in bin ${existingBinLabel}. Do you want to scan it in ${newBinLabel !== '-' ? newBinLabel : 'this bin'} also?`;
 }
 
 async function smartBinWarningForScan(scan = {}) {
@@ -1039,7 +1032,7 @@ async function smartBinWarningForScan(scan = {}) {
   const partDescription = clean(scan.partDescription || scan.partName || scan.description || '');
   const existingBin = clean(suggestion.existingBin || (existingBins[0] && existingBins[0].binLocation) || currentBin || '');
   const newBin = clean(suggestion.newBin || currentBin || '');
-  const message = smartBinPromptMessage({ partNumber, partDescription, existingBins, existingBin, newBin });
+  const message = clean(suggestion.message || smartBinPromptMessage({ partNumber, partDescription, existingBins, existingBin, newBin }));
   return {
     smartBinWarning: true,
     status: 'smart_bin',
@@ -1376,6 +1369,18 @@ async function scanPolicyResult(scan = {}) {
         reason: 'Manual duplicate in same bin'
       };
     }
+  }
+  const partBinFilter = duplicatePolicy.partBinDuplicateFilter(scan);
+  const partBinDuplicate = partBinFilter ? await Inventory.findOne(partBinFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  if (partBinDuplicate) {
+    return {
+      ok: false,
+      status: 'duplicate',
+      existing: partBinDuplicate,
+      partBinDuplicate: true,
+      reason: 'Duplicate part already scanned in this bin',
+      message: duplicatePolicy.partBinDuplicateMessage(partBinDuplicate, scan)
+    };
   }
   scan.rawUpiHash = scan.rawUpiHash || duplicatePolicy.rawUpiHash(scan);
   const identityFilter = duplicatePolicy.identityDuplicateFilter(scan);

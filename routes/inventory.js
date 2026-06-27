@@ -347,6 +347,15 @@ async function findBackendDuplicate(input = {}, options = {}) {
       message: duplicatePolicy.duplicateUpiMessage(activeDuplicate)
     };
   }
+  const partBinFilter = duplicatePolicy.partBinDuplicateFilter(payload);
+  const partBinDuplicate = partBinFilter ? await Inventory.findOne(partBinFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
+  if (partBinDuplicate) {
+    return {
+      existing: partBinDuplicate,
+      reason: 'Duplicate part already scanned in this bin',
+      message: duplicatePolicy.partBinDuplicateMessage(partBinDuplicate, payload)
+    };
+  }
   const identityFilter = duplicatePolicy.identityDuplicateFilter(payload);
   const existing = identityFilter ? await Inventory.findOne(identityFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
   if (existing) {
@@ -3865,12 +3874,20 @@ async function duplicateCheckHandler(req, res) {
     }
 
     const scan = publicScan(duplicate.existing);
+    const message = duplicate.upiDuplicate !== false
+      ? duplicatePolicy.duplicateUpiMessage(duplicate.existing)
+      : duplicatePolicy.partBinDuplicateMessage(duplicate.existing, {
+          partNumber: part,
+          binLocation: scan.binLocation || scan.bin || req.body.binLocation || req.body.bin || '',
+          scanType
+        });
+    const reason = duplicate.reason || (duplicate.upiDuplicate !== false ? 'Duplicate UPI' : 'Duplicate part already scanned in this bin');
     return res.json({
       success: true,
       duplicate: true,
       upiDuplicate: duplicate.upiDuplicate !== false,
-      reason: duplicate.reason || 'Duplicate UPI',
-      message: duplicatePolicy.duplicateUpiMessage(duplicate.existing),
+      reason,
+      message,
       scan,
       existing: scan,
       binLocation: scan.binLocation || scan.bin || '',

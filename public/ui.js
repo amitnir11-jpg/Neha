@@ -5119,7 +5119,7 @@
   }
 
   function renderSmartBinSuggestionModal(payload = {}) {
-    const { modal, title, message, bins, selectWrap, select } = smartBinPromptNodes();
+    const { modal, title, message, bins, selectWrap, select, useExisting } = smartBinPromptNodes();
     if (!modal) return;
     const existingBins = Array.isArray(payload.existingBins) ? payload.existingBins : [];
     const suggestedBin = cleanDealerCode(payload.suggestedBin || (existingBins[0] && existingBins[0].binLocation) || payload.currentBin || '');
@@ -5147,16 +5147,7 @@
       title.textContent = promptTitle;
     }
     if (message) {
-      message.textContent = [
-        promptTitle,
-        '',
-        `Part: ${partNumber || '-'}`,
-        `Description: ${partDescription || '-'}`,
-        `Existing Bin: ${existingBin || '-'}`,
-        `New Bin: ${newBin || '-'}`,
-        '',
-        `Do you still want to keep this part in ${newBin || 'this bin'}?`
-      ].join('\n');
+      message.textContent = clean(payload.message || '') || `This part is already available in bin ${existingBin || '-'}. Do you want to scan it in ${newBin || 'this bin'} also?`;
     }
     if (bins) bins.innerHTML = smartBinExistingBinMarkup(existingBins);
     if (selectWrap) selectWrap.classList.toggle('hidden', !showSelect);

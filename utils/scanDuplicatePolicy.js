@@ -201,6 +201,25 @@ function manualBinDuplicateFilter(input = {}) {
   return filter;
 }
 
+function partBinDuplicateFilter(input = {}) {
+  const filter = businessDuplicateFilter(input);
+  const binLocation = upper(input.binLocation || input.bin || input.location || '');
+  if (!filter || !binLocation) return null;
+  filter.$and.push({
+    $or: [
+      { binLocation },
+      { bin: binLocation }
+    ]
+  });
+  return filter;
+}
+
+function partBinDuplicateMessage(existing = {}, input = {}) {
+  const partNumber = scanPartNumber(existing) || scanPartNumber(input) || '-';
+  const binLocation = upper(existing.binLocation || existing.bin || input.binLocation || input.bin || '') || '-';
+  return `Part ${partNumber} is already scanned in bin ${binLocation}.`;
+}
+
 function identityDuplicateFilter(input = {}) {
   const dealerCode = scanDealerCode(input);
   const auditId = scanAuditId(input);
@@ -231,6 +250,8 @@ module.exports = {
   globalUpiKey,
   identityDuplicateFilter,
   manualBinDuplicateFilter,
+  partBinDuplicateFilter,
+  partBinDuplicateMessage,
   rawUpiHash,
   rawScanText,
   scanAuditId,

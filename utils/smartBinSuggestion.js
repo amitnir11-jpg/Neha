@@ -214,9 +214,10 @@ function buildSmartBinSuggestion(scans = [], currentBin = '') {
   const partNumber = existingBins[0] ? existingBins[0].partNumber : '';
   const dealerCode = existingBins[0] ? existingBins[0].dealerCode : '';
   const auditId = existingBins[0] ? existingBins[0].auditId : '';
-  const message = existingBins.length === 1
-    ? `Part ${partNumber} is already available in Bin ${existingBins[0].binLocation}. Do you want to keep this part in same bin location?`
-    : `Part ${partNumber} is already available in:\n${existingBins.map((row) => `- ${row.binLocation} : Qty ${formatQty(row.qty)}`).join('\n')}\nDo you want to keep this part in same bin location?`;
+  const existingBinText = existingBins.length === 1
+    ? existingBins[0].binLocation
+    : existingBins.map((row) => row.binLocation).join(', ');
+  const message = `This part is already available in bin ${existingBinText}. Do you want to scan it in ${normalizedCurrentBin || 'this bin'} also?`;
 
   return {
     shouldPrompt,

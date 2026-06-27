@@ -740,7 +740,7 @@
   }
 
   function renderSmartBinSuggestionModal(payload = {}) {
-    const { dialog, title, message, bins, selectWrap, select } = smartBinPromptNodes();
+    const { dialog, title, message, bins, selectWrap, select, useExisting } = smartBinPromptNodes();
     if (!dialog) return;
     const existingBins = Array.isArray(payload.existingBins) ? payload.existingBins : [];
     const suggestedBin = clean(payload.suggestedBin || (existingBins[0] && existingBins[0].binLocation) || payload.currentBin || '');
@@ -768,16 +768,7 @@
 
     if (title) title.textContent = promptTitle;
     if (message) {
-      message.textContent = [
-        promptTitle,
-        '',
-        `Part: ${partNumber || '-'}`,
-        `Description: ${partDescription || '-'}`,
-        `Existing Bin: ${existingBin || '-'}`,
-        `New Bin: ${newBin || '-'}`,
-        '',
-        `Do you still want to keep this part in ${newBin || 'this bin'}?`
-      ].join('\n');
+      message.textContent = clean(payload.message || '') || `This part is already available in bin ${existingBin || '-'}. Do you want to scan it in ${newBin || 'this bin'} also?`;
     }
     if (bins) {
       bins.innerHTML = smartBinExistingBinMarkup(existingBins, selectedExistingBin || existingBin);
@@ -1233,16 +1224,10 @@
     const maxAllowedLocationsPerPart = Math.max(1, Number.parseInt(String(state.smartBinSettings?.maxAllowedLocationsPerPart || 3), 10) || 3);
     const locationLimitReached = existingBins.length >= maxAllowedLocationsPerPart;
     const promptTitle = 'PART ALREADY AVAILABLE IN OTHER BIN';
-    const message = [
-      promptTitle,
-      '',
-      `Part: ${partNumber || '-'}`,
-      `Description: ${partDescription || '-'}`,
-      `Existing Bin: ${primaryBin || '-'}`,
-      `New Bin: ${currentBin || '-'}`,
-      '',
-      `Do you still want to keep this part in ${currentBin || 'this bin'}?`
-    ].join('\n');
+    const existingBinText = existingBins.length > 1
+      ? existingBins.map((row) => row.binLocation).join(', ')
+      : primaryBin || '-';
+    const message = `This part is already available in bin ${existingBinText}. Do you want to scan it in ${currentBin || 'this bin'} also?`;
 
     return {
       dealerCode: currentDealer,

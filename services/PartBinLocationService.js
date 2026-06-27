@@ -252,16 +252,10 @@ function buildSuggestionPayload(rows = [], scope = {}, settings = {}) {
   const shouldPrompt = Boolean(existingBins.length > 0 && newBin && !sameBinExists);
   const partDescription = clean(existingBins[0] ? existingBins[0].partDescription : '');
   const promptTitle = 'PART ALREADY AVAILABLE IN OTHER BIN';
-  const message = [
-    promptTitle,
-    '',
-    `Part: ${normalized.partNumber || '-'}`,
-    `Description: ${partDescription || '-'}`,
-    `Existing Bin: ${existingBin || '-'}`,
-    `New Bin: ${newBin || '-'}`,
-    '',
-    `Do you still want to keep this part in ${newBin || 'this bin'}?`
-  ].join('\n');
+  const existingBinText = existingBins.length > 1
+    ? existingBins.map((row) => row.binLocation).join(', ')
+    : existingBin || '-';
+  const message = `This part is already available in bin ${existingBinText}. Do you want to scan it in ${newBin || 'this bin'} also?`;
 
   return {
     dealerCode: normalized.dealerCode,
