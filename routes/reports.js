@@ -11,11 +11,19 @@ const Dealer = require('../models/Dealer');
 const router = reportModule;
 const auth = require('./auth');
 const { applyCacheHeaders, getCachedResponse } = require('../utils/reportCache');
+const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
+const categoryResolver = require('../utils/categoryResolver');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const VerificationLog = require('../models/VerificationLog');
 const { formatDateLikeFields, formatIstDateTime, parseIstFilterDate } = require('../utils/time');
 const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
+const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
+  ? categoryResolver.canonicalizePartCategory
+  : (value, options = {}) => {
+      const text = String(value === undefined || value === null ? '' : value).trim().replace(/\s+/g, ' ');
+      return text || options.uncategorized || 'Uncategorized';
+    };
 
 const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 
@@ -850,12 +858,18 @@ function registerFilterMatch(row = {}, query = {}) {
   return true;
 }
 
-async function scanRegisterRows(query = {}) {
+async function scanRegisterRows(query = {}, options = {}) {
   const sourceQuery = { ...stripRegisterOnlyFilters(query), ...rowReportScanWindow(query) };
-  const data = await reportModule.buildReportData(sourceQuery);
+  const hasPreloadedScans = Array.isArray(options.scans);
+  const data = options.reportData || (hasPreloadedScans ? { scans: options.scans } : await reportModule.buildReportData(sourceQuery));
   const duplicates = await duplicateReportRows(sourceQuery);
+  const scans = hasPreloadedScans
+    ? options.scans
+    : Array.isArray(data.scans)
+      ? data.scans
+      : [];
   return [
-    ...data.scans.map(scanRegisterInventoryRow),
+    ...scans.map(scanRegisterInventoryRow),
     ...duplicates.map(scanRegisterDuplicateRow)
   ]
     .filter((row) => registerFilterMatch(row, query))
@@ -2243,15 +2257,12 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
 
   let reportData = await reportModule.buildReportData(normalized);
   const resolvedAuditId = clean(normalized.auditId || reportData.selectedAudit?.auditId || reportData.selectedDealer?.currentAuditId || (Array.isArray(reportData.audits) && reportData.audits[0] ? reportData.audits[0].auditId : ''));
-  const resolvedQuery = resolvedAuditId && resolvedAuditId !== normalized.auditId
+  const resolvedQuery = resolvedAuditId
     ? { ...normalized, auditId: resolvedAuditId }
     : normalized;
-  if (resolvedQuery.auditId !== normalized.auditId || !reportData.selectedAudit) {
-    reportData = await reportModule.buildReportData(resolvedQuery);
-  }
 
   const [scanRegisterRowsData, movementAnalysisData] = await Promise.all([
-    scanRegisterRows(resolvedQuery),
+    scanRegisterRows(resolvedQuery, { scans: reportData.scans }),
     reconciliationRoute.buildMovementAnalysisReport(resolvedQuery)
   ]);
   const selectedDealer = reportData.selectedDealer || {};
@@ -2262,10 +2273,34 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     || {};
   const generatedBy = clean(user.name || user.username || user.email || user.id || 'System');
   const generatedAt = formatIstDateTime(new Date());
-  const getStockSummaryData = () => (getStockSummaryData.cache || (getStockSummaryData.cache = reportModule.buildStockSummaryReport(resolvedQuery)));
-  const getPartwiseData = () => (getPartwiseData.cache || (getPartwiseData.cache = reportModule.buildPartwiseInventoryAuditReport(resolvedQuery)));
-  const getCategoryData = () => (getCategoryData.cache || (getCategoryData.cache = reportModule.buildCategoryWiseVarianceSummary(resolvedQuery)));
-  const getReconciliationData = () => (getReconciliationData.cache || (getReconciliationData.cache = reconciliationRoute.buildReconciliationReport(resolvedQuery)));
+  const createLazyPromise = (factory) => {
+    let promise = null;
+    return () => {
+      if (!promise) promise = Promise.resolve().then(factory);
+      return promise;
+    };
+  };
+  const getStockSummaryData = createLazyPromise(() => reportModule.buildStockSummaryReport(resolvedQuery));
+  const getPartwiseData = createLazyPromise(() => reportModule.buildPartwiseInventoryAuditReport(resolvedQuery));
+  const getCategoryData = createLazyPromise(() => reportModule.buildCategoryWiseVarianceSummary(resolvedQuery));
+  const getReconciliationData = createLazyPromise(() => reconciliationRoute.buildReconciliationReport(resolvedQuery));
+  const validationPromise = Promise.allSettled([getPartwiseData(), getStockSummaryData(), getCategoryData()])
+    .then(async (validationResults) => {
+      try {
+        const validationPayload = {};
+        if (validationResults[0].status === 'fulfilled') validationPayload.partwise = validationResults[0].value;
+        if (validationResults[1].status === 'fulfilled') validationPayload.stockSummary = validationResults[1].value;
+        if (validationResults[2].status === 'fulfilled') validationPayload.category = validationResults[2].value;
+        await reportModule.validateValuationReports(resolvedQuery, validationPayload);
+      } catch (error) {
+        console.error('Complete audit pack valuation validation failed', {
+          dealerCode: resolvedQuery.dealerCode,
+          auditId: resolvedQuery.auditId,
+          message: error.message,
+          reconciliation: error.reconciliation || null
+        });
+      }
+    });
   const packContext = buildAuditPackContext(reportData, movementAnalysisData, scanRegisterRowsData, {
     selectedReports: resolvedQuery.reports,
     extras: normalized,
@@ -2273,21 +2308,6 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     generatedAt,
     resolvedQuery
   });
-  const validationResults = await Promise.allSettled([getPartwiseData(), getStockSummaryData(), getCategoryData()]);
-  try {
-    const validationPayload = {};
-    if (validationResults[0].status === 'fulfilled') validationPayload.partwise = validationResults[0].value;
-    if (validationResults[1].status === 'fulfilled') validationPayload.stockSummary = validationResults[1].value;
-    if (validationResults[2].status === 'fulfilled') validationPayload.category = validationResults[2].value;
-    await reportModule.validateValuationReports(resolvedQuery, validationPayload);
-  } catch (error) {
-    console.error('Complete audit pack valuation validation failed', {
-      dealerCode: resolvedQuery.dealerCode,
-      auditId: resolvedQuery.auditId,
-      message: error.message,
-      reconciliation: error.reconciliation || null
-    });
-  }
   const workbook = new ExcelJS.Workbook();
   workbook.creator = generatedBy || 'Daksh Inventory';
   workbook.lastModifiedBy = generatedBy || workbook.creator;
@@ -2753,20 +2773,19 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     })
   };
 
-  const selectedSpecs = [];
-  for (const reportKey of normalized.reports) {
+  const selectedSpecs = (await Promise.all(normalized.reports.map(async (reportKey) => {
     const builder = packBuildMap[reportKey];
-    if (!builder) continue;
+    if (!builder) return null;
     try {
-      selectedSpecs.push(await builder());
+      return await builder();
     } catch (error) {
-      selectedSpecs.push({
+      return {
         title: reportLabelForKey(reportKey).toUpperCase(),
         kind: 'metrics',
         rows: packMetricRows('Error', [['Message', error.message]])
-      });
+      };
     }
-  }
+  }))).filter(Boolean);
 
   selectedSpecs.forEach((spec) => {
     if (!spec) return;
