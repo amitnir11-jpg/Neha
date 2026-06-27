@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20260627-smart-cache-v2';
+  const APP_VERSION = '20260627-cross-bin-confirm-v1';
   const SERVICE_WORKER_VERSION = APP_VERSION;
   const PRESERVED_LOCAL_KEYS = new Set([
     'dakshToken',

@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20260627-smart-cache-v2';
+  const APP_VERSION = '20260627-cross-bin-confirm-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -824,11 +824,22 @@
   }
 
   async function openSmartBinSuggestionModal(payload = {}) {
-    if (state.smartBinPromptResolver) closeSmartBinSuggestionModal(null);
-    return new Promise((resolve) => {
-      state.smartBinPromptResolver = resolve;
-      renderSmartBinSuggestionModal(payload);
-    });
+    const existingBins = Array.isArray(payload.existingBins) ? payload.existingBins : [];
+    const existingBin = clean(payload.existingBin || (existingBins[0] && existingBins[0].binLocation) || payload.suggestedBin || payload.currentBin || '');
+    const newBin = clean(payload.newBin || payload.currentBin || payload.binLocation || '');
+    const message = clean(payload.message || '') || `This part is already available in bin ${existingBin || '-'}. Do you want to scan it in ${newBin || 'this bin'} also?`;
+    if (!window.confirm(message)) return null;
+    const now = nowIso();
+    return {
+      action: 'SAVE_NEW_BIN',
+      currentBin: newBin || clean(payload.currentBin || payload.binLocation || ''),
+      selectedBin: newBin || clean(payload.currentBin || payload.binLocation || ''),
+      suggestedBin: clean(payload.suggestedBin || existingBin || newBin || ''),
+      existingBins,
+      decisionBy: clean(state.session && (state.session.user?.name || state.session.user?.username || state.session.user?.email || state.session.user?.id || '')),
+      decisionAt: String(payload.decisionAt || now),
+      checkedAt: String(payload.checkedAt || now)
+    };
   }
 
   async function resolveSmartBinSuggestionAction(action, payload = {}) {

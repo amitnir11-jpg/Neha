@@ -106,7 +106,7 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
-const APP_VERSION = '20260627-smart-cache-v2';
+const APP_VERSION = '20260627-cross-bin-confirm-v1';
 const WEB_SCANNER_BUILD = APP_VERSION;
 const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.2.2';
 const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();

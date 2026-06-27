@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260627-smart-cache-v2';
+  const UI_BOOT_VERSION = '20260627-cross-bin-confirm-v1';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -5241,10 +5241,21 @@
   }
 
   function openSmartBinSuggestionModal(payload = {}) {
-    if (smartBinPromptResolver) closeSmartBinSuggestionModal(null);
-    return new Promise((resolve) => {
-      smartBinPromptResolver = resolve;
-      renderSmartBinSuggestionModal(payload);
+    const existingBins = Array.isArray(payload.existingBins) ? payload.existingBins : [];
+    const existingBin = cleanDealerCode(payload.existingBin || (existingBins[0] && existingBins[0].binLocation) || payload.suggestedBin || payload.currentBin || '');
+    const newBin = cleanDealerCode(payload.newBin || payload.currentBin || payload.binLocation || '');
+    const message = clean(payload.message || '') || `This part is already available in bin ${existingBin || '-'}. Do you want to scan it in ${newBin || 'this bin'} also?`;
+    if (!window.confirm(message)) return Promise.resolve(null);
+    const now = new Date().toISOString();
+    return Promise.resolve({
+      action: 'SAVE_NEW_BIN',
+      currentBin: newBin || cleanDealerCode(payload.currentBin || payload.binLocation || ''),
+      selectedBin: newBin || cleanDealerCode(payload.currentBin || payload.binLocation || ''),
+      suggestedBin: cleanDealerCode(payload.suggestedBin || existingBin || newBin || ''),
+      existingBins,
+      decisionBy: String(state.user?.name || state.user?.username || state.user?.email || '').trim(),
+      decisionAt: String(payload.decisionAt || now),
+      checkedAt: String(payload.checkedAt || now)
     });
   }
 

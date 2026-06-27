@@ -9,7 +9,8 @@ const scanCss = fs.readFileSync(path.join(root, 'public', 'scan.css'), 'utf8');
 const mobileRoute = fs.readFileSync(path.join(root, 'routes', 'mobile.js'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 
-const build = scanJs.match(/const CACHE_VERSION = '([^']+)'/)?.[1];
+const build = scanJs.match(/const APP_VERSION = '([^']+)'/)?.[1]
+  || scanJs.match(/const CACHE_VERSION = '([^']+)'/)?.[1];
 assert.ok(build, 'Scanner build version is required');
 assert.ok(scanHtml.includes(`/scan.js?v=${build}`), 'Scanner script build must match HTML');
 assert.ok(scanHtml.includes(`/scan.css?v=${build}`), 'Scanner stylesheet build must match HTML');

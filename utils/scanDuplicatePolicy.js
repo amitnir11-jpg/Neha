@@ -3,7 +3,7 @@ const { normalizePartNumber } = require('./normalize');
 
 const COUNTED_SCAN_STATUSES = ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'];
 const EXCLUDED_SYNC_STATUSES = ['duplicate', 'rejected', 'failed', 'deleted'];
-const DUPLICATE_PART_MESSAGE = 'Duplicate part already scanned in this audit.';
+const DUPLICATE_PART_MESSAGE = 'Duplicate part already scanned in this bin.';
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -181,14 +181,19 @@ function allowCrossBinDuplicate(input = {}) {
   );
 }
 
+function duplicateScope(input = {}) {
+  return {
+    dealerCode: scanDealerCode(input),
+    type: scanType(input),
+    partNumber: scanPartNumber(input),
+    binLocation: duplicateBinLocation(input)
+  };
+}
+
 function businessDuplicateKey(input = {}) {
-  const dealerCode = scanDealerCode(input);
-  const auditId = scanAuditId(input);
-  const binLocation = upper(input.binLocation || input.bin || input.location || '');
-  const partNumber = scanPartNumber(input);
-  const type = scanType(input);
-  if (!dealerCode || !auditId || !binLocation || !partNumber || !type || type === 'VERIFICATION') return '';
-  return [dealerCode, auditId, type, partNumber, binLocation].join('::');
+  const { dealerCode, type, partNumber, binLocation } = duplicateScope(input);
+  if (!dealerCode || !binLocation || !partNumber || !type || type === 'VERIFICATION') return '';
+  return [dealerCode, type, partNumber, binLocation].join('::');
 }
 
 function countedScanClause() {
@@ -210,46 +215,25 @@ function scanTypeClauses(type) {
 }
 
 function businessDuplicateFilter(input = {}) {
-  const dealerCode = scanDealerCode(input);
-  const auditId = scanAuditId(input);
-  const partNumber = scanPartNumber(input);
-  const type = scanType(input);
-  if (!dealerCode || !auditId || !partNumber || !type || type === 'VERIFICATION') return null;
+  const { dealerCode, type, partNumber, binLocation } = duplicateScope(input);
+  if (!dealerCode || !binLocation || !partNumber || !type || type === 'VERIFICATION') return null;
   return {
     ...countedScanClause(),
     dealerCode,
-    auditId,
     $and: [
       { $or: scanTypeClauses(type) },
-      { $or: partClauses(partNumber) }
+      { $or: partClauses(partNumber) },
+      { $or: [{ binLocation }, { bin: binLocation }] }
     ]
   };
 }
 
 function manualBinDuplicateFilter(input = {}) {
-  const filter = businessDuplicateFilter(input);
-  const binLocation = upper(input.binLocation || input.bin || input.location || '');
-  if (!filter || !binLocation) return null;
-  filter.$and.push({
-    $or: [
-      { binLocation },
-      { bin: binLocation }
-    ]
-  });
-  return filter;
+  return businessDuplicateFilter(input);
 }
 
 function partBinDuplicateFilter(input = {}) {
-  const filter = businessDuplicateFilter(input);
-  const binLocation = upper(input.binLocation || input.bin || input.location || '');
-  if (!filter || !binLocation) return null;
-  filter.$and.push({
-    $or: [
-      { binLocation },
-      { bin: binLocation }
-    ]
-  });
-  return filter;
+  return businessDuplicateFilter(input);
 }
 
 function partBinDuplicateMessage(existing = {}, input = {}) {
