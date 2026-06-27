@@ -360,6 +360,16 @@ const CATEGORY_VARIANCE_ACTIONS = [
 ];
 
 const MASTER_NOT_FOUND_LABEL = 'UNKNOWN PART / MASTER NOT FOUND';
+const DEDICATED_REPORT_BUILDERS = new Set([
+  'stock-summary',
+  'movement_wise_stock_analysis',
+  'movement-wise-stock-analysis',
+  'category-wise-variance-summary',
+  'partwise-inventory-audit',
+  'short',
+  'excess',
+  'damage'
+]);
 
 function cleanText(value) {
   return normalizedCleanText(value);
@@ -416,6 +426,10 @@ function reqSafeValue(value) {
 function reportQueryValue(value) {
   const text = cleanText(value);
   return /^all(\s|$)/i.test(text) ? '' : text;
+}
+
+function isAggregationReport(reportType = '') {
+  return DEDICATED_REPORT_BUILDERS.has(cleanText(reportType).toLowerCase());
 }
 
 function requireDealerForReport(payload = {}) {
