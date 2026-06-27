@@ -49,6 +49,7 @@ function identityScopeFilter(input = {}) {
   const dealerCode = upper(input.dealerCode);
   const auditId = clean(input.auditId);
   const upiCode = upiCodeValue(input);
+  const binLocation = upper(input.binLocation || input.bin || input.location || '');
   if (dealerCode) filter.dealerCode = dealerCode;
   if (auditId) filter.auditId = auditId;
   if (upiCode) {
@@ -57,6 +58,14 @@ function identityScopeFilter(input = {}) {
       { upiNo: upiCode },
       { upiId: upiCode }
     ];
+  }
+  if (binLocation) {
+    filter.$and = (filter.$and || []).concat([{
+      $or: [
+        { binLocation },
+        { bin: binLocation }
+      ]
+    }]);
   }
   return filter;
 }

@@ -250,7 +250,8 @@ async function refreshInventoryUpiState(scan = {}) {
   const scope = {
     dealerCode: scan.dealerCode || '',
     auditId: scan.auditId || '',
-    upiCode: scan.upiCode || scan.upiNo || scan.upiId || ''
+    upiCode: scan.upiCode || scan.upiNo || scan.upiId || '',
+    binLocation: scan.binLocation || scan.bin || ''
   };
   return recomputeUpiInventoryState(Inventory, scope);
 }
@@ -261,9 +262,15 @@ async function refreshInventoryUpiScopes(rows = []) {
     const scope = {
       dealerCode: row.dealerCode || '',
       auditId: row.auditId || '',
-      upiCode: row.upiCode || row.upiNo || row.upiId || ''
+      upiCode: row.upiCode || row.upiNo || row.upiId || '',
+      binLocation: row.binLocation || row.bin || ''
     };
-    const key = [normalizeDealerCode(scope.dealerCode), clean(scope.auditId), inventoryUpiCode(scope)].join('|');
+    const key = [
+      normalizeDealerCode(scope.dealerCode),
+      clean(scope.auditId),
+      inventoryUpiCode(scope),
+      upper(scope.binLocation || scope.bin || '')
+    ].join('|');
     if (key && key.replace(/\|/g, '')) scopes.set(key, scope);
   });
   for (const scope of scopes.values()) {
@@ -343,7 +350,7 @@ async function findBackendDuplicate(input = {}, options = {}) {
     return {
       existing: activeDuplicate,
       upiDuplicate: true,
-      reason: 'Active inward duplicate UPI',
+      reason: 'Duplicate part already scanned in this bin',
       message: duplicatePolicy.duplicateUpiMessage(activeDuplicate)
     };
   }
@@ -2382,7 +2389,7 @@ async function saveScanRequest(req, res) {
       if (activeExisting) {
         existing = activeExisting;
         upiDuplicate = true;
-        duplicateReason = 'Active inward duplicate UPI';
+        duplicateReason = 'Duplicate part already scanned in this bin';
         duplicateMessage = duplicatePolicy.duplicateUpiMessage(activeExisting);
       }
     }
@@ -2729,7 +2736,7 @@ async function saveScanRequest(req, res) {
           duplicate: true,
           upiDuplicate,
           message: upiDuplicate ? duplicatePolicy.duplicateUpiMessage(duplicate) : duplicatePolicy.DUPLICATE_PART_MESSAGE,
-          reason: upiDuplicate ? 'Active inward duplicate UPI' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
+          reason: upiDuplicate ? 'Duplicate part already scanned in this bin' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
           scan: duplicate
         });
       }
@@ -3184,7 +3191,7 @@ async function saveScanRequest(req, res) {
       if (activeExisting) {
         existing = activeExisting;
         upiDuplicate = true;
-        duplicateReason = 'Active inward duplicate UPI';
+        duplicateReason = 'Duplicate part already scanned in this bin';
         duplicateMessage = duplicatePolicy.duplicateUpiMessage(activeExisting);
       }
     }
@@ -3531,7 +3538,7 @@ async function saveScanRequest(req, res) {
           duplicate: true,
           upiDuplicate,
           message: upiDuplicate ? duplicatePolicy.duplicateUpiMessage(duplicate) : duplicatePolicy.DUPLICATE_PART_MESSAGE,
-          reason: upiDuplicate ? 'Active inward duplicate UPI' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
+          reason: upiDuplicate ? 'Duplicate part already scanned in this bin' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
           scan: duplicate
         });
       }
@@ -3881,7 +3888,7 @@ async function duplicateCheckHandler(req, res) {
           binLocation: scan.binLocation || scan.bin || req.body.binLocation || req.body.bin || '',
           scanType
         });
-    const reason = duplicate.reason || (duplicate.upiDuplicate !== false ? 'Duplicate UPI' : 'Duplicate part already scanned in this bin');
+    const reason = duplicate.reason || 'Duplicate part already scanned in this bin';
     return res.json({
       success: true,
       duplicate: true,

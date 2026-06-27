@@ -1335,7 +1335,7 @@ async function scanPolicyResult(scan = {}) {
       status: 'duplicate',
       existing: activeDuplicate,
       upiDuplicate: true,
-      reason: 'Active inward duplicate UPI',
+      reason: 'Duplicate part already scanned in this bin',
       message: duplicatePolicy.duplicateUpiMessage(activeDuplicate)
     };
   }
@@ -1526,6 +1526,11 @@ async function saveNormalizedScan(scan, req) {
     if (!smartBinDecisionUsesExisting(decision.action) && !smartBinDecisionAllowsNewLocation(decision.action)) {
       return smartBinState;
     }
+    scan.qrFingerprint = manualEntry ? '' : makeQrFingerprint(scan);
+    if (scan.scanType === 'FITTED') scan.qrFingerprint = '';
+    if (scan.scanType === 'OUTWARD' && scan.qrFingerprint) scan.qrFingerprint = `OUTWARD:${scan.qrFingerprint}`;
+    scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
+    scan.globalUpiKey = duplicatePolicy.globalUpiKey(scan);
   }
   const policy = await scanPolicyResult(scan);
   if (!policy.ok) {

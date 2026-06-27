@@ -7,17 +7,26 @@ const inwardScan = {
   dealerCode: 'D001',
   auditId: 'AUDIT-1',
   scanType: 'INWARD',
+  partNumber: 'PART-100',
   binLocation: 'BIN-A',
   rawScan: 'OEM/UPI-987654/X/PART-100/1/500'
 };
 const sameScopeInward = {
   ...inwardScan,
-  partNumber: 'OTHER-PART'
+  partNumber: 'PART-100'
 };
 const differentScopeInward = {
   ...inwardScan,
   dealerCode: 'D999',
   auditId: 'AUDIT-9'
+};
+const differentBinInward = {
+  ...inwardScan,
+  binLocation: 'BIN-B'
+};
+const differentPartInward = {
+  ...inwardScan,
+  partNumber: 'PART-101'
 };
 const nonInward = {
   ...sameScopeInward,
@@ -26,6 +35,8 @@ const nonInward = {
 
 assert.strictEqual(duplicatePolicy.canonicalUpiValue(inwardScan), 'UPI-987654');
 assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentScopeInward));
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentBinInward));
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentPartInward));
 assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(sameScopeInward));
 assert.strictEqual(duplicatePolicy.globalUpiKey({ partNumber: 'PART-100', source: 'manual' }), '');
 
@@ -60,7 +71,7 @@ const message = duplicatePolicy.duplicateUpiMessage({
   partNumber: 'PART-100',
   timestamp: '2026-06-14T08:00:00.000Z'
 });
-assert(message.startsWith('This UPI is already scanned in Bin Location: BIN-A, Part No: PART100, Scanned Date/Time:'));
+assert(message.startsWith('Part PART100 is already scanned in bin BIN-A. Scanned Date/Time:'));
 
 const inventoryIndexes = Inventory.schema.indexes();
 assert(inventoryIndexes.some(([fields, options]) => fields.upiCode === 1 && options.name === 'inventory_upi_code_idx'));

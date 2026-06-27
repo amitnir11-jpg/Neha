@@ -88,14 +88,31 @@ function canonicalUpiValue(input = {}) {
 }
 
 function globalUpiKey(input = {}) {
+  const dealerCode = scanDealerCode(input);
+  const auditId = scanAuditId(input);
+  const type = scanType(input);
+  const partNumber = scanPartNumber(input);
+  const binLocation = upper(input.binLocation || input.bin || input.location || '');
+  if (dealerCode && auditId && type && partNumber && binLocation) {
+    const businessScope = [
+      dealerCode,
+      auditId,
+      type,
+      partNumber,
+      binLocation
+    ].map((value) => upper(value)).join('|');
+    return createHash('sha256').update(businessScope).digest('hex');
+  }
+
   const upi = canonicalUpiValue(input);
   if (!upi) return '';
-  const scope = [
-    scanDealerCode(input),
-    scanAuditId(input),
+  const fallbackScope = [
+    dealerCode,
+    auditId,
+    type,
     upi
   ].map((value) => upper(value)).filter(Boolean).join('|');
-  return scope ? createHash('sha256').update(scope).digest('hex') : '';
+  return fallbackScope ? createHash('sha256').update(fallbackScope).digest('hex') : '';
 }
 
 function activeUpiDuplicateFilter(input = {}) {
@@ -134,23 +151,24 @@ function globalUpiDuplicateFilter(input = {}) {
 }
 
 function duplicateUpiMessage(existing = {}) {
-  const bin = upper(existing.binLocation || existing.bin) || '-';
   const part = scanPartNumber(existing) || '-';
+  const bin = upper(existing.binLocation || existing.bin) || '-';
   const rawTime = existing.timestamp || existing.scanTime || existing.createdAt;
   const parsedTime = rawTime ? new Date(rawTime) : null;
   const scannedAt = parsedTime && !Number.isNaN(parsedTime.getTime())
     ? parsedTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
     : '-';
-  return `This UPI is already scanned in Bin Location: ${bin}, Part No: ${part}, Scanned Date/Time: ${scannedAt}`;
+  return `Part ${part} is already scanned in bin ${bin}. Scanned Date/Time: ${scannedAt}`;
 }
 
 function businessDuplicateKey(input = {}) {
   const dealerCode = scanDealerCode(input);
   const auditId = scanAuditId(input);
+  const binLocation = upper(input.binLocation || input.bin || input.location || '');
   const partNumber = scanPartNumber(input);
   const type = scanType(input);
-  if (!dealerCode || !auditId || !partNumber || !type || type === 'VERIFICATION') return '';
-  return [dealerCode, auditId, partNumber, type].join('::');
+  if (!dealerCode || !auditId || !binLocation || !partNumber || !type || type === 'VERIFICATION') return '';
+  return [dealerCode, auditId, type, partNumber, binLocation].join('::');
 }
 
 function countedScanClause() {
