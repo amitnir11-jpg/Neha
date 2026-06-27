@@ -1075,7 +1075,7 @@ async function dashboardProductGroupSummary({ limit = 100, q = '', filter = {} }
     item.scanCount = item.totalScans;
     item.totalQuantity += Number(row.physicalQty || 0);
     item.qty = item.totalQuantity;
-    if (Number(row.physicalQty || 0) !== 0) item.uniqueParts += 1;
+    item.uniqueParts += 1;
     item.totalDlcValue += Number(row.actualStockValue || row.physicalValueOnDlc || 0);
     item.totalMrpValue += Number(row.actualMrpValue || row.physicalValueOnMrp || 0);
     groups.set(key, item);
