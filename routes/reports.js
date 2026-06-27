@@ -12,6 +12,7 @@ const router = reportModule;
 const auth = require('./auth');
 const { applyCacheHeaders, getCachedResponse } = require('../utils/reportCache');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
+const { stockValuationTotals } = require('../utils/stockValuation');
 const categoryResolver = require('../utils/categoryResolver');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const VerificationLog = require('../models/VerificationLog');
