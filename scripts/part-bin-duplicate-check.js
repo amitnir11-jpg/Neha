@@ -1,4 +1,6 @@
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
 
 const base = {
@@ -51,5 +53,21 @@ assert(otherFilter.$and.some((group) => group.$or.some((term) => term.binLocatio
 assert.strictEqual(duplicatePolicy.sameBinLocation(base, sameBinDifferentAudit), true);
 assert.strictEqual(duplicatePolicy.sameBinLocation(base, differentBin), false);
 assert.strictEqual(duplicatePolicy.businessDuplicateFilter(differentType).$and.some((group) => group.$or.some((term) => term.scanType === 'DAMAGE' || term.type === 'DAMAGE')), true);
+
+const migration = fs.readFileSync(
+  path.join(__dirname, '..', 'prisma', 'migrations', '20260627183000_allow_cross_bin_upi_duplicates', 'migration.sql'),
+  'utf8'
+);
+assert(/DROP INDEX IF EXISTS inventories_active_inward_upi_unique/i.test(migration));
+assert(/DROP INDEX IF EXISTS dealer_audit_upi_unique/i.test(migration));
+assert(/DROP INDEX IF EXISTS global_upi_key_unique/i.test(migration));
+assert(/CREATE INDEX IF NOT EXISTS inventories_active_inward_upi_bin_lookup_idx/i.test(migration));
+assert(!/CREATE UNIQUE INDEX IF NOT EXISTS inventories_active_inward_upi_bin_lookup_idx/i.test(migration));
+
+const syncRoute = fs.readFileSync(path.join(__dirname, '..', 'routes', 'sync.js'), 'utf8');
+assert(/businessDuplicateClauses/.test(syncRoute));
+assert(/duplicatePolicy\.businessDuplicateFilter/.test(syncRoute));
+assert(/duplicatePolicy\.businessDuplicateKey/.test(syncRoute));
+assert(/duplicatePolicy\.partBinDuplicateMessage/.test(syncRoute));
 
 console.log('Part/bin duplicate policy checks passed.');

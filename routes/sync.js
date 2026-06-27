@@ -1968,6 +1968,9 @@ async function pushHandler(req, res) {
     const normalizedScanIds = normalized.map((item) => item.scan.uniqueScanId).filter(Boolean);
     const normalizedSyncKeys = normalized.map((item) => item.scan.syncKey).filter(Boolean);
     const normalizedQrFingerprints = normalized.map((item) => item.scan.qrFingerprint).filter(Boolean);
+    const businessDuplicateClauses = normalized
+      .map((item) => duplicatePolicy.businessDuplicateFilter(item.scan))
+      .filter(Boolean);
     const fittedDuplicateClauses = normalized
       .map((item) => item.scan)
       .filter((scan) => scan.scanType === 'FITTED' && scan.dealerCode && scan.partNumber && scan.regdNo && scan.jobCardNo)
@@ -1992,6 +1995,7 @@ async function pushHandler(req, res) {
           { scanId: { $in: normalizedScanIds } },
           { syncKey: { $in: normalizedSyncKeys } },
           { qrFingerprint: { $in: normalizedQrFingerprints } },
+          ...businessDuplicateClauses,
           ...fittedDuplicateClauses
         ]
         }).select('uniqueScanId scanId syncKey qrFingerprint rawUpiHash globalUpiKey rawScan rawScanString rawUpi upiNo upiId dealerCode auditId syncBatchId userId loginId userName staffName binLocation bin scanType type normalizedPartNumber partNumber part regdNo jobCardNo qty quantity mrp scanMRP manualMRP valuationMRP finalMRP valuationSource currentCatalogueMRP currentCatalogueDLC dlc timestamp scanTime createdAt').lean()
@@ -2208,15 +2212,22 @@ async function pushHandler(req, res) {
       const activeDuplicate = activeFilter
         ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
         : null;
-      const normalDuplicate = Boolean(activeDuplicate || (!fittedKey && (storedIdentityDuplicate || batchIdentityDuplicate)));
+      const businessKey = duplicatePolicy.businessDuplicateKey(scan);
+      const storedBusinessDuplicate = Boolean(businessKey && existingScanIds.has(businessKey));
+      const batchBusinessDuplicate = Boolean(businessKey && duplicateScanIds.has(businessKey));
+      const partBinDuplicate = Boolean(!fittedKey && (storedBusinessDuplicate || batchBusinessDuplicate));
+      const normalDuplicate = Boolean(activeDuplicate || (!fittedKey && (storedIdentityDuplicate || batchIdentityDuplicate || partBinDuplicate)));
       if (fittedDuplicate || normalDuplicate) {
         if (fittedKey) duplicateScanIds.add(fittedKey);
-        let existingIdentity = activeDuplicate || existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.scanId) || existingIdentityByKey.get(scan.syncKey) || existingIdentityByKey.get(scan.qrFingerprint) || {};
+        if (businessKey) duplicateScanIds.add(businessKey);
+        let existingIdentity = activeDuplicate || existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(businessKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.scanId) || existingIdentityByKey.get(scan.syncKey) || existingIdentityByKey.get(scan.qrFingerprint) || {};
         existingIdentity = await backfillDuplicateMrp(existingIdentity, scan, { manualEntry });
         const duplicateMessage = activeDuplicate
           ? duplicatePolicy.duplicateUpiMessage(existingIdentity)
           : fittedKey
           ? 'Fitted part already exists for this vehicle/job card'
+          : partBinDuplicate
+          ? duplicatePolicy.partBinDuplicateMessage(existingIdentity, scan)
           : 'Duplicate exact scan skipped';
         logDuplicateScan(scan, existingIdentity, duplicateMessage).catch(() => undefined);
         logSync('duplicate scan skipped', {
@@ -2236,6 +2247,10 @@ async function pushHandler(req, res) {
       scan.qrFingerprint = manualEntry || fittedKey ? '' : makeQrFingerprint(scan);
       if (fittedKey) duplicateScanIds.add(fittedKey);
       if (scan.globalUpiKey) existingIdentityByKey.set(scan.globalUpiKey, scan);
+      if (businessKey) {
+        duplicateScanIds.add(businessKey);
+        existingIdentityByKey.set(businessKey, scan);
+      }
 
       const finalQty = Number(scan.quantity || 1);
       const finalBin = scan.binLocation;
