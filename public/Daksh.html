@@ -8,9 +8,9 @@
   <link rel="apple-touch-icon" sizes="512x512" href="/brand/app-icon.png">
   <script>
     (function () {
-      var width = 90;
+      var width = 260;
       try {
-        width = Math.min(260, Math.max(90, parseInt(localStorage.getItem('dakshSidebarWidth'), 10) || 90));
+        width = Math.min(260, Math.max(90, parseInt(localStorage.getItem('dakshSidebarWidth'), 10) || 260));
       } catch (error) {}
       document.documentElement.style.setProperty('--sidebar-width-desktop', width + 'px');
       if (width >= 132) document.documentElement.classList.add('sidebar-wide-initial');
@@ -208,8 +208,7 @@
 
           <section class="card dashboard-chart-card">
             <div class="card-head">
-              <h2>Quick Overview</h2>
-              <span class="muted">Scan mix today</span>
+              <h2>Scan Mix (Today)</h2>
             </div>
             <div class="dashboard-overview">
               <div class="dashboard-overview-chart">
@@ -240,13 +239,27 @@
               </div>
             </div>
           </section>
+
+          <section class="card dashboard-actions-card">
+            <div class="card-head">
+              <h2>Quick Actions</h2>
+            </div>
+            <div class="dashboard-actions-grid">
+              <button id="quickActionStartScan" class="btn dashboard-action-btn action-blue" type="button"><svg viewBox="0 0 24 24"><use href="#icon-play"></use></svg><span>Start Scan</span></button>
+              <button id="quickActionManualEntry" class="btn dashboard-action-btn action-green" type="button"><svg viewBox="0 0 24 24"><use href="#icon-pencil"></use></svg><span>Manual Entry</span></button>
+              <button id="quickActionViewReports" class="btn dashboard-action-btn action-purple" type="button"><svg viewBox="0 0 24 24"><use href="#icon-reports"></use></svg><span>View Reports</span></button>
+              <button id="quickActionBinTransfer" class="btn dashboard-action-btn action-orange" type="button"><svg viewBox="0 0 24 24"><use href="#icon-transfer"></use></svg><span>Bin Transfer</span></button>
+              <button id="quickActionSyncNow" class="btn dashboard-action-btn action-cyan" type="button"><svg viewBox="0 0 24 24"><use href="#icon-sync"></use></svg><span>Sync Now</span></button>
+              <button id="quickActionRepairSync" class="btn dashboard-action-btn action-red" type="button"><svg viewBox="0 0 24 24"><use href="#icon-wrench"></use></svg><span>Repair Sync</span></button>
+            </div>
+          </section>
         </div>
 
         <div class="dashboard-lower-grid">
           <section class="card dashboard-card dashboard-stream-card">
             <div class="card-head">
               <h2>Real-Time Scan Stream</h2>
-              <span class="muted">Latest 12 scans</span>
+              <button id="streamViewAll" class="link-button" type="button">View All</button>
             </div>
             <div class="table-wrap compact-table dashboard-table-wrap dashboard-stream-wrap">
               <table class="dashboard-data-table dashboard-stream-table">
@@ -261,18 +274,13 @@
             </div>
           </section>
 
-          <section class="card dashboard-actions-card">
+          <section class="card dashboard-card dashboard-top-bins-card">
             <div class="card-head">
-              <h2>Quick Actions</h2>
-              <span class="muted">Common tasks</span>
+              <h2>Top Bins by Scans</h2>
+              <button id="topBinsViewAll" class="link-button" type="button">View All</button>
             </div>
-            <div class="dashboard-actions-grid">
-              <button id="quickActionStartScan" class="btn dashboard-action-btn action-blue" type="button"><svg viewBox="0 0 24 24"><use href="#icon-play"></use></svg><span>Start Scan</span></button>
-              <button id="quickActionManualEntry" class="btn dashboard-action-btn action-green" type="button"><svg viewBox="0 0 24 24"><use href="#icon-pencil"></use></svg><span>Manual Entry</span></button>
-              <button id="quickActionViewReports" class="btn dashboard-action-btn action-purple" type="button"><svg viewBox="0 0 24 24"><use href="#icon-reports"></use></svg><span>View Reports</span></button>
-              <button id="quickActionBinTransfer" class="btn dashboard-action-btn action-orange" type="button"><svg viewBox="0 0 24 24"><use href="#icon-transfer"></use></svg><span>Bin Transfer</span></button>
-              <button id="quickActionSyncNow" class="btn dashboard-action-btn action-cyan" type="button"><svg viewBox="0 0 24 24"><use href="#icon-sync"></use></svg><span>Sync Now</span></button>
-              <button id="quickActionRepairSync" class="btn dashboard-action-btn action-red" type="button"><svg viewBox="0 0 24 24"><use href="#icon-wrench"></use></svg><span>Repair Sync</span></button>
+            <div id="topBinsRows" class="dashboard-top-bins-list">
+              <div class="dashboard-top-bins-empty">Loading top bins...</div>
             </div>
           </section>
         </div>

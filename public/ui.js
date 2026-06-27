@@ -315,14 +315,14 @@
     { key: 'raw-upi', label: 'Raw UPI Report' },
     { key: 'scan-register', label: 'Scan Register Report' },
     { key: 'invalid-scan-report', label: 'Invalid Scan Report' },
-    { key: 'stock-summary', label: 'Stock Summary' },
+    { key: 'stock-summary', label: 'Stock Summary Report' },
     { key: 'product-group-summary', label: 'Product Group Summary' },
     { key: 'short', label: 'Short Report' },
     { key: 'excess', label: 'Excess Report' },
     { key: 'movement_wise_stock_analysis', label: 'Movement Wise Stock Analysis Report' },
     { key: 'damage', label: 'Damage Report' },
     { key: 'category-wise-variance-summary', label: 'Category Wise Variance Summary' },
-    { key: 'partwise-inventory-audit', label: 'Partwise Inventory Audit Report' },
+    { key: 'partwise-inventory-audit', label: 'Partwise Inventory Report' },
     { key: 'parts-inventory-refresh-template', label: 'Part Inventory Refresh Template' },
     { key: 'reconciliation-report', label: 'Reconciliation Report' },
     { key: 'dealer-reconciliation-report', label: 'Dealer Reconciliation Report' },
@@ -372,14 +372,14 @@
     'invalid-scan-report': 'Invalid Scan Report',
     'wrong-not-found-master': 'Invalid Scan Report',
     'multiple-bin-location-alert': 'Multiple Bin Location Alert Report',
-    'stock-summary': 'Stock Summary',
+    'stock-summary': 'Stock Summary Report',
     'product-group-summary': 'Product Group Summary',
     short: 'Short Report',
     excess: 'Excess Report',
     movement_wise_stock_analysis: 'Movement Wise Stock Analysis Report',
     damage: 'Damage Report',
     'category-wise-variance-summary': 'Category Wise Variance Summary',
-    'partwise-inventory-audit': 'Partwise Inventory Audit Report',
+    'partwise-inventory-audit': 'Partwise Inventory Report',
     'parts-inventory-refresh-template': 'Part Inventory Refresh Template'
   };
   const CSV_REPORT_TYPES = new Set();
@@ -574,7 +574,7 @@
 
   function initSidebarResize() {
     const handle = $('#sideResizeHandle');
-    applySidebarWidth(storedSidebarWidth() || SIDEBAR_MIN_WIDTH);
+    applySidebarWidth(storedSidebarWidth() || SIDEBAR_MAX_WIDTH);
     if (!handle) return;
     let startX = 0;
     let startWidth = sidebarWidth;
@@ -1548,6 +1548,21 @@
     return `${window.location.origin.replace(/\/+$/, '')}/mobile-scanner`;
   }
 
+  function dashboardWelcomeText() {
+    return `Welcome back, ${roleDisplayName(state.user && state.user.role)}`;
+  }
+
+  function updateSystemSubline() {
+    const node = $('#systemSubline');
+    if (!node) return;
+    if ($('#dashboard')?.classList.contains('active')) {
+      node.textContent = dashboardWelcomeText();
+      return;
+    }
+    const mobileScannerUrl = resolveMobileScannerUrl(state.serverInfo || {});
+    node.textContent = mobileScannerUrl ? `Mobile scanner: ${mobileScannerUrl}` : '';
+  }
+
   function applyServerInfo(info = {}) {
     const serverUrl = info.serverUrl || (info.ip && info.port ? `http://${info.ip}:${info.port}` : '');
     const mobileScannerUrl = resolveMobileScannerUrl({ ...state.serverInfo, ...info, serverUrl });
@@ -1566,8 +1581,7 @@
     setText('syncServerPort', state.serverInfo.port || '3001');
     setText('syncServerUrlText', serverUrl || 'Unavailable');
     setText('syncMobileScannerUrlText', mobileScannerUrl || 'Unavailable');
-    setText('systemSubline', `Mobile scanner: ${mobileScannerUrl || 'Unavailable'}`);
-    setText('mobileUrl', `Mobile scanner: ${mobileScannerUrl || 'Unavailable'}`);
+    updateSystemSubline();
   }
 
   async function loadHealth() {
@@ -2710,9 +2724,7 @@
     setText('userDropdownLogin', loginName);
     setText('userDropdownRole', roleName);
     $$('.admin-only').forEach((node) => node.classList.toggle('hidden', !state.user || state.user.role !== 'admin'));
-    const mobileScannerUrl = resolveMobileScannerUrl(state.serverInfo || {});
-    setText('systemSubline', `Mobile scanner: ${mobileScannerUrl}`);
-    setText('mobileUrl', `Mobile scanner: ${mobileScannerUrl}`);
+    updateSystemSubline();
     $('#manualStaff').value = state.user ? state.user.name || state.user.username || '' : '';
     $('#barcodeDeviceId').value = ensureDeviceId();
     $('#allowUnknownToggle').checked = storageGet('dakshAllowUnknown') === 'true';
@@ -3165,6 +3177,7 @@
       const rows = options.skipActiveAuditFilter === true ? merged : filterActiveAuditScans(merged);
       state.scanStreamRecords = rows;
       renderDashboardQuickOverview(state.dashboardStats || {}, rows);
+      renderDashboardTopBins(rows);
       if (body) {
         const emptyLabel = rows.length
           ? ''
@@ -3202,9 +3215,50 @@
       console.warn('[DASHBOARD] stream render failed', error.message);
       state.scanStreamRecords = [];
       renderDashboardQuickOverview(state.dashboardStats || {}, []);
+      renderDashboardTopBins([]);
       if (body) body.innerHTML = '<tr><td colspan="9" class="muted">No scans yet</td></tr>';
       return [];
     }
+  }
+
+  function dashboardBinLabel(scan = {}) {
+    const bin = String(scan.binLocation || scan.bin || '').trim();
+    return bin ? bin.toUpperCase() : 'UNASSIGNED';
+  }
+
+  function renderDashboardTopBins(scans = []) {
+    const body = $('#topBinsRows');
+    if (!body) return [];
+    const records = Array.isArray(scans) ? scans : [];
+    const counts = new Map();
+    records.forEach((scan) => {
+      const bin = dashboardBinLabel(scan);
+      counts.set(bin, (counts.get(bin) || 0) + 1);
+    });
+    const rows = Array.from(counts.entries())
+      .map(([bin, count]) => ({ bin, count }))
+      .sort((a, b) => Number(b.count || 0) - Number(a.count || 0) || String(a.bin).localeCompare(String(b.bin), undefined, { numeric: true, sensitivity: 'base' }))
+      .slice(0, 5);
+    if (!rows.length) {
+      body.innerHTML = '<div class="dashboard-top-bins-empty">No bins yet</div>';
+      return rows;
+    }
+    const max = Math.max(1, ...rows.map((row) => Number(row.count || 0)));
+    body.innerHTML = rows.map((row) => {
+      const width = Math.max(10, Math.round((Number(row.count || 0) / max) * 100));
+      return `
+        <div class="dashboard-top-bin-row">
+          <strong class="dashboard-top-bin-label">${escapeHtml(row.bin)}</strong>
+          <div class="dashboard-top-bin-copy">
+            <div class="dashboard-top-bin-track">
+              <span class="dashboard-top-bin-bar" style="width: ${width}%"></span>
+            </div>
+          </div>
+          <div class="dashboard-top-bin-count">${wholeNumber(row.count || 0)}</div>
+        </div>
+      `;
+    }).join('');
+    return rows;
   }
 
   function groupSummaryNumber(value) {
@@ -3466,6 +3520,13 @@
     state.dashboardLoadPromise = (async () => {
       try {
         const query = dashboardQueryString();
+        const topBinsPromise = api(`/api/scans/live?limit=200${query ? `&${query}` : ''}`, { signal: controller.signal })
+          .catch((error) => {
+            if (error && error.name !== 'AbortError') {
+              console.warn('[DASHBOARD] top bins load failed', error.message);
+            }
+            return null;
+          });
         const data = await api(`/api/scans/dashboard${query ? `?${query}` : ''}`, { signal: controller.signal });
         if (state.dashboardLoadRequestId !== requestId) return null;
         if (data.activeAudit && data.activeAudit.dealerCode) {
@@ -3492,6 +3553,9 @@
             }
           }
           const rows = renderScanStream(Array.isArray(recent) ? recent : [], { skipActiveAuditFilter: true });
+          const liveData = await topBinsPromise;
+          const liveRows = liveData && (liveData.records || liveData.scans);
+          renderDashboardTopBins(Array.isArray(liveRows) ? liveRows : rows);
           if (!rows.length && Array.isArray(recent) && recent.length) {
             console.warn('[DASHBOARD] server returned recent scans but none rendered', {
               dealerCode: data.dealerCode || '',
@@ -5687,12 +5751,11 @@
     const button = $('#completeAuditPackGenerate');
     if (!button) return;
     const settings = state.auditPackSettings || defaultAuditPackSettings();
-    const reportCount = Array.isArray(settings.reports) ? settings.reports.length : 0;
     const dealerCode = auditPackDealerCode();
     button.disabled = state.auditPackInProgress || !dealerCode;
     button.title = state.auditPackInProgress
       ? 'Generating audit pack...'
-      : (!dealerCode ? 'Select a dealer code first' : (reportCount ? 'Generate the complete audit pack workbook' : 'Please select at least one report'));
+      : (!dealerCode ? 'Select a dealer code first' : 'Generate the complete audit pack workbook');
   }
 
   function renderAuditPackModal(searchTerm = null) {
@@ -5891,10 +5954,6 @@
     const payload = collectAuditPackPayload();
     if (!payload.dealerCode) {
       toast('Select dealer code first', 'error');
-      return;
-    }
-    if (!Array.isArray(payload.reports) || !payload.reports.length) {
-      toast('Please select at least one report', 'error');
       return;
     }
 
@@ -10475,6 +10534,7 @@
     const viewTitle = VIEW_TITLES[viewId] || title || viewId;
     $('#viewTitle').textContent = viewTitle;
     document.title = `DAKSH INVENTORY SYSTEM - ${viewTitle}`;
+    updateSystemSubline();
     if (viewId === 'dashboard' && state.dashboardLoaded) {
       loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
     } else if (viewId !== 'dashboard') {
@@ -10699,6 +10759,8 @@
     $('#clearConnectionLogsBtn')?.addEventListener('click', () => clearConnectionLogs().catch((error) => toast(error.message, 'error')));
     $('#syncCopyServerUrlBtn').addEventListener('click', () => copyServerUrl().catch((error) => toast(error.message, 'error')));
     $('#syncCopyMobileScannerUrlBtn')?.addEventListener('click', () => copyMobileScannerUrl().catch((error) => toast(error.message, 'error')));
+    $('#streamViewAll')?.addEventListener('click', () => openView('scan'));
+    $('#topBinsViewAll')?.addEventListener('click', () => openView('reports'));
     $('#loadLabelBinsBtn')?.addEventListener('click', () => loadLabelBins().catch((error) => toast(error.message, 'error')));
     $('#labelDealerSelect')?.addEventListener('change', () => loadLabelBins().catch((error) => toast(error.message, 'error')));
     $('#barcodeBinLocation')?.addEventListener('input', (event) => {

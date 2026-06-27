@@ -502,14 +502,14 @@ const COMPLETE_AUDIT_PACK_REPORTS = [
   { key: 'raw-upi', label: 'Raw UPI Report' },
   { key: 'scan-register', label: 'Scan Register Report' },
   { key: 'invalid-scan-report', label: 'Invalid Scan Report' },
-  { key: 'stock-summary', label: 'Stock Summary' },
+  { key: 'stock-summary', label: 'Stock Summary Report' },
   { key: 'product-group-summary', label: 'Product Group Summary' },
   { key: 'short', label: 'Short Report' },
   { key: 'excess', label: 'Excess Report' },
   { key: 'movement_wise_stock_analysis', label: 'Movement Wise Stock Analysis Report' },
   { key: 'damage', label: 'Damage Report' },
   { key: 'category-wise-variance-summary', label: 'Category Wise Variance Summary' },
-  { key: 'partwise-inventory-audit', label: 'Partwise Inventory Audit Report' },
+  { key: 'partwise-inventory-audit', label: 'Partwise Inventory Report' },
   { key: 'parts-inventory-refresh-template', label: 'Part Inventory Refresh Template' },
   { key: 'reconciliation-report', label: 'Reconciliation Report' },
   { key: 'dealer-reconciliation-report', label: 'Dealer Reconciliation Report' },
@@ -1628,6 +1628,45 @@ function packRenderSummaryRows(sheet, startRow, totalColumns, title, rows = [], 
   return rowNumber - 1;
 }
 
+function packDisplayDate(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'Asia/Kolkata'
+  }).format(date).replace(/\s+/g, '-');
+}
+
+function packRenderCompactHeader(sheet, totalColumns, options = {}) {
+  const endColumn = Math.max(4, Number(totalColumns) || 4);
+  const dealer = packText(options.dealer || options.dealerName || options.dealerCode || '-');
+  const reportName = packText(options.reportName || options.title || '-');
+  const generatedDate = packText(options.generatedDate || packDisplayDate(options.generatedAt || new Date()));
+  packMergeBand(sheet, 1, 1, endColumn, 'Daksh Inventory Solution V2', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.title } },
+    font: { name: PACK_FONT, size: 16, bold: true, color: { argb: PACK_THEME.titleText } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+    borderColor: PACK_THEME.title,
+    height: 24
+  });
+  packMergeBand(sheet, 2, 1, endColumn, 'Inventory Audit Report', {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: PACK_THEME.subtitle } },
+    font: { name: PACK_FONT, size: 11, bold: true, color: { argb: PACK_THEME.subtitleText } },
+    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+    borderColor: PACK_THEME.border,
+    height: 20
+  });
+  packMergeBand(sheet, 3, 1, endColumn, `Dealer: ${dealer} | Report Name: ${reportName} | Generated Date: ${generatedDate}`, {
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } },
+    font: { name: PACK_FONT, size: 10, bold: true, color: { argb: 'FF334155' } },
+    alignment: { vertical: 'middle', horizontal: 'left', wrapText: true },
+    borderColor: PACK_THEME.border,
+    height: 20
+  });
+}
+
 function packRenderDataTable(sheet, startRow, totalColumns, title, columns = [], rows = [], options = {}) {
   const effectiveColumns = packResolveColumns(columns, rows, Math.max(1, columns.length), options.maxWidth || 60);
   const sheetColumns = effectiveColumns.map((column) => ({
@@ -1640,15 +1679,20 @@ function packRenderDataTable(sheet, startRow, totalColumns, title, columns = [],
   }
   sheet.columns = sheetColumns;
 
-  packMergeBand(sheet, startRow, 1, totalColumns, title || 'Detailed Data', {
-    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: options.fill || PACK_THEME.sectionBlue } },
-    font: { name: PACK_FONT, size: 11, bold: true, color: { argb: PACK_THEME.subtitleText } },
-    alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
-    borderColor: PACK_THEME.border,
-    height: 20
-  });
+  const hideTitle = options.hideTableTitle === true;
+  let headerRowNumber = startRow;
+  if (!hideTitle) {
+    packMergeBand(sheet, startRow, 1, totalColumns, title || 'Detailed Data', {
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: options.fill || PACK_THEME.sectionBlue } },
+      font: { name: PACK_FONT, size: 11, bold: true, color: { argb: PACK_THEME.subtitleText } },
+      alignment: { vertical: 'middle', horizontal: 'center', wrapText: true },
+      borderColor: PACK_THEME.border,
+      height: 20
+    });
+    headerRowNumber = startRow + 1;
+  }
 
-  const headerRow = sheet.getRow(startRow + 1);
+  const headerRow = sheet.getRow(headerRowNumber);
   const visibleColumns = columns.length || 1;
   for (let index = 0; index < visibleColumns; index += 1) {
     headerRow.getCell(index + 1).value = effectiveColumns[index] && effectiveColumns[index].header ? effectiveColumns[index].header : '';
@@ -1676,8 +1720,8 @@ function packRenderDataTable(sheet, startRow, totalColumns, title, columns = [],
     added.height = 20;
   });
 
-  sheet.autoFilter = { from: { row: startRow + 1, column: 1 }, to: { row: startRow + 1, column: visibleColumns } };
-  return { headerRow: startRow + 1, nextRow: startRow + 1 + dataRows.length };
+  sheet.autoFilter = { from: { row: headerRowNumber, column: 1 }, to: { row: headerRowNumber, column: visibleColumns } };
+  return { headerRow: headerRowNumber, nextRow: headerRowNumber + dataRows.length };
 }
 
 function addTableSheet(workbook, name, columns, rows, options = {}) {
@@ -1690,6 +1734,29 @@ function addTableSheet(workbook, name, columns, rows, options = {}) {
   const resolvedColumns = packResolveColumns(visibleColumns, rows, Math.max(visibleColumns.length, 12), options.maxWidth || 60);
   const totalColumns = Math.max(12, resolvedColumns.length);
   sheet.columns = Array.from({ length: totalColumns }, (_, index) => ({ width: index < 4 ? 18 : 14 }));
+  const compactHeader = options.compactHeader === true;
+  if (compactHeader) {
+    packRenderCompactHeader(sheet, totalColumns, {
+      dealer: options.dealerName || selectedDealer.dealerName || selectedDealer.dealerCode || reportData.summary?.[0]?.dealerName || reportData.summary?.[0]?.dealerCode || options.dealerCode || '-',
+      reportName: options.reportName || subtitle,
+      generatedDate: options.generatedDate || packDisplayDate(options.generatedAt || new Date())
+    });
+    const table = packRenderDataTable(sheet, 4, totalColumns, options.tableTitle || subtitle, visibleColumns, rows, {
+      ...options,
+      hideTableTitle: true
+    });
+    sheet.views = [{ state: 'frozen', ySplit: table.headerRow, showGridLines: false }];
+    sheet.pageSetup = {
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      orientation: options.orientation || 'landscape',
+      paperSize: 9
+    };
+    addSheetFooter(sheet, options.generatedAt || '');
+    return sheet;
+  }
+
   packRenderTitleBlock(sheet, totalColumns, subtitle);
 
   const dealerInfo = Array.isArray(options.dealerInfo) && options.dealerInfo.length ? options.dealerInfo : [
@@ -1738,7 +1805,15 @@ function addMetricSheet(workbook, name, rows, options = {}) {
   const tableWidth = tables.reduce((max, table) => Math.max(max, Array.isArray(table.columns) ? table.columns.length : 0), 0);
   const totalColumns = Math.max(12, tableWidth);
   sheet.columns = Array.from({ length: totalColumns }, (_, index) => ({ width: index < 4 ? 18 : 14 }));
-  packRenderTitleBlock(sheet, totalColumns, subtitle);
+  if (options.compactHeader) {
+    packRenderCompactHeader(sheet, totalColumns, {
+      dealer: options.dealerName || options.dealerCode || '-',
+      reportName: options.reportName || subtitle,
+      generatedDate: options.generatedDate || packDisplayDate(options.generatedAt || new Date())
+    });
+  } else {
+    packRenderTitleBlock(sheet, totalColumns, subtitle);
+  }
 
   const sections = [];
   const sectionMap = new Map();
@@ -1751,7 +1826,7 @@ function addMetricSheet(workbook, name, rows, options = {}) {
     sectionMap.get(section).push({ ...row, __index: index });
   });
 
-  let currentRow = 3;
+  let currentRow = options.compactHeader ? 4 : 3;
   sections.forEach((section, index) => {
     const sectionRows = sectionMap.get(section).map((row) => ({
       label: row.metric || row.label || '',
@@ -1771,13 +1846,14 @@ function addMetricSheet(workbook, name, rows, options = {}) {
       ...(table.options || {}),
       fill: table.fill || options.tableFill,
       headerFill: table.headerFill || options.headerFill,
-      maxWidth: table.maxWidth || options.maxWidth
+      maxWidth: table.maxWidth || options.maxWidth,
+      hideTableTitle: options.compactHeader ? true : table.hideTableTitle
     });
     if (!firstTableHeader) firstTableHeader = rendered.headerRow;
     currentRow = rendered.nextRow;
   });
 
-  sheet.views = [{ state: 'frozen', ySplit: firstTableHeader || 2, showGridLines: false }];
+  sheet.views = [{ state: 'frozen', ySplit: options.compactHeader ? (firstTableHeader || 3) : (firstTableHeader || 2), showGridLines: false }];
   sheet.pageSetup = {
     fitToPage: true,
     fitToWidth: 1,
@@ -2059,6 +2135,47 @@ function buildSummaryStatusRows(reportData = {}, selectedReports = [], extras = 
       label,
       'Included'
     ])))
+  ];
+}
+
+function buildAuditSummaryRows(reportData = {}, context = null, productGroupSummary = {}, generatedAt = '') {
+  const packContext = context || buildAuditPackContext(reportData, null, []);
+  const { summary, dealer, audit, totals } = packContext;
+  const groupTotals = productGroupSummary && productGroupSummary.totals ? productGroupSummary.totals : {};
+  const remarks = reconciliationRemarksText({
+    netDifference: totals.netDifference || 0,
+    totalShortageValue: totals.totalShortValue || 0,
+    totalExcessValue: totals.totalExcessValue || 0
+  });
+  return [
+    ...packMetricRows('Dealer Details', [
+      ['Dealer Name', dealer.dealerName || summary.dealerName || packText(summary.dealerCode || dealer.dealerCode || reportData.filters?.dealerCode || '-')],
+      ['Dealer Code', dealer.dealerCode || summary.dealerCode || reportData.filters?.dealerCode || '-'],
+      ['Location', dealer.location || '-'],
+      ['Brand', dealer.brand || '-']
+    ]),
+    ...packMetricRows('Audit Details', [
+      ['Audit ID', audit.auditId || summary.auditId || '-'],
+      ['Auditor Name', dealer.auditorName || audit.auditorName || '-'],
+      ['Audit Start Date', audit.auditStartDate || audit.auditDate || summary.fromDate || reportData.filters?.fromDate || reportData.filters?.from || '-'],
+      ['Audit End Date', audit.auditClosedDate || audit.auditEndDate || summary.toDate || reportData.filters?.toDate || reportData.filters?.to || '-']
+    ]),
+    ...packMetricRows('Audit Totals', [
+      ['Total Scan Qty', packNumber(totals.totalQuantity || 0, 0)],
+      ['Actual Stock Value (DLC)', packCurrency(totals.totalPhysicalDlcValue || 0)],
+      ['Shortage / Excess', `Shortage ${packCurrency(totals.totalShortValue || 0)} | Excess ${packCurrency(totals.totalExcessValue || 0)}`],
+      ['Final Net Difference', packCurrency(totals.netDifference || 0)]
+    ]),
+    ...packMetricRows('Product Group Summary', [
+      ['Total Groups', packNumber(Array.isArray(productGroupSummary.rows) ? productGroupSummary.rows.length : 0, 0)],
+      ['Total Scans', packNumber(groupTotals.totalScans || 0, 0)],
+      ['Total Quantity', packNumber(groupTotals.totalQuantity || 0, 0)],
+      ['Actual Stock Value (DLC)', packCurrency(groupTotals.totalDlcValue || 0)],
+      ['MRP Value Reference', packCurrency(groupTotals.totalMrpValue || 0)]
+    ]),
+    ...packMetricRows('Final Remarks', [
+      ['Remarks', remarks]
+    ])
   ];
 }
 
@@ -2348,11 +2465,6 @@ function buildReconciliationSummaryRows(report = {}, context = null) {
 
 async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
   const normalized = normalizeAuditPackSelection(payload);
-  if (!normalized.reports.length) {
-    const error = new Error('Please select at least one report');
-    error.statusCode = 400;
-    throw error;
-  }
   if (!normalized.dealerCode) {
     const error = new Error('Select dealer code first to generate complete audit pack');
     error.statusCode = 400;
@@ -2377,6 +2489,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     || {};
   const generatedBy = clean(user.name || user.username || user.email || user.id || 'System');
   const generatedAt = formatIstDateTime(new Date());
+  const generatedDate = packDisplayDate(new Date());
   const createLazyPromise = (factory) => {
     let promise = null;
     return () => {
@@ -2422,66 +2535,6 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
   workbook.company = 'DAKSH INVENTORY SYSTEM';
   workbook.properties = { date1904: false };
 
-  addMetricSheet(workbook, 'Audit Summary', buildSummaryStatusRows(
-    reportData,
-    resolvedQuery.reports,
-    normalized,
-    generatedBy,
-    generatedAt,
-    movementAnalysisData,
-    scanRegisterRowsData,
-    packContext
-  ), {
-    title: 'AUDIT SUMMARY',
-    orientation: 'landscape',
-    generatedAt
-  });
-
-  if (normalized.includeDashboardSummary) {
-    addMetricSheet(workbook, 'Dashboard Summary', buildDashboardSummaryRows(reportData, movementAnalysisData, scanRegisterRowsData, packContext), {
-      title: 'DASHBOARD SUMMARY',
-      orientation: 'landscape',
-      generatedAt
-    });
-  }
-
-  if (normalized.includeAuditInformation) {
-    addMetricSheet(workbook, 'Audit Information', buildAuditInformationRows(resolvedQuery, reportData), {
-      title: 'AUDIT INFORMATION',
-      orientation: 'landscape',
-      generatedAt
-    });
-  }
-
-  if (normalized.includeDealerInformation) {
-    addMetricSheet(workbook, 'Dealer Information', buildDealerInformationRows(reportData), {
-      title: 'DEALER INFORMATION',
-      orientation: 'landscape',
-      generatedAt
-    });
-  }
-
-  if (normalized.includeScanStatistics) {
-    addMetricSheet(workbook, 'Scan Statistics', buildScanStatisticsRows(reportData, scanRegisterRowsData, packContext), {
-      title: 'SCAN STATISTICS',
-      orientation: 'landscape',
-      generatedAt
-    });
-  }
-
-  if (normalized.includePendingOfflineScanDetails) {
-    addTableSheet(workbook, 'Pending Offline Scans', SCAN_REGISTER_COLUMNS, buildPendingOfflineRows(scanRegisterRowsData), {
-      emptyMessage: 'No Data Available',
-      generatedAt
-    });
-  }
-
-  if (normalized.includeUserWiseSummary) {
-    addTableSheet(workbook, 'User Wise Summary', USER_WISE_SUMMARY_COLUMNS, buildUserWiseSummaryRows(reportData), {
-      emptyMessage: 'No Data Available',
-      generatedAt
-    });
-  }
   const buildDealerInfoRows = () => [
     { label: 'Dealer Name', value: packText(selectedDealer.dealerName || reportData.summary?.[0]?.dealerName || resolvedQuery.dealerCode || '-') },
     { label: 'Dealer Code', value: packText(selectedDealer.dealerCode || reportData.summary?.[0]?.dealerCode || resolvedQuery.dealerCode || '-') },
@@ -2906,13 +2959,113 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     })
   };
 
-  const selectedSpecs = (await Promise.all(normalized.reports.map(async (reportKey) => {
+  const coreReportKeys = new Set(['stock-summary', 'bin-wise-stock', 'partwise-inventory-audit', 'scan-register', 'product-group-summary']);
+  const [stockSummaryData, partwiseData] = await Promise.all([getStockSummaryData(), getPartwiseData()]);
+  const productGroupSummary = buildProductGroupSummaryPackRows(partwiseData.rows || []);
+
+  const coreSpecs = [
+    {
+      sheetName: 'Audit Summary',
+      kind: 'metrics',
+      reportName: 'Audit Summary',
+      rows: buildAuditSummaryRows(reportData, packContext, productGroupSummary, generatedAt),
+      tables: [],
+      orientation: 'landscape'
+    },
+    {
+      sheetName: reportLabelForKey('stock-summary'),
+      kind: 'table',
+      reportName: reportLabelForKey('stock-summary'),
+      title: reportLabelForKey('stock-summary'),
+      columns: stockSummaryData.columns || [],
+      rows: stockSummaryData.rows || [],
+      orientation: 'landscape',
+      maxWidth: 60
+    },
+    {
+      sheetName: reportLabelForKey('bin-wise-stock'),
+      kind: 'table',
+      reportName: reportLabelForKey('bin-wise-stock'),
+      title: reportLabelForKey('bin-wise-stock'),
+      columns: BIN_COLUMNS,
+      rows: selectRows(reportData, 'bin-wise-stock'),
+      orientation: 'landscape',
+      maxWidth: 60
+    },
+    {
+      sheetName: reportLabelForKey('partwise-inventory-audit'),
+      kind: 'table',
+      reportName: reportLabelForKey('partwise-inventory-audit'),
+      title: reportLabelForKey('partwise-inventory-audit'),
+      columns: partwiseData.columns || [],
+      rows: partwiseData.rows || [],
+      orientation: 'landscape',
+      maxWidth: 60
+    },
+    {
+      sheetName: reportLabelForKey('scan-register'),
+      kind: 'table',
+      reportName: reportLabelForKey('scan-register'),
+      title: reportLabelForKey('scan-register'),
+      columns: SCAN_REGISTER_COLUMNS,
+      rows: scanRegisterRowsData,
+      orientation: 'landscape',
+      maxWidth: 60
+    },
+    {
+      sheetName: reportLabelForKey('product-group-summary'),
+      kind: 'table',
+      reportName: reportLabelForKey('product-group-summary'),
+      title: reportLabelForKey('product-group-summary'),
+      columns: PRODUCT_GROUP_SUMMARY_COLUMNS,
+      rows: productGroupSummary.rows,
+      orientation: 'landscape',
+      maxWidth: 60
+    }
+  ];
+
+  const renderCompactSpec = (spec) => {
+    const sheetName = spec.sheetName || spec.title || 'Report';
+    if (spec.kind === 'metrics') {
+      addMetricSheet(workbook, sheetName, spec.rows || [], {
+        title: spec.reportName || spec.title || sheetName,
+        tables: spec.tables || [],
+        sectionFills: spec.sectionFills || {},
+        orientation: spec.orientation || 'landscape',
+        generatedAt,
+        generatedDate,
+        compactHeader: true,
+        reportName: spec.reportName || spec.title || sheetName,
+        dealerName: selectedDealer.dealerName || selectedDealer.dealerCode || resolvedQuery.dealerCode || '-'
+      });
+      return;
+    }
+    addTableSheet(workbook, sheetName, spec.columns || [], spec.rows || [], {
+      title: spec.reportName || spec.title || sheetName,
+      reportName: spec.reportName || spec.title || sheetName,
+      dealerName: selectedDealer.dealerName || selectedDealer.dealerCode || resolvedQuery.dealerCode || '-',
+      reportData,
+      generatedBy,
+      generatedAt,
+      generatedDate,
+      compactHeader: true,
+      emptyMessage: spec.emptyMessage || 'No Data Available',
+      orientation: spec.orientation || 'landscape',
+      maxWidth: spec.maxWidth
+    });
+  };
+
+  coreSpecs.forEach(renderCompactSpec);
+
+  const extraReportKeys = Array.from(new Set((normalized.reports || []).filter((reportKey) => !coreReportKeys.has(reportKey))));
+  const selectedSpecs = (await Promise.all(extraReportKeys.map(async (reportKey) => {
     const builder = packBuildMap[reportKey];
     if (!builder) return null;
     try {
       return await builder();
     } catch (error) {
       return {
+        sheetName: reportLabelForKey(reportKey),
         title: reportLabelForKey(reportKey).toUpperCase(),
         kind: 'metrics',
         rows: packMetricRows('Error', [['Message', error.message]])
@@ -2922,45 +3075,30 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
 
   selectedSpecs.forEach((spec) => {
     if (!spec) return;
-    if (spec.kind === 'stock-summary') {
-      reportModule.addStockSummarySheet(workbook, spec.data || {}, {
-        generatedBy,
-        generatedAt,
-        canonicalContext: packContext,
-        reportData
-      });
-      return;
-    }
+    const sheetName = spec.sheetName || spec.title || reportLabelForKey(spec.reportKey || '') || 'Report';
     if (spec.kind === 'metrics') {
-      addMetricSheet(workbook, spec.title, spec.rows || [], {
-        title: spec.title,
+      addMetricSheet(workbook, sheetName, spec.rows || [], {
+        title: spec.title || sheetName,
         tables: spec.tables || [],
         sectionFills: spec.sectionFills || {},
         orientation: spec.orientation || 'landscape',
-        generatedAt
+        generatedAt,
+        generatedDate,
+        compactHeader: true,
+        reportName: spec.reportName || spec.title || sheetName,
+        dealerName: selectedDealer.dealerName || selectedDealer.dealerCode || resolvedQuery.dealerCode || '-'
       });
       return;
     }
-    const summaryMetrics = Array.isArray(spec.summaryMetrics) && spec.summaryMetrics.length
-      ? spec.summaryMetrics
-      : buildSummaryMetricsForReport(
-        spec.reportKey || '',
-        spec.rows || [],
-        { movementAnalysis: movementAnalysisData, registerCounts: countScanRegisterRows(scanRegisterRowsData) }
-      );
-    addTableSheet(workbook, spec.title, spec.columns || [], spec.rows || [], {
-      title: spec.title,
-      dealerInfo: spec.dealerInfo || buildDealerInfoRows(),
-      auditInfo: spec.auditInfo || buildAuditInfoRows(),
-      summaryMetrics,
+    addTableSheet(workbook, sheetName, spec.columns || [], spec.rows || [], {
+      title: spec.title || sheetName,
+      reportName: spec.reportName || spec.title || sheetName,
+      dealerName: selectedDealer.dealerName || selectedDealer.dealerCode || resolvedQuery.dealerCode || '-',
       reportData,
       generatedBy,
       generatedAt,
-      canonicalContext: packContext,
-      dealerTitle: 'Dealer Details',
-      auditTitle: 'Audit Details',
-      summaryTitle: spec.summaryTitle || 'Report Summary',
-      tableTitle: spec.tableTitle || spec.title,
+      generatedDate,
+      compactHeader: true,
       emptyMessage: spec.emptyMessage || 'No Data Available',
       orientation: spec.orientation || 'landscape',
       maxWidth: spec.maxWidth
@@ -3412,9 +3550,6 @@ async function handleCompleteAuditPack(req, res) {
   try {
     const normalized = normalizeAuditPackSelection(req.body || {});
     if (!normalized.dealerCode) return requireDealerSelection(res);
-    if (!normalized.reports.length) {
-      return res.status(400).json({ success: false, message: 'Please select at least one report' });
-    }
 
     const generatedBy = clean(req.user && (req.user.name || req.user.username || req.user.email || req.user.id || 'System'));
     const cacheQuery = {
