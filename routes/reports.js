@@ -9,6 +9,11 @@ const reconciliationRoute = require('./reconciliation');
 const Inventory = require('../models/Inventory');
 const Dealer = require('../models/Dealer');
 const router = reportModule;
+const getDakshReportLogoId = typeof reportModule.getDakshReportLogoId === 'function'
+  ? reportModule.getDakshReportLogoId
+  : function getDakshReportLogoId() {
+      return null;
+    };
 const auth = require('./auth');
 const { applyCacheHeaders, getCachedResponse } = require('../utils/reportCache');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
@@ -498,6 +503,7 @@ const COMPLETE_AUDIT_PACK_REPORTS = [
   { key: 'scan-register', label: 'Scan Register Report' },
   { key: 'invalid-scan-report', label: 'Invalid Scan Report' },
   { key: 'stock-summary', label: 'Stock Summary' },
+  { key: 'product-group-summary', label: 'Product Group Summary' },
   { key: 'short', label: 'Short Report' },
   { key: 'excess', label: 'Excess Report' },
   { key: 'movement_wise_stock_analysis', label: 'Movement Wise Stock Analysis Report' },
@@ -522,6 +528,16 @@ const COMPLETE_AUDIT_PACK_EXTRA_OPTIONS = [
   { key: 'includeScanStatistics', label: 'Include Scan Statistics' },
   { key: 'includePendingOfflineScanDetails', label: 'Include Pending/Offline Scan Details' },
   { key: 'includeUserWiseSummary', label: 'Include User Wise Summary' }
+];
+
+const PRODUCT_GROUP_SUMMARY_COLUMNS = [
+  { header: 'Product Group', key: 'productGroup', width: 24 },
+  { header: 'Product Sub Group', key: 'partSubGroup', width: 26 },
+  { header: 'Total Scans', key: 'totalScans', width: 14, numFmt: '#,##0' },
+  { header: 'Total Quantity', key: 'totalQuantity', width: 16, numFmt: '#,##0' },
+  { header: 'Unique Parts', key: 'uniqueParts', width: 14, numFmt: '#,##0' },
+  { header: 'Actual Stock Value (DLC)', key: 'totalDlcValue', width: 24, numFmt: '#,##0.00' },
+  { header: 'MRP Value Reference', key: 'totalMrpValue', width: 22, numFmt: '#,##0.00' }
 ];
 
 const CATEGORY_VARIANCE_COLUMNS = [
@@ -1445,7 +1461,7 @@ function packRenderTitleBlock(sheet, totalColumns, subtitle) {
     borderColor: PACK_THEME.border,
     height: 28
   });
-  const logoId = packGetDakshReportLogoId(sheet.workbook);
+  const logoId = getDakshReportLogoId(sheet.workbook);
   if (logoId !== null) {
     sheet.addImage(logoId, {
       tl: { col: 0.2, row: 0.16 },
@@ -1779,6 +1795,68 @@ function packMetricRows(section, entries = []) {
     metric,
     value
   }));
+}
+
+function buildProductGroupSummaryPackRows(rows = []) {
+  const groups = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((row = {}) => {
+    if (row.rowType === 'subtotal' || row.rowType === 'grandTotal') return;
+    const productGroup = clean(row.productGroup || row.productCategory || 'OTHERS') || 'OTHERS';
+    const partSubGroup = clean(row.partSubGroup || row.productSubGroup || 'GENERAL') || 'GENERAL';
+    const key = `${productGroup}::${partSubGroup}`;
+    const item = groups.get(key) || {
+      productGroup,
+      partSubGroup,
+      totalScans: 0,
+      scanCount: 0,
+      totalQuantity: 0,
+      qty: 0,
+      uniqueParts: 0,
+      totalDlcValue: 0,
+      totalMrpValue: 0
+    };
+    item.totalScans += Number(row.scanCount || 0);
+    item.scanCount = item.totalScans;
+    item.totalQuantity += Number(row.physicalQty || row.qty || 0);
+    item.qty = item.totalQuantity;
+    item.uniqueParts += 1;
+    item.totalDlcValue += Number(row.actualStockValue || row.physicalValueOnDlc || 0);
+    item.totalMrpValue += Number(row.actualMrpValue || row.physicalValueOnMrp || 0);
+    groups.set(key, item);
+  });
+  const summaryRows = Array.from(groups.values())
+    .map((row) => ({
+      ...row,
+      totalDlcValue: money(row.totalDlcValue),
+      totalMrpValue: money(row.totalMrpValue)
+    }))
+    .sort((a, b) => Number(b.totalQuantity || 0) - Number(a.totalQuantity || 0)
+      || String(a.productGroup || '').localeCompare(String(b.productGroup || ''))
+      || String(a.partSubGroup || '').localeCompare(String(b.partSubGroup || '')));
+  const totals = summaryRows.reduce((summary, row) => {
+    summary.totalScans += Number(row.totalScans || 0);
+    summary.totalQuantity += Number(row.totalQuantity || 0);
+    summary.uniqueParts += Number(row.uniqueParts || 0);
+    summary.totalDlcValue += Number(row.totalDlcValue || 0);
+    summary.totalMrpValue += Number(row.totalMrpValue || 0);
+    return summary;
+  }, {
+    totalScans: 0,
+    totalQuantity: 0,
+    uniqueParts: 0,
+    totalDlcValue: 0,
+    totalMrpValue: 0
+  });
+  return {
+    rows: summaryRows,
+    totals: {
+      totalScans: money(totals.totalScans),
+      totalQuantity: money(totals.totalQuantity),
+      uniqueParts: totals.uniqueParts,
+      totalDlcValue: money(totals.totalDlcValue),
+      totalMrpValue: money(totals.totalMrpValue)
+    }
+  };
 }
 
 function reportLabelForKey(key) {
@@ -2509,6 +2587,16 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
           { label: 'Total Value', value: packCurrency(totals.totalPhysicalDlcValue || totalValue) },
           { label: 'Net Difference', value: packCurrency(totals.totalVarianceDlcValue || sumBy(rows, (row) => firstNumericValue(row.varianceDlc, row.netDifference, row.varianceValue))) }
         ];
+      case 'product-group-summary': {
+        const summaryTotals = context.productGroupSummaryTotals || {};
+        return [
+          { label: 'Groups', value: packNumber(rowCount, 0) },
+          { label: 'Total Scans', value: packNumber(summaryTotals.totalScans || sumBy(rows, (row) => firstNumericValue(row.totalScans, 0)), 0) },
+          { label: 'Total Quantity', value: packNumber(summaryTotals.totalQuantity || sumBy(rows, (row) => firstNumericValue(row.totalQuantity, 0)), 0) },
+          { label: 'Actual Stock Value (DLC)', value: packCurrency(summaryTotals.totalDlcValue || sumBy(rows, (row) => firstNumericValue(row.totalDlcValue, 0))) },
+          { label: 'MRP Value Reference', value: packCurrency(summaryTotals.totalMrpValue || sumBy(rows, (row) => firstNumericValue(row.totalMrpValue, 0))) }
+        ];
+      }
       case 'parts-inventory-refresh-template':
         return [
           { label: 'Rows', value: packNumber(rowCount, 0) },
@@ -2601,6 +2689,25 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         title: 'STOCK SUMMARY',
         kind: 'stock-summary',
         data: stockSummary
+      };
+    },
+    'product-group-summary': async () => {
+      const partwise = await getPartwiseData();
+      const productGroupSummary = buildProductGroupSummaryPackRows(partwise.rows || []);
+      return {
+        title: 'Product Group Summary',
+        kind: 'table',
+        columns: PRODUCT_GROUP_SUMMARY_COLUMNS,
+        rows: productGroupSummary.rows,
+        dealerInfo: buildDealerInfoRows(),
+        auditInfo: buildAuditInfoRows(),
+        summaryMetrics: buildSummaryMetricsForReport(
+          'product-group-summary',
+          productGroupSummary.rows,
+          { ...packContext, productGroupSummaryTotals: productGroupSummary.totals }
+        ),
+        tableTitle: 'PRODUCT GROUP SUMMARY',
+        reportKey: 'product-group-summary'
       };
     },
     short: async () => {
@@ -2961,7 +3068,7 @@ function renderExcelReportHeader(sheet, workbook, title, subtitle, totalColumns)
   sheet.getCell(1, 1).value = '';
   sheet.getRow(1).height = 28;
   sheet.getRow(2).height = 22;
-  const logoId = packGetDakshReportLogoId(workbook);
+  const logoId = getDakshReportLogoId(workbook);
   if (logoId !== null) {
     sheet.addImage(logoId, {
       tl: { col: 0.2, row: 0.16 },
@@ -3336,7 +3443,17 @@ async function handleCompleteAuditPack(req, res) {
     res.setHeader('Content-Disposition', `attachment; filename="${output.filename || 'AUDIT_PACK.xlsx'}"`);
     return res.send(Buffer.isBuffer(output.buffer) ? output.buffer : Buffer.from(output.buffer || []));
   } catch (error) {
-    return res.status(reportErrorStatus(error)).json({ success: false, message: error.message });
+    console.error('Complete audit pack generation failed', {
+      message: error && error.message,
+      stack: error && error.stack,
+      dealerCode: req.body && req.body.dealerCode,
+      auditId: req.body && req.body.auditId,
+      reports: req.body && req.body.reports
+    });
+    return res.status(reportErrorStatus(error)).json({
+      success: false,
+      message: 'Audit Pack generation failed. Please try again.'
+    });
   }
 }
 

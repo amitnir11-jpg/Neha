@@ -81,15 +81,24 @@ const {
 const router = express.Router();
 const autoTable = autoTableModule.default || autoTableModule;
 const DAKSH_REPORT_LOGO_PNG = path.resolve(__dirname, '..', 'public', 'brand', 'logo-report.png');
-const DAKSH_REPORT_LOGO_BUFFER = fs.readFileSync(DAKSH_REPORT_LOGO_PNG);
+let DAKSH_REPORT_LOGO_BUFFER = null;
+try {
+  DAKSH_REPORT_LOGO_BUFFER = fs.readFileSync(DAKSH_REPORT_LOGO_PNG);
+} catch (error) {
+  DAKSH_REPORT_LOGO_BUFFER = null;
+}
 const workbookLogoIds = new WeakMap();
 
 function getDakshReportLogoId(workbook) {
-  if (!workbook) return null;
+  if (!workbook || typeof workbook.addImage !== 'function' || !DAKSH_REPORT_LOGO_BUFFER || !DAKSH_REPORT_LOGO_BUFFER.length) return null;
   if (workbookLogoIds.has(workbook)) return workbookLogoIds.get(workbook);
-  const imageId = workbook.addImage({ buffer: DAKSH_REPORT_LOGO_BUFFER, extension: 'png' });
-  workbookLogoIds.set(workbook, imageId);
-  return imageId;
+  try {
+    const imageId = workbook.addImage({ buffer: DAKSH_REPORT_LOGO_BUFFER, extension: 'png' });
+    workbookLogoIds.set(workbook, imageId);
+    return imageId;
+  } catch (error) {
+    return null;
+  }
 }
 const REPORT_SCAN_SELECT = [
   'uniqueScanId scanId syncKey clientScanId clientSyncKey qrFingerprint rawUpiHash',
@@ -4415,3 +4424,4 @@ module.exports.buildPartwiseInventoryAuditReport = cachedBuildPartwiseInventoryA
 module.exports.buildPartsInventoryRefreshRows = cachedBuildPartsInventoryRefreshRows;
 module.exports.addStockSummarySheet = addStockSummarySheet;
 module.exports.validateValuationReports = validateValuationReports;
+module.exports.getDakshReportLogoId = getDakshReportLogoId;

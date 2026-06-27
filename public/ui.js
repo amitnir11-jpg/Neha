@@ -316,6 +316,7 @@
     { key: 'scan-register', label: 'Scan Register Report' },
     { key: 'invalid-scan-report', label: 'Invalid Scan Report' },
     { key: 'stock-summary', label: 'Stock Summary' },
+    { key: 'product-group-summary', label: 'Product Group Summary' },
     { key: 'short', label: 'Short Report' },
     { key: 'excess', label: 'Excess Report' },
     { key: 'movement_wise_stock_analysis', label: 'Movement Wise Stock Analysis Report' },
@@ -343,7 +344,7 @@
   const AUDIT_PACK_REPORT_GROUPS = [
     {
       title: 'Stock Reports',
-      keys: ['stock-summary', 'bin-wise-stock', 'partwise-inventory-audit', 'parts-inventory-refresh-template']
+      keys: ['stock-summary', 'product-group-summary', 'bin-wise-stock', 'partwise-inventory-audit', 'parts-inventory-refresh-template']
     },
     {
       title: 'Scan Reports',
@@ -5960,11 +5961,11 @@
       setAuditPackProgress({
         stage: 'error',
         percent: Math.max(0, Number(state.auditPackProgress.percent || 0)),
-        message: error.message || 'Audit pack generation failed',
+        message: 'Audit Pack generation failed. Please try again.',
         activeStep: Number(state.auditPackProgress.activeStep || 0),
         status: 'error'
       });
-      toast(error.message || 'Audit pack generation failed', 'error');
+      toast('Audit Pack generation failed. Please try again.', 'error');
     }
   }
 
