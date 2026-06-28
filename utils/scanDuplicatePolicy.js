@@ -3,7 +3,7 @@ const { normalizePartNumber } = require('./normalize');
 
 const COUNTED_SCAN_STATUSES = ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'];
 const EXCLUDED_SYNC_STATUSES = ['duplicate', 'rejected', 'failed', 'deleted'];
-const DUPLICATE_PART_MESSAGE = 'Duplicate part already scanned in this bin.';
+const DUPLICATE_PART_MESSAGE = 'This QR code is already scanned.';
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -64,6 +64,32 @@ function compactIdentity(value = '') {
   return upper(stripStoredBinSuffix(value));
 }
 
+function compactRawIdentity(value = '') {
+  return compactIdentity(value).replace(/\s+/g, '');
+}
+
+function slashUpiToken(raw = '') {
+  const parts = clean(raw).split('/');
+  if (parts.length < 6) return '';
+  return compactIdentity(parts[1] || '');
+}
+
+function slashQrIdentity(raw = '') {
+  const text = clean(raw);
+  const parts = text.split('/');
+  if (parts.length < 6 || !clean(parts[1]) || !clean(parts[3])) return '';
+  return compactRawIdentity(text);
+}
+
+function directUpiValue(input = {}) {
+  const direct = clean(input.upiCode || input.upiNo || input.upiId || input.upiID || input.upiScanId || input.uniqueUpiId || input.transactionId || input.txnId);
+  if (/^MANUAL[:|#-]/i.test(direct)) return '';
+  const value = compactIdentity(direct);
+  const partNumber = scanPartNumber(input);
+  if (value && partNumber && value === partNumber) return '';
+  return value;
+}
+
 function scanIdentityId(input = {}) {
   return clean(input.uniqueScanId || input.scanId || input.clientScanId || input.mobileScanId || input.offlineScanId || input.offline_scan_id || input.localId);
 }
@@ -85,29 +111,49 @@ function rawUpiHash(input = {}) {
 }
 
 function canonicalUpiValue(input = {}) {
-  const direct = clean(input.upiCode || input.upiNo || input.upiId || input.upiID || input.upiScanId || input.uniqueUpiId || input.transactionId || input.txnId);
-  if (/^MANUAL[:|#-]/i.test(direct)) return '';
-  if (direct) return compactIdentity(direct);
-
   const raw = rawScanText(input);
+  const slashIdentity = slashQrIdentity(raw);
+  if (slashIdentity) return slashIdentity;
+
+  const direct = directUpiValue(input);
+  if (direct) return direct;
+
   if (!raw) return '';
-  const slashParts = raw.split('/');
-  if (slashParts.length >= 6 && clean(slashParts[1])) return compactIdentity(slashParts[1]);
 
   const keyed = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
-  return keyed ? compactIdentity(keyed[1]) : '';
+  if (keyed) {
+    const keyedValue = compactIdentity(keyed[1]);
+    const partNumber = scanPartNumber(input);
+    if (keyedValue && (!partNumber || keyedValue !== partNumber)) return keyedValue;
+  }
+
+  const rawIdentity = compactRawIdentity(raw);
+  const partNumber = scanPartNumber(input);
+  if (/^MANUAL[:|#-]/i.test(raw)) return '';
+  if (rawIdentity && (!partNumber || rawIdentity !== partNumber)) return rawIdentity;
+  return '';
 }
 
 function globalQrIdentity(input = {}) {
-  const upi = canonicalUpiValue(input);
+  const raw = rawScanText(input);
+  const slashIdentity = slashQrIdentity(raw);
+  if (slashIdentity) return { type: 'QR', value: slashIdentity };
+
+  const upi = directUpiValue(input);
   if (upi) return { type: 'UPI', value: upi };
 
-  const raw = rawScanText(input);
+  const keyed = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
+  if (keyed) {
+    const keyedValue = compactIdentity(keyed[1]);
+    const partNumber = scanPartNumber(input);
+    if (keyedValue && (!partNumber || keyedValue !== partNumber)) return { type: 'UPI', value: keyedValue };
+  }
+
   const partNumber = scanPartNumber(input);
-  const rawNormalized = upper(raw).replace(/\s+/g, '');
+  const rawNormalized = compactRawIdentity(raw);
   if (/^MANUAL[:|#-]/i.test(raw)) return { type: '', value: '' };
   if (raw && rawNormalized && rawNormalized !== partNumber) {
-    return { type: 'RAW', value: upper(raw) };
+    return { type: 'RAW', value: rawNormalized };
   }
   return { type: '', value: '' };
 }
@@ -115,7 +161,8 @@ function globalQrIdentity(input = {}) {
 function globalUpiKey(input = {}) {
   const identity = globalQrIdentity(input);
   if (!identity.value) return '';
-  return createHash('sha256').update(`${identity.type}|${identity.value}`).digest('hex');
+  const dealerCode = scanDealerCode(input);
+  return createHash('sha256').update(`${dealerCode || 'NO-DEALER'}|${identity.type}|${identity.value}`).digest('hex');
 }
 
 function activeUpiDuplicateFilter(input = {}) {
@@ -123,33 +170,42 @@ function activeUpiDuplicateFilter(input = {}) {
   const globalKey = clean(input.globalUpiKey || globalUpiKey(input));
   if (!identity.value && !globalKey) return null;
   const terms = [];
-  if (identity.value && identity.type === 'UPI') {
-    const escaped = identity.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const addUpiTerms = (value = '') => {
+    const token = compactIdentity(value);
+    if (!token) return;
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const upiPattern = `^${escaped}(?:::.+)?$`;
     terms.push(
       { upiCode: { $regex: upiPattern, $options: 'i' } },
       { upiNo: { $regex: upiPattern, $options: 'i' } },
       { upiId: { $regex: upiPattern, $options: 'i' } }
     );
-  }
-  if (identity.value && identity.type === 'RAW') {
-    const escapedRaw = identity.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const rawPattern = `^${escapedRaw}$`;
+  };
+  if (identity.value && identity.type === 'UPI') addUpiTerms(identity.value);
+  const raw = rawScanText(input);
+  const rawSlashToken = slashUpiToken(raw);
+  if (rawSlashToken) addUpiTerms(rawSlashToken);
+  if (identity.value && ['QR', 'RAW'].includes(identity.type)) {
+    const rawValue = raw ? upper(raw) : identity.value;
+    const escapedRaw = rawValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     terms.push(
-      { rawScan: { $regex: rawPattern, $options: 'i' } },
-      { rawScanString: { $regex: rawPattern, $options: 'i' } },
-      { rawBarcode: { $regex: rawPattern, $options: 'i' } },
-      { rawQR: { $regex: rawPattern, $options: 'i' } },
-      { rawUpi: { $regex: rawPattern, $options: 'i' } }
+      { rawScan: { $regex: `^${escapedRaw}$`, $options: 'i' } },
+      { rawScanString: { $regex: `^${escapedRaw}$`, $options: 'i' } },
+      { rawBarcode: { $regex: `^${escapedRaw}$`, $options: 'i' } },
+      { rawQR: { $regex: `^${escapedRaw}$`, $options: 'i' } },
+      { rawUpi: { $regex: `^${escapedRaw}$`, $options: 'i' } }
     );
   }
   if (globalKey) terms.push({ globalUpiKey: globalKey });
-  return {
+  const filter = {
     deletedAt: null,
     syncStatus: { $nin: EXCLUDED_SYNC_STATUSES },
     $nor: [{ scanType: 'VERIFICATION' }, { type: 'VERIFICATION' }],
     $or: terms.length ? terms : [{ upiCode: '__NO_UPI__' }]
   };
+  const dealerCode = scanDealerCode(input);
+  if (dealerCode) filter.dealerCode = dealerCode;
+  return filter;
 }
 
 function globalUpiDuplicateFilter(input = {}) {
@@ -192,9 +248,8 @@ function duplicateScope(input = {}) {
 }
 
 function businessDuplicateKey(input = {}) {
-  const { dealerCode, type, partNumber, binLocation } = duplicateScope(input);
-  if (!dealerCode || !binLocation || !partNumber || !type || type === 'VERIFICATION') return '';
-  return [dealerCode, type, partNumber, binLocation].join('::');
+  void input;
+  return '';
 }
 
 function countedScanClause() {
@@ -216,17 +271,8 @@ function scanTypeClauses(type) {
 }
 
 function businessDuplicateFilter(input = {}) {
-  const { dealerCode, type, partNumber, binLocation } = duplicateScope(input);
-  if (!dealerCode || !binLocation || !partNumber || !type || type === 'VERIFICATION') return null;
-  return {
-    ...countedScanClause(),
-    dealerCode,
-    $and: [
-      { $or: scanTypeClauses(type) },
-      { $or: partClauses(partNumber) },
-      { $or: [{ binLocation }, { bin: binLocation }] }
-    ]
-  };
+  void input;
+  return null;
 }
 
 function manualBinDuplicateFilter(input = {}) {

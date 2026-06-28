@@ -1,6 +1,6 @@
 /* eslint-disable no-restricted-globals */
 (function () {
-  const APP_VERSION = '20260627-qr-global-bin-choice-v1';
+  const APP_VERSION = '20260628-exact-qr-duplicate-v1';
   const CACHE_NAME = `daksh-static-${APP_VERSION}`;
   const STATIC_EXTENSIONS = new Set([
     '.css',

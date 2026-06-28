@@ -40,34 +40,41 @@ const qr002A24 = {
 
 assert.strictEqual(
   duplicatePolicy.businessDuplicateKey(base),
-  'D01::INWARD::33402KCC710S::A23'
+  ''
 );
 assert.strictEqual(
   duplicatePolicy.businessDuplicateKey(sameBinDifferentAudit),
   duplicatePolicy.businessDuplicateKey(base)
 );
-assert.notStrictEqual(
-  duplicatePolicy.businessDuplicateKey(differentBin),
-  duplicatePolicy.businessDuplicateKey(base)
-);
+assert.strictEqual(duplicatePolicy.businessDuplicateKey(differentBin), '');
 
 const filter = duplicatePolicy.partBinDuplicateFilter(base);
-assert(filter, 'part/bin duplicate filter should be built');
-assert.strictEqual(filter.dealerCode, 'D01');
-assert(Array.isArray(filter.$and), 'part/bin duplicate filter should include AND clauses');
-assert(filter.$and.some((group) => group.$or.some((term) => term.scanType === 'INWARD' || term.type === 'INWARD')));
-assert(filter.$and.some((group) => group.$or.some((term) => term.normalizedPartNumber === '33402KCC710S' || term.partNumber === '33402KCC710S' || term.part === '33402KCC710S')));
-assert(filter.$and.some((group) => group.$or.some((term) => term.binLocation === 'A23' || term.bin === 'A23')));
+assert.strictEqual(filter, null, 'part/bin duplicate filter must not block scans');
 
 const otherFilter = duplicatePolicy.partBinDuplicateFilter(differentBin);
-assert(otherFilter.$and.some((group) => group.$or.some((term) => term.binLocation === 'A24' || term.bin === 'A24')));
+assert.strictEqual(otherFilter, null, 'different-bin part scan must not be a duplicate');
 
 assert.strictEqual(duplicatePolicy.sameBinLocation(base, sameBinDifferentAudit), true);
 assert.strictEqual(duplicatePolicy.sameBinLocation(base, differentBin), false);
-assert.strictEqual(duplicatePolicy.businessDuplicateFilter(differentType).$and.some((group) => group.$or.some((term) => term.scanType === 'DAMAGE' || term.type === 'DAMAGE')), true);
+assert.strictEqual(duplicatePolicy.businessDuplicateFilter(differentType), null);
 assert.notStrictEqual(duplicatePolicy.globalUpiKey(qr001A23), duplicatePolicy.globalUpiKey(qr002A23));
 assert.strictEqual(duplicatePolicy.globalUpiKey(qr002A23), duplicatePolicy.globalUpiKey(qr002A24));
 assert.strictEqual(duplicatePolicy.duplicateUpiMessage(qr001A23), 'This QR code is already scanned.');
+
+const hondaQr1A15 = {
+  dealerCode: 'D01',
+  scanType: 'INWARD',
+  partNumber: '957010805000S',
+  binLocation: 'A15',
+  rawScan: 'D/GCSG0000272850/CCG8FN2C6D4C/957010805000S     /000010/0000011.00/AAB/1/G/000/00'
+};
+const hondaQr2A16 = {
+  ...hondaQr1A15,
+  binLocation: 'A16',
+  rawScan: 'D/FDWG0000852103/DCF7PL8MCW8A/957010805000S     /000010/0000011.00/AAB/1/G/000/00'
+};
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(hondaQr1A15), duplicatePolicy.globalUpiKey(hondaQr2A16), 'same part in different bin with different QR must be allowed');
+assert.strictEqual(duplicatePolicy.globalUpiKey(hondaQr1A15), duplicatePolicy.globalUpiKey({ ...hondaQr1A15, binLocation: 'A16' }), 'same QR in any bin must be duplicate');
 
 const migration = fs.readFileSync(
   path.join(__dirname, '..', 'prisma', 'migrations', '20260627183000_allow_cross_bin_upi_duplicates', 'migration.sql'),
@@ -79,14 +86,23 @@ assert(/DROP INDEX IF EXISTS global_upi_key_unique/i.test(migration));
 assert(/CREATE INDEX IF NOT EXISTS inventories_active_inward_upi_bin_lookup_idx/i.test(migration));
 assert(!/CREATE UNIQUE INDEX IF NOT EXISTS inventories_active_inward_upi_bin_lookup_idx/i.test(migration));
 
+const qrRuleMigration = fs.readFileSync(
+  path.join(__dirname, '..', 'prisma', 'migrations', '20260628053000_qr_identity_duplicate_rule', 'migration.sql'),
+  'utf8'
+);
+assert(/DROP INDEX IF EXISTS inventories_active_inward_upi_unique/i.test(qrRuleMigration));
+assert(/indexdef ILIKE '%"dealerCode"%'/i.test(qrRuleMigration));
+assert(/indexdef ILIKE '%"upiCode"%'/i.test(qrRuleMigration));
+assert(/inventories_dealer_global_upi_lookup_idx/i.test(qrRuleMigration));
+
 const syncRoute = fs.readFileSync(path.join(__dirname, '..', 'routes', 'sync.js'), 'utf8');
 assert(!/businessDuplicateClauses/.test(syncRoute));
 assert(/duplicatePolicy\.globalUpiKey/.test(syncRoute));
 assert(/duplicatePolicy\.activeUpiDuplicateFilter/.test(syncRoute));
 
 const mobileScanner = fs.readFileSync(path.join(__dirname, '..', 'public', 'scan.js'), 'utf8');
-assert(/Use Existing/.test(mobileScanner));
-assert(/Continue With/.test(mobileScanner));
+assert(/Scan in/.test(mobileScanner));
+assert(/Continue with/.test(mobileScanner));
 assert(!/window\.confirm\(message\)/.test(mobileScanner));
 
 console.log('Part/bin duplicate policy checks passed.');

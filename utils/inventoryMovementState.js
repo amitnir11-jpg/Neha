@@ -19,10 +19,12 @@ function movementTypeValue(input = {}) {
 }
 
 function upiCodeValue(input = {}) {
-  const explicit = upper(input.upiCode || input.upiNo || input.upiId || input.upi || '');
-  if (explicit) return explicit;
   const canonical = duplicatePolicy.canonicalUpiValue(input);
-  return canonical ? upper(canonical) : '';
+  if (canonical) return upper(canonical);
+  const explicit = upper(input.upiCode || input.upiNo || input.upiId || input.upi || '');
+  const partNumber = duplicatePolicy.scanPartNumber(input);
+  if (explicit && (!partNumber || explicit !== partNumber) && !/^MANUAL[:|#-]/i.test(explicit)) return explicit;
+  return '';
 }
 
 function activeInventoryValue(input = {}) {

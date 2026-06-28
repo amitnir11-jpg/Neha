@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20260627-qr-global-bin-choice-v1';
+  const APP_VERSION = '20260628-exact-qr-duplicate-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -394,14 +394,18 @@
   }
 
   function extractUpiIdFromText(payload = {}) {
-    const direct = clean(payload.upiNo || payload.upiId || payload.upiID || payload.upiScanId || payload.transactionId || payload.txnId);
-    if (direct) return upper(direct).split('::')[0];
     const raw = clean(payload.rawScanString || payload.rawScan || payload.rawBarcode || payload.rawQR || payload.rawUpi || payload.scanText || payload.raw);
-    if (!raw) return '';
-    const slashParts = raw.split('/');
-    if (slashParts.length >= 6 && clean(slashParts[1])) return upper(slashParts[1]).split('::')[0];
-    const keyed = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
-    return keyed ? upper(keyed[1]).split('::')[0] : '';
+    if (raw) {
+      const slashParts = raw.split('/');
+      if (slashParts.length >= 6 && clean(slashParts[1])) return upper(slashParts[1]).split('::')[0];
+      const keyed = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
+      if (keyed) return upper(keyed[1]).split('::')[0];
+    }
+    const direct = clean(payload.upiNo || payload.upiId || payload.upiID || payload.upiScanId || payload.transactionId || payload.txnId || payload.upiCode);
+    const part = duplicatePartKey(payload);
+    const value = upper(direct).split('::')[0];
+    if (!value || (part && value === part)) return '';
+    return value;
   }
 
   function scanIdentityKey(scan = {}) {
@@ -727,8 +731,8 @@
     const { useExisting, saveNew, select } = smartBinPromptNodes();
     const existingBin = clean((select && select.value) || payload.selectedBin || payload.existingBin || payload.suggestedBin || payload.primaryBin || '');
     const newBin = clean(payload.newBin || payload.currentBin || payload.binLocation || '');
-    if (useExisting) useExisting.textContent = existingBin ? `Use Existing ${existingBin}` : 'Use Existing Bin';
-    if (saveNew) saveNew.textContent = newBin ? `Continue With ${newBin}` : 'Continue With Current Bin';
+    if (useExisting) useExisting.textContent = existingBin ? `Scan in ${existingBin}` : 'Scan in Existing Bin';
+    if (saveNew) saveNew.textContent = newBin ? `Continue with ${newBin}` : 'Continue with Current Bin';
   }
 
   function renderDuplicateAlert(message = '', existing = {}) {
@@ -782,7 +786,7 @@
 
     if (title) title.textContent = promptTitle;
     if (message) {
-      message.textContent = clean(payload.message || '') || `PART ${partNumber || '-'} IS AVAILABLE IN ${existingBin || '-'}\n\nWhat do you want to do?`;
+      message.textContent = clean(payload.message || '') || `PART ${partNumber || '-'} IS AVAILABLE IN BIN ${existingBin || '-'}\n\nWill you continue scanning in ${existingBin || '-'} or continue with ${newBin || 'this bin'}?`;
     }
     if (bins) {
       bins.innerHTML = smartBinExistingBinMarkup(existingBins, selectedExistingBin || existingBin);
@@ -1244,7 +1248,7 @@
     const existingBinText = existingBins.length > 1
       ? existingBins.map((row) => row.binLocation).join(', ')
       : primaryBin || '-';
-    const message = `PART ${partNumber || '-'} IS AVAILABLE IN ${existingBinText || '-'}\n\nWhat do you want to do?`;
+    const message = `PART ${partNumber || '-'} IS AVAILABLE IN BIN ${existingBinText || '-'}\n\nWill you continue scanning in ${existingBinText || '-'} or continue with ${currentBin || 'this bin'}?`;
 
     return {
       dealerCode: currentDealer,

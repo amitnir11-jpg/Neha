@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260627-qr-global-bin-choice-v1';
+  const UI_BOOT_VERSION = '20260628-exact-qr-duplicate-v1';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -1730,13 +1730,18 @@
   }
 
   function extractUpiIdFromText(payload) {
-    const direct = payload.upiCode || payload.upiNo || payload.upiId || payload.upiID || payload.upiScanId || payload.transactionId || payload.txnId;
-    if (direct) return String(direct).trim().toUpperCase().split('::')[0];
     const raw = String(payload.rawScan || payload.rawScanString || payload.rawBarcode || payload.rawQR || payload.rawUpi || payload.scanText || '');
-    const slashParts = raw.split('/');
-    if (slashParts.length >= 6 && String(slashParts[1] || '').trim()) return String(slashParts[1]).trim().toUpperCase().split('::')[0];
-    const match = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
-    return match ? match[1].trim().toUpperCase().split('::')[0] : '';
+    if (raw) {
+      const slashParts = raw.split('/');
+      if (slashParts.length >= 6 && String(slashParts[1] || '').trim()) return String(slashParts[1]).trim().toUpperCase().split('::')[0];
+      const match = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
+      if (match) return match[1].trim().toUpperCase().split('::')[0];
+    }
+    const direct = payload.upiCode || payload.upiNo || payload.upiId || payload.upiID || payload.upiScanId || payload.transactionId || payload.txnId;
+    const value = String(direct || '').trim().toUpperCase().split('::')[0];
+    const part = normalizePartText(payload.partNumber || payload.part || payload.normalizedPartNumber || '');
+    if (!value || (part && value === part)) return '';
+    return value;
   }
 
   function buildClientSyncKey(payload) {
@@ -5206,8 +5211,8 @@
     const { useExisting, saveNew, select } = smartBinPromptNodes();
     const existingBin = cleanDealerCode((select && select.value) || payload.selectedBin || payload.existingBin || payload.suggestedBin || payload.primaryBin || '');
     const newBin = cleanDealerCode(payload.newBin || payload.currentBin || payload.binLocation || '');
-    if (useExisting) useExisting.textContent = existingBin ? `Use Existing ${existingBin}` : 'Use Existing Bin';
-    if (saveNew) saveNew.textContent = newBin ? `Continue With ${newBin}` : 'Continue With Current Bin';
+    if (useExisting) useExisting.textContent = existingBin ? `Scan in ${existingBin}` : 'Scan in Existing Bin';
+    if (saveNew) saveNew.textContent = newBin ? `Continue with ${newBin}` : 'Continue with Current Bin';
   }
 
   function renderSmartBinSuggestionModal(payload = {}) {
@@ -5239,7 +5244,7 @@
       title.textContent = promptTitle;
     }
     if (message) {
-      message.textContent = clean(payload.message || '') || `PART ${partNumber || '-'} IS AVAILABLE IN ${existingBin || '-'}\n\nWhat do you want to do?`;
+      message.textContent = clean(payload.message || '') || `PART ${partNumber || '-'} IS AVAILABLE IN BIN ${existingBin || '-'}\n\nWill you continue scanning in ${existingBin || '-'} or continue with ${newBin || 'this bin'}?`;
     }
     if (bins) bins.innerHTML = smartBinExistingBinMarkup(existingBins);
     if (selectWrap) selectWrap.classList.toggle('hidden', !showSelect);

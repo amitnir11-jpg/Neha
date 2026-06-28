@@ -255,7 +255,7 @@ function buildSuggestionPayload(rows = [], scope = {}, settings = {}) {
   const existingBinText = existingBins.length > 1
     ? existingBins.map((row) => row.binLocation).join(', ')
     : existingBin || '-';
-  const message = `This part is already available in bin ${existingBinText}. Do you want to scan it in ${newBin || 'this bin'} also?`;
+  const message = `PART ${normalized.partNumber || '-'} IS AVAILABLE IN BIN ${existingBinText || '-'}\n\nWill you continue scanning in ${existingBinText || '-'} or continue with ${newBin || 'this bin'}?`;
 
   return {
     dealerCode: normalized.dealerCode,

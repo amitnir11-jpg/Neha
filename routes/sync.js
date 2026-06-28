@@ -999,8 +999,7 @@ function smartBinPromptMessage({ partNumber = '', partDescription = '', existing
   const existingBinLabel = clean(existingBin || bins[0] || '') || '-';
   const newBinLabel = clean(newBin || '') || '-';
   void partDescription;
-  void newBinLabel;
-  return `PART ${clean(partNumber || '-') || '-'} IS AVAILABLE IN ${existingBinLabel}\n\nWhat do you want to do?`;
+  return `PART ${clean(partNumber || '-') || '-'} IS AVAILABLE IN BIN ${existingBinLabel}\n\nWill you continue scanning in ${existingBinLabel} or continue with ${newBinLabel}?`;
 }
 
 async function smartBinWarningForScan(scan = {}) {
@@ -2006,11 +2005,6 @@ async function pushHandler(req, res) {
       const scanBin = upper(scan.binLocation || scan.bin);
       const scanUser = identityUserKey(scan);
       const scanSession = identitySessionKey(scan);
-      const businessKey = duplicatePolicy.businessDuplicateKey(scan);
-      if (businessKey) {
-        existingScanIds.add(businessKey);
-        existingIdentityByKey.set(businessKey, identity);
-      }
       if (scanType === 'FITTED') {
         const fittedKey = [
           scanDealer,

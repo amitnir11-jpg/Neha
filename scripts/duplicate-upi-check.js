@@ -37,17 +37,33 @@ const nonInward = {
   scanType: 'DAMAGE'
 };
 
-assert.strictEqual(duplicatePolicy.canonicalUpiValue(inwardScan), 'UPI-987654');
-assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentScopeInward));
+assert.strictEqual(duplicatePolicy.canonicalUpiValue(inwardScan), 'OEM/UPI-987654/X/PART-100/1/500');
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentScopeInward));
 assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentBinInward));
 assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentPartInward));
 assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(sameScopeInward));
 assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentQrSamePartSameBin));
 assert.strictEqual(duplicatePolicy.globalUpiKey({ partNumber: 'PART-100', rawScanString: 'MANUAL:PART-100', source: 'manual' }), '');
 
+const qr1A15 = {
+  dealerCode: 'D001',
+  scanType: 'INWARD',
+  partNumber: '957010805000S',
+  binLocation: 'A15',
+  rawScan: 'D/GCSG0000272850/CCG8FN2C6D4C/957010805000S     /000010/0000011.00/AAB/1/G/000/00'
+};
+const qr2A16 = {
+  ...qr1A15,
+  binLocation: 'A16',
+  rawScan: 'D/FDWG0000852103/DCF7PL8MCW8A/957010805000S     /000010/0000011.00/AAB/1/G/000/00'
+};
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(qr1A15), duplicatePolicy.globalUpiKey(qr2A16), 'same part with different QR must not collide');
+assert.strictEqual(duplicatePolicy.globalUpiKey(qr1A15), duplicatePolicy.globalUpiKey({ ...qr1A15, binLocation: 'A99' }), 'same QR must collide across bins for same dealer');
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(qr1A15), duplicatePolicy.globalUpiKey({ ...qr1A15, dealerCode: 'D999' }), 'same QR can belong to a different dealer scope');
+
 const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(sameScopeInward);
 assert(activeFilter, 'global UPI duplicate filter should exist for QR scans');
-assert.strictEqual(Object.prototype.hasOwnProperty.call(activeFilter, 'dealerCode'), false);
+assert.strictEqual(activeFilter.dealerCode, 'D001');
 assert.strictEqual(Object.prototype.hasOwnProperty.call(activeFilter, 'auditId'), false);
 assert.strictEqual(Object.prototype.hasOwnProperty.call(activeFilter, 'activeInventory'), false);
 assert(activeFilter.$or.some((term) => term.upiCode?.$regex || term.upiNo?.$regex || term.upiId?.$regex));

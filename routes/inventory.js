@@ -302,7 +302,14 @@ function duplicateLookupPayload(input = {}) {
   const auditId = String(input.auditId || '').trim();
   const scanType = normalizeScanType(input.scanType || input.type || 'INWARD');
   const rawScan = String(input.rawScan || input.rawScanString || input.rawBarcode || input.rawQR || input.rawUpi || '').trim();
-  const upiId = String(input.upiId || input.upiNo || input.upiCode || '').trim();
+  const canonicalUpi = duplicatePolicy.canonicalUpiValue({
+    ...input,
+    partNumber,
+    rawScanString: rawScan,
+    rawScan
+  });
+  const directUpi = String(input.upiId || input.upiNo || input.upiCode || '').trim();
+  const upiId = canonicalUpi || (normalizePartNumber(directUpi) === partNumber ? '' : directUpi);
   const rawUpiHash = duplicatePolicy.rawUpiHash({
     ...input,
     partNumber,
@@ -313,13 +320,22 @@ function duplicateLookupPayload(input = {}) {
   });
   const globalUpiKey = duplicatePolicy.globalUpiKey({
     ...input,
-    rawScanString: rawScan
+    partNumber,
+    dealerCode,
+    auditId,
+    scanType,
+    upiCode: canonicalUpi || input.upiCode || upiId,
+    upiNo: canonicalUpi || input.upiNo || upiId,
+    upiId: canonicalUpi || input.upiId || upiId,
+    rawScanString: rawScan,
+    rawScan
   });
   const upiCode = inventoryUpiCode({
     ...input,
-    upiCode: input.upiCode || upiId,
-    upiNo: input.upiNo || upiId,
-    upiId: input.upiId || upiId,
+    partNumber,
+    upiCode: canonicalUpi || input.upiCode || upiId,
+    upiNo: canonicalUpi || input.upiNo || upiId,
+    upiId: canonicalUpi || input.upiId || upiId,
     rawScanString: rawScan
   });
   return {
