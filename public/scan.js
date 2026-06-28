@@ -1301,10 +1301,6 @@
     if (!rowBlocksDuplicate(existing)) return false;
     const recordType = rowMode(record);
     const existingType = rowMode(existing);
-    const recordKeyValue = recordKey(record);
-    const existingKeyValue = recordKey(existing);
-    if (recordKeyValue && existingKeyValue && recordKeyValue === existingKeyValue) return false;
-    if (isSameQrDuplicateScan(record, existing)) return true;
     if (recordType === 'VERIFICATION' || existingType === 'VERIFICATION') return false;
     const recordIdentity = scanIdentityKey(record);
     const existingIdentity = scanIdentityKey(existing);
@@ -2286,19 +2282,6 @@
 
   async function preflightDuplicateDecision(record = {}) {
     const normalized = { ...record };
-    if (rowMode(normalized) === 'VERIFICATION') return normalized;
-
-    if (navigator.onLine && state.session?.token) {
-      await refreshLiveRecentScans({ force: true, reason: 'duplicate-preflight' }).catch(() => undefined);
-      const result = await checkBackendDuplicateBeforeSync(normalized, { timeoutMs: 5000 });
-      if (result?.duplicate) {
-        const existing = result.existing || normalized;
-        showDuplicateOnce(normalized, existing, result.message || duplicateScanMessage(existing));
-        console.log("VALIDATION STATUS: DUPLICATE_QR", { message: result.message });
-        cameraState('Duplicate blocked');
-        return null;
-      }
-      if (!result?.checkedOnline) {
         const localExisting = localDuplicateForRecord(normalized);
         if (localExisting) {
           showDuplicateOnce(normalized, localExisting, duplicateScanMessage(localExisting));
@@ -2306,17 +2289,6 @@
           cameraState('Duplicate blocked');
           return null;
         }
-      }
-      return normalized;
-    }
-
-    const localExisting = localDuplicateForRecord(normalized);
-    if (localExisting) {
-      showDuplicateOnce(normalized, localExisting, duplicateScanMessage(localExisting));
-      console.log("VALIDATION STATUS: DUPLICATE_OFFLINE", { message: duplicateScanMessage(localExisting) });
-      cameraState('Duplicate blocked');
-      return null;
-    }
 
     return normalized;
   }

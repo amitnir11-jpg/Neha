@@ -359,15 +359,15 @@ function duplicateLookupPayload(input = {}) {
 
 async function findBackendDuplicate(input = {}, options = {}) {
   const payload = duplicateLookupPayload(input);
-  if (payload.scanType === 'VERIFICATION') return null;
-  const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(payload);
-  const activeDuplicate = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
-  if (activeDuplicate) {
+  if (payload.scanType === 'VERIFICATION' || !payload.globalUpiKey) return null;
+
+  const globalDuplicate = await Inventory.findOne({ globalUpiKey: payload.globalUpiKey }).sort({ timestamp: 1, createdAt: 1 }).lean();
+  if (globalDuplicate) {
     return {
-      existing: activeDuplicate,
+      existing: globalDuplicate,
       upiDuplicate: true,
       reason: 'Duplicate QR/UPI already scanned',
-      message: duplicatePolicy.duplicateUpiMessage(activeDuplicate)
+      message: duplicatePolicy.duplicateUpiMessage(globalDuplicate)
     };
   }
   const identityFilter = duplicatePolicy.identityDuplicateFilter(payload);
