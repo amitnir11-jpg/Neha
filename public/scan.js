@@ -2282,13 +2282,6 @@
 
   async function preflightDuplicateDecision(record = {}) {
     const normalized = { ...record };
-        const localExisting = localDuplicateForRecord(normalized);
-        if (localExisting) {
-          showDuplicateOnce(normalized, localExisting, duplicateScanMessage(localExisting));
-          console.log("VALIDATION STATUS: DUPLICATE_LOCAL", { message: duplicateScanMessage(localExisting) });
-          cameraState('Duplicate blocked');
-          return null;
-        }
 
     return normalized;
   }
@@ -3097,14 +3090,14 @@
       binLocation: requiresBin() ? loadActiveBin() : ''
     });
     try {
-      record = await preflightDuplicateDecision(record);
-      if (!record) return;
+      console.log("Starting validation for:", record.partNumber, "in bin", record.binLocation);
       record = await preflightSmartBinDecision(record);
       if (!record) {
         console.log("VALIDATION STATUS: SMART_BIN_CANCELLED");
         cameraState('Ready to scan');
         return;
       }
+      console.log("Smart bin check complete, proceeding to save.");
       await saveRecord(record, { silent: true, deferSync: false });
       byId('manualRawPreview').hidden = true;
       cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
