@@ -680,7 +680,8 @@
       select: byId('smartBinExistingBinSelect'),
       useExisting: byId('smartBinUseExistingBtn'),
       saveNew: byId('smartBinSaveNewBtn'),
-      cancel: byId('smartBinCancelBtn')
+      cancel: byId('smartBinCancelBtn'),
+      override: byId('smartBinOverrideBtn')
     };
   }
 
@@ -735,8 +736,8 @@
     const { useExisting, saveNew, select } = smartBinPromptNodes();
     const existingBin = clean((select && select.value) || payload.selectedBin || payload.existingBin || payload.suggestedBin || payload.primaryBin || '');
     const newBin = clean(payload.newBin || payload.currentBin || payload.binLocation || '');
-    if (useExisting) useExisting.textContent = existingBin ? `Scan in ${existingBin}` : 'Scan in Existing Bin';
-    if (saveNew) saveNew.textContent = newBin ? `Continue with ${newBin}` : 'Continue with Current Bin';
+    if (useExisting) useExisting.textContent = existingBin ? `Use Bin ${existingBin}` : 'Use Existing Bin';
+    if (saveNew) saveNew.textContent = newBin ? `Save in New Bin (${newBin})` : 'Save in New Bin';
   }
 
   function renderDuplicateAlert(message = '', existing = {}) {
@@ -848,11 +849,23 @@
     const selectedExistingBin = clean((select && select.value) || suggestedBin || '');
     const useExisting = action === 'USE_EXISTING_BIN';
     const saveNew = action === 'SAVE_NEW_BIN';
+    const manualOverride = action === 'MANUAL_OVERRIDE';
 
-    if (!useExisting && !saveNew) {
+    if (!useExisting && !saveNew && !manualOverride) {
       closeSmartBinSuggestionModal(null);
       return null;
     }
+
+    if (manualOverride) {
+      const record = state.smartBinPromptPayload || {};
+      closeSmartBinSuggestionModal(null);
+      openManualDialog({
+        rawText: record.rawScanString || record.rawScan || '',
+        autoPartNumber: record.partNumber || ''
+      });
+      return null;
+    }
+
     const decision = {
       action: useExisting ? 'USE_EXISTING_BIN' : 'SAVE_NEW_BIN',
       currentBin,
@@ -3572,6 +3585,7 @@
     byId('duplicateAlertOkBtn')?.addEventListener('click', () => closeDuplicateAlert());
     byId('smartBinUseExistingBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('USE_EXISTING_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
     byId('smartBinSaveNewBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('SAVE_NEW_BIN', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
+    byId('smartBinOverrideBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('MANUAL_OVERRIDE', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
     byId('smartBinCancelBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('ABORT', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
     window.addEventListener('online', () => {
       renderConnectionBadge();

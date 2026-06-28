@@ -2367,14 +2367,18 @@ async function saveScanRequest(req, res) {
     if (!existing && !smartBinDecision) {
       const smartBinState = await smartBinSuggestionForScan({
         ...req.body,
+        partNumber: part,
         dealerCode,
         auditId,
-        partNumber: part,
         binLocation
       });
       if (smartBinState.shouldPrompt) {
+        const existingBinText = smartBinState.existingBins.map(b => b.binLocation).join(', ');
+        const customMessage = `Part ${part} is already available in bin(s): ${existingBinText}. Would you like to scan in an existing bin or continue with ${binLocation}?`;
+
         return res.status(409).json({
           success: false,
+          ...smartBinState,
           smartBinWarning: true,
           message: smartBinState.message,
           smartBinSuggestion: smartBinState
