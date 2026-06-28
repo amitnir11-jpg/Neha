@@ -409,10 +409,14 @@
   }
 
   function scanIdentityKey(scan = {}) {
+    console.log("Generating scan identity key for:", scan);
     const type = upper(scan.scanType || scan.type || state.mode);
     if (type === 'VERIFICATION') return '';
     const upi = extractUpiIdFromText(scan);
-    if (upi) return ['UPI', upi].join('|');
+    if (upi) {
+      console.log("QR ID:", upi, "PART:", duplicatePartKey(scan), "BIN:", rowBin(scan));
+      return ['UPI', upi].join('|');
+    }
     const raw = normalizeText(scan.rawScanString || scan.rawScan || scan.rawBarcode || scan.rawQR || scan.rawUpi || '');
     const part = duplicatePartKey(scan);
     if (/^MANUAL[:|#-]/i.test(clean(scan.rawScanString || scan.rawScan || ''))) return '';
@@ -1300,6 +1304,7 @@
     const recordKeyValue = recordKey(record);
     const existingKeyValue = recordKey(existing);
     if (recordKeyValue && existingKeyValue && recordKeyValue === existingKeyValue) return false;
+    if (isSameQrDuplicateScan(record, existing)) return true;
     if (recordType === 'VERIFICATION' || existingType === 'VERIFICATION') return false;
     const recordIdentity = scanIdentityKey(record);
     const existingIdentity = scanIdentityKey(existing);
@@ -2289,6 +2294,7 @@
       if (result?.duplicate) {
         const existing = result.existing || normalized;
         showDuplicateOnce(normalized, existing, result.message || duplicateScanMessage(existing));
+        console.log("VALIDATION STATUS: DUPLICATE_QR", { message: result.message });
         cameraState('Duplicate blocked');
         return null;
       }
@@ -2296,6 +2302,7 @@
         const localExisting = localDuplicateForRecord(normalized);
         if (localExisting) {
           showDuplicateOnce(normalized, localExisting, duplicateScanMessage(localExisting));
+          console.log("VALIDATION STATUS: DUPLICATE_LOCAL", { message: duplicateScanMessage(localExisting) });
           cameraState('Duplicate blocked');
           return null;
         }
@@ -2306,6 +2313,7 @@
     const localExisting = localDuplicateForRecord(normalized);
     if (localExisting) {
       showDuplicateOnce(normalized, localExisting, duplicateScanMessage(localExisting));
+      console.log("VALIDATION STATUS: DUPLICATE_OFFLINE", { message: duplicateScanMessage(localExisting) });
       cameraState('Duplicate blocked');
       return null;
     }
@@ -3121,6 +3129,7 @@
       if (!record) return;
       record = await preflightSmartBinDecision(record);
       if (!record) {
+        console.log("VALIDATION STATUS: SMART_BIN_CANCELLED");
         cameraState('Ready to scan');
         return;
       }
@@ -3134,6 +3143,7 @@
       if (authExpired(error)) {
         handleAuthExpired(error);
       } else {
+        console.log("VALIDATION STATUS: SAVE_FAILED", error.message);
         const message = clean(error?.message || 'Unable to queue scan');
         cameraState('Network pending');
         toast(message, 'error');

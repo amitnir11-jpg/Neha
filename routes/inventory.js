@@ -2359,7 +2359,7 @@ async function saveScanRequest(req, res) {
         duplicateReason = backendDuplicate.reason;
         duplicateMessage = backendDuplicate.message;
         upiDuplicate = Boolean(backendDuplicate.upiDuplicate);
-      }
+      } 
     }
 
     // Smart Bin Check

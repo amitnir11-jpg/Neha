@@ -76,6 +76,15 @@ const hondaQr2A16 = {
 assert.notStrictEqual(duplicatePolicy.globalUpiKey(hondaQr1A15), duplicatePolicy.globalUpiKey(hondaQr2A16), 'same part in different bin with different QR must be allowed');
 assert.strictEqual(duplicatePolicy.globalUpiKey(hondaQr1A15), duplicatePolicy.globalUpiKey({ ...hondaQr1A15, binLocation: 'A16' }), 'same QR in any bin must be duplicate');
 
+const hondaQr1A15Again = {
+  ...hondaQr1A15
+};
+
+assert.strictEqual(
+  duplicatePolicy.globalUpiKey(hondaQr1A15),
+  duplicatePolicy.globalUpiKey(hondaQr1A15Again), 'same QR must have same global key'
+);
+
 const migration = fs.readFileSync(
   path.join(__dirname, '..', 'prisma', 'migrations', '20260627183000_allow_cross_bin_upi_duplicates', 'migration.sql'),
   'utf8'
