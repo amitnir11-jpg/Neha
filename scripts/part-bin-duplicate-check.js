@@ -25,6 +25,18 @@ const differentType = {
   ...base,
   scanType: 'DAMAGE'
 };
+const qr001A23 = {
+  ...base,
+  rawScan: 'OEM/QR001/X/33402KCC710S/1/100'
+};
+const qr002A23 = {
+  ...base,
+  rawScan: 'OEM/QR002/X/33402KCC710S/1/100'
+};
+const qr002A24 = {
+  ...differentBin,
+  rawScan: 'OEM/QR002/X/33402KCC710S/1/100'
+};
 
 assert.strictEqual(
   duplicatePolicy.businessDuplicateKey(base),
@@ -53,6 +65,9 @@ assert(otherFilter.$and.some((group) => group.$or.some((term) => term.binLocatio
 assert.strictEqual(duplicatePolicy.sameBinLocation(base, sameBinDifferentAudit), true);
 assert.strictEqual(duplicatePolicy.sameBinLocation(base, differentBin), false);
 assert.strictEqual(duplicatePolicy.businessDuplicateFilter(differentType).$and.some((group) => group.$or.some((term) => term.scanType === 'DAMAGE' || term.type === 'DAMAGE')), true);
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(qr001A23), duplicatePolicy.globalUpiKey(qr002A23));
+assert.strictEqual(duplicatePolicy.globalUpiKey(qr002A23), duplicatePolicy.globalUpiKey(qr002A24));
+assert.strictEqual(duplicatePolicy.duplicateUpiMessage(qr001A23), 'This QR code is already scanned.');
 
 const migration = fs.readFileSync(
   path.join(__dirname, '..', 'prisma', 'migrations', '20260627183000_allow_cross_bin_upi_duplicates', 'migration.sql'),
@@ -65,9 +80,13 @@ assert(/CREATE INDEX IF NOT EXISTS inventories_active_inward_upi_bin_lookup_idx/
 assert(!/CREATE UNIQUE INDEX IF NOT EXISTS inventories_active_inward_upi_bin_lookup_idx/i.test(migration));
 
 const syncRoute = fs.readFileSync(path.join(__dirname, '..', 'routes', 'sync.js'), 'utf8');
-assert(/businessDuplicateClauses/.test(syncRoute));
-assert(/duplicatePolicy\.businessDuplicateFilter/.test(syncRoute));
-assert(/duplicatePolicy\.businessDuplicateKey/.test(syncRoute));
-assert(/duplicatePolicy\.partBinDuplicateMessage/.test(syncRoute));
+assert(!/businessDuplicateClauses/.test(syncRoute));
+assert(/duplicatePolicy\.globalUpiKey/.test(syncRoute));
+assert(/duplicatePolicy\.activeUpiDuplicateFilter/.test(syncRoute));
+
+const mobileScanner = fs.readFileSync(path.join(__dirname, '..', 'public', 'scan.js'), 'utf8');
+assert(/Use Existing/.test(mobileScanner));
+assert(/Continue With/.test(mobileScanner));
+assert(!/window\.confirm\(message\)/.test(mobileScanner));
 
 console.log('Part/bin duplicate policy checks passed.');

@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260627-cross-bin-confirm-v1';
+  const UI_BOOT_VERSION = '20260627-qr-global-bin-choice-v1';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -1730,11 +1730,13 @@
   }
 
   function extractUpiIdFromText(payload) {
-    const direct = payload.upiId || payload.upiID || payload.upiScanId || payload.transactionId || payload.txnId;
-    if (direct) return String(direct).trim();
-    const raw = String(payload.rawScan || payload.rawScanString || '');
+    const direct = payload.upiCode || payload.upiNo || payload.upiId || payload.upiID || payload.upiScanId || payload.transactionId || payload.txnId;
+    if (direct) return String(direct).trim().toUpperCase().split('::')[0];
+    const raw = String(payload.rawScan || payload.rawScanString || payload.rawBarcode || payload.rawQR || payload.rawUpi || payload.scanText || '');
+    const slashParts = raw.split('/');
+    if (slashParts.length >= 6 && String(slashParts[1] || '').trim()) return String(slashParts[1]).trim().toUpperCase().split('::')[0];
     const match = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
-    return match ? match[1].trim() : '';
+    return match ? match[1].trim().toUpperCase().split('::')[0] : '';
   }
 
   function buildClientSyncKey(payload) {
@@ -1754,17 +1756,15 @@
 
   function barcodeScanKey(scan = {}) {
     const dealerCode = cleanDealerCode(scan.dealerCode || currentDealerCode() || '');
-    const scanType = String(scan.scanType || scan.type || '').trim().toUpperCase();
     const partNumber = normalizePartText(scan.partNumber || scan.part || scan.normalizedPartNumber || '');
-    const binLocation = cleanDealerCode(scan.binLocation || scan.bin || '');
-    if (dealerCode && scanType && partNumber && binLocation) return [dealerCode, scanType, partNumber, binLocation].join('|');
     const auditId = String(scan.auditId || activeAuditIdForScope() || '').trim();
     const upiId = normalizePartText(extractUpiIdFromText(scan) || scan.upiId || scan.upiNo || '');
     const raw = normalizePartText(scan.rawScan || scan.rawScanString || scan.rawBarcode || scan.rawScanValue || scan.barcodeValue || scan.scanText || '');
-    if (dealerCode && auditId && upiId) return [dealerCode, auditId, upiId, binLocation || 'NO-BIN'].join('|');
-    if (raw) return [dealerCode || 'NO-DEALER', auditId || 'NO-AUDIT', binLocation || 'NO-BIN', 'RAW', raw].join('|');
+    if (upiId) return ['UPI', upiId].join('|');
+    if (/^MANUAL[:|#-]/i.test(String(scan.rawScan || scan.rawScanString || ''))) return '';
+    if (raw && raw !== partNumber) return ['RAW', raw].join('|');
     const id = cleanId(scan.id || scan._id || scan.uniqueScanId || scan.scanId || scan.syncKey || scan.localId || scan.uniqueLocalId || '');
-    return id ? [dealerCode || 'NO-DEALER', auditId || 'NO-AUDIT', binLocation || 'NO-BIN', 'ID', id].join('|') : '';
+    return id ? [dealerCode || 'NO-DEALER', auditId || 'NO-AUDIT', 'ID', id].join('|') : '';
   }
 
   function suppressTimedKey(map, key, ttlMs = 3000) {
@@ -1789,9 +1789,8 @@
   }
 
   function barcodeDuplicateMessage(existing = {}) {
-    const bin = clean(existing.binLocation || existing.bin || '-');
-    const part = clean(existing.partNumber || existing.part || '-');
-    return `This UPI is already scanned in Bin ${bin}, Part No ${part}`;
+    void existing;
+    return 'This QR code is already scanned.';
   }
 
   function normalizeQueuedHistoryScan(scan = {}) {
@@ -4234,6 +4233,18 @@
       return;
     }
 
+    const serverDuplicate = await checkServerBarcodeDuplicate(normalized);
+    if (serverDuplicate && serverDuplicate.duplicate) {
+      if (isBarcodeForm) {
+        handleBarcodeDuplicate(normalized, serverDuplicate);
+      } else {
+        const existing = serverDuplicate.scan || serverDuplicate.existing || normalized;
+        playScanTone('duplicate');
+        toast(serverDuplicate.message || barcodeDuplicateMessage(existing), 'error');
+      }
+      return;
+    }
+
     const smartBinSettings = state.smartBinSettingsLoaded
       ? state.smartBinSettings
       : { enabled: true, requireReason: true };
@@ -4657,6 +4668,20 @@
           clientScanId: record.clientScanId || record.localId || record.scanId,
           clientSyncKey: record.clientSyncKey || record.syncKey
         }));
+        const duplicateBeforePrompt = await checkServerBarcodeDuplicate(outbound);
+        if (duplicateBeforePrompt && duplicateBeforePrompt.duplicate) {
+          outcomes.set(recordKey, { remove: true });
+          duplicateCount += 1;
+          logs.push({
+            partNumber: record.partNumber || record.part,
+            upiId: record.upiId,
+            dealer: record.dealerCode,
+            status: 'duplicate',
+            errorMessage: duplicateBeforePrompt.message || barcodeDuplicateMessage(duplicateBeforePrompt.scan || duplicateBeforePrompt.existing || record)
+          });
+          handleBarcodeDuplicate(record, duplicateBeforePrompt);
+          continue;
+        }
         const smartBinEligibleScan = ['INWARD', 'DAMAGE', 'AUDIT'].includes(outbound.scanType);
         if (smartBinEligibleScan && outbound.dealerCode && outbound.auditId && outbound.partNumber && outbound.binLocation) {
           try {
@@ -5181,8 +5206,8 @@
     const { useExisting, saveNew, select } = smartBinPromptNodes();
     const existingBin = cleanDealerCode((select && select.value) || payload.selectedBin || payload.existingBin || payload.suggestedBin || payload.primaryBin || '');
     const newBin = cleanDealerCode(payload.newBin || payload.currentBin || payload.binLocation || '');
-    if (useExisting) useExisting.textContent = existingBin ? `USE EXISTING BIN ${existingBin}` : 'USE EXISTING BIN';
-    if (saveNew) saveNew.textContent = newBin ? `OK - SAVE IN ${newBin}` : 'OK - SAVE IN NEW BIN';
+    if (useExisting) useExisting.textContent = existingBin ? `Use Existing ${existingBin}` : 'Use Existing Bin';
+    if (saveNew) saveNew.textContent = newBin ? `Continue With ${newBin}` : 'Continue With Current Bin';
   }
 
   function renderSmartBinSuggestionModal(payload = {}) {
@@ -5214,7 +5239,7 @@
       title.textContent = promptTitle;
     }
     if (message) {
-      message.textContent = clean(payload.message || '') || `This part is already available in bin ${existingBin || '-'}. Do you want to scan it in ${newBin || 'this bin'} also?`;
+      message.textContent = clean(payload.message || '') || `PART ${partNumber || '-'} IS AVAILABLE IN ${existingBin || '-'}\n\nWhat do you want to do?`;
     }
     if (bins) bins.innerHTML = smartBinExistingBinMarkup(existingBins);
     if (selectWrap) selectWrap.classList.toggle('hidden', !showSelect);
@@ -5241,21 +5266,12 @@
   }
 
   function openSmartBinSuggestionModal(payload = {}) {
-    const existingBins = Array.isArray(payload.existingBins) ? payload.existingBins : [];
-    const existingBin = cleanDealerCode(payload.existingBin || (existingBins[0] && existingBins[0].binLocation) || payload.suggestedBin || payload.currentBin || '');
-    const newBin = cleanDealerCode(payload.newBin || payload.currentBin || payload.binLocation || '');
-    const message = clean(payload.message || '') || `This part is already available in bin ${existingBin || '-'}. Do you want to scan it in ${newBin || 'this bin'} also?`;
-    if (!window.confirm(message)) return Promise.resolve(null);
-    const now = new Date().toISOString();
-    return Promise.resolve({
-      action: 'SAVE_NEW_BIN',
-      currentBin: newBin || cleanDealerCode(payload.currentBin || payload.binLocation || ''),
-      selectedBin: newBin || cleanDealerCode(payload.currentBin || payload.binLocation || ''),
-      suggestedBin: cleanDealerCode(payload.suggestedBin || existingBin || newBin || ''),
-      existingBins,
-      decisionBy: String(state.user?.name || state.user?.username || state.user?.email || '').trim(),
-      decisionAt: String(payload.decisionAt || now),
-      checkedAt: String(payload.checkedAt || now)
+    const { modal } = smartBinPromptNodes();
+    if (!modal) return Promise.resolve(null);
+    if (smartBinPromptResolver) closeSmartBinSuggestionModal(null);
+    renderSmartBinSuggestionModal(payload);
+    return new Promise((resolve) => {
+      smartBinPromptResolver = resolve;
     });
   }
 
@@ -5271,7 +5287,22 @@
       return null;
     }
 
-    const decision = { action, currentBin, selectedBin };
+    const finalBin = useExisting ? selectedBin : currentBin;
+    const decision = {
+      action,
+      currentBin,
+      selectedBin: finalBin,
+      suggestedBin: cleanDealerCode(payload.suggestedBin || payload.primaryBin || selectedBin || ''),
+      existingBins: Array.isArray(payload.existingBins) ? payload.existingBins : [],
+      decisionBy: String(state.user?.name || state.user?.username || state.user?.email || '').trim(),
+      decisionAt: new Date().toISOString(),
+      checkedAt: payload.checkedAt || new Date().toISOString()
+    };
+    if (finalBin) {
+      const barcodeBin = $('#barcodeBinLocation');
+      if (barcodeBin) barcodeBin.value = finalBin;
+      localStorage.setItem(BARCODE_LAST_BIN_KEY, finalBin);
+    }
     closeSmartBinSuggestionModal(decision);
     return decision;
   }

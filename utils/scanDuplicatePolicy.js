@@ -54,6 +54,16 @@ function rawScanText(input = {}) {
   return clean(input.rawScanString || input.rawScan || input.rawBarcode || input.rawQR || input.rawUpi || input.rawUPI || input.barcode || input.raw || input.scanText);
 }
 
+function stripStoredBinSuffix(value = '') {
+  const text = clean(value);
+  const marker = text.indexOf('::');
+  return marker > 0 ? text.slice(0, marker) : text;
+}
+
+function compactIdentity(value = '') {
+  return upper(stripStoredBinSuffix(value));
+}
+
 function scanIdentityId(input = {}) {
   return clean(input.uniqueScanId || input.scanId || input.clientScanId || input.mobileScanId || input.offlineScanId || input.offline_scan_id || input.localId);
 }
@@ -75,90 +85,81 @@ function rawUpiHash(input = {}) {
 }
 
 function canonicalUpiValue(input = {}) {
-  const direct = clean(input.upiNo || input.upiId || input.upiID || input.upiScanId || input.uniqueUpiId || input.transactionId || input.txnId);
-  if (direct) return upper(direct);
+  const direct = clean(input.upiCode || input.upiNo || input.upiId || input.upiID || input.upiScanId || input.uniqueUpiId || input.transactionId || input.txnId);
+  if (/^MANUAL[:|#-]/i.test(direct)) return '';
+  if (direct) return compactIdentity(direct);
 
   const raw = rawScanText(input);
   if (!raw) return '';
   const slashParts = raw.split('/');
-  if (slashParts.length >= 6 && clean(slashParts[1])) return upper(slashParts[1]);
+  if (slashParts.length >= 6 && clean(slashParts[1])) return compactIdentity(slashParts[1]);
 
   const keyed = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
-  return keyed ? upper(keyed[1]) : '';
+  return keyed ? compactIdentity(keyed[1]) : '';
+}
+
+function globalQrIdentity(input = {}) {
+  const upi = canonicalUpiValue(input);
+  if (upi) return { type: 'UPI', value: upi };
+
+  const raw = rawScanText(input);
+  const partNumber = scanPartNumber(input);
+  const rawNormalized = upper(raw).replace(/\s+/g, '');
+  if (/^MANUAL[:|#-]/i.test(raw)) return { type: '', value: '' };
+  if (raw && rawNormalized && rawNormalized !== partNumber) {
+    return { type: 'RAW', value: upper(raw) };
+  }
+  return { type: '', value: '' };
 }
 
 function globalUpiKey(input = {}) {
-  const dealerCode = scanDealerCode(input);
-  const auditId = scanAuditId(input);
-  const type = scanType(input);
-  const partNumber = scanPartNumber(input);
-  const binLocation = upper(input.binLocation || input.bin || input.location || '');
-  if (dealerCode && auditId && type && partNumber && binLocation) {
-    const businessScope = [
-      dealerCode,
-      auditId,
-      type,
-      partNumber,
-      binLocation
-    ].map((value) => upper(value)).join('|');
-    return createHash('sha256').update(businessScope).digest('hex');
-  }
-
-  const upi = canonicalUpiValue(input);
-  if (!upi) return '';
-  const fallbackScope = [
-    dealerCode,
-    auditId,
-    type,
-    upi
-  ].map((value) => upper(value)).filter(Boolean).join('|');
-  return fallbackScope ? createHash('sha256').update(fallbackScope).digest('hex') : '';
+  const identity = globalQrIdentity(input);
+  if (!identity.value) return '';
+  return createHash('sha256').update(`${identity.type}|${identity.value}`).digest('hex');
 }
 
 function activeUpiDuplicateFilter(input = {}) {
-  const upi = canonicalUpiValue(input);
-  const dealerCode = scanDealerCode(input);
-  const auditId = scanAuditId(input);
-  const binLocation = upper(input.binLocation || input.bin || input.location || '');
-  if (smartBinDecisionAllowsDuplicate(input) && !binLocation) return null;
+  const identity = globalQrIdentity(input);
   const globalKey = clean(input.globalUpiKey || globalUpiKey(input));
-  if (!upi && !globalKey) return null;
+  if (!identity.value && !globalKey) return null;
   const terms = [];
-  if (upi) terms.push({ upiCode: upi }, { upiNo: upi }, { upiId: upi });
+  if (identity.value && identity.type === 'UPI') {
+    const escaped = identity.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const upiPattern = `^${escaped}(?:::.+)?$`;
+    terms.push(
+      { upiCode: { $regex: upiPattern, $options: 'i' } },
+      { upiNo: { $regex: upiPattern, $options: 'i' } },
+      { upiId: { $regex: upiPattern, $options: 'i' } }
+    );
+  }
+  if (identity.value && identity.type === 'RAW') {
+    const escapedRaw = identity.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rawPattern = `^${escapedRaw}$`;
+    terms.push(
+      { rawScan: { $regex: rawPattern, $options: 'i' } },
+      { rawScanString: { $regex: rawPattern, $options: 'i' } },
+      { rawBarcode: { $regex: rawPattern, $options: 'i' } },
+      { rawQR: { $regex: rawPattern, $options: 'i' } },
+      { rawUpi: { $regex: rawPattern, $options: 'i' } }
+    );
+  }
   if (globalKey) terms.push({ globalUpiKey: globalKey });
-  const filter = {
-    activeInventory: { $ne: false },
+  return {
     deletedAt: null,
-    $and: [{ $or: [{ movementType: 'INWARD' }, { scanType: 'INWARD' }, { type: 'INWARD' }] }],
+    syncStatus: { $nin: EXCLUDED_SYNC_STATUSES },
+    $nor: [{ scanType: 'VERIFICATION' }, { type: 'VERIFICATION' }],
     $or: terms.length ? terms : [{ upiCode: '__NO_UPI__' }]
   };
-  if (dealerCode) filter.dealerCode = dealerCode;
-  if (auditId) filter.auditId = auditId;
-  if (binLocation) {
-    filter.$and = (filter.$and || []).concat([{
-      $or: [
-        { binLocation },
-        { bin: binLocation }
-      ]
-    }]);
-  }
-  return filter;
 }
 
 function globalUpiDuplicateFilter(input = {}) {
-  if (scanType(input) !== 'INWARD') return null;
+  if (scanType(input) === 'VERIFICATION') return null;
   return activeUpiDuplicateFilter(input);
 }
 
 function duplicateUpiMessage(existing = {}) {
-  const part = scanPartNumber(existing) || '-';
-  const bin = upper(existing.binLocation || existing.bin) || '-';
-  const rawTime = existing.timestamp || existing.scanTime || existing.createdAt;
-  const parsedTime = rawTime ? new Date(rawTime) : null;
-  const scannedAt = parsedTime && !Number.isNaN(parsedTime.getTime())
-    ? parsedTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })
-    : '-';
-  return `Part ${part} is already scanned in bin ${bin}. Scanned Date/Time: ${scannedAt}`;
+  void existing;
+  return 'This QR code is already scanned.';
 }
 
 function duplicateBinLocation(input = {}) {
@@ -269,6 +270,7 @@ module.exports = {
   canonicalUpiValue,
   duplicateUpiMessage,
   allowCrossBinDuplicate,
+  globalQrIdentity,
   globalUpiDuplicateFilter,
   globalUpiKey,
   identityDuplicateFilter,

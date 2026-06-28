@@ -15,6 +15,10 @@ const sameScopeInward = {
   ...inwardScan,
   partNumber: 'PART-100'
 };
+const differentQrSamePartSameBin = {
+  ...inwardScan,
+  rawScan: 'OEM/UPI-222222/X/PART-100/1/500'
+};
 const differentScopeInward = {
   ...inwardScan,
   dealerCode: 'D999',
@@ -34,20 +38,20 @@ const nonInward = {
 };
 
 assert.strictEqual(duplicatePolicy.canonicalUpiValue(inwardScan), 'UPI-987654');
-assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentScopeInward));
-assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentBinInward));
-assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentPartInward));
+assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentScopeInward));
+assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentBinInward));
+assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentPartInward));
 assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(sameScopeInward));
-assert.strictEqual(duplicatePolicy.globalUpiKey({ partNumber: 'PART-100', source: 'manual' }), '');
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentQrSamePartSameBin));
+assert.strictEqual(duplicatePolicy.globalUpiKey({ partNumber: 'PART-100', rawScanString: 'MANUAL:PART-100', source: 'manual' }), '');
 
 const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(sameScopeInward);
-assert(activeFilter, 'active UPI duplicate filter should exist for inward scans');
-assert.strictEqual(activeFilter.dealerCode, inwardScan.dealerCode);
-assert.strictEqual(activeFilter.auditId, inwardScan.auditId);
-assert.strictEqual(activeFilter.activeInventory.$ne, false);
-assert(activeFilter.$and.some((group) => group.$or.some((term) => term.movementType === 'INWARD' || term.scanType === 'INWARD' || term.type === 'INWARD')));
-assert(activeFilter.$or.some((term) => term.upiCode === 'UPI-987654' || term.upiNo === 'UPI-987654' || term.upiId === 'UPI-987654'));
-assert.strictEqual(duplicatePolicy.globalUpiDuplicateFilter(nonInward), null);
+assert(activeFilter, 'global UPI duplicate filter should exist for QR scans');
+assert.strictEqual(Object.prototype.hasOwnProperty.call(activeFilter, 'dealerCode'), false);
+assert.strictEqual(Object.prototype.hasOwnProperty.call(activeFilter, 'auditId'), false);
+assert.strictEqual(Object.prototype.hasOwnProperty.call(activeFilter, 'activeInventory'), false);
+assert(activeFilter.$or.some((term) => term.upiCode?.$regex || term.upiNo?.$regex || term.upiId?.$regex));
+assert(duplicatePolicy.globalUpiDuplicateFilter(nonInward), 'damage QR scans must also use global duplicate validation');
 
 const identityFilter = duplicatePolicy.identityDuplicateFilter({
   ...inwardScan,
@@ -71,7 +75,7 @@ const message = duplicatePolicy.duplicateUpiMessage({
   partNumber: 'PART-100',
   timestamp: '2026-06-14T08:00:00.000Z'
 });
-assert(message.startsWith('Part PART100 is already scanned in bin BIN-A. Scanned Date/Time:'));
+assert.strictEqual(message, 'This QR code is already scanned.');
 
 const inventoryIndexes = Inventory.schema.indexes();
 assert(inventoryIndexes.some(([fields, options]) => fields.upiCode === 1 && options.name === 'inventory_upi_code_idx'));

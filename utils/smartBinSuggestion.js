@@ -217,7 +217,7 @@ function buildSmartBinSuggestion(scans = [], currentBin = '') {
   const existingBinText = existingBins.length === 1
     ? existingBins[0].binLocation
     : existingBins.map((row) => row.binLocation).join(', ');
-  const message = `This part is already available in bin ${existingBinText}. Do you want to scan it in ${normalizedCurrentBin || 'this bin'} also?`;
+  const message = `PART ${partNumber || '-'} IS AVAILABLE IN ${existingBinText || '-'}\n\nWhat do you want to do?`;
 
   return {
     shouldPrompt,

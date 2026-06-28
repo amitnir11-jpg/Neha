@@ -302,7 +302,7 @@ function duplicateLookupPayload(input = {}) {
   const auditId = String(input.auditId || '').trim();
   const scanType = normalizeScanType(input.scanType || input.type || 'INWARD');
   const rawScan = String(input.rawScan || input.rawScanString || input.rawBarcode || input.rawQR || input.rawUpi || '').trim();
-  const upiId = String(input.upiId || input.upiNo || input.upiCode || rawScan || '').trim();
+  const upiId = String(input.upiId || input.upiNo || input.upiCode || '').trim();
   const rawUpiHash = duplicatePolicy.rawUpiHash({
     ...input,
     partNumber,
@@ -317,9 +317,9 @@ function duplicateLookupPayload(input = {}) {
   });
   const upiCode = inventoryUpiCode({
     ...input,
-    upiCode: input.upiCode || upiId || rawScan,
-    upiNo: input.upiNo || upiId || rawScan,
-    upiId: input.upiId || upiId || rawScan,
+    upiCode: input.upiCode || upiId,
+    upiNo: input.upiNo || upiId,
+    upiId: input.upiId || upiId,
     rawScanString: rawScan
   });
   return {
@@ -344,30 +344,14 @@ function duplicateLookupPayload(input = {}) {
 async function findBackendDuplicate(input = {}, options = {}) {
   const payload = duplicateLookupPayload(input);
   if (payload.scanType === 'VERIFICATION') return null;
-  const allowCrossBinDuplicate = duplicatePolicy.allowCrossBinDuplicate(payload);
-  const activeFilter = payload.scanType === 'INWARD' ? duplicatePolicy.activeUpiDuplicateFilter(payload) : null;
-  let activeDuplicate = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
-  if (activeDuplicate && allowCrossBinDuplicate && !duplicatePolicy.sameBinLocation(activeDuplicate, payload)) {
-    activeDuplicate = null;
-  }
+  const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(payload);
+  const activeDuplicate = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
   if (activeDuplicate) {
     return {
       existing: activeDuplicate,
       upiDuplicate: true,
-      reason: 'Duplicate part already scanned in this bin',
+      reason: 'Duplicate QR/UPI already scanned',
       message: duplicatePolicy.duplicateUpiMessage(activeDuplicate)
-    };
-  }
-  const partBinFilter = duplicatePolicy.partBinDuplicateFilter(payload);
-  let partBinDuplicate = partBinFilter ? await Inventory.findOne(partBinFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
-  if (partBinDuplicate && allowCrossBinDuplicate && !duplicatePolicy.sameBinLocation(partBinDuplicate, payload)) {
-    partBinDuplicate = null;
-  }
-  if (partBinDuplicate) {
-    return {
-      existing: partBinDuplicate,
-      reason: 'Duplicate part already scanned in this bin',
-      message: duplicatePolicy.partBinDuplicateMessage(partBinDuplicate, payload)
     };
   }
   const identityFilter = duplicatePolicy.identityDuplicateFilter(payload);
@@ -2310,9 +2294,7 @@ async function saveScanRequest(req, res) {
       upiNo,
       upiId
     });
-    const storedUpiToken = allowCrossBinDuplicate && binLocation && (upiNo || upiCode)
-      ? `${upiNo || upiCode}::${binLocation}`
-      : (upiCode || upiNo);
+    const storedUpiToken = upiCode || upiNo;
     const qrFingerprint = duplicateIdentityRaw ? makeQrFingerprint({
       ...req.body,
       dealerCode,
@@ -2332,47 +2314,13 @@ async function saveScanRequest(req, res) {
     let duplicateReason = '';
     let duplicateMessage = '';
     let upiDuplicate = false;
-    let manualBinDuplicate = false;
 
-    // Smart Bin Check
-    const smartBinDecision = String(req.body.smartBinDecision || '').trim().toUpperCase();
-    if (!smartBinDecision) {
-      const smartBinState = await smartBinSuggestionForScan({
-        ...req.body,
-        dealerCode,
-        auditId,
-        partNumber: part,
-        binLocation
-      });
-      if (smartBinState.shouldPrompt) {
-        return res.status(409).json({
-          success: false,
-          smartBinWarning: true,
-          message: smartBinState.message,
-          smartBinSuggestion: smartBinState
-        });
-      }
-    }
-
-    if (manualEntryMode && ['INWARD', 'DAMAGE'].includes(type) && binLocation) {
-      const manualDuplicateFilter = duplicatePolicy.manualBinDuplicateFilter({
-        dealerCode,
-        auditId,
-        partNumber: part,
-        scanType: type,
-        binLocation
-      });
-      existing = manualDuplicateFilter
-        ? await Inventory.findOne(manualDuplicateFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
-        : null;
-      manualBinDuplicate = Boolean(existing);
-    }
     if (!existing && type === 'FITTED' && regdNo && jobCardNo) {
       existing = await Inventory.findOne(fittedIdentityFilter({ dealerCode, partNumber: part, regdNo, jobCardNo, auditId })).lean();
     } else if (!existing) {
       existing = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
     }
-    if (!existing && type === 'INWARD') {
+    if (!existing && type !== 'VERIFICATION') {
       const backendDuplicate = await findBackendDuplicate({
         ...req.body,
         uniqueScanId,
@@ -2397,7 +2345,28 @@ async function saveScanRequest(req, res) {
         upiDuplicate = Boolean(backendDuplicate.upiDuplicate);
       }
     }
-    if (!upiDuplicate && existing && movementType === 'INWARD') {
+
+    // Smart Bin Check
+    const smartBinDecision = String(req.body.smartBinDecision || '').trim().toUpperCase();
+    if (!existing && !smartBinDecision) {
+      const smartBinState = await smartBinSuggestionForScan({
+        ...req.body,
+        dealerCode,
+        auditId,
+        partNumber: part,
+        binLocation
+      });
+      if (smartBinState.shouldPrompt) {
+        return res.status(409).json({
+          success: false,
+          smartBinWarning: true,
+          message: smartBinState.message,
+          smartBinSuggestion: smartBinState
+        });
+      }
+    }
+
+    if (!upiDuplicate && existing && movementType !== 'VERIFICATION') {
       const activeFilter = duplicatePolicy.activeUpiDuplicateFilter({
         dealerCode,
         auditId,
@@ -2411,51 +2380,11 @@ async function saveScanRequest(req, res) {
       if (activeExisting) {
         existing = activeExisting;
         upiDuplicate = true;
-        duplicateReason = 'Duplicate part already scanned in this bin';
+        duplicateReason = 'Duplicate QR/UPI already scanned';
         duplicateMessage = duplicatePolicy.duplicateUpiMessage(activeExisting);
       }
     }
     if (existing) {
-      if (manualBinDuplicate) {
-        if (manualAddRequestId && existing.lastManualAddRequestId === manualAddRequestId) {
-          const publicRow = publicScan(existing);
-          const currentQty = numberValue(publicRow.qty !== undefined ? publicRow.qty : publicRow.quantity, 0);
-          return res.json({
-            success: true,
-            updated: true,
-            duplicate: false,
-            alreadyApplied: true,
-            addedQuantity: 0,
-            newQuantity: currentQty,
-            message: `This manual save was already applied. Current quantity: ${currentQty}.`,
-            scan: publicRow
-          });
-        }
-        if (booleanFlag(req.body.addManualQuantity || req.body.confirmAddQuantity)) {
-          const result = await addManualQuantity(existing, { ...req.body, qty: preQty }, req);
-          if (result.error) return res.status(400).json({ success: false, message: result.error });
-          const newQty = numberValue(result.updated.qty !== undefined ? result.updated.qty : result.updated.quantity, 0);
-          return res.json({
-            success: true,
-            updated: true,
-            duplicate: false,
-            alreadyApplied: result.alreadyApplied,
-            addedQuantity: result.addQty,
-            newQuantity: newQty,
-            message: result.alreadyApplied
-              ? `Quantity was already added. Current quantity: ${newQty}.`
-              : `Added ${result.addQty} more. New quantity: ${newQty}.`,
-            scan: result.updated
-          });
-        }
-        return res.status(409).json({
-          success: false,
-          duplicate: true,
-          skipped: true,
-          ...manualDuplicatePayload(existing, preQty),
-          scan: publicScan(existing)
-        });
-      }
       existing = await backfillDuplicateMrp(existing, {
         partNumber: part,
         rawScanText,
@@ -2798,7 +2727,7 @@ async function saveScanRequest(req, res) {
           duplicate: true,
           upiDuplicate,
           message: upiDuplicate ? duplicatePolicy.duplicateUpiMessage(duplicate) : duplicatePolicy.DUPLICATE_PART_MESSAGE,
-          reason: upiDuplicate ? 'Duplicate part already scanned in this bin' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
+          reason: upiDuplicate ? 'Duplicate QR/UPI already scanned' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
           scan: duplicate
         });
       }
@@ -3195,26 +3124,12 @@ async function saveScanRequest(req, res) {
     let duplicateReason = '';
     let duplicateMessage = '';
     let upiDuplicate = false;
-    let manualBinDuplicate = false;
-    if (manualEntryMode && ['INWARD', 'DAMAGE'].includes(type) && binLocation) {
-      const manualDuplicateFilter = duplicatePolicy.manualBinDuplicateFilter({
-        dealerCode,
-        auditId,
-        partNumber: part,
-        scanType: type,
-        binLocation
-      });
-      existing = manualDuplicateFilter
-        ? await Inventory.findOne(manualDuplicateFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
-        : null;
-      manualBinDuplicate = Boolean(existing);
-    }
     if (!existing && type === 'FITTED' && regdNo && jobCardNo) {
       existing = await Inventory.findOne(fittedIdentityFilter({ dealerCode, partNumber: part, regdNo, jobCardNo, auditId })).lean();
     } else if (!existing) {
       existing = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
     }
-    if (!existing && type === 'INWARD') {
+    if (!existing && type !== 'VERIFICATION') {
       const backendDuplicate = await findBackendDuplicate({
         ...req.body,
         uniqueScanId,
@@ -3239,7 +3154,7 @@ async function saveScanRequest(req, res) {
         upiDuplicate = Boolean(backendDuplicate.upiDuplicate);
       }
     }
-    if (!upiDuplicate && existing && movementType === 'INWARD') {
+    if (!upiDuplicate && existing && movementType !== 'VERIFICATION') {
       const activeFilter = duplicatePolicy.activeUpiDuplicateFilter({
         dealerCode,
         auditId,
@@ -3253,51 +3168,11 @@ async function saveScanRequest(req, res) {
       if (activeExisting) {
         existing = activeExisting;
         upiDuplicate = true;
-        duplicateReason = 'Duplicate part already scanned in this bin';
+        duplicateReason = 'Duplicate QR/UPI already scanned';
         duplicateMessage = duplicatePolicy.duplicateUpiMessage(activeExisting);
       }
     }
     if (existing) {
-      if (manualBinDuplicate) {
-        if (manualAddRequestId && existing.lastManualAddRequestId === manualAddRequestId) {
-          const publicRow = publicScan(existing);
-          const currentQty = numberValue(publicRow.qty !== undefined ? publicRow.qty : publicRow.quantity, 0);
-          return res.json({
-            success: true,
-            updated: true,
-            duplicate: false,
-            alreadyApplied: true,
-            addedQuantity: 0,
-            newQuantity: currentQty,
-            message: `This manual save was already applied. Current quantity: ${currentQty}.`,
-            scan: publicRow
-          });
-        }
-        if (booleanFlag(req.body.addManualQuantity || req.body.confirmAddQuantity)) {
-          const result = await addManualQuantity(existing, { ...req.body, qty: preQty }, req);
-          if (result.error) return res.status(400).json({ success: false, message: result.error });
-          const newQty = numberValue(result.updated.qty !== undefined ? result.updated.qty : result.updated.quantity, 0);
-          return res.json({
-            success: true,
-            updated: true,
-            duplicate: false,
-            alreadyApplied: result.alreadyApplied,
-            addedQuantity: result.addQty,
-            newQuantity: newQty,
-            message: result.alreadyApplied
-              ? `Quantity was already added. Current quantity: ${newQty}.`
-              : `Added ${result.addQty} more. New quantity: ${newQty}.`,
-            scan: result.updated
-          });
-        }
-        return res.status(409).json({
-          success: false,
-          duplicate: true,
-          skipped: true,
-          ...manualDuplicatePayload(existing, preQty),
-          scan: publicScan(existing)
-        });
-      }
       existing = await backfillDuplicateMrp(existing, {
         partNumber: part,
         rawScanText,
@@ -3600,7 +3475,7 @@ async function saveScanRequest(req, res) {
           duplicate: true,
           upiDuplicate,
           message: upiDuplicate ? duplicatePolicy.duplicateUpiMessage(duplicate) : duplicatePolicy.DUPLICATE_PART_MESSAGE,
-          reason: upiDuplicate ? 'Duplicate part already scanned in this bin' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
+          reason: upiDuplicate ? 'Duplicate QR/UPI already scanned' : duplicatePolicy.DUPLICATE_PART_MESSAGE,
           scan: duplicate
         });
       }
@@ -3943,14 +3818,8 @@ async function duplicateCheckHandler(req, res) {
     }
 
     const scan = publicScan(duplicate.existing);
-    const message = duplicate.upiDuplicate !== false
-      ? duplicatePolicy.duplicateUpiMessage(duplicate.existing)
-      : duplicatePolicy.partBinDuplicateMessage(duplicate.existing, {
-          partNumber: part,
-          binLocation: scan.binLocation || scan.bin || req.body.binLocation || req.body.bin || '',
-          scanType
-        });
-    const reason = duplicate.reason || 'Duplicate part already scanned in this bin';
+    const message = duplicatePolicy.duplicateUpiMessage(duplicate.existing);
+    const reason = duplicate.reason || 'Duplicate QR/UPI already scanned';
     return res.json({
       success: true,
       duplicate: true,

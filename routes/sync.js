@@ -999,8 +999,8 @@ function smartBinPromptMessage({ partNumber = '', partDescription = '', existing
   const existingBinLabel = clean(existingBin || bins[0] || '') || '-';
   const newBinLabel = clean(newBin || '') || '-';
   void partDescription;
-  void partNumber;
-  return `This part is already available in bin ${existingBinLabel}. Do you want to scan it in ${newBinLabel !== '-' ? newBinLabel : 'this bin'} also?`;
+  void newBinLabel;
+  return `PART ${clean(partNumber || '-') || '-'} IS AVAILABLE IN ${existingBinLabel}\n\nWhat do you want to do?`;
 }
 
 async function smartBinWarningForScan(scan = {}) {
@@ -1328,19 +1328,15 @@ async function emitEnterpriseRealtime(io, scans = []) {
 
 async function scanPolicyResult(scan = {}) {
   scan.globalUpiKey = scan.globalUpiKey || duplicatePolicy.globalUpiKey(scan);
-  const allowCrossBinDuplicate = duplicatePolicy.allowCrossBinDuplicate(scan);
-  const activeFilter = upper(scan.scanType || scan.type) === 'INWARD' ? duplicatePolicy.activeUpiDuplicateFilter(scan) : null;
-  let activeDuplicate = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
-  if (activeDuplicate && allowCrossBinDuplicate && !duplicatePolicy.sameBinLocation(activeDuplicate, scan)) {
-    activeDuplicate = null;
-  }
+  const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(scan);
+  const activeDuplicate = activeFilter ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
   if (activeDuplicate) {
     return {
       ok: false,
       status: 'duplicate',
       existing: activeDuplicate,
       upiDuplicate: true,
-      reason: 'Duplicate part already scanned in this bin',
+      reason: 'Duplicate QR/UPI already scanned',
       message: duplicatePolicy.duplicateUpiMessage(activeDuplicate)
     };
   }
@@ -1361,38 +1357,6 @@ async function scanPolicyResult(scan = {}) {
       };
     }
     return { ok: true };
-  }
-  if (isManualEntry(scan) && ['INWARD', 'DAMAGE'].includes(scan.scanType)) {
-    const manualFilter = duplicatePolicy.manualBinDuplicateFilter(scan);
-    let manualDuplicate = manualFilter ? await Inventory.findOne(manualFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
-    if (manualDuplicate && allowCrossBinDuplicate && !duplicatePolicy.sameBinLocation(manualDuplicate, scan)) {
-      manualDuplicate = null;
-    }
-    if (manualDuplicate) {
-      const payload = manualDuplicatePayload(manualDuplicate, requestedQuantity(scan, 1));
-      return {
-        ok: false,
-        status: 'duplicate',
-        existing: manualDuplicate,
-        ...payload,
-        reason: 'Manual duplicate in same bin'
-      };
-    }
-  }
-  const partBinFilter = duplicatePolicy.partBinDuplicateFilter(scan);
-  let partBinDuplicate = partBinFilter ? await Inventory.findOne(partBinFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
-  if (partBinDuplicate && allowCrossBinDuplicate && !duplicatePolicy.sameBinLocation(partBinDuplicate, scan)) {
-    partBinDuplicate = null;
-  }
-  if (partBinDuplicate) {
-    return {
-      ok: false,
-      status: 'duplicate',
-      existing: partBinDuplicate,
-      partBinDuplicate: true,
-      reason: 'Duplicate part already scanned in this bin',
-      message: duplicatePolicy.partBinDuplicateMessage(partBinDuplicate, scan)
-    };
   }
   scan.rawUpiHash = scan.rawUpiHash || duplicatePolicy.rawUpiHash(scan);
   const identityFilter = duplicatePolicy.identityDuplicateFilter(scan);
@@ -1524,10 +1488,16 @@ async function saveNormalizedScan(scan, req) {
   if (scan.scanType === 'FITTED') scan.qrFingerprint = '';
   if (scan.scanType === 'OUTWARD' && scan.qrFingerprint) scan.qrFingerprint = `OUTWARD:${scan.qrFingerprint}`;
   scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
-  let allowCrossBinDuplicate = duplicatePolicy.allowCrossBinDuplicate(scan);
-  let storedUpiToken = allowCrossBinDuplicate && scan.binLocation && (scan.upiNo || scan.upiId)
-    ? `${scan.upiNo || scan.upiId}::${scan.binLocation}`
-    : (scan.upiNo || scan.upiId);
+  let storedUpiToken = scan.upiNo || scan.upiId;
+  scan.globalUpiKey = duplicatePolicy.globalUpiKey(scan);
+  const preSmartBinPolicy = await scanPolicyResult(scan);
+  if (!preSmartBinPolicy.ok) {
+    const confirmedUpdate = await confirmedDuplicateUpdate(preSmartBinPolicy, scan, req);
+    if (confirmedUpdate) return confirmedUpdate;
+    if (preSmartBinPolicy.existing) await logDuplicateScan(scan, preSmartBinPolicy.existing, preSmartBinPolicy.reason);
+    logSync('scan policy blocked', { status: preSmartBinPolicy.status, reason: preSmartBinPolicy.reason, deviceId: scan.deviceId, scanId: scan.uniqueScanId, existingId: preSmartBinPolicy.existing && preSmartBinPolicy.existing._id });
+    return duplicateResult(preSmartBinPolicy, scan);
+  }
   const smartBinState = await smartBinWarningForScan(scan);
   if (smartBinState) {
     // If the client has already made a decision, apply it and proceed.
@@ -1547,10 +1517,7 @@ async function saveNormalizedScan(scan, req) {
     scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
     scan.globalUpiKey = duplicatePolicy.globalUpiKey(scan);
   }
-  allowCrossBinDuplicate = duplicatePolicy.allowCrossBinDuplicate(scan);
-  storedUpiToken = allowCrossBinDuplicate && scan.binLocation && (scan.upiNo || scan.upiId)
-    ? `${scan.upiNo || scan.upiId}::${scan.binLocation}`
-    : (scan.upiNo || scan.upiId);
+  storedUpiToken = scan.upiNo || scan.upiId;
   const policy = await scanPolicyResult(scan);
   if (!policy.ok) {
     const confirmedUpdate = await confirmedDuplicateUpdate(policy, scan, req);
@@ -1704,7 +1671,7 @@ async function saveNormalizedScan(scan, req) {
         const smartBinState = await smartBinWarningForScan(scan);
       if (smartBinState) return smartBinState;
     }
-    const activeFilter = upper(scan.scanType || scan.type) === 'INWARD' ? duplicatePolicy.activeUpiDuplicateFilter(scan) : null;
+    const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(scan);
     const existing = activeFilter
       ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
       : await Inventory.findOne(duplicateQuery(scan)).lean();
@@ -1968,9 +1935,7 @@ async function pushHandler(req, res) {
     const normalizedScanIds = normalized.map((item) => item.scan.uniqueScanId).filter(Boolean);
     const normalizedSyncKeys = normalized.map((item) => item.scan.syncKey).filter(Boolean);
     const normalizedQrFingerprints = normalized.map((item) => item.scan.qrFingerprint).filter(Boolean);
-    const businessDuplicateClauses = normalized
-      .map((item) => duplicatePolicy.businessDuplicateFilter(item.scan))
-      .filter(Boolean);
+    const normalizedGlobalUpiKeys = normalized.map((item) => item.scan.globalUpiKey).filter(Boolean);
     const fittedDuplicateClauses = normalized
       .map((item) => item.scan)
       .filter((scan) => scan.scanType === 'FITTED' && scan.dealerCode && scan.partNumber && scan.regdNo && scan.jobCardNo)
@@ -1995,7 +1960,7 @@ async function pushHandler(req, res) {
           { scanId: { $in: normalizedScanIds } },
           { syncKey: { $in: normalizedSyncKeys } },
           { qrFingerprint: { $in: normalizedQrFingerprints } },
-          ...businessDuplicateClauses,
+          { globalUpiKey: { $in: normalizedGlobalUpiKeys } },
           ...fittedDuplicateClauses
         ]
         }).select('uniqueScanId scanId syncKey qrFingerprint rawUpiHash globalUpiKey rawScan rawScanString rawUpi upiNo upiId dealerCode auditId syncBatchId userId loginId userName staffName binLocation bin scanType type normalizedPartNumber partNumber part regdNo jobCardNo qty quantity mrp scanMRP manualMRP valuationMRP finalMRP valuationSource currentCatalogueMRP currentCatalogueDLC dlc timestamp scanTime createdAt').lean()
@@ -2073,6 +2038,10 @@ async function pushHandler(req, res) {
       if (scan.qrFingerprint) {
         existingScanIds.add(scan.qrFingerprint);
         existingIdentityByKey.set(scan.qrFingerprint, identity);
+      }
+      if (scan.globalUpiKey) {
+        existingScanIds.add(scan.globalUpiKey);
+        existingIdentityByKey.set(scan.globalUpiKey, identity);
       }
     });
     const duplicateScanIds = new Set();
@@ -2208,26 +2177,25 @@ async function pushHandler(req, res) {
         || (scan.scanId && duplicateScanIds.has(scan.scanId))
         || (scan.syncKey && duplicateScanIds.has(scan.syncKey))
       );
-      const activeFilter = upper(scan.scanType || scan.type) === 'INWARD' ? duplicatePolicy.activeUpiDuplicateFilter(scan) : null;
+      const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(scan);
       const activeDuplicate = activeFilter
         ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
         : null;
-      const businessKey = duplicatePolicy.businessDuplicateKey(scan);
-      const storedBusinessDuplicate = Boolean(businessKey && existingScanIds.has(businessKey));
-      const batchBusinessDuplicate = Boolean(businessKey && duplicateScanIds.has(businessKey));
-      const partBinDuplicate = Boolean(!fittedKey && (storedBusinessDuplicate || batchBusinessDuplicate));
-      const normalDuplicate = Boolean(activeDuplicate || (!fittedKey && (storedIdentityDuplicate || batchIdentityDuplicate || partBinDuplicate)));
+      const globalUpiKey = scan.globalUpiKey || duplicatePolicy.globalUpiKey(scan);
+      const storedQrDuplicate = Boolean(globalUpiKey && existingScanIds.has(globalUpiKey));
+      const batchQrDuplicate = Boolean(globalUpiKey && duplicateScanIds.has(globalUpiKey));
+      const normalDuplicate = Boolean(activeDuplicate || (!fittedKey && (storedIdentityDuplicate || batchIdentityDuplicate || storedQrDuplicate || batchQrDuplicate)));
       if (fittedDuplicate || normalDuplicate) {
         if (fittedKey) duplicateScanIds.add(fittedKey);
-        if (businessKey) duplicateScanIds.add(businessKey);
-        let existingIdentity = activeDuplicate || existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(businessKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.scanId) || existingIdentityByKey.get(scan.syncKey) || existingIdentityByKey.get(scan.qrFingerprint) || {};
+        if (globalUpiKey) duplicateScanIds.add(globalUpiKey);
+        let existingIdentity = activeDuplicate || existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(globalUpiKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.scanId) || existingIdentityByKey.get(scan.syncKey) || existingIdentityByKey.get(scan.qrFingerprint) || {};
         existingIdentity = await backfillDuplicateMrp(existingIdentity, scan, { manualEntry });
         const duplicateMessage = activeDuplicate
           ? duplicatePolicy.duplicateUpiMessage(existingIdentity)
           : fittedKey
           ? 'Fitted part already exists for this vehicle/job card'
-          : partBinDuplicate
-          ? duplicatePolicy.partBinDuplicateMessage(existingIdentity, scan)
+          : (storedQrDuplicate || batchQrDuplicate)
+          ? duplicatePolicy.duplicateUpiMessage(existingIdentity)
           : 'Duplicate exact scan skipped';
         logDuplicateScan(scan, existingIdentity, duplicateMessage).catch(() => undefined);
         logSync('duplicate scan skipped', {
@@ -2247,9 +2215,9 @@ async function pushHandler(req, res) {
       scan.qrFingerprint = manualEntry || fittedKey ? '' : makeQrFingerprint(scan);
       if (fittedKey) duplicateScanIds.add(fittedKey);
       if (scan.globalUpiKey) existingIdentityByKey.set(scan.globalUpiKey, scan);
-      if (businessKey) {
-        duplicateScanIds.add(businessKey);
-        existingIdentityByKey.set(businessKey, scan);
+      if (globalUpiKey) {
+        duplicateScanIds.add(globalUpiKey);
+        existingIdentityByKey.set(globalUpiKey, scan);
       }
 
       const finalQty = Number(scan.quantity || 1);
@@ -2391,7 +2359,7 @@ async function pushHandler(req, res) {
           const isDuplicate = writeError.code === 11000;
           let duplicateExisting = null;
           if (isDuplicate) {
-            const activeFilter = upper(doc.scanType || doc.type) === 'INWARD' ? duplicatePolicy.activeUpiDuplicateFilter(doc) : null;
+            const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(doc);
             duplicateExisting = activeFilter
               ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
               : null;

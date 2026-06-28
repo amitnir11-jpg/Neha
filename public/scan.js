@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20260627-cross-bin-confirm-v1';
+  const APP_VERSION = '20260627-qr-global-bin-choice-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -395,24 +395,24 @@
 
   function extractUpiIdFromText(payload = {}) {
     const direct = clean(payload.upiNo || payload.upiId || payload.upiID || payload.upiScanId || payload.transactionId || payload.txnId);
-    if (direct) return upper(direct);
+    if (direct) return upper(direct).split('::')[0];
     const raw = clean(payload.rawScanString || payload.rawScan || payload.rawBarcode || payload.rawQR || payload.rawUpi || payload.scanText || payload.raw);
     if (!raw) return '';
     const slashParts = raw.split('/');
-    if (slashParts.length >= 6 && clean(slashParts[1])) return upper(slashParts[1]);
+    if (slashParts.length >= 6 && clean(slashParts[1])) return upper(slashParts[1]).split('::')[0];
     const keyed = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
-    return keyed ? upper(keyed[1]) : '';
+    return keyed ? upper(keyed[1]).split('::')[0] : '';
   }
 
   function scanIdentityKey(scan = {}) {
     const type = upper(scan.scanType || scan.type || state.mode);
     if (type === 'VERIFICATION') return '';
-    const dealer = upper(scan.dealerCode || scan.dealer || activeDealerCode() || 'NO-DEALER');
-    const audit = clean(scan.auditId || activeAuditId() || 'NO-AUDIT');
     const upi = extractUpiIdFromText(scan);
-    if (upi) return [dealer, audit, 'UPI', upi].join('|');
+    if (upi) return ['UPI', upi].join('|');
     const raw = normalizeText(scan.rawScanString || scan.rawScan || scan.rawBarcode || scan.rawQR || scan.rawUpi || '');
-    if (raw) return [dealer, audit, 'RAW', raw].join('|');
+    const part = duplicatePartKey(scan);
+    if (/^MANUAL[:|#-]/i.test(clean(scan.rawScanString || scan.rawScan || ''))) return '';
+    if (raw && raw !== part) return ['RAW', raw].join('|');
     return '';
   }
 
@@ -727,14 +727,14 @@
     const { useExisting, saveNew, select } = smartBinPromptNodes();
     const existingBin = clean((select && select.value) || payload.selectedBin || payload.existingBin || payload.suggestedBin || payload.primaryBin || '');
     const newBin = clean(payload.newBin || payload.currentBin || payload.binLocation || '');
-    if (useExisting) useExisting.textContent = existingBin ? `USE EXISTING BIN ${existingBin}` : 'USE EXISTING BIN';
-    if (saveNew) saveNew.textContent = newBin ? `OK - SAVE IN ${newBin}` : 'OK - SAVE IN NEW BIN';
+    if (useExisting) useExisting.textContent = existingBin ? `Use Existing ${existingBin}` : 'Use Existing Bin';
+    if (saveNew) saveNew.textContent = newBin ? `Continue With ${newBin}` : 'Continue With Current Bin';
   }
 
   function renderDuplicateAlert(message = '', existing = {}) {
     const { dialog, title, message: messageNode, ok } = duplicateAlertNodes();
     if (!dialog) return;
-    if (title) title.textContent = 'PART ALREADY SCANNED';
+    if (title) title.textContent = 'QR CODE ALREADY SCANNED';
     if (messageNode) {
       messageNode.textContent = clean(message || duplicateScanMessage(existing || {}));
     }
@@ -782,7 +782,7 @@
 
     if (title) title.textContent = promptTitle;
     if (message) {
-      message.textContent = clean(payload.message || '') || `This part is already available in bin ${existingBin || '-'}. Do you want to scan it in ${newBin || 'this bin'} also?`;
+      message.textContent = clean(payload.message || '') || `PART ${partNumber || '-'} IS AVAILABLE IN ${existingBin || '-'}\n\nWhat do you want to do?`;
     }
     if (bins) {
       bins.innerHTML = smartBinExistingBinMarkup(existingBins, selectedExistingBin || existingBin);
@@ -824,22 +824,13 @@
   }
 
   async function openSmartBinSuggestionModal(payload = {}) {
-    const existingBins = Array.isArray(payload.existingBins) ? payload.existingBins : [];
-    const existingBin = clean(payload.existingBin || (existingBins[0] && existingBins[0].binLocation) || payload.suggestedBin || payload.currentBin || '');
-    const newBin = clean(payload.newBin || payload.currentBin || payload.binLocation || '');
-    const message = clean(payload.message || '') || `This part is already available in bin ${existingBin || '-'}. Do you want to scan it in ${newBin || 'this bin'} also?`;
-    if (!window.confirm(message)) return null;
-    const now = nowIso();
-    return {
-      action: 'SAVE_NEW_BIN',
-      currentBin: newBin || clean(payload.currentBin || payload.binLocation || ''),
-      selectedBin: newBin || clean(payload.currentBin || payload.binLocation || ''),
-      suggestedBin: clean(payload.suggestedBin || existingBin || newBin || ''),
-      existingBins,
-      decisionBy: clean(state.session && (state.session.user?.name || state.session.user?.username || state.session.user?.email || state.session.user?.id || '')),
-      decisionAt: String(payload.decisionAt || now),
-      checkedAt: String(payload.checkedAt || now)
-    };
+    const { dialog } = smartBinPromptNodes();
+    if (!dialog) return null;
+    if (state.smartBinPromptResolver) closeSmartBinSuggestionModal(null);
+    renderSmartBinSuggestionModal(payload);
+    return new Promise((resolve) => {
+      state.smartBinPromptResolver = resolve;
+    });
   }
 
   async function resolveSmartBinSuggestionAction(action, payload = {}) {
@@ -864,7 +855,11 @@
       decisionAt: nowIso(),
       checkedAt: payload.checkedAt || nowIso()
     };
+    const finalBin = clean(decision.selectedBin || decision.currentBin || '');
+    if (finalBin) setActiveBin(finalBin);
     closeSmartBinSuggestionModal(decision);
+    if (state.scanning) cameraState('Ready to scan');
+    else requestAutoCameraStart();
     return decision;
   }
 
@@ -1039,9 +1034,7 @@
     const status = rowStatus(row);
     if (row.serverDuplicateState === 'free') return false;
     if (['duplicate', 'failed-duplicate', 'failed', 'invalid', 'deleted', 'rejected'].includes(status)) return false;
-    if (row.activeInventory === false) return false;
-    if (Number(row.remainingQty ?? row.qty ?? row.quantity ?? 0) <= 0) return false;
-    return rowMovementType(row) === 'INWARD';
+    return rowMovementType(row) !== 'VERIFICATION';
   }
 
   function rowPart(row = {}) {
@@ -1128,9 +1121,8 @@
   }
 
   function duplicateScanMessage(existing = {}) {
-    const bin = rowBin(existing) || '-';
-    const part = rowPart(existing) || '-';
-    return `This UPI is already scanned in Bin ${bin}, Part No ${part}`;
+    void existing;
+    return 'This QR code is already scanned.';
   }
 
   function duplicateRawKey(row = {}) {
@@ -1252,7 +1244,7 @@
     const existingBinText = existingBins.length > 1
       ? existingBins.map((row) => row.binLocation).join(', ')
       : primaryBin || '-';
-    const message = `This part is already available in bin ${existingBinText}. Do you want to scan it in ${currentBin || 'this bin'} also?`;
+    const message = `PART ${partNumber || '-'} IS AVAILABLE IN ${existingBinText || '-'}\n\nWhat do you want to do?`;
 
     return {
       dealerCode: currentDealer,
@@ -1297,24 +1289,17 @@
     return rows;
   }
 
-  function isSameBinDuplicateScan(record = {}, existing = {}) {
+  function isSameQrDuplicateScan(record = {}, existing = {}) {
     if (!rowBlocksDuplicate(existing)) return false;
-    const recordDealer = upper(record.dealerCode || activeDealerCode());
-    const existingDealer = upper(existing.dealerCode || existing.dealer || '');
-    if (recordDealer && existingDealer && recordDealer !== existingDealer) return false;
     const recordType = rowMode(record);
     const existingType = rowMode(existing);
-    if (recordType && existingType && recordType !== existingType) return false;
     const recordKeyValue = recordKey(record);
     const existingKeyValue = recordKey(existing);
     if (recordKeyValue && existingKeyValue && recordKeyValue === existingKeyValue) return false;
-    const recordBin = upper(rowBin(record));
-    const existingBin = upper(rowBin(existing));
-    if (!recordBin || !existingBin || recordBin !== existingBin) return false;
-    const recordPart = duplicatePartKey(record);
-    const existingPart = duplicatePartKey(existing);
-    if (recordPart && existingPart && recordPart !== existingPart) return false;
-    return Boolean(recordDealer && existingDealer && recordType && existingType && recordPart && existingPart && recordBin && existingBin);
+    if (recordType === 'VERIFICATION' || existingType === 'VERIFICATION') return false;
+    const recordIdentity = scanIdentityKey(record);
+    const existingIdentity = scanIdentityKey(existing);
+    return Boolean(recordIdentity && existingIdentity && recordIdentity === existingIdentity);
   }
 
   async function deleteHistoryRow(row = {}) {
@@ -1345,7 +1330,7 @@
 
   function localDuplicateForRecord(record = {}) {
     if (!(rowUpiCode(record) || extractUpiIdFromText(record) || duplicateRawKey(record))) return null;
-    return duplicateLookupRows().find((row) => isSameBinDuplicateScan(record, row)) || null;
+    return duplicateLookupRows().find((row) => isSameQrDuplicateScan(record, row)) || null;
   }
 
   function renderUrlState() {
@@ -2134,6 +2119,7 @@
       decisionAt,
       decisionBy
     };
+    if (finalBin) setActiveBin(finalBin);
     return {
       ...record,
       binLocation: finalBin,
@@ -2292,10 +2278,6 @@
   async function preflightDuplicateDecision(record = {}) {
     const normalized = { ...record };
     if (rowMode(normalized) === 'VERIFICATION') return normalized;
-    const smartBinDecision = clean(normalized.smartBinDecision || '').toUpperCase();
-    if (smartBinDecision === 'SAVE_NEW_BIN' || normalized.allowCrossBinDuplicate) {
-      return normalized;
-    }
 
     if (navigator.onLine && state.session?.token) {
       await refreshLiveRecentScans({ force: true, reason: 'duplicate-preflight' }).catch(() => undefined);
@@ -3131,13 +3113,13 @@
       binLocation: requiresBin() ? loadActiveBin() : ''
     });
     try {
+      record = await preflightDuplicateDecision(record);
+      if (!record) return;
       record = await preflightSmartBinDecision(record);
       if (!record) {
         cameraState('Ready to scan');
         return;
       }
-      record = await preflightDuplicateDecision(record);
-      if (!record) return;
       await saveRecord(record, { silent: true, deferSync: false });
       byId('manualRawPreview').hidden = true;
       cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
@@ -3181,6 +3163,12 @@
     try {
       for (const row of batch) {
         try {
+          const duplicateResult = await checkBackendDuplicateBeforeSync(row, { timeoutMs: 5000 });
+          if (duplicateResult?.duplicate) {
+            await markDuplicateRecord(row, duplicateResult.existing || {}, duplicateResult.message || duplicateScanMessage(duplicateResult.existing || row));
+            duplicateCount += 1;
+            continue;
+          }
           const readyRow = await preflightSmartBinDecision(row);
           if (!readyRow) {
             await removeStoredQueueRecord(row);
@@ -3489,9 +3477,9 @@
       jobCardNo
     });
     try {
-      record = await preflightSmartBinDecision(record);
-      if (!record) return;
       record = await preflightDuplicateDecision(record);
+      if (!record) return;
+      record = await preflightSmartBinDecision(record);
       if (!record) return;
       await saveRecord(record, { silent: true, deferSync: false });
       closeManualDialog();
