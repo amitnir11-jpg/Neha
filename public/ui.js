@@ -234,8 +234,6 @@
     barcodeServerDuplicateChecks: new Map(),
     scanStreamRecords: []
   };
-  let activeDashboardTab = 'stream';
-
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   function clean(value) {
@@ -2913,7 +2911,7 @@
   }
 
   function enhanceCoreTables() {
-    enhanceDataTable($('#streamRows')?.closest('table'), 'daksh_table_realtime_stream_v2');
+    enhanceDataTable($('#streamRows')?.closest('table'), 'daksh_table_realtime_stream');
     enhanceDataTable($('#productGroupSummaryRows')?.closest('table'), 'daksh_table_product_group_summary');
     enhanceDataTable($('#scanHistoryRows')?.closest('table'), 'daksh_table_scan_history');
   }
@@ -3337,6 +3335,7 @@
   }
 
   function scanStreamRow(scan = {}) {
+    const syncStatus = normalizedDisplaySyncStatus(scan) || 'pending';
     const partDescription = scan.partDescription || scan.partName || scan.description || scan.part || '-';
     return `
       <tr>
@@ -3352,11 +3351,15 @@
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? 0))}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin)}</td>
+        <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
+        <td>${deviceLink(scan.deviceId)}</td>
+        <td>${syncStatusBadge(syncStatus)}</td>
       </tr>
     `;
   }
 
   function safeScanStreamRow(scan = {}) {
+    const syncStatus = normalizedDisplaySyncStatus(scan) || 'pending';
     const partDescription = scan.partDescription || scan.partName || scan.description || scan.part || '-';
     return `
       <tr>
@@ -3372,6 +3375,9 @@
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.mrp ?? 0))}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin || '-')}</td>
+        <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
+        <td>${escapeHtml(scan.deviceId || '-')}</td>
+        <td>${syncStatusBadge(syncStatus)}</td>
       </tr>
     `;
   }
@@ -3402,7 +3408,7 @@
               return safeScanStreamRow(scan);
             }
           }).join('')
-          : `<tr><td colspan="6" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
+          : `<tr><td colspan="9" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
       }
       if (!rows.length && Array.isArray(merged) && merged.length && options.skipActiveAuditFilter !== true) {
         console.warn('[DASHBOARD] stream filtered to zero rows', {
@@ -3422,7 +3428,7 @@
       state.scanStreamRecords = [];
       renderDashboardQuickOverview(state.dashboardStats || {}, []);
       renderDashboardTopBins([]);
-      if (body) body.innerHTML = '<tr><td colspan="6" class="muted">No scans yet</td></tr>';
+      if (body) body.innerHTML = '<tr><td colspan="9" class="muted">No scans yet</td></tr>';
       return [];
     }
   }
@@ -10678,47 +10684,6 @@
     setTimeout(() => document.body.classList.remove('print-labels'), 500);
   }
 
-  function setDashboardTab(tabName = 'stream') {
-    const availableTabs = ['overview', 'stream', 'sync', 'bins'];
-    const nextTab = availableTabs.includes(String(tabName || '').trim()) ? String(tabName).trim() : 'stream';
-    activeDashboardTab = nextTab;
-    $$('.dashboard-tab').forEach((button) => {
-      const active = button.dataset.dashboardTab === nextTab;
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-selected', String(active));
-      button.tabIndex = active ? 0 : -1;
-    });
-    $$('.dashboard-tab-panel').forEach((panel) => {
-      const active = panel.dataset.dashboardPanel === nextTab;
-      panel.classList.toggle('active', active);
-      panel.hidden = !active;
-    });
-    if (nextTab === 'stream') {
-      requestAnimationFrame(() => enhanceDataTable($('#streamRows')?.closest('table'), 'daksh_table_realtime_stream_v2'));
-    }
-  }
-
-  function bindDashboardTabs() {
-    const tabs = $$('.dashboard-tab');
-    if (!tabs.length) return;
-    tabs.forEach((button, index) => {
-      button.addEventListener('click', () => setDashboardTab(button.dataset.dashboardTab || 'stream'));
-      button.addEventListener('keydown', (event) => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        event.preventDefault();
-        let nextIndex = index;
-        if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
-        if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
-        if (event.key === 'Home') nextIndex = 0;
-        if (event.key === 'End') nextIndex = tabs.length - 1;
-        tabs[nextIndex]?.focus();
-        setDashboardTab(tabs[nextIndex]?.dataset.dashboardTab || 'stream');
-      });
-    });
-    const defaultTab = tabs.find((button) => button.classList.contains('active'))?.dataset.dashboardTab || activeDashboardTab || 'stream';
-    setDashboardTab(defaultTab);
-  }
-
   function openView(viewId, title) {
     if (viewId === 'admin') viewId = 'master';
     if (!$(`#${viewId}`)) viewId = 'dashboard';
@@ -10733,7 +10698,6 @@
     document.title = `DAKSH INVENTORY SYSTEM - ${viewTitle}`;
     updateSystemSubline();
     if (viewId === 'dashboard' && state.dashboardLoaded) {
-      setDashboardTab(activeDashboardTab);
       loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
     } else if (viewId !== 'dashboard') {
       document.body.classList.remove('app-booting');
@@ -12217,7 +12181,6 @@
       restoreBarcodeScanDefaults();
       bootLog('binding dashboard UI start');
       bindNavigation();
-      bindDashboardTabs();
       bindEvents();
       bindSuggestions();
       bindMasterSearchSuggestions();
