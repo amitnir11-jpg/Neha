@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260628-exact-qr-duplicate-v1';
+  const UI_BOOT_VERSION = '20260629-smart-bin-popup-v1';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -234,6 +234,7 @@
     barcodeServerDuplicateChecks: new Map(),
     scanStreamRecords: []
   };
+  let activeDashboardTab = 'stream';
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -1938,6 +1939,143 @@
     return allRecords.find((item) => barcodeScanKey(item) === key) || null;
   }
 
+  function smartBinScanDecision(scan = {}) {
+    return String(scan.smartBinDecision || scan.smartBinAction || scan.smartBinOverride || '').trim().toUpperCase();
+  }
+
+  function smartBinDecisionAllowsNewBin(scan = {}) {
+    return ['SAVE_NEW_BIN', 'CONTINUE_NEW', 'ADD_ADDITIONAL'].includes(smartBinScanDecision(scan));
+  }
+
+  function smartBinDecisionUsesExistingBin(scan = {}) {
+    return ['USE_EXISTING', 'USE_EXISTING_BIN'].includes(smartBinScanDecision(scan));
+  }
+
+  function smartBinRowCounted(row = {}) {
+    const status = String(row.syncStatus || row.localStatus || row.status || '').trim().toLowerCase();
+    if (['duplicate', 'failed-duplicate', 'failed', 'invalid', 'deleted', 'rejected'].includes(status)) return false;
+    if (row.deletedAt || row.activeInventory === false) return false;
+    const scanType = String(row.scanType || row.type || row.movementType || 'INWARD').trim().toUpperCase();
+    if (!['INWARD', 'AUDIT', 'DAMAGE'].includes(scanType)) return false;
+    return Number(row.qty ?? row.quantity ?? 1) > 0;
+  }
+
+  function localSmartBinSuggestion(scan = {}) {
+    const partNumber = normalizePartText(scan.partNumber || scan.part || scan.normalizedPartNumber || '');
+    const currentBin = cleanDealerCode(scan.binLocation || scan.bin || '');
+    const dealerCode = cleanDealerCode(scan.dealerCode || currentDealerCode() || '');
+    const auditId = String(scan.auditId || activeAuditIdForScope() || '').trim();
+    if (!partNumber || !currentBin || !dealerCode || !auditId) return null;
+    const currentKey = barcodeScanKey(scan);
+    const rows = getSyncQueue()
+      .concat(state.scanHistoryRecords || [])
+      .concat(state.scanStreamRecords || []);
+    const bins = new Map();
+    rows.forEach((row) => {
+      if (!smartBinRowCounted(row)) return;
+      if (dealerCode && cleanDealerCode(row.dealerCode || row.dealer || '') !== dealerCode) return;
+      if (auditId && String(row.auditId || row.audit || '').trim() !== auditId) return;
+      if (normalizePartText(row.partNumber || row.part || row.normalizedPartNumber || '') !== partNumber) return;
+      if (currentKey && barcodeScanKey(row) === currentKey) return;
+      const rowBin = cleanDealerCode(row.binLocation || row.bin || '');
+      if (!rowBin || rowBin === currentBin) return;
+      const qty = Math.abs(Number(row.qty ?? row.quantity ?? 1) || 1);
+      const existing = bins.get(rowBin) || {
+        binLocation: rowBin,
+        qty: 0,
+        locationType: 'SECONDARY',
+        partDescription: row.partDescription || row.partName || row.description || '',
+        lastScanDate: row.timestamp || row.scanTime || row.createdAt || '',
+        createdBy: row.userName || row.staffName || row.loginId || ''
+      };
+      existing.qty += qty;
+      bins.set(rowBin, existing);
+    });
+    const existingBins = Array.from(bins.values())
+      .sort((left, right) => Number(right.qty || 0) - Number(left.qty || 0) || String(left.binLocation).localeCompare(String(right.binLocation), undefined, { numeric: true, sensitivity: 'base' }))
+      .map((row, index) => ({ ...row, locationType: index === 0 ? 'PRIMARY' : 'SECONDARY' }));
+    if (!existingBins.length) return null;
+    const existingBin = existingBins[0].binLocation;
+    const existingBinText = existingBins.map((row) => row.binLocation).join(', ');
+    return {
+      success: true,
+      shouldPrompt: true,
+      promptTitle: 'PART ALREADY AVAILABLE IN OTHER BIN',
+      dealerCode,
+      auditId,
+      partNumber,
+      partDescription: existingBins.find((row) => row.partDescription)?.partDescription || scan.partDescription || scan.partName || '',
+      currentBin,
+      newBin: currentBin,
+      existingBin,
+      suggestedBin: existingBin,
+      primaryBin: existingBin,
+      existingBins,
+      existingBinCount: existingBins.length,
+      totalQty: existingBins.reduce((sum, row) => sum + Number(row.qty || 0), 0),
+      sameBinExists: false,
+      allowMultipleLocations: state.smartBinSettings?.allowMultipleLocations === undefined ? true : Boolean(state.smartBinSettings.allowMultipleLocations),
+      reasonRequired: Boolean(state.smartBinSettings?.requireReason ?? true),
+      maxAllowedLocationsPerPart: Math.max(1, Number.parseInt(String(state.smartBinSettings?.maxAllowedLocationsPerPart || 3), 10) || 3),
+      message: `PART ${partNumber} IS AVAILABLE IN BIN ${existingBinText}\n\nWill you continue scanning in ${existingBinText} or continue with ${currentBin}?`
+    };
+  }
+
+  function applySmartBinDecisionToScan(scan = {}, suggestion = {}, decision = {}, options = {}) {
+    const action = String(decision.action || scan.smartBinDecision || '').trim().toUpperCase();
+    const currentBin = cleanDealerCode(decision.currentBin || suggestion.currentBin || scan.binLocation || scan.bin || '');
+    const selectedBin = cleanDealerCode(decision.selectedBin || suggestion.suggestedBin || suggestion.existingBin || currentBin || '');
+    const finalBin = smartBinDecisionUsesExistingBin({ smartBinDecision: action }) && selectedBin ? selectedBin : currentBin;
+    const existingBins = Array.isArray(decision.existingBins)
+      ? decision.existingBins
+      : (Array.isArray(suggestion.existingBins) ? suggestion.existingBins : []);
+    const decisionAt = String(decision.decisionAt || new Date().toISOString());
+    const checkedAt = String(decision.checkedAt || suggestion.checkedAt || new Date().toISOString());
+    const decisionBy = String(decision.decisionBy || state.user?.name || state.user?.username || state.user?.email || '').trim();
+    scan.smartBinEnabled = true;
+    scan.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || suggestion.suggestedBin || suggestion.existingBin || finalBin || currentBin || '');
+    scan.smartBinCurrentBin = currentBin;
+    scan.smartBinSelectedBin = finalBin || selectedBin || currentBin;
+    scan.smartBinExistingBins = existingBins;
+    scan.smartBinAllowMultipleLocations = suggestion.allowMultipleLocations === undefined ? true : Boolean(suggestion.allowMultipleLocations);
+    scan.smartBinMaxAllowedLocationsPerPart = Math.max(1, Number.parseInt(String(suggestion.maxAllowedLocationsPerPart || 3), 10) || 3);
+    scan.smartBinReasonRequired = options.reasonRequired === undefined
+      ? (suggestion.reasonRequired === undefined ? true : Boolean(suggestion.reasonRequired))
+      : Boolean(options.reasonRequired);
+    scan.smartBinDecision = action;
+    scan.smartBinReason = action === 'SAVE_NEW_BIN'
+      ? 'User confirmed different bin'
+      : String(decision.reason || 'User selected existing bin').trim();
+    scan.smartBinCheckedAt = checkedAt;
+    scan.smartBinDecisionAt = decisionAt;
+    scan.smartBinDecisionBy = decisionBy;
+    scan.smartBinLocationType = action === 'SAVE_NEW_BIN' ? 'SECONDARY' : 'PRIMARY';
+    scan.smartBinIsSecondaryLocation = action === 'SAVE_NEW_BIN';
+    scan.allowCrossBinDuplicate = scan.smartBinIsSecondaryLocation || Boolean(scan.allowCrossBinDuplicate);
+    scan.smartBinAuditTrail = {
+      enabled: true,
+      decision: scan.smartBinDecision,
+      reason: scan.smartBinReason,
+      suggestedBin: scan.smartBinSuggestedBin,
+      selectedBin: scan.smartBinSelectedBin,
+      currentBin: scan.smartBinCurrentBin,
+      existingBins: scan.smartBinExistingBins,
+      allowMultipleLocations: scan.smartBinAllowMultipleLocations,
+      maxAllowedLocationsPerPart: scan.smartBinMaxAllowedLocationsPerPart,
+      reasonRequired: scan.smartBinReasonRequired,
+      checkedAt,
+      decisionAt,
+      decisionBy,
+      locationType: scan.smartBinLocationType,
+      isSecondaryLocation: scan.smartBinIsSecondaryLocation
+    };
+    if (smartBinDecisionUsesExistingBin(scan) && finalBin) {
+      scan.binLocation = finalBin;
+      scan.bin = finalBin;
+    }
+    return scan;
+  }
+
   function removeQueuedBarcodeScan(scan = {}) {
     const key = barcodeScanKey(scan);
     const syncKey = clean(scan.syncKey || '');
@@ -2249,15 +2387,26 @@
   }
 
   async function checkServerBarcodeDuplicate(scan = {}) {
-    const key = barcodeScanKey(scan) || clean(scan.syncKey || scan.localId || '');
+    const decision = smartBinScanDecision(scan);
+    const key = [
+      barcodeScanKey(scan) || clean(scan.syncKey || scan.localId || ''),
+      decision,
+      cleanDealerCode(scan.binLocation || scan.bin || '')
+    ].filter(Boolean).join('|');
     if (!key) return null;
     if (state.barcodeServerDuplicateChecks.has(key)) return state.barcodeServerDuplicateChecks.get(key);
+    const allowSmartBinCrossBin = Boolean(
+      scan.allowCrossBinDuplicate ||
+      scan.smartBinAllowCrossBinDuplicate ||
+      scan.smartBinIsSecondaryLocation ||
+      smartBinDecisionAllowsNewBin(scan)
+    );
     const duplicatePayload = {
       ...scan,
-      allowCrossBinDuplicate: false,
-      smartBinAllowCrossBinDuplicate: false,
-      smartBinIsSecondaryLocation: false,
-      smartBinDecision: ''
+      allowCrossBinDuplicate: allowSmartBinCrossBin,
+      smartBinAllowCrossBinDuplicate: allowSmartBinCrossBin,
+      smartBinIsSecondaryLocation: Boolean(scan.smartBinIsSecondaryLocation || smartBinDecisionAllowsNewBin(scan)),
+      smartBinDecision: decision
     };
     const promise = api('/api/scans/duplicate-check', {
       method: 'POST',
@@ -2764,7 +2913,7 @@
   }
 
   function enhanceCoreTables() {
-    enhanceDataTable($('#streamRows')?.closest('table'), 'daksh_table_realtime_stream');
+    enhanceDataTable($('#streamRows')?.closest('table'), 'daksh_table_realtime_stream_v2');
     enhanceDataTable($('#productGroupSummaryRows')?.closest('table'), 'daksh_table_product_group_summary');
     enhanceDataTable($('#scanHistoryRows')?.closest('table'), 'daksh_table_scan_history');
   }
@@ -3188,7 +3337,6 @@
   }
 
   function scanStreamRow(scan = {}) {
-    const syncStatus = normalizedDisplaySyncStatus(scan) || 'pending';
     const partDescription = scan.partDescription || scan.partName || scan.description || scan.part || '-';
     return `
       <tr>
@@ -3204,15 +3352,11 @@
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? 0))}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin)}</td>
-        <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
-        <td>${deviceLink(scan.deviceId)}</td>
-        <td>${syncStatusBadge(syncStatus)}</td>
       </tr>
     `;
   }
 
   function safeScanStreamRow(scan = {}) {
-    const syncStatus = normalizedDisplaySyncStatus(scan) || 'pending';
     const partDescription = scan.partDescription || scan.partName || scan.description || scan.part || '-';
     return `
       <tr>
@@ -3228,9 +3372,6 @@
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.mrp ?? 0))}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin || '-')}</td>
-        <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
-        <td>${escapeHtml(scan.deviceId || '-')}</td>
-        <td>${syncStatusBadge(syncStatus)}</td>
       </tr>
     `;
   }
@@ -3261,7 +3402,7 @@
               return safeScanStreamRow(scan);
             }
           }).join('')
-          : `<tr><td colspan="9" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
+          : `<tr><td colspan="6" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
       }
       if (!rows.length && Array.isArray(merged) && merged.length && options.skipActiveAuditFilter !== true) {
         console.warn('[DASHBOARD] stream filtered to zero rows', {
@@ -3281,7 +3422,7 @@
       state.scanStreamRecords = [];
       renderDashboardQuickOverview(state.dashboardStats || {}, []);
       renderDashboardTopBins([]);
-      if (body) body.innerHTML = '<tr><td colspan="9" class="muted">No scans yet</td></tr>';
+      if (body) body.innerHTML = '<tr><td colspan="6" class="muted">No scans yet</td></tr>';
       return [];
     }
   }
@@ -4238,6 +4379,50 @@
       return;
     }
 
+    const smartBinSettings = state.smartBinSettingsLoaded
+      ? state.smartBinSettings
+      : { enabled: true, requireReason: true };
+    const smartBinEligibleScan = ['INWARD', 'DAMAGE', 'AUDIT'].includes(normalized.scanType);
+    let smartBinPrompted = false;
+    if (smartBinSettings.enabled !== false && smartBinEligibleScan && normalized.dealerCode && normalized.auditId && normalized.partNumber && normalized.binLocation) {
+      try {
+        let suggestion = localSmartBinSuggestion(normalized);
+        if (!suggestion?.shouldPrompt) {
+          suggestion = await api('/api/scans/smart-bin-check', {
+            method: 'POST',
+            body: {
+              dealerCode: normalized.dealerCode,
+              auditId: normalized.auditId,
+              partNumber: normalized.partNumber,
+              partDescription: normalized.partDescription || normalized.partName || '',
+              binLocation: normalized.binLocation,
+              scanType: normalized.scanType,
+              qty: normalized.qty,
+              refresh: true
+            },
+            timeoutMs: 1800
+          });
+        }
+        if (suggestion && suggestion.shouldPrompt) {
+          smartBinPrompted = true;
+          const decision = await openSmartBinSuggestionModal({
+            ...suggestion,
+            currentBin: suggestion.currentBin || normalized.binLocation,
+            newBin: suggestion.newBin || normalized.binLocation,
+            existingBin: suggestion.existingBin || (Array.isArray(suggestion.existingBins) && suggestion.existingBins[0] && suggestion.existingBins[0].binLocation) || '',
+            requireReason: Boolean(smartBinSettings.requireReason)
+          });
+          if (!decision) return;
+          applySmartBinDecisionToScan(normalized, suggestion, decision, {
+            reasonRequired: Boolean(smartBinSettings.requireReason)
+          });
+            }
+      } catch (error) {
+        console.warn('[SMART BIN] preflight skipped', error.message);
+        addConnectionLog(`Smart bin preflight skipped: ${error.message}`, 'warning');
+      }
+    }
+
     const serverDuplicate = await checkServerBarcodeDuplicate(normalized);
     if (serverDuplicate && serverDuplicate.duplicate) {
       if (isBarcodeForm) {
@@ -4248,94 +4433,6 @@
         toast(serverDuplicate.message || barcodeDuplicateMessage(existing), 'error');
       }
       return;
-    }
-
-    const smartBinSettings = state.smartBinSettingsLoaded
-      ? state.smartBinSettings
-      : { enabled: true, requireReason: true };
-    const smartBinEligibleScan = ['INWARD', 'DAMAGE', 'AUDIT'].includes(normalized.scanType);
-    let smartBinPrompted = false;
-    if (smartBinEligibleScan && normalized.dealerCode && normalized.auditId && normalized.partNumber && normalized.binLocation) {
-      try {
-        // API call for Smart Bin Check
-        const suggestion = await api('/api/scans/smart-bin-check', {
-          method: 'POST',
-          body: {
-            dealerCode: normalized.dealerCode,
-            auditId: normalized.auditId,
-            partNumber: normalized.partNumber,
-            partDescription: normalized.partDescription || normalized.partName || '',
-            binLocation: normalized.binLocation,
-            scanType: normalized.scanType,
-            qty: normalized.qty,
-            refresh: true
-          },
-          timeoutMs: 1800
-        });
-          if (suggestion && suggestion.shouldPrompt) {
-            // Show the popup if needed
-            smartBinPrompted = true;
-            const decision = await openSmartBinSuggestionModal({
-              ...suggestion,
-              currentBin: suggestion.currentBin || normalized.binLocation,
-              newBin: suggestion.newBin || normalized.binLocation,
-              existingBin: suggestion.existingBin || (Array.isArray(suggestion.existingBins) && suggestion.existingBins[0] && suggestion.existingBins[0].binLocation) || '',
-              requireReason: Boolean(smartBinSettings.requireReason)
-            });
-            if (!decision) return;
-            normalized.smartBinEnabled = true;
-
-            // Apply user's decision to the scan payload
-            normalized.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || suggestion.suggestedBin || normalized.binLocation || '');
-            normalized.smartBinCurrentBin = cleanDealerCode(decision.currentBin || suggestion.currentBin || normalized.binLocation || '');
-            normalized.smartBinSelectedBin = cleanDealerCode(decision.selectedBin || normalized.binLocation || '');
-          normalized.smartBinExistingBins = Array.isArray(decision.existingBins) ? decision.existingBins : (Array.isArray(suggestion.existingBins) ? suggestion.existingBins : []);
-          normalized.smartBinAllowMultipleLocations = suggestion.allowMultipleLocations === undefined
-            ? true
-            : Boolean(suggestion.allowMultipleLocations);
-          normalized.smartBinMaxAllowedLocationsPerPart = Math.max(1, Number.parseInt(String(suggestion.maxAllowedLocationsPerPart || 3), 10) || 3);
-          normalized.smartBinReasonRequired = suggestion.reasonRequired === undefined
-            ? true
-            : Boolean(suggestion.reasonRequired);
-          normalized.smartBinDecision = String(decision.action || '').trim().toUpperCase();
-          normalized.smartBinReason = normalized.smartBinDecision === 'SAVE_NEW_BIN'
-            ? 'User confirmed different bin'
-            : String(decision.reason || 'User selected existing bin').trim();
-          normalized.smartBinCheckedAt = String(decision.checkedAt || new Date().toISOString());
-          normalized.smartBinDecisionAt = String(decision.decisionAt || new Date().toISOString());
-          normalized.smartBinDecisionBy = String(decision.decisionBy || state.user?.name || state.user?.username || state.user?.email || '').trim();
-          normalized.smartBinLocationType = normalized.smartBinDecision === 'SAVE_NEW_BIN' ? 'SECONDARY' : 'PRIMARY';
-          normalized.smartBinIsSecondaryLocation = normalized.smartBinDecision === 'SAVE_NEW_BIN';
-          normalized.allowCrossBinDuplicate = normalized.smartBinIsSecondaryLocation;
-            normalized.smartBinAuditTrail = {
-              enabled: true,
-              decision: normalized.smartBinDecision,
-              reason: normalized.smartBinReason,
-              suggestedBin: normalized.smartBinSuggestedBin,
-              selectedBin: normalized.smartBinSelectedBin,
-            currentBin: normalized.smartBinCurrentBin,
-            existingBins: normalized.smartBinExistingBins,
-            allowMultipleLocations: normalized.smartBinAllowMultipleLocations,
-            maxAllowedLocationsPerPart: normalized.smartBinMaxAllowedLocationsPerPart,
-            reasonRequired: normalized.smartBinReasonRequired,
-            checkedAt: normalized.smartBinCheckedAt,
-            decisionAt: normalized.smartBinDecisionAt,
-            decisionBy: normalized.smartBinDecisionBy,
-            locationType: normalized.smartBinLocationType,
-            isSecondaryLocation: normalized.smartBinIsSecondaryLocation
-          };
-          if (normalized.smartBinDecision === 'USE_EXISTING_BIN') {
-            const selectedBin = cleanDealerCode(normalized.smartBinSelectedBin || suggestion.suggestedBin || normalized.binLocation || '');
-            if (selectedBin) {
-              normalized.binLocation = selectedBin;
-              normalized.bin = selectedBin;
-            }
-          }
-        }
-      } catch (error) {
-        console.warn('[SMART BIN] preflight skipped', error.message);
-        addConnectionLog(`Smart bin preflight skipped: ${error.message}`, 'warning');
-      }
     }
 
     if (!isBarcodeForm && options.confirmBeforeSave !== false && !smartBinPrompted) {
@@ -4352,15 +4449,6 @@
       normalized.manualAddRequestId = requestId;
       normalized.uniqueScanId = normalized.uniqueScanId || requestId;
       normalized.scanId = normalized.scanId || requestId;
-    }
-
-    if (isBarcodeForm) {
-      if (isBarcodeScanRecentlyLocked(normalized, 3000)) {
-        setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
-        resetBarcodeScanFields(form, normalized, options.expectedRaw);
-        setTimeout(() => $('#barcodeRaw')?.focus(), 700);
-        return;
-      }
     }
 
     try {
@@ -4673,37 +4761,26 @@
           clientScanId: record.clientScanId || record.localId || record.scanId,
           clientSyncKey: record.clientSyncKey || record.syncKey
         }));
-        const duplicateBeforePrompt = await checkServerBarcodeDuplicate(outbound);
-        if (duplicateBeforePrompt && duplicateBeforePrompt.duplicate) {
-          outcomes.set(recordKey, { remove: true });
-          duplicateCount += 1;
-          logs.push({
-            partNumber: record.partNumber || record.part,
-            upiId: record.upiId,
-            dealer: record.dealerCode,
-            status: 'duplicate',
-            errorMessage: duplicateBeforePrompt.message || barcodeDuplicateMessage(duplicateBeforePrompt.scan || duplicateBeforePrompt.existing || record)
-          });
-          handleBarcodeDuplicate(record, duplicateBeforePrompt);
-          continue;
-        }
         const smartBinEligibleScan = ['INWARD', 'DAMAGE', 'AUDIT'].includes(outbound.scanType);
-        if (smartBinEligibleScan && outbound.dealerCode && outbound.auditId && outbound.partNumber && outbound.binLocation) {
+        if (state.smartBinSettings?.enabled !== false && smartBinEligibleScan && outbound.dealerCode && outbound.auditId && outbound.partNumber && outbound.binLocation) {
           try {
-            const suggestion = await api('/api/scans/smart-bin-check', {
-              method: 'POST',
-              body: {
-                dealerCode: outbound.dealerCode,
-                auditId: outbound.auditId,
-                partNumber: outbound.partNumber,
-                partDescription: outbound.partDescription || outbound.partName || '',
-                binLocation: outbound.binLocation,
-                scanType: outbound.scanType,
-                qty: outbound.qty,
-                refresh: true
-              },
-              timeoutMs: 1800
-            });
+            let suggestion = localSmartBinSuggestion(outbound);
+            if (!suggestion?.shouldPrompt) {
+              suggestion = await api('/api/scans/smart-bin-check', {
+                method: 'POST',
+                body: {
+                  dealerCode: outbound.dealerCode,
+                  auditId: outbound.auditId,
+                  partNumber: outbound.partNumber,
+                  partDescription: outbound.partDescription || outbound.partName || '',
+                  binLocation: outbound.binLocation,
+                  scanType: outbound.scanType,
+                  qty: outbound.qty,
+                  refresh: true
+                },
+                timeoutMs: 1800
+              });
+            }
             if (suggestion && suggestion.shouldPrompt) {
               const decision = await openSmartBinSuggestionModal({
                 ...suggestion,
@@ -4724,54 +4801,28 @@
                 });
                 continue;
               }
-              const decisionAction = String(decision.action || '').trim().toUpperCase();
-              const selectedBin = cleanDealerCode(decision.selectedBin || outbound.binLocation || outbound.bin || '');
-              outbound.smartBinEnabled = true;
-              outbound.smartBinSuggestedBin = cleanDealerCode(decision.suggestedBin || suggestion.suggestedBin || outbound.binLocation || '');
-              outbound.smartBinCurrentBin = cleanDealerCode(decision.currentBin || suggestion.currentBin || outbound.binLocation || '');
-              outbound.smartBinSelectedBin = selectedBin || cleanDealerCode(outbound.binLocation || '');
-              outbound.smartBinExistingBins = Array.isArray(decision.existingBins) ? decision.existingBins : (Array.isArray(suggestion.existingBins) ? suggestion.existingBins : []);
-              outbound.smartBinAllowMultipleLocations = suggestion.allowMultipleLocations === undefined
-                ? true
-                : Boolean(suggestion.allowMultipleLocations);
-              outbound.smartBinMaxAllowedLocationsPerPart = Math.max(1, Number.parseInt(String(suggestion.maxAllowedLocationsPerPart || 3), 10) || 3);
-              outbound.smartBinReasonRequired = Boolean(suggestion.reasonRequired === undefined ? true : suggestion.reasonRequired);
-              outbound.smartBinDecision = decisionAction;
-              outbound.smartBinReason = decisionAction === 'SAVE_NEW_BIN'
-                ? 'User confirmed different bin'
-                : 'User selected existing bin';
-              outbound.smartBinCheckedAt = String(decision.checkedAt || new Date().toISOString());
-              outbound.smartBinDecisionAt = String(decision.decisionAt || new Date().toISOString());
-              outbound.smartBinDecisionBy = String(decision.decisionBy || state.user?.name || state.user?.username || state.user?.email || '').trim();
-              outbound.smartBinLocationType = decisionAction === 'SAVE_NEW_BIN' ? 'SECONDARY' : 'PRIMARY';
-              outbound.smartBinIsSecondaryLocation = decisionAction === 'SAVE_NEW_BIN';
-              outbound.allowCrossBinDuplicate = outbound.smartBinIsSecondaryLocation;
-              outbound.smartBinAuditTrail = {
-                enabled: true,
-                decision: outbound.smartBinDecision,
-                reason: outbound.smartBinReason,
-                suggestedBin: outbound.smartBinSuggestedBin,
-                selectedBin: outbound.smartBinSelectedBin,
-                currentBin: outbound.smartBinCurrentBin,
-                existingBins: outbound.smartBinExistingBins,
-                allowMultipleLocations: outbound.smartBinAllowMultipleLocations,
-                maxAllowedLocationsPerPart: outbound.smartBinMaxAllowedLocationsPerPart,
-                reasonRequired: outbound.smartBinReasonRequired,
-                checkedAt: outbound.smartBinCheckedAt,
-                decisionAt: outbound.smartBinDecisionAt,
-                decisionBy: outbound.smartBinDecisionBy,
-                locationType: outbound.smartBinLocationType,
-                isSecondaryLocation: outbound.smartBinIsSecondaryLocation
-              };
-              if (decisionAction === 'USE_EXISTING_BIN' && selectedBin) {
-                outbound.binLocation = selectedBin;
-                outbound.bin = selectedBin;
-              }
+              applySmartBinDecisionToScan(outbound, suggestion, decision, {
+                reasonRequired: Boolean(state.smartBinSettings?.requireReason ?? true)
+              });
             }
           } catch (error) {
             console.warn('[SMART BIN] preflight skipped', error.message);
             addConnectionLog(`Smart bin preflight skipped: ${error.message}`, 'warning');
           }
+        }
+        const duplicateBeforePrompt = await checkServerBarcodeDuplicate(outbound);
+        if (duplicateBeforePrompt && duplicateBeforePrompt.duplicate) {
+          outcomes.set(recordKey, { remove: true });
+          duplicateCount += 1;
+          logs.push({
+            partNumber: record.partNumber || record.part,
+            upiId: record.upiId,
+            dealer: record.dealerCode,
+            status: 'duplicate',
+            errorMessage: duplicateBeforePrompt.message || barcodeDuplicateMessage(duplicateBeforePrompt.scan || duplicateBeforePrompt.existing || record)
+          });
+          handleBarcodeDuplicate(record, duplicateBeforePrompt);
+          continue;
         }
         try {
           const result = await api('/api/scans/process', { method: 'POST', body: outbound, timeoutMs: 20000 });
@@ -10627,6 +10678,47 @@
     setTimeout(() => document.body.classList.remove('print-labels'), 500);
   }
 
+  function setDashboardTab(tabName = 'stream') {
+    const availableTabs = ['overview', 'stream', 'sync', 'bins'];
+    const nextTab = availableTabs.includes(String(tabName || '').trim()) ? String(tabName).trim() : 'stream';
+    activeDashboardTab = nextTab;
+    $$('.dashboard-tab').forEach((button) => {
+      const active = button.dataset.dashboardTab === nextTab;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+    });
+    $$('.dashboard-tab-panel').forEach((panel) => {
+      const active = panel.dataset.dashboardPanel === nextTab;
+      panel.classList.toggle('active', active);
+      panel.hidden = !active;
+    });
+    if (nextTab === 'stream') {
+      requestAnimationFrame(() => enhanceDataTable($('#streamRows')?.closest('table'), 'daksh_table_realtime_stream_v2'));
+    }
+  }
+
+  function bindDashboardTabs() {
+    const tabs = $$('.dashboard-tab');
+    if (!tabs.length) return;
+    tabs.forEach((button, index) => {
+      button.addEventListener('click', () => setDashboardTab(button.dataset.dashboardTab || 'stream'));
+      button.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        let nextIndex = index;
+        if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+        if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+        if (event.key === 'Home') nextIndex = 0;
+        if (event.key === 'End') nextIndex = tabs.length - 1;
+        tabs[nextIndex]?.focus();
+        setDashboardTab(tabs[nextIndex]?.dataset.dashboardTab || 'stream');
+      });
+    });
+    const defaultTab = tabs.find((button) => button.classList.contains('active'))?.dataset.dashboardTab || activeDashboardTab || 'stream';
+    setDashboardTab(defaultTab);
+  }
+
   function openView(viewId, title) {
     if (viewId === 'admin') viewId = 'master';
     if (!$(`#${viewId}`)) viewId = 'dashboard';
@@ -10641,6 +10733,7 @@
     document.title = `DAKSH INVENTORY SYSTEM - ${viewTitle}`;
     updateSystemSubline();
     if (viewId === 'dashboard' && state.dashboardLoaded) {
+      setDashboardTab(activeDashboardTab);
       loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
     } else if (viewId !== 'dashboard') {
       document.body.classList.remove('app-booting');
@@ -12124,6 +12217,7 @@
       restoreBarcodeScanDefaults();
       bootLog('binding dashboard UI start');
       bindNavigation();
+      bindDashboardTabs();
       bindEvents();
       bindSuggestions();
       bindMasterSearchSuggestions();

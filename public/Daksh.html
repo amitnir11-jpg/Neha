@@ -16,7 +16,7 @@
       if (width >= 132) document.documentElement.classList.add('sidebar-wide-initial');
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260627-dashboard-refined-v4">
+  <link rel="stylesheet" href="/style.css?v=20260629-smart-bin-popup-v1">
 </head>
 <body class="app-booting dashboard-view-active">
   <script>
@@ -142,35 +142,127 @@
         </div>
       </header>
 
-      <section id="dashboard" class="view active dashboard-page">
-        <div class="dashboard-kpi-grid metric-grid six">
-          <div class="metric dashboard-kpi dashboard-kpi-scan">
-            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-scan"></use></svg></span><span>Total Scanned Today</span></div>
-            <strong id="dashToday">0</strong>
+      <section id="dashboard" class="view active dashboard-page dashboard-tabs-page">
+        <div class="dashboard-tabbar" role="tablist" aria-label="Dashboard sections">
+          <button class="dashboard-tab" type="button" role="tab" aria-selected="false" aria-controls="dashboardTabOverview" data-dashboard-tab="overview">[OVERVIEW]</button>
+          <button class="dashboard-tab active" type="button" role="tab" aria-selected="true" aria-controls="dashboardTabStream" data-dashboard-tab="stream">[LAST SCAN STREAM]</button>
+          <button class="dashboard-tab" type="button" role="tab" aria-selected="false" aria-controls="dashboardTabSync" data-dashboard-tab="sync">[SYNC SNAPSHOT]</button>
+          <button class="dashboard-tab" type="button" role="tab" aria-selected="false" aria-controls="dashboardTabBins" data-dashboard-tab="bins">[BIN ANALYTICS]</button>
+        </div>
+
+        <div id="dashboardTabOverview" class="dashboard-tab-panel dashboard-overview-panel" role="tabpanel" data-dashboard-panel="overview" hidden>
+          <div class="dashboard-kpi-grid metric-grid six">
+            <div class="metric dashboard-kpi dashboard-kpi-qty">
+              <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-play"></use></svg></span><span>Total Scan Qty</span></div>
+              <strong id="dashTotalScanQty">0</strong>
+            </div>
+            <div class="metric dashboard-kpi dashboard-kpi-stock">
+              <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-reports"></use></svg></span><span>Actual Stock Value</span></div>
+              <strong id="dashStockValueDlc">₹ 0.00</strong>
+            </div>
+            <div class="metric dashboard-kpi dashboard-kpi-multi">
+              <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-transfer"></use></svg></span><span>Parts in Multiple Locations</span></div>
+              <strong id="dashMultiBinParts">0</strong>
+            </div>
           </div>
-          <div class="metric dashboard-kpi dashboard-kpi-qty">
-            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-play"></use></svg></span><span>Total Scan Qty</span></div>
-            <strong id="dashTotalScanQty">0</strong>
-          </div>
-          <div class="metric dashboard-kpi dashboard-kpi-stock">
-            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-reports"></use></svg></span><span>Actual Stock Value</span></div>
-            <strong id="dashStockValueDlc">₹ 0.00</strong>
-          </div>
-          <div class="metric dashboard-kpi dashboard-kpi-damage">
-            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-validator"></use></svg></span><span>Damage Count</span></div>
-            <strong id="dashDamage">0</strong>
-          </div>
-          <div class="metric dashboard-kpi dashboard-kpi-duplicate">
-            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-sync"></use></svg></span><span>Duplicate Scans</span></div>
-            <strong id="dashDuplicates">0</strong>
-          </div>
-          <div class="metric dashboard-kpi dashboard-kpi-multi">
-            <div class="dashboard-kpi-head"><span class="dashboard-kpi-icon"><svg viewBox="0 0 24 24"><use href="#icon-transfer"></use></svg></span><span>Parts in Multiple Locations</span></div>
-            <strong id="dashMultiBinParts">0</strong>
+
+          <div class="dashboard-upper-grid dashboard-overview-grid">
+            <section class="card dashboard-chart-card">
+              <div class="card-head">
+                <h2>Scan Mix (Today)</h2>
+              </div>
+              <div class="dashboard-overview">
+                <div class="dashboard-overview-chart">
+                  <div id="dashboardOverviewRing" class="dashboard-overview-ring">
+                    <div class="dashboard-overview-center">
+                      <strong id="dashboardOverviewTotal">0</strong>
+                      <span>Total Scans</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="dashboard-overview-legend">
+                  <div class="dashboard-overview-item inward">
+                    <span class="dashboard-overview-dot"></span>
+                    <div><strong>Inward</strong><span id="dashboardOverviewInward">0 (0%)</span></div>
+                  </div>
+                  <div class="dashboard-overview-item outward">
+                    <span class="dashboard-overview-dot"></span>
+                    <div><strong>Outward</strong><span id="dashboardOverviewOutward">0 (0%)</span></div>
+                  </div>
+                  <div class="dashboard-overview-item manual">
+                    <span class="dashboard-overview-dot"></span>
+                    <div><strong>Manual</strong><span id="dashboardOverviewManual">0 (0%)</span></div>
+                  </div>
+                  <div class="dashboard-overview-item failed">
+                    <span class="dashboard-overview-dot"></span>
+                    <div><strong>Failed</strong><span id="dashboardOverviewFailed">0 (0%)</span></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="card dashboard-actions-card">
+              <div class="card-head">
+                <h2>Quick Tools</h2>
+              </div>
+              <div class="dashboard-actions-grid">
+                <button id="quickActionBinTransfer" class="btn dashboard-action-btn action-orange" type="button"><svg viewBox="0 0 24 24"><use href="#icon-transfer"></use></svg><span>Bin Transfer</span></button>
+                <button id="quickActionSyncNow" class="btn dashboard-action-btn action-cyan" type="button"><svg viewBox="0 0 24 24"><use href="#icon-sync"></use></svg><span>Sync Now</span></button>
+                <button id="quickActionRepairSync" class="btn dashboard-action-btn action-red" type="button"><svg viewBox="0 0 24 24"><use href="#icon-wrench"></use></svg><span>Repair Sync</span></button>
+              </div>
+            </section>
           </div>
         </div>
 
-        <div class="dashboard-upper-grid">
+        <div id="dashboardTabStream" class="dashboard-tab-panel dashboard-stream-panel active" role="tabpanel" data-dashboard-panel="stream">
+          <div class="dashboard-stream-toolbar">
+            <div class="dashboard-mini-kpis" aria-label="Last scan summary">
+              <div class="dashboard-mini-kpi dashboard-mini-kpi-blue">
+                <span>Total Scans</span>
+                <strong id="dashToday">45</strong>
+              </div>
+              <div class="dashboard-mini-kpi dashboard-mini-kpi-red">
+                <span>Duplicates</span>
+                <strong id="dashDuplicates">22</strong>
+              </div>
+              <div class="dashboard-mini-kpi dashboard-mini-kpi-orange">
+                <span>Damage Count</span>
+                <strong id="dashDamage">0</strong>
+              </div>
+              <button id="streamViewAll" class="dashboard-view-all-link" type="button">View All</button>
+            </div>
+            <div class="dashboard-primary-actions" aria-label="Primary dashboard actions">
+              <button id="quickActionStartScan" class="btn dashboard-primary-action dashboard-start-scan" type="button">[START SCAN]</button>
+              <button id="quickActionManualEntry" class="btn dashboard-primary-action dashboard-neutral-action" type="button">[MANUAL ENTRY]</button>
+              <button id="quickActionViewReports" class="btn dashboard-primary-action dashboard-neutral-action" type="button">[EXPORT DATA]</button>
+            </div>
+          </div>
+
+          <section class="card dashboard-card dashboard-stream-card">
+            <div class="dashboard-stream-table-scroll">
+              <table class="dashboard-data-table dashboard-stream-table dashboard-stream-table-v2">
+                <thead>
+                  <tr>
+                    <th data-col-key="time">Time</th>
+                    <th data-col-key="part-number">Part Number</th>
+                    <th data-col-key="description">Description</th>
+                    <th data-col-key="qty">Qty</th>
+                    <th data-col-key="mrp">MRP</th>
+                    <th data-col-key="bin-location">Bin Location</th>
+                  </tr>
+                </thead>
+                <tbody id="streamRows">
+                  <tr class="dashboard-skeleton-row"><td colspan="6"><span></span></td></tr>
+                  <tr class="dashboard-skeleton-row"><td colspan="6"><span></span></td></tr>
+                  <tr class="dashboard-skeleton-row"><td colspan="6"><span></span></td></tr>
+                  <tr class="dashboard-skeleton-row"><td colspan="6"><span></span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div id="dashboardTabSync" class="dashboard-tab-panel dashboard-sync-panel" role="tabpanel" data-dashboard-panel="sync" hidden>
           <section class="card dashboard-sync-card">
             <div class="card-head dashboard-sync-head">
               <h2>Sync Snapshot</h2>
@@ -206,78 +298,12 @@
               </div>
             </div>
           </section>
-
-          <section class="card dashboard-chart-card">
-            <div class="card-head">
-              <h2>Scan Mix (Today)</h2>
-            </div>
-            <div class="dashboard-overview">
-              <div class="dashboard-overview-chart">
-                <div id="dashboardOverviewRing" class="dashboard-overview-ring">
-                  <div class="dashboard-overview-center">
-                    <strong id="dashboardOverviewTotal">0</strong>
-                    <span>Total Scans</span>
-                  </div>
-                </div>
-              </div>
-              <div class="dashboard-overview-legend">
-                <div class="dashboard-overview-item inward">
-                  <span class="dashboard-overview-dot"></span>
-                  <div><strong>Inward</strong><span id="dashboardOverviewInward">0 (0%)</span></div>
-                </div>
-                <div class="dashboard-overview-item outward">
-                  <span class="dashboard-overview-dot"></span>
-                  <div><strong>Outward</strong><span id="dashboardOverviewOutward">0 (0%)</span></div>
-                </div>
-                <div class="dashboard-overview-item manual">
-                  <span class="dashboard-overview-dot"></span>
-                  <div><strong>Manual</strong><span id="dashboardOverviewManual">0 (0%)</span></div>
-                </div>
-                <div class="dashboard-overview-item failed">
-                  <span class="dashboard-overview-dot"></span>
-                  <div><strong>Failed</strong><span id="dashboardOverviewFailed">0 (0%)</span></div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="card dashboard-actions-card">
-            <div class="card-head">
-              <h2>Quick Actions</h2>
-            </div>
-            <div class="dashboard-actions-grid">
-              <button id="quickActionStartScan" class="btn dashboard-action-btn action-blue" type="button"><svg viewBox="0 0 24 24"><use href="#icon-play"></use></svg><span>Start Scan</span></button>
-              <button id="quickActionManualEntry" class="btn dashboard-action-btn action-green" type="button"><svg viewBox="0 0 24 24"><use href="#icon-pencil"></use></svg><span>Manual Entry</span></button>
-              <button id="quickActionViewReports" class="btn dashboard-action-btn action-purple" type="button"><svg viewBox="0 0 24 24"><use href="#icon-reports"></use></svg><span>View Reports</span></button>
-              <button id="quickActionBinTransfer" class="btn dashboard-action-btn action-orange" type="button"><svg viewBox="0 0 24 24"><use href="#icon-transfer"></use></svg><span>Bin Transfer</span></button>
-              <button id="quickActionSyncNow" class="btn dashboard-action-btn action-cyan" type="button"><svg viewBox="0 0 24 24"><use href="#icon-sync"></use></svg><span>Sync Now</span></button>
-              <button id="quickActionRepairSync" class="btn dashboard-action-btn action-red" type="button"><svg viewBox="0 0 24 24"><use href="#icon-wrench"></use></svg><span>Repair Sync</span></button>
-            </div>
-          </section>
         </div>
 
-        <div class="dashboard-lower-grid">
-          <section class="card dashboard-card dashboard-stream-card">
-            <div class="card-head">
-              <h2>Real-Time Scan Stream</h2>
-              <button id="streamViewAll" class="link-button" type="button">View All</button>
-            </div>
-            <div class="table-wrap compact-table dashboard-table-wrap dashboard-stream-wrap">
-              <table class="dashboard-data-table dashboard-stream-table">
-                <thead><tr><th data-col-key="time">Time</th><th data-col-key="part-number">Part Number</th><th data-col-key="description">Description</th><th data-col-key="qty">Qty</th><th data-col-key="mrp">MRP</th><th data-col-key="bin-location">Bin Location</th><th data-col-key="entry-source">Entry Source</th><th data-col-key="device-id">Device ID</th><th data-col-key="status">Status</th></tr></thead>
-                <tbody id="streamRows">
-                  <tr class="dashboard-skeleton-row"><td colspan="9"><span></span></td></tr>
-                  <tr class="dashboard-skeleton-row"><td colspan="9"><span></span></td></tr>
-                  <tr class="dashboard-skeleton-row"><td colspan="9"><span></span></td></tr>
-                  <tr class="dashboard-skeleton-row"><td colspan="9"><span></span></td></tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
-
+        <div id="dashboardTabBins" class="dashboard-tab-panel dashboard-bins-panel" role="tabpanel" data-dashboard-panel="bins" hidden>
           <section class="card dashboard-card dashboard-top-bins-card">
             <div class="card-head">
-              <h2>Top Bins by Scans</h2>
+              <h2>Bin Analytics</h2>
               <button id="topBinsViewAll" class="link-button" type="button">View All</button>
             </div>
             <div id="topBinsRows" class="dashboard-top-bins-list">
@@ -1546,8 +1572,8 @@
   <div id="toast" class="toast"></div>
 
   <script src="/config.js"></script>
-  <script src="/js/runtime.js?v=20260628-exact-qr-duplicate-v1"></script>
+  <script src="/js/runtime.js?v=20260629-smart-bin-popup-v1"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260628-exact-qr-duplicate-v1"></script>
+  <script src="/ui.js?v=20260629-smart-bin-popup-v1"></script>
 </body>
 </html>

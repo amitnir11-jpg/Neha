@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20260628-exact-qr-duplicate-v1';
+  const APP_VERSION = '20260629-smart-bin-popup-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -736,8 +736,8 @@
     const { useExisting, saveNew, select } = smartBinPromptNodes();
     const existingBin = clean((select && select.value) || payload.selectedBin || payload.existingBin || payload.suggestedBin || payload.primaryBin || '');
     const newBin = clean(payload.newBin || payload.currentBin || payload.binLocation || '');
-    if (useExisting) useExisting.textContent = existingBin ? `Use Bin ${existingBin}` : 'Use Existing Bin';
-    if (saveNew) saveNew.textContent = newBin ? `Save in New Bin (${newBin})` : 'Save in New Bin';
+    if (useExisting) useExisting.textContent = existingBin ? `Scan in ${existingBin}` : 'Scan in Existing Bin';
+    if (saveNew) saveNew.textContent = newBin ? `Continue with ${newBin}` : 'Continue with Current Bin';
   }
 
   function renderDuplicateAlert(message = '', existing = {}) {
@@ -2247,6 +2247,17 @@
 
     if (smartBinPreflightEligible(normalized) && navigator.onLine && state.session?.token) {
       await refreshLiveRecentScans({ force: true, reason: 'smart-bin-preflight' }).catch(() => undefined);
+      const refreshedLocalSuggestion = buildLocalSmartBinSuggestion(normalized);
+      if (refreshedLocalSuggestion?.shouldPrompt) {
+        const decision = await openSmartBinSuggestionModal({
+          ...refreshedLocalSuggestion,
+          currentBin: refreshedLocalSuggestion.currentBin || normalized.binLocation || normalized.bin || '',
+          newBin: refreshedLocalSuggestion.newBin || normalized.binLocation || normalized.bin || '',
+          existingBin: refreshedLocalSuggestion.existingBin || (Array.isArray(refreshedLocalSuggestion.existingBins) && refreshedLocalSuggestion.existingBins[0] && refreshedLocalSuggestion.existingBins[0].binLocation) || ''
+        });
+        if (!decision) return null;
+        return applySmartBinDecisionToRecord(normalized, refreshedLocalSuggestion, decision);
+      }
       try {
         const suggestion = await api('/api/scans/smart-bin-check', {
           method: 'POST',
@@ -2755,10 +2766,10 @@
     try {
       const duplicatePayload = {
         ...convertToSyncPayload(record),
-        allowCrossBinDuplicate: false,
-        smartBinAllowCrossBinDuplicate: false,
-        smartBinIsSecondaryLocation: false,
-        smartBinDecision: ''
+        allowCrossBinDuplicate: Boolean(record.allowCrossBinDuplicate || record.smartBinIsSecondaryLocation || record.smartBinDecision === 'SAVE_NEW_BIN'),
+        smartBinAllowCrossBinDuplicate: Boolean(record.allowCrossBinDuplicate || record.smartBinIsSecondaryLocation || record.smartBinDecision === 'SAVE_NEW_BIN'),
+        smartBinIsSecondaryLocation: Boolean(record.smartBinIsSecondaryLocation || record.smartBinDecision === 'SAVE_NEW_BIN'),
+        smartBinDecision: record.smartBinDecision || ''
       };
       const data = await api('/api/scan/check-duplicate', {
         method: 'POST',
@@ -3155,16 +3166,20 @@
     try {
       for (const row of batch) {
         try {
-          const duplicateResult = await checkBackendDuplicateBeforeSync(row, { timeoutMs: 5000 });
-          if (duplicateResult?.duplicate) {
-            await markDuplicateRecord(row, duplicateResult.existing || {}, duplicateResult.message || duplicateScanMessage(duplicateResult.existing || row));
-            duplicateCount += 1;
-            continue;
-          }
           const readyRow = await preflightSmartBinDecision(row);
           if (!readyRow) {
             await removeStoredQueueRecord(row);
             rejectedCount += 1;
+            continue;
+          }
+          if (readyRow !== row || readyRow.smartBinDecision) {
+            await putRecord(readyRow);
+            upsertStateRow(readyRow);
+          }
+          const duplicateResult = await checkBackendDuplicateBeforeSync(readyRow, { timeoutMs: 5000 });
+          if (duplicateResult?.duplicate) {
+            await markDuplicateRecord(readyRow, duplicateResult.existing || {}, duplicateResult.message || duplicateScanMessage(duplicateResult.existing || readyRow));
+            duplicateCount += 1;
             continue;
           }
           await saveRecordToServer(readyRow, { refreshRecent: false });
