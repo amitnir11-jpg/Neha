@@ -199,6 +199,7 @@ function activeUpiDuplicateFilter(input = {}) {
   if (globalKey) terms.push({ globalUpiKey: globalKey });
   const filter = {
     deletedAt: null,
+    isDeleted: { $ne: true },
     syncStatus: { $nin: EXCLUDED_SYNC_STATUSES },
     $nor: [{ scanType: 'VERIFICATION' }, { type: 'VERIFICATION' }],
     $or: terms.length ? terms : [{ upiCode: '__NO_UPI__' }]
@@ -256,7 +257,9 @@ function countedScanClause() {
   return {
     scanStatus: { $in: COUNTED_SCAN_STATUSES },
     syncStatus: 'synced',
-    isDuplicate: { $ne: true }
+    isDuplicate: { $ne: true },
+    isDeleted: { $ne: true },
+    deletedAt: null
   };
 }
 

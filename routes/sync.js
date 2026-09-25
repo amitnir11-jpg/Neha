@@ -1,6 +1,7 @@
 const express = require('express');
 const { randomUUID } = require('crypto');
 const Inventory = require('../models/Inventory');
+const DealerStock = require('../models/DealerStock');
 const Bin = require('../models/Bin');
 const MasterPart = require('../models/MasterPart');
 const Dealer = require('../models/Dealer');
@@ -36,12 +37,14 @@ const {
 } = require('../utils/inventoryMovementState');
 const { isDatabaseReady } = require('../services/prisma');
 const { invalidateCache } = require('../utils/safeCache');
+const scanModification = require('../services/ScanModificationService');
 const {
   MISSING_PART_MASTER_PRICE_MESSAGE,
   getPriceFromPartMaster,
   masterPriceMissing,
   masterPriceScanFields,
-  priceFromPartMasterRecord
+  priceFromPartMasterRecord,
+  savedAuditPrice
 } = require('../utils/partMasterPrice');
 
 const router = express.Router();
@@ -88,8 +91,19 @@ function upper(value) {
   return clean(value).toUpperCase();
 }
 
-async function getMasterPrice(partNumber, dealerCode = '', master = null) {
-  return getPriceFromPartMaster(partNumber, dealerCode);
+async function getMasterPrice(partNumber, dealerCode = '', master = null, auditId = '') {
+  const current = await getPriceFromPartMaster(partNumber, dealerCode);
+  if (!auditId) return current;
+  const part = normalizePartNo(partNumber);
+  const filter = {
+    dealerCode: upper(dealerCode), auditId: clean(auditId),
+    $or: [{ normalizedPartNumber: part }, { partNumber: part }, { part }]
+  };
+  const [savedScan, savedStock] = await Promise.all([
+    Inventory.findOne(filter).sort({ timestamp: 1, createdAt: 1 }).lean(),
+    DealerStock.findOne(filter).sort({ createdAt: 1 }).lean()
+  ]);
+  return savedAuditPrice(savedScan || savedStock, current || master) || current;
 }
 
 function validDate(value) {
@@ -164,10 +178,26 @@ async function userByContext(context = {}) {
 async function resolveScanUserContext(req = {}, scan = {}) {
   const body = req.body || {};
   const context = {};
-  applyUserContext(context, scan.source || {});
-  applyUserContext(context, body);
-  applyUserContext(context, req.user || {});
-  applyUserContext(context, scan);
+  if (req.user) {
+    applyUserContext(context, req.user);
+    context.userId = clean(req.user.id || req.user._id || context.userId);
+    context.loginId = clean(req.user.username || req.user.email || context.loginId).toLowerCase();
+    context.userName = clean(req.user.name || req.user.username || context.userName);
+    context.staffName = context.userName;
+    context.role = auth.normalizeRole(req.user.role);
+  } else {
+    // Never trust a role supplied by an offline payload. Resolve identity from
+    // the authenticated request or the server-side user record only.
+    const sourceWithoutRole = { ...(scan.source || {}) };
+    const bodyWithoutRole = { ...body };
+    const scanWithoutRole = { ...scan };
+    delete sourceWithoutRole.role;
+    delete bodyWithoutRole.role;
+    delete scanWithoutRole.role;
+    applyUserContext(context, sourceWithoutRole);
+    applyUserContext(context, bodyWithoutRole);
+    applyUserContext(context, scanWithoutRole);
+  }
 
   const deviceId = clean(scan.deviceId || body.deviceId);
   if (deviceId) {
@@ -177,7 +207,10 @@ async function resolveScanUserContext(req = {}, scan = {}) {
 
   if (!context.userId || !context.userName || !context.role) {
     const user = await userByContext(context).catch(() => null);
-    if (user) applyUserContext(context, user);
+    if (user) {
+      applyUserContext(context, user);
+      context.role = auth.normalizeRole(user.role);
+    }
   }
 
   return context;
@@ -251,6 +284,8 @@ async function autoDetectOutwardBin(scan = {}) {
     scanStatus: { $in: acceptedStatuses() },
     syncStatus: 'synced',
     isDuplicate: { $ne: true },
+    isDeleted: { $ne: true },
+    deletedAt: null,
     $or: [
       { normalizedPartNumber: partNumber },
       { partNumber },
@@ -373,7 +408,8 @@ function outwardDoneFilter(raw, scan = {}) {
 }
 
 function scanRole(req, scan = {}) {
-  return clean(scan.role || scan.source?.role || req.user?.role || '').toLowerCase();
+  if (req.user) return auth.normalizeRole(req.user.role);
+  return '';
 }
 
 function scanUserName(req, scan = {}) {
@@ -382,7 +418,7 @@ function scanUserName(req, scan = {}) {
 
 function roleScanError(role, scanType) {
   if (!role) return '';
-  if (role === 'admin' || role === 'supervisor') return '';
+  if (['admin', 'audit_user', 'mobile_user'].includes(auth.normalizeRole(role))) return '';
   if (role === 'outward_counter') return scanType === 'OUTWARD' ? '' : 'Outward Counter can only perform OUTWARD scans';
   if (role === 'scanner') return scanType === 'OUTWARD' ? 'Scanner users cannot perform OUTWARD scans' : '';
   return '';
@@ -582,9 +618,11 @@ function manualDuplicatePayload(existing = {}, requestedQty = 1) {
 }
 
 async function addFittedQuantity(existing = {}, scan = {}, req = {}) {
+  if (!req.user || auth.normalizeRole(req.user.role) !== 'admin') return { error: 'Admin permission required.' };
+  if (existing.isDeleted === true) return { error: 'Deleted scans must be restored before quantity can be changed.' };
   const addQty = requestedQuantity(scan, 1);
   if (!(addQty > 0)) return { error: 'Quantity to add must be greater than zero.' };
-  const updated = await Inventory.findByIdAndUpdate(existing._id, {
+  const updated = await scanModification.updateScan(existing, {
     $inc: { qty: addQty, quantity: addQty, fittedQty: addQty },
     $set: {
       fittedLocation: 'VEHICLE',
@@ -593,7 +631,11 @@ async function addFittedQuantity(existing = {}, scan = {}, req = {}) {
       synced: true,
       isSynced: true
     }
-  }, { new: true }).lean();
+  }, req, {
+    action: 'UPDATE',
+    reason: scan.reason || scan.source?.reason,
+    remarks: scan.remarks || scan.source?.remarks
+  });
   const publicRow = publicScanRow(updated || existing);
   const io = req.io || (req.app && typeof req.app.get === 'function' ? req.app.get('io') : null);
   invalidateScanCaches(publicRow);
@@ -635,13 +677,18 @@ async function confirmedDuplicateUpdate(policy = {}, scan = {}, req = {}) {
       return { status: 'failed', httpStatus: 400, scan: policy.existing || scan, error: 'Manual quantity update is not available.' };
     }
     const addQty = requestedQuantity(scan, 1);
-    const result = await inventory.addManualQuantity(policy.existing, {
-      ...source,
-      ...scan,
-      qty: addQty,
-      quantity: addQty,
-      manualAddRequestId: source.manualAddRequestId || scan.manualAddRequestId || scan.uniqueScanId || scan.scanId || scan.clientScanId || scan.syncKey
-    }, req);
+    let result;
+    try {
+      result = await inventory.addManualQuantity(policy.existing, {
+        ...source,
+        ...scan,
+        qty: addQty,
+        quantity: addQty,
+        manualAddRequestId: source.manualAddRequestId || scan.manualAddRequestId || scan.uniqueScanId || scan.scanId || scan.clientScanId || scan.syncKey
+      }, req);
+    } catch (error) {
+      return { status: 'failed', httpStatus: error.status || 500, scan: policy.existing || scan, error: error.message };
+    }
     if (result.error) return { status: 'failed', httpStatus: 400, scan: policy.existing || scan, error: result.error };
     const newQty = numericValue(result.updated.qty !== undefined ? result.updated.qty : result.updated.quantity, 0);
     return {
@@ -660,7 +707,12 @@ async function confirmedDuplicateUpdate(policy = {}, scan = {}, req = {}) {
     };
   }
   if (policy.fittedDuplicate && hasScanFlag(scan, ['addFittedQuantity', 'confirmAddQuantity'])) {
-    const result = await addFittedQuantity(policy.existing, scan, req);
+    let result;
+    try {
+      result = await addFittedQuantity(policy.existing, scan, req);
+    } catch (error) {
+      return { status: 'failed', httpStatus: error.status || 500, scan: policy.existing || scan, error: error.message };
+    }
     if (result.error) return { status: 'failed', httpStatus: 400, scan: policy.existing || scan, error: result.error };
     const newQty = numericValue(result.updated.qty !== undefined ? result.updated.qty : result.updated.quantity, 0);
     return {
@@ -684,14 +736,13 @@ function valuationFields({ masterPrice = null, master = null, qty = 0 } = {}) {
   return masterPriceScanFields(price, qty);
 }
 
-async function backfillDuplicateMrp(existing = {}, scan = {}) {
-  if (!existing || !existing._id) return existing;
-  const masterPrice = await getMasterPrice(scan.partNumber || existing.partNumber || existing.part, scan.dealerCode || existing.dealerCode, null).catch(() => null);
-  if (masterPriceMissing(masterPrice)) return existing;
-  const quantity = Number(existing.quantity || existing.qty || scan.quantity || 1);
-  const update = masterPriceScanFields(masterPrice, quantity);
-  await Inventory.updateOne({ _id: existing._id }, { $set: update });
-  return { ...existing, ...update };
+async function backfillDuplicateMrp(existing = {}, scan = {}, options = {}) {
+  // Duplicate detection must not mutate a saved scan. Price corrections go
+  // through the explicit Admin correction endpoint, which requires a reason
+  // and writes a before/after ScanAuditLog snapshot.
+  void scan;
+  void options;
+  return existing;
 }
 
 function makeScanId(item = {}, timestamp = new Date()) {
@@ -801,9 +852,15 @@ function normalizeScan(item = {}) {
   const scanSource = normalizeSource(item.source?.source || item.source?.scanSource || item.scanSource || item.source, 'mobile');
   const rawHasValue = Boolean(rawScan);
   const explicitPartNumber = firstValue(item, ['partNumber', 'partNo', 'part', 'sku', 'itemCode']);
-  const partNumber = normalizePartNumber(scanSource === 'manual'
-    ? (explicitPartNumber || parsed.part)
-    : (parsed.part || (rawHasValue ? '' : explicitPartNumber)));
+  const explicitPart = normalizePartNumber(explicitPartNumber);
+  const parsedPart = normalizePartNumber(parsed.part);
+  const partNumber = scanSource === 'manual'
+    ? normalizePartNumber(explicitPart || parsedPart)
+    : normalizePartNumber(
+      (explicitPart && isValidPartNumber(explicitPart) ? explicitPart : '') ||
+      (parsedPart && isValidPartNumber(parsedPart) ? parsedPart : '') ||
+      (rawHasValue ? '' : explicitPart)
+    );
   const scanType = normalizeScanType(item.scanType || item.action || item.type || item.movement || parsed.type || 'INWARD');
   const binLocation = clean(item.binLocation || item.bin || item.location || parsed.bin);
   const regdNo = upper(item.regdNo || item.regNo || item.registrationNo || item.regdNumber || item.vehicleRegNo);
@@ -838,7 +895,7 @@ function normalizeScan(item = {}) {
     : booleanFlag(item.smartBinAllowMultipleLocations);
   const smartBinMaxAllowedLocationsPerPart = item.smartBinMaxAllowedLocationsPerPart === undefined
     ? undefined
-    : Math.max(1, numberValue(item.smartBinMaxAllowedLocationsPerPart, 3) || 3);
+    : Math.max(1, numericValue(item.smartBinMaxAllowedLocationsPerPart, 3) || 3);
   const smartBinReasonRequired = item.smartBinReasonRequired === undefined
     ? undefined
     : booleanFlag(item.smartBinReasonRequired);
@@ -1193,7 +1250,7 @@ function applyActiveAudit(scan, activeAudit) {
 
 function duplicateQuery(scan) {
   if (upper(scan.scanType || scan.type) === 'FITTED') {
-    return inventory.fittedIdentityFilter(scan) || { uniqueScanId: '__missing__' };
+    return (inventory.fittedAnyIdentityFilter ? inventory.fittedAnyIdentityFilter(scan) : inventory.fittedIdentityFilter(scan)) || { uniqueScanId: '__missing__' };
   }
   if (isManualEntry(scan)) {
     const scanId = clean(scan.uniqueScanId || scan.scanId);
@@ -1325,6 +1382,37 @@ async function emitEnterpriseRealtime(io, scans = []) {
   logSync('socket broadcast success', { count: publicScans.length, events: ['scan:new', 'scan:saved', 'scanData', 'reports:update', 'syncData', 'dashboard:update'] });
 }
 
+async function findManualPartBinDuplicate(scan = {}) {
+  if (!isManualEntry(scan) || upper(scan.scanType) !== 'INWARD') return null;
+  const dealerCode = upper(scan.dealerCode || '');
+  const auditId = clean(scan.auditId || '');
+  const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part || '');
+  const binLocation = upper(scan.binLocation || scan.bin || '');
+  if (!dealerCode || !auditId || !partNumber || !binLocation) return null;
+
+  const excludedIds = [scan.uniqueScanId, scan.scanId, scan.syncKey]
+    .map((value) => clean(value))
+    .filter(Boolean);
+  const query = {
+    dealerCode,
+    auditId,
+    scanType: 'INWARD',
+    isDuplicate: { $ne: true },
+    isDeleted: { $ne: true },
+    deletedAt: null,
+    syncStatus: { $ne: 'failed' },
+    $and: [
+      { $or: [{ normalizedPartNumber: partNumber }, { partNumber }, { part: partNumber }] },
+      { $or: [{ binLocation }, { bin: binLocation }] }
+    ]
+  };
+  if (excludedIds.length) {
+    query.uniqueScanId = { $nin: excludedIds };
+    query.scanId = { $nin: excludedIds };
+  }
+  return Inventory.findOne(query).sort({ timestamp: 1, createdAt: 1 }).lean();
+}
+
 async function scanPolicyResult(scan = {}) {
   scan.globalUpiKey = scan.globalUpiKey || duplicatePolicy.globalUpiKey(scan);
   const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(scan);
@@ -1357,6 +1445,19 @@ async function scanPolicyResult(scan = {}) {
     }
     return { ok: true };
   }
+  const manualDuplicate = await findManualPartBinDuplicate(scan);
+  if (manualDuplicate) {
+    const requestedQty = requestedQuantity(scan, 1);
+    const payload = manualDuplicatePayload(manualDuplicate, requestedQty);
+    return {
+      ok: false,
+      status: 'duplicate',
+      existing: manualDuplicate,
+      ...payload,
+      reason: payload.message,
+      message: payload.message
+    };
+  }
   scan.rawUpiHash = scan.rawUpiHash || duplicatePolicy.rawUpiHash(scan);
   const identityFilter = duplicatePolicy.identityDuplicateFilter(scan);
   const identityDuplicate = identityFilter ? await Inventory.findOne(identityFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
@@ -1384,6 +1485,18 @@ async function saveNormalizedScan(scan, req) {
   }
   applyActiveAudit(scan, activeAudit);
   applyUserContext(scan, await resolveScanUserContext(req, scan));
+  const trustedUser = req.user || {};
+  if (trustedUser.id || trustedUser._id) {
+    scan.userId = clean(trustedUser.id || trustedUser._id);
+    scan.loginId = clean(trustedUser.username || trustedUser.email).toLowerCase();
+    scan.userName = clean(trustedUser.name || trustedUser.username);
+    scan.staffName = scan.userName;
+    scan.createdBy = scan.userId;
+    scan.createdByUsername = scan.loginId;
+    scan.createdByName = scan.userName;
+    scan.createdByRole = auth.normalizeRole(trustedUser.role);
+    scan.role = scan.createdByRole;
+  }
   if (scan.scanType === 'VERIFICATION') {
     const result = await inventory.verifyPartOnly({
       rawScan: scan.rawScanString,
@@ -1414,7 +1527,7 @@ async function saveNormalizedScan(scan, req) {
 
   const dealer = scan.dealerCode ? await Dealer.findOne({ dealerCode: scan.dealerCode }).lean() : null;
   const manualEntry = isManualEntry(scan);
-  const masterPrice = master ? await getMasterPrice(scan.partNumber, scan.dealerCode, master) : null;
+  const masterPrice = master ? await getMasterPrice(scan.partNumber, scan.dealerCode, master, scan.auditId) : null;
   const valueFields = valuationFields({ masterPrice, master, qty: scan.quantity || 1 });
 
   const errors = [];
@@ -1728,6 +1841,10 @@ async function syncSummary(activePort, dealerCode = '', req = null) {
     ip: info.ip,
     port: info.port,
     serverUrl: info.serverUrl,
+    scanUrl: info.scanUrl,
+    mobileWebUrl: info.mobileWebUrl,
+    mobileScannerUrl: info.mobileScannerUrl,
+    legacyMobileScannerUrl: info.legacyMobileScannerUrl,
     healthUrl: info.healthUrl,
     connectUrl: info.connectUrl,
     syncUrl: info.syncUrl
@@ -1742,7 +1859,7 @@ async function pushHandler(req, res) {
   try {
     const body = Array.isArray(req.body) ? { scans: req.body } : req.body || {};
     if (isLocalhostUrl(body.serverUrl)) {
-      return res.status(400).json({ success: false, message: 'Do not use localhost on mobile. Use the cloud server URL from pairing QR.' });
+      return res.status(400).json({ success: false, message: 'Use automatic discovery, daksh.local, or the temporary pairing QR for the mobile server URL.' });
     }
 
     const incomingRaw = incomingScansFromBody(body);
@@ -2067,7 +2184,7 @@ async function pushHandler(req, res) {
     for (const { index, scan } of normalized) {
       const master = masterByDealer.get(`${scan.normalizedPartNumber || scan.partNumber}::${upper(scan.dealerCode)}`) || masterByPart.get(scan.normalizedPartNumber || scan.partNumber);
       const manualEntry = isManualEntry(scan);
-      const masterPrice = master ? await getMasterPrice(scan.partNumber, scan.dealerCode, master) : null;
+      const masterPrice = master ? await getMasterPrice(scan.partNumber, scan.dealerCode, master, scan.auditId) : null;
       logSync('row normalized', {
         rawScanReceived: scan.rawScanString || scan.partNumber || '',
         extractedPartNumber: scan.partNumber || '',
@@ -2183,7 +2300,7 @@ async function pushHandler(req, res) {
         if (fittedKey) duplicateScanIds.add(fittedKey);
         if (globalUpiKey) duplicateScanIds.add(globalUpiKey);
         let existingIdentity = activeDuplicate || existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(globalUpiKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.scanId) || existingIdentityByKey.get(scan.syncKey) || existingIdentityByKey.get(scan.qrFingerprint) || {};
-        existingIdentity = await backfillDuplicateMrp(existingIdentity, scan, { manualEntry });
+        existingIdentity = await backfillDuplicateMrp(existingIdentity, scan, { manualEntry, req });
         const duplicateMessage = activeDuplicate
           ? duplicatePolicy.duplicateUpiMessage(existingIdentity)
           : fittedKey
@@ -2201,6 +2318,50 @@ async function pushHandler(req, res) {
           existing: existingIdentity || 'same request batch'
         });
         logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'duplicate', duplicateMessage));
+        continue;
+      }
+      const manualPartBinDuplicate = manualEntry ? await findManualPartBinDuplicate(scan) : null;
+      if (manualPartBinDuplicate) {
+        const requestedQty = requestedQuantity(scan, 1);
+        const manualPolicy = {
+          ok: false,
+          status: 'duplicate',
+          existing: manualPartBinDuplicate,
+          ...manualDuplicatePayload(manualPartBinDuplicate, requestedQty)
+        };
+        const confirmedUpdate = await confirmedDuplicateUpdate(manualPolicy, scan, req);
+        if (confirmedUpdate && confirmedUpdate.status === 'synced') {
+          const statusMessage = confirmedUpdate.message || 'Manual quantity updated';
+          logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'synced', statusMessage));
+          if (scan.uniqueScanId) duplicateScanIds.add(scan.uniqueScanId);
+          if (scan.scanId) duplicateScanIds.add(scan.scanId);
+          if (scan.syncKey) duplicateScanIds.add(scan.syncKey);
+          logSync('manual quantity updated from mobile bulk sync', {
+            row: index + 1,
+            scanId: scan.uniqueScanId,
+            partNumber: scan.partNumber,
+            binLocation: scan.binLocation,
+            addedQuantity: confirmedUpdate.addedQuantity,
+            newQuantity: confirmedUpdate.newQuantity
+          });
+          continue;
+        }
+        if (confirmedUpdate && confirmedUpdate.status === 'failed') {
+          const reason = confirmedUpdate.error || 'Saved scan quantity update failed';
+          failedRows.push({ row: index + 1, scanId: scan.uniqueScanId, partNumber: scan.partNumber, reason, status: 'failed' });
+          errors.push(reason);
+          logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'failed', reason));
+          continue;
+        }
+        const duplicateMessage = manualPolicy.message || 'Manual part already exists in this bin';
+        logDuplicateScan(scan, manualPartBinDuplicate, duplicateMessage).catch(() => undefined);
+        logs.push(syncLogFromAck(scan, ackMetaFromScan(scan, index + 1), 'duplicate', duplicateMessage));
+        logSync('manual same-bin duplicate skipped from mobile bulk sync', {
+          row: index + 1,
+          scanId: scan.uniqueScanId,
+          partNumber: scan.partNumber,
+          binLocation: scan.binLocation
+        });
         continue;
       }
       if (scan.uniqueScanId) duplicateScanIds.add(scan.uniqueScanId);
@@ -2571,10 +2732,10 @@ async function pushHandler(req, res) {
   }
 }
 
-router.post('/push', auth.optionalAuth, pushHandler);
-router.post('/mobile', auth.optionalAuth, pushHandler);
+router.post('/push', auth.requireAuth, pushHandler);
+router.post('/mobile', auth.requireAuth, pushHandler);
 
-router.get('/status', auth.optionalAuth, async (req, res) => {
+router.get('/status', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = auth.normalizeAccessCode(req.query.activeDealerId || req.query.dealerId || req.query.dealerCode || '');
     if (req.user && dealerCode) {
@@ -2643,7 +2804,7 @@ router.get('/debug/latest', auth.requireAuth, auth.requireAdmin, async (req, res
   }
 });
 
-router.post('/retry', auth.optionalAuth, async (req, res) => {
+router.post('/retry', auth.requireAuth, async (req, res) => {
   req.body.records = Array.isArray(req.body.records) ? req.body.records : [];
   return pushHandler(req, res);
 });

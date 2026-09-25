@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -23,16 +25,30 @@ class _ServerQrScreenState extends State<ServerQrScreen> {
     super.dispose();
   }
 
-  void _onDetect(BarcodeCapture capture) {
+  Future<void> _onDetect(BarcodeCapture capture) async {
     if (_handled) return;
     final raw = capture.barcodes.map((barcode) => barcode.rawValue).firstWhere(
         (value) => value != null && value.trim().isNotEmpty,
         orElse: () => null);
     if (raw == null) return;
+    Map<String, dynamic>? payload;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) payload = Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    if (payload != null) {
+      final pairing = payload;
+      final url = SettingsStore.serverUrlFromPayload(pairing);
+      if (url.isEmpty) return;
+      _handled = true;
+      await SettingsStore().savePairingPayload(pairing);
+      if (mounted) Navigator.of(context).pop(url);
+      return;
+    }
     final url = SettingsStore.normalizeServerUrl(raw);
     if (url.isEmpty) return;
     _handled = true;
-    Navigator.of(context).pop(url);
+    if (mounted) Navigator.of(context).pop(url);
   }
 
   @override

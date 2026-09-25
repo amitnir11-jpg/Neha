@@ -1,11 +1,13 @@
 (function () {
-  const APP_VERSION = '20260629-smart-bin-popup-v1';
+  const APP_VERSION = '2.0.26';
   const SERVICE_WORKER_VERSION = APP_VERSION;
+  const VERSION_RELOAD_KEY = 'dakshVersionReloadAttempt';
   const PRESERVED_LOCAL_KEYS = new Set([
     'dakshToken',
     'dakshUser',
     'dakshDeviceId',
-    'dakshRememberMe'
+    'dakshRememberMe',
+    VERSION_RELOAD_KEY
   ]);
   const PRESERVED_LOCAL_PREFIXES = ['dakshInventorySyncQueue'];
 
@@ -16,6 +18,30 @@
   function serverVersion() {
     const config = window.DAKSH_CONFIG || {};
     return clean(config.appVersion || config.webScannerBuild || config.mobileAppVersion || config.version || '');
+  }
+
+  function storageGet(key) {
+    try {
+      return window.localStorage ? localStorage.getItem(key) || '' : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      if (window.localStorage) localStorage.setItem(key, value);
+    } catch (_) {}
+  }
+
+  function storageRemove(key) {
+    try {
+      if (window.localStorage) localStorage.removeItem(key);
+    } catch (_) {}
+  }
+
+  function versionReloadSignature(build) {
+    return `${APP_VERSION}->${clean(build)}`;
   }
 
   async function clearBrowserCacheStorage() {
@@ -59,13 +85,22 @@
     await unregisterServiceWorkers();
   }
 
-  async function refreshForVersionMismatch(serverBuild = '', { quiet = false } = {}) {
+  async function refreshForVersionMismatch(serverBuild = '') {
     const build = clean(serverBuild);
-    if (!build || build === APP_VERSION) return false;
-    if (!quiet) {
-      const confirmed = window.confirm('New update available. Please refresh application.');
-      if (!confirmed) return true;
+    if (!build) return false;
+    if (build === APP_VERSION) {
+      storageRemove(VERSION_RELOAD_KEY);
+      return false;
     }
+    const signature = versionReloadSignature(build);
+    if (storageGet(VERSION_RELOAD_KEY) === signature) {
+      console.warn('[DAKSH_RUNTIME] Version mismatch remained after reload; continuing without another reload.', {
+        appVersion: APP_VERSION,
+        serverBuild: build
+      });
+      return false;
+    }
+    storageSet(VERSION_RELOAD_KEY, signature);
     await clearClientCaches().catch(() => undefined);
     window.location.reload();
     return true;

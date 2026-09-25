@@ -1,4 +1,5 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const auth = require('./auth');
 
@@ -24,7 +25,7 @@ router.post(['/', '/create'], async (req, res) => {
     const approved = req.body.approved !== false && req.body.approved !== 'false';
     const active = req.body.active !== false && req.body.active !== 'false' && req.body.isActive !== false && req.body.isActive !== 'false';
     const user = await auth.createUserFromPayload(req.body, {
-      role: req.body.role || 'staff',
+      role: auth.normalizeRole(req.body.role || 'audit_user'),
       active,
       approved,
       approvedBy: req.user.username || req.user.name || 'admin'
@@ -43,7 +44,7 @@ router.put('/:id', async (req, res) => {
       username: auth.cleanUsername(req.body.username || req.body.userId || req.body.email),
       email: String(req.body.email || req.body.userId || '').trim().toLowerCase(),
       mobileNumber: String(req.body.mobileNumber || req.body.mobile || '').trim(),
-      role: auth.ROLES.includes(req.body.role) ? req.body.role : 'staff',
+      role: auth.normalizeRole(req.body.role || 'audit_user'),
       responsibility: String(req.body.responsibility || '').trim(),
       dealerAccess: auth.normalizeDealerAccess(req.body.dealerAccess),
       active: req.body.active !== false && req.body.active !== 'false',
@@ -64,6 +65,53 @@ router.put('/:id', async (req, res) => {
     return res.status(400).json({ success: false, message: error.message });
   }
 });
+
+async function resetUserSecret(req, res) {
+  try {
+    const password = String(req.body.password || '').trim();
+    const pin = String(req.body.pin || '').trim();
+    if (!password && !pin) {
+      return res.status(400).json({ success: false, message: 'Password or 4-digit PIN is required' });
+    }
+    if (pin && !/^\d{4}$/.test(pin)) {
+      return res.status(400).json({ success: false, message: 'PIN must be exactly 4 digits' });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    if (password) {
+      const passwordHash = await bcrypt.hash(password, 10);
+      user.passwordHash = passwordHash;
+      user.password = passwordHash;
+    }
+    if (pin) {
+      const pinHash = await bcrypt.hash(pin, 10);
+      user.pinHash = pinHash;
+      user.pin = pinHash;
+    }
+    user.forcePasswordChange = req.body.forcePasswordChange === true || req.body.forcePasswordChange === 'true';
+    user.resetOtpHash = '';
+    user.resetTokenHash = '';
+    user.resetExpiresAt = undefined;
+    user.resetRequestedAt = undefined;
+    await user.save();
+
+    const dealerAccess = await auth.userDealerAccessCodes(user);
+    return res.json({
+      success: true,
+      user: { ...auth.cleanPublicUser(user), dealerAccess },
+      message: password && pin ? 'Password and PIN reset' : password ? 'Password reset' : 'PIN reset'
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+router.put('/:id/password', resetUserSecret);
+router.post('/:id/password', resetUserSecret);
+router.put('/:id/reset-password', resetUserSecret);
+router.post('/:id/reset-password', resetUserSecret);
 
 router.put('/:id/approve', async (req, res) => {
   try {
@@ -98,7 +146,7 @@ router.put('/:id/block', async (req, res) => {
 
 router.put('/:id/role', async (req, res) => {
   try {
-    const role = auth.ROLES.includes(req.body.role) ? req.body.role : '';
+    const role = auth.ROLES.includes(auth.normalizeRole(req.body.role, '')) ? auth.normalizeRole(req.body.role, '') : '';
     if (!role) return res.status(400).json({ success: false, message: 'Valid role is required' });
     const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });

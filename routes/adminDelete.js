@@ -8,6 +8,7 @@ const BinTransferHistory = require('../models/BinTransferHistory');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const auth = require('./auth');
 const inventory = require('./inventory');
+const scanModification = require('../services/ScanModificationService');
 const { normalizePartNumber } = require('../utils/normalize');
 
 const router = express.Router();
@@ -59,8 +60,13 @@ function criteriaParts(body = {}) {
   return Array.from(new Set(parts));
 }
 
+function undeletedScans(filter = {}) {
+  // Archived scans remain stored for restore/history, but cannot be deleted again.
+  return { ...filter, isDeleted: { $ne: true }, deletedAt: null };
+}
+
 function scanFilter(body = {}) {
-  const filter = { dealerCode: dealerCode(body.dealerCode), ...dateFilter(body) };
+  const filter = undeletedScans({ dealerCode: dealerCode(body.dealerCode), ...dateFilter(body) });
   const parts = criteriaParts(body);
   const type = String(body.deleteType || '').toLowerCase();
   if (parts.length && ['single-part', 'multiple-parts'].includes(type)) Object.assign(filter, partFilter(parts));
@@ -109,7 +115,7 @@ async function countForCriteria(body = {}) {
   const scanIdQuery = byIds ? idFilter(body.ids) : null;
   const counts = { scanCount: 0, masterCount: 0, binCount: 0, transferCount: 0, dealerCount: 0 };
   if (byIds && scanIdQuery) {
-    counts.scanCount = await Inventory.countDocuments({ dealerCode: dealerCode(body.dealerCode), ...scanIdQuery });
+    counts.scanCount = await Inventory.countDocuments(undeletedScans({ dealerCode: dealerCode(body.dealerCode), ...scanIdQuery }));
     counts.totalCount = counts.scanCount;
     return counts;
   }
@@ -120,7 +126,7 @@ async function countForCriteria(body = {}) {
   } else if (type === 'master-parts') {
     counts.masterCount = await MasterPart.countDocuments(masterFilter(body));
   } else if (type === 'full-dealer-data') {
-    counts.scanCount = await Inventory.countDocuments({ dealerCode: dealerCode(body.dealerCode) });
+    counts.scanCount = await Inventory.countDocuments(undeletedScans({ dealerCode: dealerCode(body.dealerCode) }));
     counts.masterCount = await MasterPart.countDocuments(masterFilter(body));
     counts.binCount = await Bin.countDocuments(binFilter(body));
     counts.transferCount = await BinTransferHistory.countDocuments(transferFilter(body));
@@ -184,7 +190,10 @@ router.post('/delete-selected', auth.requireAuth, auth.requireAdmin, async (req,
     const filter = idFilter(req.body.ids || []);
     if (!code) return res.status(400).json({ success: false, message: 'Dealer Code required' });
     if (!filter) return res.status(400).json({ success: false, message: 'Select rows to delete' });
-    const result = await Inventory.deleteMany({ dealerCode: code, ...filter });
+    const result = await scanModification.softDeleteScans(undeletedScans({ dealerCode: code, ...filter }), req, {
+      reason: req.body?.reason,
+      remarks: req.body?.remarks
+    });
     const duplicateResult = await DuplicateScanLog.deleteMany({ dealerCode: code, ...filter });
     req.io.emit('scan:deleted');
     req.io.emit('stats:update');
@@ -201,14 +210,20 @@ router.post('/delete-all-dealer', auth.requireAuth, auth.requireAdmin, async (re
     const type = String(req.body.deleteType || '').toLowerCase();
     const result = { scansDeleted: 0, duplicateLogsDeleted: 0, masterDeleted: 0, binsDeleted: 0, transferDeleted: 0, dealersDeleted: 0, verificationDeleted: 0 };
     if (['single-part', 'multiple-parts', 'selected-parts', 'all-scan-data', 'unknown-not-master'].includes(type)) {
-      result.scansDeleted = (await Inventory.deleteMany(scanFilter(req.body))).deletedCount || 0;
+      result.scansDeleted = (await scanModification.softDeleteScans(scanFilter(req.body), req, {
+        reason: req.body?.reason,
+        remarks: req.body?.remarks
+      })).deletedCount || 0;
       result.duplicateLogsDeleted = (await DuplicateScanLog.deleteMany(duplicateLogFilter(req.body))).deletedCount || 0;
     } else if (type === 'bin-data') {
       result.binsDeleted = (await Bin.deleteMany(binFilter(req.body))).deletedCount || 0;
     } else if (type === 'master-parts') {
       result.masterDeleted = (await MasterPart.deleteMany(masterFilter(req.body))).deletedCount || 0;
     } else if (type === 'full-dealer-data') {
-      result.scansDeleted = (await Inventory.deleteMany({ dealerCode: code })).deletedCount || 0;
+      result.scansDeleted = (await scanModification.softDeleteScans(undeletedScans({ dealerCode: code }), req, {
+        reason: req.body?.reason,
+        remarks: req.body?.remarks
+      })).deletedCount || 0;
       result.duplicateLogsDeleted = (await DuplicateScanLog.deleteMany({ dealerCode: code })).deletedCount || 0;
       result.masterDeleted = (await MasterPart.deleteMany({ dealerCode: code })).deletedCount || 0;
       result.binsDeleted = (await Bin.deleteMany({ dealerCode: code })).deletedCount || 0;
@@ -230,7 +245,7 @@ router.post('/check-location-count', auth.requireAuth, auth.requireAdmin, async 
     if (!code) return res.status(400).json({ success: false, message: 'Dealer Code required' });
     const scope = locationScope(req.body.dataType);
     const counts = {
-      scanCount: scope.scans ? await Inventory.countDocuments({ dealerCode: code }) : 0,
+      scanCount: scope.scans ? await Inventory.countDocuments(undeletedScans({ dealerCode: code })) : 0,
       masterCount: scope.master ? await MasterPart.countDocuments({ dealerCode: code }) : 0,
       binCount: scope.bins ? await Bin.countDocuments({ dealerCode: code }) : 0,
       transferCount: scope.transfers ? await BinTransferHistory.countDocuments({ dealerCode: code }) : 0,
@@ -249,7 +264,10 @@ router.post('/delete-location-data', auth.requireAuth, auth.requireAdmin, async 
     if (!code) return res.status(400).json({ success: false, message: 'Dealer Code required' });
     const scope = locationScope(req.body.dataType);
     const result = {
-      scansDeleted: scope.scans ? (await Inventory.deleteMany({ dealerCode: code })).deletedCount || 0 : 0,
+      scansDeleted: scope.scans ? (await scanModification.softDeleteScans(undeletedScans({ dealerCode: code }), req, {
+        reason: req.body?.reason,
+        remarks: req.body?.remarks
+      })).deletedCount || 0 : 0,
       duplicateLogsDeleted: scope.scans ? (await DuplicateScanLog.deleteMany({ dealerCode: code })).deletedCount || 0 : 0,
       masterDeleted: scope.master ? (await MasterPart.deleteMany({ dealerCode: code })).deletedCount || 0 : 0,
       binsDeleted: scope.bins ? (await Bin.deleteMany({ dealerCode: code })).deletedCount || 0 : 0,

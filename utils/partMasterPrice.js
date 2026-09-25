@@ -373,6 +373,46 @@ function scanWithPartMasterPrice(scan = {}, price = null) {
   };
 }
 
+// Read saved audit records without replacing their price snapshot with today's
+// catalogue. This helper must never be used to validate incoming scan prices.
+function savedAuditPrice(record = null, master = null) {
+  if (!record) return null;
+  const savedMrp = numberValue(record.currentCatalogueMRP ?? record.valuationMRP ?? record.finalMRP ?? record.mrp, 0);
+  const savedDlc = numberValue(record.currentCatalogueDLC ?? record.dlc ?? record.dlp, 0);
+  const currentPrice = master ? priceFromPartMasterRecord(master) : null;
+  if (!(savedMrp > 0) && !(savedDlc > 0) && !currentPrice) return null;
+  const mrp = savedMrp > 0 ? savedMrp : numberValue(currentPrice && currentPrice.mrp, 0);
+  const dlc = savedDlc > 0 ? savedDlc : numberValue(currentPrice && currentPrice.dlc, 0);
+  const metadata = master || record;
+  const price = priceFromPartMasterRecord({
+    ...metadata,
+    partNumber: record.normalizedPartNumber || record.partNumber || record.partNo || record.part || metadata.partNumber,
+    dealerCode: record.dealerCode || metadata.dealerCode,
+    mrp,
+    dlc
+  });
+  return price ? { ...price, priceSnapshot: true } : null;
+}
+
+function auditPartPrice(scans = [], stock = null, master = null) {
+  return savedAuditPrice(stock || scans[0] || null, master);
+}
+
+function scanWithSavedAuditPrice(scan = {}, master = null) {
+  const price = savedAuditPrice(scan, master);
+  const fields = masterPriceScanFields(price, numberValue(scan.qty ?? scan.quantity, 0));
+  return {
+    ...scanWithPartMasterPrice(scan, master || price),
+    ...fields,
+    scanMRP: numberValue(scan.scanMRP, 0),
+    manualMRP: numberValue(scan.manualMRP, 0),
+    displayMRP: fields.mrp,
+    masterFound: Boolean(master || scan.masterFound || scan.masterMatch || scan.isMasterMatched),
+    masterMatch: Boolean(master || scan.masterFound || scan.masterMatch || scan.isMasterMatched),
+    isMasterMatched: Boolean(master || scan.masterFound || scan.masterMatch || scan.isMasterMatched)
+  };
+}
+
 function masterPriceMissing(price = null) {
   return !price || !(numberValue(price.mrp, 0) > 0) || !(numberValue(price.dlc, 0) > 0);
 }
@@ -404,5 +444,8 @@ module.exports = {
   pickBestPriceRecord,
   priceFromPartMasterRecord,
   requirePartMasterPrice,
-  scanWithPartMasterPrice
+  scanWithPartMasterPrice,
+  savedAuditPrice,
+  auditPartPrice,
+  scanWithSavedAuditPrice
 };

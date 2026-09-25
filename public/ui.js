@@ -1,5 +1,5 @@
 (function () {
-  const UI_BOOT_VERSION = '20260629-smart-bin-popup-v1';
+  const UI_BOOT_VERSION = '20260818-global-select-runtime-v6';
   const uiBootStartedAt = Date.now();
   const uiBootRoot = window.__DAKSH_DASHBOARD_BOOT__ || (window.__DAKSH_DASHBOARD_BOOT__ = {
     startedAt: new Date(uiBootStartedAt).toISOString(),
@@ -44,9 +44,11 @@
 
   function storageGet(key) {
     try {
+      const sessionValue = window.sessionStorage ? sessionStorage.getItem(key) : null;
+      if (sessionValue !== null) return sessionValue;
       return window.localStorage ? localStorage.getItem(key) : null;
     } catch (error) {
-      bootWarn('localStorage read failed', { key, error: errorDetails(error) });
+      bootWarn('browser storage read failed', { key, error: errorDetails(error) });
       return null;
     }
   }
@@ -62,8 +64,9 @@
   function storageRemove(key) {
     try {
       if (window.localStorage) localStorage.removeItem(key);
+      if (window.sessionStorage) sessionStorage.removeItem(key);
     } catch (error) {
-      bootWarn('localStorage remove failed', { key, error: errorDetails(error) });
+      bootWarn('browser storage remove failed', { key, error: errorDetails(error) });
     }
   }
 
@@ -184,6 +187,9 @@
     reportTableGrandTotal: null,
     reportTableSummary: null,
     reportTableSections: null,
+    localPartsReportPage: 1,
+    localPartsReportTotalPages: 1,
+    localPartsReportStale: false,
     reportFilterSettings: {},
     reportFilterSettingsLoaded: new Set(),
     reportFilterDropdownsLoadedAt: 0,
@@ -191,18 +197,27 @@
     smartBinSettingsLoaded: false,
     smartBinSettingsSaving: false,
     reportSort: { reportType: '', key: '', direction: 'asc' },
+    scanHistorySort: { key: 'time', direction: 'desc' },
     dashboardDealerCode: '',
     dealersLoadPromise: null,
     dealersLoadedAt: 0,
     reconLoaded: false,
     reconRefreshTimer: null,
+    reconRows: [],
+    reconPage: 1,
+    reconPageSize: 10,
+    reconDashboardStats: null,
+    reconLastUpdatedAt: null,
     validatorInvalidRows: [],
     validatorMapIndex: null,
     catalogueFailureDownloadId: '',
     catalogueUploadSessionId: '',
     catalogueUploadInFlight: false,
+    auditPriceRefreshInFlight: false,
+    auditPriceScopeLoading: false,
     catalogueUploadProgress: { stage: '', percent: 0, message: '', processedRows: 0, totalRows: 0, savedRowsCount: 0, failedRowsCount: 0, duplicateRowsCount: 0 },
     masterCatalogueCount: 0,
+    partMasterExportInFlight: false,
     masterSearch: { q: '', page: 1, limit: 25, total: 0 },
     masterSearchRows: [],
     activeAudit: null,
@@ -232,16 +247,27 @@
     partMasterLookupCache: new Map(),
     partMasterLookupPromise: new Map(),
     barcodeServerDuplicateChecks: new Map(),
-    scanStreamRecords: []
+    scanStreamRecords: [],
+    localPartPage: 1,
+    localPartTotalPages: 1,
+    localPartEditingId: '',
+    localPartHistoryLoaded: false,
+    localPartRows: [],
+    localPartFilterTimer: null
   };
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+  // The Print Bin Label dealer select gets one scoped SVG chevron from
+  // /js/select-system.js; the Select Bin(s) trigger owns its own single icon.
+
   function clean(value) {
     return String(value ?? '').trim();
   }
   if (typeof window.clean !== 'function') window.clean = clean;
   const cleanId = (value) => String(value || '').trim();
   let deleteModalResolver = null;
+  let deleteModalDetails = { reason: '', remarks: '' };
   const SYNC_QUEUE_KEY = 'dakshInventorySyncQueue';
   const SYNC_LOG_KEY = 'dakshInventorySyncLog';
   const CONNECTION_LOG_KEY = 'dakshInventoryConnectionLog';
@@ -262,7 +288,9 @@
     movement_wise_stock_analysis: ['dealer', 'audit', 'binLocation', 'productCategory', 'partNumber', 'movementStatus'],
     damage: ['dealer', 'dateRange', 'scanType', 'productCategory', 'productGroup', 'productSubGroup', 'partNumber', 'binLocation'],
     'product-group-summary': ['dealer'],
-    'multiple-bin-location-alert': ['dealer', 'audit', 'dateRange', 'partNumber', 'binLocation', 'userName']
+    'multiple-bin-location-alert': ['dealer', 'audit', 'dateRange', 'partNumber', 'binLocation', 'userName'],
+    'local-parts': ['dealer', 'audit', 'dateRange', 'partNumber', 'userName', 'status'],
+    
   };
   const REPORT_FILTER_OPTIONS = [
     ['dealer', 'Dealer'],
@@ -291,6 +319,7 @@
     ['year', 'Year'],
     ['action', 'Action'],
     ['varianceType', 'Variance Type'],
+    ['status', 'Status'],
     ['scanModeOptions', 'Inventory Audit Options']
   ];
   const DATA_VERSION_KEY = 'dakshDataVersion';
@@ -323,6 +352,7 @@
     { key: 'category-wise-variance-summary', label: 'Category Wise Variance Summary' },
     { key: 'partwise-inventory-audit', label: 'Partwise Inventory Report' },
     { key: 'parts-inventory-refresh-template', label: 'Part Inventory Refresh Template' },
+    { key: 'local-parts', label: 'Local Parts Report' },
     { key: 'reconciliation-report', label: 'Reconciliation Report' },
     { key: 'dealer-reconciliation-report', label: 'Dealer Reconciliation Report' },
     { key: 'dead-stock-report', label: 'Dead Stock Report' },
@@ -344,6 +374,10 @@
     {
       title: 'Stock Reports',
       keys: ['stock-summary', 'product-group-summary', 'bin-wise-stock', 'partwise-inventory-audit', 'parts-inventory-refresh-template']
+    },
+    {
+      title: 'Local Reports',
+      keys: ['local-parts']
     },
     {
       title: 'Scan Reports',
@@ -379,10 +413,18 @@
     damage: 'Damage Report',
     'category-wise-variance-summary': 'Category Wise Variance Summary',
     'partwise-inventory-audit': 'Partwise Inventory Report',
-    'parts-inventory-refresh-template': 'Part Inventory Refresh Template'
+    'parts-inventory-refresh-template': 'Part Inventory Refresh Template',
+    'local-parts': 'Local Parts Report'
   };
   const CSV_REPORT_TYPES = new Set();
   const NO_PDF_EMAIL_REPORT_TYPES = new Set(['stock-summary', 'product-group-summary', 'parts-inventory-refresh-template']);
+  const HEAVY_REPORT_TYPES = new Set([
+    'multiple-bin-location-alert',
+    'partwise-inventory-audit',
+    'category-wise-variance-summary',
+    'movement_wise_stock_analysis'
+  ]);
+  const REPORT_PREVIEW_TIMEOUT_MS = 45000;
   const REPORT_LAYOUT_KEYS = {
     'partwise-inventory-audit': 'partwise_inventory_audit_report_layout_v2',
     short: 'short_report_layout',
@@ -498,119 +540,18 @@
     return option ? String(option.textContent || option.label || option.value || '').trim() : '';
   }
 
-  function fitDashboardDealerSelect(select = $('#dashboardDealerSelect')) {
-    if (!select) return;
-    const labels = Array.from(select.options || [])
-      .map((option) => String(option.textContent || option.label || option.value || '').trim())
-      .filter(Boolean);
-    const longest = labels.reduce((best, label) => (label.length > best.length ? label : best), selectedOptionText(select));
-    const measurer = document.createElement('span');
-    const style = window.getComputedStyle(select);
-    measurer.style.position = 'fixed';
-    measurer.style.left = '-9999px';
-    measurer.style.top = '-9999px';
-    measurer.style.visibility = 'hidden';
-    measurer.style.whiteSpace = 'nowrap';
-    measurer.style.font = style.font;
-    measurer.textContent = longest || 'Active Audit';
-    document.body.appendChild(measurer);
-    const textWidth = Math.ceil(measurer.getBoundingClientRect().width);
-    measurer.remove();
-    const left = select.getBoundingClientRect().left || 0;
-    const viewportRoom = Math.max(280, window.innerWidth - left - 32);
-    const maxSelectWidth = Math.max(240, Math.min(420, viewportRoom));
-    const width = Math.min(Math.max(280, textWidth + 64), maxSelectWidth);
-    select.style.width = `${width}px`;
-    select.style.maxWidth = '100%';
-  }
-
   function syncDealerSelectDisplay(select) {
     if (!select) return;
     select.title = selectedOptionText(select);
-    if (select.id === 'dashboardDealerSelect') fitDashboardDealerSelect(select);
-  }
-
-  function clampSidebarWidth(width) {
-    const parsed = Number.parseInt(width, 10);
-    if (!Number.isFinite(parsed)) return SIDEBAR_MIN_WIDTH;
-    return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, parsed));
-  }
-
-  let sidebarWidth = SIDEBAR_MIN_WIDTH;
-
-  function storedSidebarWidth() {
-    try {
-      return window.localStorage ? localStorage.getItem(SIDEBAR_WIDTH_KEY) : '';
-    } catch (error) {
-      console.warn('Sidebar width preference unavailable', error.message);
-      return '';
-    }
-  }
-
-  function saveSidebarWidth(width) {
-    try {
-      if (window.localStorage) localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
-    } catch (error) {
-      console.warn('Sidebar width preference not saved', error.message);
-    }
-  }
-
-  function clearSidebarWidth() {
-    try {
-      if (window.localStorage) localStorage.removeItem(SIDEBAR_WIDTH_KEY);
-    } catch (error) {
-      console.warn('Sidebar width preference not cleared', error.message);
-    }
   }
 
   function applySidebarWidth(width, persist = false) {
-    sidebarWidth = clampSidebarWidth(width);
-    document.documentElement.style.setProperty('--sidebar-width-desktop', `${sidebarWidth}px`);
-    if (document.body) document.body.classList.toggle('sidebar-wide', sidebarWidth >= SIDEBAR_WIDE_WIDTH);
-    if (persist) saveSidebarWidth(sidebarWidth);
-    return sidebarWidth;
+    // This function is deprecated. Sidebar width is now fixed via CSS.
+    return;
   }
 
   function initSidebarResize() {
-    const handle = $('#sideResizeHandle');
-    applySidebarWidth(storedSidebarWidth() || SIDEBAR_MAX_WIDTH);
-    if (!handle) return;
-    let startX = 0;
-    let startWidth = sidebarWidth;
-    let dragging = false;
-
-    function stopDragging() {
-      if (!dragging) return;
-      dragging = false;
-      document.body.classList.remove('sidebar-resizing');
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', stopDragging);
-      window.removeEventListener('pointercancel', stopDragging);
-    }
-
-    function onMove(event) {
-      if (!dragging) return;
-      applySidebarWidth(startWidth + event.clientX - startX, true);
-      event.preventDefault();
-    }
-
-    handle.addEventListener('pointerdown', (event) => {
-      if (event.button !== 0) return;
-      dragging = true;
-      startX = event.clientX;
-      startWidth = sidebarWidth;
-      document.body.classList.add('sidebar-resizing');
-      if (handle.setPointerCapture && event.pointerId !== undefined) handle.setPointerCapture(event.pointerId);
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', stopDragging);
-      window.addEventListener('pointercancel', stopDragging);
-      event.preventDefault();
-    });
-
-    handle.addEventListener('dblclick', () => {
-      clearSidebarWidth();
-      applySidebarWidth(SIDEBAR_MIN_WIDTH);
-    });
+    // This function is deprecated as the sidebar is now a fixed width.
   }
 
   function dashboardHref(params = {}) {
@@ -683,6 +624,12 @@
   function deviceLink(deviceId, className = 'table-link') {
     const id = String(deviceId || '').trim();
     return id ? enterpriseLink(id, dashboardHref({ view: 'devices', deviceId: id }), { className, label: `Open device ${id} in a new tab` }) : escapeHtml(deviceId || '-');
+  }
+
+  function dashboardDeviceCell(deviceId) {
+    const id = String(deviceId || '').trim();
+    if (!id) return '<span class="device-id-cell">-</span>';
+    return `<span class="device-id-cell" title="${escapeHtml(id)}">${deviceLink(id, 'table-link device-id-link')}</span>`;
   }
 
   function scannerLink(device = {}, className = 'table-link') {
@@ -793,6 +740,7 @@
   }
 
   function logout() {
+    fetch(apiUrl('/api/auth/logout'), { method: 'POST', credentials: 'include' }).catch(() => {});
     clearSession();
     navigateTo('/', { replace: true });
   }
@@ -958,10 +906,21 @@
 
     const isMobileSyncRequest = /^\/api\/mobile\/|^\/api\/sync\//.test(path);
     let timeout = null;
-    if (Number(timeoutMs) > 0 && typeof AbortController !== 'undefined' && !fetchOptions.signal) {
+    let timeoutTriggered = false;
+    let externalAbortHandler = null;
+    const externalSignal = fetchOptions.signal;
+    if (Number(timeoutMs) > 0 && typeof AbortController !== 'undefined') {
       const controller = new AbortController();
       fetchOptions.signal = controller.signal;
-      timeout = setTimeout(() => controller.abort(), Number(timeoutMs));
+      if (externalSignal) {
+        externalAbortHandler = () => controller.abort(externalSignal.reason || 'cancelled');
+        if (externalSignal.aborted) externalAbortHandler();
+        else externalSignal.addEventListener('abort', externalAbortHandler, { once: true });
+      }
+      timeout = setTimeout(() => {
+        timeoutTriggered = true;
+        controller.abort('timeout');
+      }, Number(timeoutMs));
     }
     let response;
     try {
@@ -972,10 +931,11 @@
         body: isFormData ? requestBody : requestBody ? JSON.stringify(requestBody) : undefined
       });
     } catch (error) {
-      if (error && error.name === 'AbortError') throw new Error('Request timed out. Check network and retry.');
+      if (error && error.name === 'AbortError' && timeoutTriggered) throw new Error('Request timed out. Check network and retry.');
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
+      if (externalSignal && externalAbortHandler) externalSignal.removeEventListener('abort', externalAbortHandler);
     }
     const data = await parseApiResponse(response);
     if (data && data.invalidJson) {
@@ -1160,7 +1120,11 @@
   }
 
   function roleDisplayName(role) {
-    return String(role || '').toLowerCase() === 'admin' ? 'Administrator' : (role ? String(role).replace(/^./, (char) => char.toUpperCase()) : 'User');
+    const normalized = String(role || '').toLowerCase();
+    if (normalized === 'admin') return 'Administrator';
+    if (normalized === 'mobile_user') return 'Mobile User';
+    if (['audit_user', 'staff', 'scanner', 'supervisor', 'outward_counter'].includes(normalized)) return 'Audit User';
+    return role ? String(role).replace(/^./, (char) => char.toUpperCase()) : 'User';
   }
 
   function userLoginName() {
@@ -1221,6 +1185,9 @@
     setStatusPill('topRealtimeStatus', lastActivityAt ? 'Realtime: Live' : 'Realtime: Waiting', lastActivityAt ? 'blue' : 'red');
     setDashboardKpiValue('dashConnectedScanners', wholeNumber(activeScanners));
     setDashboardKpiValue('dashOfflineDevices', wholeNumber(offlineDevices));
+    setDashboardKpiValue('auditConnectedScanners', wholeNumber(activeScanners));
+    setDashboardKpiValue('auditOfflineDevices', wholeNumber(offlineDevices));
+    updateDashboardHealth({ ...state.lastSyncStatus, connectedDevices: activeScanners, offlineDevices, pending: pendingSyncCount });
     setDashboardKpiValue('dashRealtimeActivity', lastActivityAt ? compactDateTime(lastActivityAt) : 'Waiting', { time: true });
   }
 
@@ -1243,9 +1210,8 @@
     const node = $(`#${id}`);
     if (!node) return;
     const text = String(value === undefined || value === null || value === '' ? '-' : value);
-    node.textContent = text;
-    node.style.setProperty('--kpi-value-size', `${kpiValueSize(text, options)}px`);
-    node.title = text.replace(/\n/g, ' ');
+    node.textContent = text.replace(/\n/g, ' ');
+    node.title = text;
   }
 
   function hasConnectionStatus(status = {}) {
@@ -1361,21 +1327,42 @@
     return params;
   }
 
-  function dashboardQueryString() {
+  function selectedDashboardRange() {
+    const value = String($('#dashboardDateRange')?.value || 'audit').trim().toLowerCase();
+    return ['today', '7d', '30d', 'audit'].includes(value) ? value : 'audit';
+  }
+
+  function updateDashboardScopeSummary() {
+    const dealerCode = dashboardScopeDealerCode();
+    const dealer = dealerByCode(dealerCode) || {};
+    const dealerName = String(dealer.dealerName || dealer.name || state.activeAudit?.dealerName || '').trim();
+    setText('dashboardScopeSummary', dealerCode ? `${dealerCode}${dealerName ? ` - ${dealerName}` : ''}` : 'All authorised dealers');
+  }
+
+  function setDashboardRefreshState(refreshing) {
+    const button = $('#dashboardRefreshButton');
+    if (button) {
+      button.disabled = Boolean(refreshing);
+      button.classList.toggle('is-refreshing', Boolean(refreshing));
+    }
+    setText('dashboardRefreshLabel', refreshing ? 'Refreshing' : 'Refresh');
+  }
+
+  function dashboardQueryString(options = {}) {
     const params = appendDashboardScopeQuery(new URLSearchParams());
+    params.set('range', selectedDashboardRange());
+    if (options.forceRefresh === true) {
+      params.set('refresh', 'true');
+      params.set('_', String(Date.now()));
+    }
     return params.toString();
   }
 
   function activeAuditMatchesScan(scan = {}) {
-    const activeDealer = state.activeAudit && state.activeAudit.dealerCode ? cleanDealerCode(state.activeAudit.dealerCode) : '';
     const dashboardDealer = dashboardScopeDealerCode();
     if (!dashboardDealer) return true;
     const scanDealer = cleanDealerCode(scan.dealerCode || scan.dealer || '');
-    if (scanDealer && scanDealer !== dashboardDealer) return false;
-    const activeAuditId = String((state.activeAudit && state.activeAudit.auditId) || '').trim();
-    const scanAuditId = String(scan.auditId || scan.audit || '').trim();
-    if (activeDealer && dashboardDealer === activeDealer && activeAuditId && scanAuditId && scanAuditId !== activeAuditId) return false;
-    return true;
+    return !scanDealer || scanDealer === dashboardDealer;
   }
 
   function filterActiveAuditScans(scans = []) {
@@ -1383,19 +1370,17 @@
   }
 
   function dashboardStatsMatchesActiveAudit(stats = {}) {
-    const activeDealer = state.activeAudit && state.activeAudit.dealerCode ? cleanDealerCode(state.activeAudit.dealerCode) : '';
     const dashboardDealer = dashboardScopeDealerCode();
+    const selectedRange = selectedDashboardRange();
+    const statsRange = String(stats.dashboardRange || '').trim().toLowerCase();
+    if (selectedRange !== 'audit' && statsRange !== selectedRange) return false;
     if (!dashboardDealer) return true;
     const dealerCode = cleanDealerCode(stats.dealerCode || stats.activeDealerCode || '');
     if (!dealerCode) return false;
-    if (dealerCode !== dashboardDealer) return false;
-    const activeAuditId = String((state.activeAudit && state.activeAudit.auditId) || '').trim();
-    const auditId = String(stats.auditId || stats.activeAuditId || '').trim();
-    return !(activeDealer && dashboardDealer === activeDealer && activeAuditId && auditId && auditId !== activeAuditId);
+    return dealerCode === dashboardDealer;
   }
 
   function dashboardPayloadMatchesActiveAudit(payload = {}) {
-    const activeDealer = state.activeAudit && state.activeAudit.dealerCode ? cleanDealerCode(state.activeAudit.dealerCode) : '';
     const dashboardDealer = dashboardScopeDealerCode();
     if (!dashboardDealer) return true;
     const payloadDealer = cleanDealerCode(
@@ -1406,13 +1391,10 @@
       ''
     );
     if (payloadDealer) {
-      if (payloadDealer !== dashboardDealer) return false;
-      const activeAuditId = String((state.activeAudit && state.activeAudit.auditId) || '').trim();
-      const payloadAuditId = String(payload.auditId || payload.activeAuditId || (payload.stats && payload.stats.auditId) || (payload.activeAudit && payload.activeAudit.auditId) || '').trim();
-      return !(activeDealer && dashboardDealer === activeDealer && activeAuditId && payloadAuditId && payloadAuditId !== activeAuditId);
+      return payloadDealer === dashboardDealer;
     }
     const scans = Array.isArray(payload.recent) ? payload.recent : (Array.isArray(payload.scans) ? payload.scans : []);
-    return scans.some(activeAuditMatchesScan);
+    return scans.some((scan) => cleanDealerCode(scan.dealerCode || scan.dealer || '') === dashboardDealer);
   }
 
   function availableActiveDealers() {
@@ -1505,6 +1487,10 @@
     const jobs = [];
     if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
     if ($('#scan')?.classList.contains('active')) jobs.push(loadScanHistory());
+    if ($('#localPartEntry')?.classList.contains('active')) {
+      syncLocalPartFormIdentity();
+      jobs.push(loadLocalPartHistory({ page: 1 }));
+    }
     if ($('#syncCenter')?.classList.contains('active')) jobs.push(loadSyncStatus());
     if ($('#devices')?.classList.contains('active')) jobs.push(loadDevices());
     await Promise.all(jobs.map((job) => job.catch((error) => toast(error.message, 'error'))));
@@ -1559,6 +1545,8 @@
       setText('sideActiveAuditDealer', 'No active audit');
       setText('sideActiveAuditStatus', 'Mobile sync disabled');
     }
+    syncLocalPartFormIdentity();
+    updateAuditPriceRefreshUi();
   }
 
   async function loadActiveAudit(options = {}) {
@@ -1585,12 +1573,216 @@
     }
   }
 
+  function localPartUserName() {
+    return state.user ? state.user.name || state.user.username || state.user.email || '' : '';
+  }
+
+  function localPartSelectedDealer(form = $('#localPartForm')) {
+    return cleanDealerCode($('[name="dealerCode"]', form)?.value || selectedScanDealerCode() || currentDealerCode());
+  }
+
+  function localPartReferenceAuditId(dealerCode = localPartSelectedDealer()) {
+    const code = cleanDealerCode(dealerCode);
+    if (state.activeAudit && cleanDealerCode(state.activeAudit.dealerCode) === code) return clean(state.activeAudit.auditId || '');
+    const dealer = dealerByCode(code);
+    return clean(dealer && (dealer.currentAuditId || dealer.auditId) || '');
+  }
+
+  function syncLocalPartFormIdentity() {
+    const form = $('#localPartForm');
+    if (!form) return;
+    const dealerCode = localPartSelectedDealer(form);
+    const referenceField = $('[name="referenceAuditId"]', form);
+    const enteredByField = $('[name="enteredByName"]', form);
+    if (referenceField) referenceField.value = localPartReferenceAuditId(dealerCode);
+    if (enteredByField) enteredByField.value = localPartUserName();
+  }
+
+  function resetLocalPartForm(options = {}) {
+    const form = $('#localPartForm');
+    if (!form) return;
+    const dealerCode = options.dealerCode || localPartSelectedDealer(form) || selectedScanDealerCode() || currentDealerCode();
+    form.reset();
+    state.localPartEditingId = '';
+    $('[name="id"]', form).value = '';
+    $('[name="quantity"]', form).value = '1.000';
+    if (dealerCode) setDealerSelectValue($('[name="dealerCode"]', form), dealerCode);
+    syncLocalPartFormIdentity();
+    const button = $('#localPartSaveBtn');
+    if (button) button.textContent = 'Save Local Part';
+    const message = $('#localPartFormMessage');
+    if (message && options.keepMessage !== true) {
+      message.className = 'form-message';
+      message.textContent = '';
+    }
+  }
+
+  function localPartHistoryQuery(page = state.localPartPage || 1) {
+    const form = $('#localPartHistoryFilters');
+    const values = form ? formObject(form) : {};
+    const params = new URLSearchParams();
+    const dealerCode = cleanDealerCode(values.dealerCode || localPartSelectedDealer());
+    if (dealerCode && dealerCode !== 'ALL') params.set('dealerCode', dealerCode);
+    ['fromDate', 'toDate', 'partNumber', 'userName', 'status'].forEach((key) => {
+      const value = clean(values[key]);
+      if (value) params.set(key, value);
+    });
+    params.set('page', String(Math.max(1, Number(page || 1))));
+    params.set('limit', '25');
+    params.set('sortBy', 'createdAt');
+    params.set('sortDir', 'desc');
+    return params;
+  }
+
+  function localPartQuantity(value) {
+    const number = Number(value || 0);
+    return Number.isFinite(number) ? number.toFixed(3) : '0.000';
+  }
+
+  function renderLocalPartHistory(data = {}) {
+    const rows = Array.isArray(data.entries) ? data.entries : [];
+    state.localPartRows = rows;
+    state.localPartPage = Number(data.pagination?.page || 1);
+    state.localPartTotalPages = Number(data.pagination?.totalPages || 1);
+    state.localPartHistoryLoaded = true;
+    const canManage = isAdminUser();
+    $('#localPartHistoryRows').innerHTML = rows.map((row) => `
+      <tr data-local-part-id="${escapeHtml(row.id)}">
+        <td>${escapeHtml(row.entryDate || '')}</td>
+        <td>${escapeHtml(row.entryTime || '')}</td>
+        <td>${escapeHtml(row.dealerCode || '')}</td>
+        <td>${escapeHtml(row.referenceAuditId || '-')}</td>
+        <td>${escapeHtml(row.partNumber || '')}</td>
+        <td>${escapeHtml(row.partDescription || '')}</td>
+        <td data-type="number">${escapeHtml(localPartQuantity(row.quantity))}</td>
+        <td data-type="number">${escapeHtml(money2(row.mrp))}</td>
+        <td data-type="number">${escapeHtml(money2(row.totalMrpValue))}</td>
+        <td data-type="number">${escapeHtml(money2(row.dlc))}</td>
+        <td data-type="number">${escapeHtml(money2(row.totalDlcValue))}</td>
+        <td>${escapeHtml(row.enteredByName || '')}</td>
+        <td>${escapeHtml(row.remarks || '')}</td>
+        <td><span class="status-pill ${row.status === 'DELETED' ? 'danger' : 'success'}">${escapeHtml(row.status || 'ACTIVE')}</span></td>
+        <td>${canManage && row.status !== 'DELETED' ? `<button class="btn light local-part-edit" type="button" data-id="${escapeHtml(row.id)}">Edit</button>` : '-'}</td>
+        <td>${canManage && row.status !== 'DELETED' ? `<button class="btn danger-soft local-part-delete" type="button" data-id="${escapeHtml(row.id)}">Delete</button>` : '-'}</td>
+      </tr>
+    `).join('') || '<tr><td colspan="16" class="muted">No Local Part entries found for selected filter</td></tr>';
+    const summary = data.summary || {};
+    setText('localPartTotalQuantity', localPartQuantity(summary.grandTotalQuantity));
+    setText('localPartTotalMrpValue', money2(summary.grandTotalMrpValue || 0));
+    setText('localPartTotalDlcValue', money2(summary.grandTotalDlcValue || 0));
+    setText('localPartPageInfo', `Page ${state.localPartPage} of ${state.localPartTotalPages}`);
+    $('#localPartPrevPage').disabled = state.localPartPage <= 1;
+    $('#localPartNextPage').disabled = state.localPartPage >= state.localPartTotalPages;
+    enhanceDataTable($('#localPartHistoryTable'), 'daksh_table_local_part_history');
+  }
+
+  async function loadLocalPartHistory(options = {}) {
+    const page = Math.max(1, Number(options.page || state.localPartPage || 1));
+    const data = await api(`/api/local-parts?${localPartHistoryQuery(page).toString()}`);
+    renderLocalPartHistory(data);
+    return data;
+  }
+
+  function markLocalPartsReportStale() {
+    state.localPartsReportStale = true;
+    Array.from(state.reportCache.keys()).forEach((key) => {
+      if (String(key).startsWith('local-parts|')) state.reportCache.delete(key);
+    });
+  }
+
+  async function refreshLocalPartsReportIfVisible() {
+    if (!$('#reports')?.classList.contains('active') || activeReportType() !== 'local-parts') return;
+    await loadReport({ forceRefresh: true, showLoading: false });
+  }
+
+  function localPartPayload(form) {
+    const values = formObject(form);
+    return {
+      dealerCode: cleanDealerCode(values.dealerCode),
+      partNumber: clean(values.partNumber).toUpperCase(),
+      quantity: clean(values.quantity),
+      mrp: clean(values.mrp),
+      dlc: clean(values.dlc),
+      partDescription: clean(values.partDescription),
+      remarks: clean(values.remarks)
+    };
+  }
+
+  async function saveLocalPart(form) {
+    const payload = localPartPayload(form);
+    const editingId = state.localPartEditingId || clean($('[name="id"]', form)?.value);
+    const message = $('#localPartFormMessage');
+    if (message) {
+      message.className = 'form-message loading';
+      message.textContent = editingId ? 'Updating Local Part...' : 'Saving Local Part...';
+    }
+    setScanFormSubmitting(form, true);
+    try {
+      const data = await api(editingId ? `/api/local-parts/${encodeURIComponent(editingId)}` : '/api/local-parts', {
+        method: editingId ? 'PUT' : 'POST',
+        body: payload
+      });
+      if (message) {
+        message.className = 'form-message success';
+        message.textContent = data.message || (editingId ? 'Local Part updated' : 'Local Part saved');
+      }
+      const dealerCode = payload.dealerCode;
+      markLocalPartsReportStale();
+      resetLocalPartForm({ dealerCode, keepMessage: true });
+      const historyDealer = $('#localPartHistoryFilters [name="dealerCode"]');
+      if (historyDealer && dealerCode) setDealerSelectValue(historyDealer, dealerCode);
+      state.localPartPage = 1;
+      await loadLocalPartHistory({ page: 1 });
+      await refreshLocalPartsReportIfVisible();
+      toast(data.message || 'Local Part saved', 'success');
+      return data;
+    } finally {
+      setScanFormSubmitting(form, false);
+      const button = $('#localPartSaveBtn');
+      if (button && !state.localPartEditingId) button.textContent = 'Save Local Part';
+    }
+  }
+
+  async function editLocalPart(id) {
+    const data = await api(`/api/local-parts/${encodeURIComponent(id)}`);
+    const entry = data.entry || {};
+    const form = $('#localPartForm');
+    state.localPartEditingId = entry.id || id;
+    $('[name="id"]', form).value = state.localPartEditingId;
+    setDealerSelectValue($('[name="dealerCode"]', form), entry.dealerCode || '');
+    $('[name="referenceAuditId"]', form).value = entry.referenceAuditId || '';
+    $('[name="partNumber"]', form).value = entry.partNumber || '';
+    $('[name="quantity"]', form).value = localPartQuantity(entry.quantity);
+    $('[name="mrp"]', form).value = Number(entry.mrp || 0).toFixed(2);
+    $('[name="dlc"]', form).value = Number(entry.dlc || 0).toFixed(2);
+    $('[name="partDescription"]', form).value = entry.partDescription || '';
+    $('[name="remarks"]', form).value = entry.remarks || '';
+    $('[name="enteredByName"]', form).value = entry.enteredByName || localPartUserName();
+    $('#localPartSaveBtn').textContent = 'Update Local Part';
+    $('#localPartFormMessage').className = 'form-message';
+    $('#localPartFormMessage').textContent = 'Editing Local Part entry';
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function deleteLocalPart(id) {
+    const row = state.localPartRows.find((entry) => entry.id === id);
+    const label = row ? `${row.partNumber} (${row.quantity})` : 'this Local Part entry';
+    if (!window.confirm(`Delete ${label}? This will keep a traceable soft-deleted record.`)) return;
+    const data = await api(`/api/local-parts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    markLocalPartsReportStale();
+    if (state.localPartEditingId === id) resetLocalPartForm();
+    await loadLocalPartHistory({ page: state.localPartPage });
+    await refreshLocalPartsReportIfVisible();
+    toast(data.message || 'Local Part deleted', 'success');
+  }
+
   function resolveMobileScannerUrl(info = {}) {
     const serverUrl = info.serverUrl || (info.ip && info.port ? `http://${info.ip}:${info.port}` : '');
-    if (info.scanUrl) return info.scanUrl;
+    if (info.mobileWebUrl) return info.mobileWebUrl;
     if (info.mobileScannerUrl) return info.mobileScannerUrl;
-    if (serverUrl) return `${String(serverUrl).replace(/\/+$/, '')}/mobile-scanner`;
-    return `${window.location.origin.replace(/\/+$/, '')}/mobile-scanner`;
+    if (info.scanUrl) return info.scanUrl;
+    if (serverUrl) return `${String(serverUrl).replace(/\/+$/, '')}/mobile-web`;
+    return `${window.location.origin.replace(/\/+$/, '')}/mobile-web`;
   }
 
   function dashboardWelcomeText() {
@@ -1629,9 +1821,48 @@
     updateSystemSubline();
   }
 
+  function setDashboardHealthRow(name, label, stateName = 'ok') {
+    setDashboardKpiValue(`dashboardHealth${name}`, label);
+    const row = $(`#dashboardHealth${name}Row`);
+    if (!row) return;
+    row.classList.remove('is-checking', 'is-warning', 'is-error');
+    if (stateName === 'checking') row.classList.add('is-checking');
+    if (stateName === 'warning') row.classList.add('is-warning');
+    if (stateName === 'error') row.classList.add('is-error');
+  }
+
+  function updateDashboardHealth(data = {}) {
+    const serverStatus = String(data.server || data.serverStatus || '').trim().toLowerCase();
+    const databaseStatus = String(data.db || data.database || data.databaseStatus || data.postgresStatus || '').trim().toLowerCase();
+    const serverKnown = Boolean(serverStatus);
+    const databaseKnown = Boolean(databaseStatus);
+    const serverOk = ['online', 'ok', 'ready', 'connected'].includes(serverStatus);
+    const databaseOk = ['connected', 'online', 'ok', 'ready'].includes(databaseStatus);
+    const connectedDevices = Math.max(0, Number(data.connectedDevices ?? data.mobileConnectedDevices ?? state.activeDeviceCount ?? 0) || 0);
+    const pending = Math.max(0, Number(data.pending ?? data.pendingSync ?? 0) || 0);
+    const failed = Math.max(0, Number(data.failed ?? data.failedSync ?? 0) || 0);
+    const storageStatus = String(data.storageStatus || (data.storage && data.storage.status) || '').trim().toLowerCase();
+
+    setDashboardHealthRow('Server', serverKnown ? (serverOk ? 'Online' : 'Offline') : 'Checking', serverKnown ? (serverOk ? 'ok' : 'error') : 'checking');
+    setDashboardHealthRow('Database', databaseKnown ? (databaseOk ? 'Online' : 'Offline') : 'Checking', databaseKnown ? (databaseOk ? 'ok' : 'error') : 'checking');
+    setDashboardHealthRow('Scanner', serverKnown ? (serverOk ? (connectedDevices ? `${wholeNumber(connectedDevices)} Online` : 'Ready') : 'Offline') : 'Checking', serverKnown ? (serverOk ? 'ok' : 'error') : 'checking');
+    setDashboardHealthRow('Sync', failed ? `${wholeNumber(failed)} Failed` : (pending ? `${wholeNumber(pending)} Pending` : 'Healthy'), failed ? 'error' : (pending ? 'warning' : 'ok'));
+    setDashboardHealthRow('Storage', storageStatus ? ({ normal: 'Normal', warning: 'Low', low: 'Critical', unavailable: 'Unavailable' }[storageStatus] || storageStatus) : 'Checking', !storageStatus ? 'checking' : (storageStatus === 'normal' ? 'ok' : (storageStatus === 'warning' || storageStatus === 'unavailable' ? 'warning' : 'error')));
+
+    const pageStatus = $('#dashboardPageStatus');
+    const known = serverKnown && databaseKnown;
+    const operational = known && serverOk && databaseOk && !failed && storageStatus !== 'low';
+    if (pageStatus) {
+      pageStatus.classList.toggle('is-checking', !known);
+      pageStatus.classList.toggle('is-degraded', known && !operational);
+    }
+    setText('dashboardPageStatusText', !known ? 'Checking system' : (operational ? 'System Operational' : 'System Needs Attention'));
+  }
+
   async function loadHealth() {
     const data = await api('/api/health');
     applyServerInfo(data);
+    updateDashboardHealth(data);
     const serverOk = data.server === 'online';
     const dbOk = data.db === 'connected';
     setLivePill('syncServerStatus', serverOk ? 'Connected' : 'Offline', serverOk);
@@ -1639,7 +1870,7 @@
     setDashboardSyncStatus(serverOk && dbOk ? 'Synced' : 'Failed', serverOk && dbOk);
     if (!serverOk || !dbOk) throw new Error('Server or PostgreSQL is not connected');
     if (isLocalhostUrl(data.serverUrl)) {
-      throw new Error('Do not use localhost on mobile. Use the cloud server URL from pairing QR.');
+      throw new Error('Use automatic discovery, daksh.local, or the temporary pairing QR for mobile.');
     }
     return data;
   }
@@ -1821,13 +2052,14 @@
   function scanHistoryRecordKey(scan = {}) {
     const upiKey = barcodeScanKey(scan);
     if (upiKey) return upiKey;
-    const explicit = cleanId(scan.id || scan._id || scan.scanId || scan.uniqueScanId || scan.syncKey || scan.localId || '');
+    const explicit = scan._id || scan.scanId || scan.uniqueScanId || scan.localId || scan.rowId || scan.id || scan.syncKey || '';
     if (explicit) return explicit;
     return normalizePartText(scan.rawScan || scan.rawScanString || scan.rawBarcode || scan.rawScanValue || '');
   }
 
   function scanHistoryRecordId(scan = {}) {
-    return cleanId(scan.id || scan.rowId || scan.scanId || scan.uniqueScanId || scan.localId || scan._id || '');
+    const explicit = scan._id || scan.scanId || scan.uniqueScanId || scan.localId || scan.rowId || scan.id || '';
+    return String(explicit || '').trim();
   }
 
   function scanHistoryRecordIdentity(scan = {}) {
@@ -1836,10 +2068,10 @@
       key: scanHistoryRecordKey(scan),
       barcodeKey: barcodeScanKey(scan),
       id,
-      scanId: cleanId(scan.scanId || scan.uniqueScanId || scan._id || ''),
-      uniqueScanId: cleanId(scan.uniqueScanId || scan.scanId || scan._id || ''),
-      syncKey: cleanId(scan.syncKey || ''),
-      localId: cleanId(scan.localId || '')
+      scanId: String(scan.scanId || scan.uniqueScanId || scan._id || '').trim(),
+      uniqueScanId: String(scan.uniqueScanId || scan.scanId || scan._id || '').trim(),
+      syncKey: String(scan.syncKey || '').trim(),
+      localId: String(scan.localId || '').trim()
     };
   }
 
@@ -1876,14 +2108,12 @@
 
     const beforeHistory = state.scanHistoryRecords || [];
     const beforeStream = state.scanStreamRecords || [];
-    state.scanHistoryRecords = beforeHistory.filter((record) => !matches(record)).slice(0, 500);
+    state.scanHistoryRecords = sortScanHistoryRecords(beforeHistory.filter((record) => !matches(record))).slice(0, 500);
     state.scanStreamRecords = beforeStream.filter((record) => !matches(record)).slice(0, 12);
 
     const historyBody = $('#scanHistoryRows');
     if (historyBody) {
-      historyBody.innerHTML = state.scanHistoryRecords.length ? state.scanHistoryRecords.map(scanHistoryRow).join('') : '<tr><td colspan="18" class="muted">No scan history found</td></tr>';
-      updateScanHistorySummary(state.scanHistoryRecords, scanHistorySummary(state.scanHistoryRecords, {}));
-      bindScanHistoryActions();
+      renderScanHistoryRecords(state.scanHistoryRecords, scanHistorySummary(state.scanHistoryRecords, {}));
     }
     renderScanStream(state.scanStreamRecords);
 
@@ -2100,13 +2330,11 @@
       });
       return replaced ? next : [replacement].concat(next);
     };
-    state.scanHistoryRecords = mergeScanHistoryRecords(replace(state.scanHistoryRecords || [])).slice(0, 500);
+    state.scanHistoryRecords = sortScanHistoryRecords(mergeScanHistoryRecords(replace(state.scanHistoryRecords || []))).slice(0, 500);
     state.scanStreamRecords = mergeScanStreamRecords(replace(state.scanStreamRecords || []));
     const historyBody = $('#scanHistoryRows');
     if (historyBody) {
-      historyBody.innerHTML = state.scanHistoryRecords.length ? state.scanHistoryRecords.map(scanHistoryRow).join('') : '<tr><td colspan="18" class="muted">No scan history found</td></tr>';
-      updateScanHistorySummary(state.scanHistoryRecords, scanHistorySummary(state.scanHistoryRecords, {}));
-      bindScanHistoryActions();
+      renderScanHistoryRecords(state.scanHistoryRecords, scanHistorySummary(state.scanHistoryRecords, {}));
     }
     renderScanStream(state.scanStreamRecords);
   }
@@ -2262,7 +2490,7 @@
 
   function normalizeScanPayload(payload) {
     if (payload.serverUrl && isLocalhostUrl(payload.serverUrl)) {
-      throw new Error('Do not use localhost on mobile. Use the cloud server URL from pairing QR.');
+      throw new Error('Use automatic discovery, daksh.local, or the temporary pairing QR for mobile.');
     }
     payload = applyActiveAuditToPayload(payload);
     const rawScanValue = payload.rawScanString || payload.rawScan || payload.rawBarcode || payload.rawScanValue || payload.barcode || payload.barcodeValue || payload.scanValue || payload.scanText || '';
@@ -2492,7 +2720,7 @@
       const counts = syncCounts();
       if (!counts.pending && !counts.failed) return;
       syncPendingQueue({ silent: true, includeFailed: true }).catch(console.warn);
-    }, 30000);
+    }, 60000);
   }
 
   function updateSyncBadges(status = {}) {
@@ -2540,6 +2768,17 @@
     setText('homeLastSync', lastSync ? dashboardScanTime(lastSync) : 'Never');
     setText('homePendingSync', counts.total);
     setText('homeFailedSync', counts.failed);
+    setDashboardKpiValue('dashboardPendingKpi', wholeNumber(counts.total));
+    setDashboardKpiValue('auditPending', wholeNumber(counts.total));
+    setDashboardKpiValue('auditFailed', wholeNumber(counts.failed));
+    setDashboardKpiValue('auditConnectedScanners', wholeNumber(connectedDevices));
+    setDashboardKpiValue('auditOfflineDevices', wholeNumber(offlineDevices));
+    updateDashboardHealth({
+      ...connectionStatus,
+      connectedDevices,
+      pending: counts.total,
+      failed: counts.failed
+    });
     setText('syncCenterLastSync', lastSync ? dateTime(lastSync) : 'Never');
     setText('syncCenterTotalSynced', totalSynced);
     setText('syncCenterPending', counts.total);
@@ -2650,15 +2889,23 @@
     state.reportCache.clear();
     if (!state.reportHasRun || !activeReportType()) return;
     clearTimeout(state.reportRealtimeTimer);
+    const message = $('#reportMessage');
+    const reportType = activeReportType();
+    if (state.auditPackInProgress || HEAVY_REPORT_TYPES.has(reportType)) {
+      if (message) {
+        message.className = 'form-message warning';
+        message.textContent = `Report data changed after ${reason}. Click Refresh Now when ready.`;
+      }
+      return;
+    }
     state.reportRealtimeTimer = setTimeout(() => {
       if (!$('#reports')?.classList.contains('active') || state.reportLoading) return;
-      const message = $('#reportMessage');
       if (message) {
         message.className = 'form-message warning';
         message.textContent = `Report data changed after ${reason}. Refreshing automatically...`;
       }
       loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error'));
-    }, 500);
+    }, 2500);
   }
 
   async function loadLatestSyncDebug() {
@@ -2740,6 +2987,7 @@
       model: 120,
       year: 90,
       qty: 70,
+      'total-qty': 90,
       type: 110,
       bin: 110,
       dealer: 190,
@@ -2913,7 +3161,11 @@
   function enhanceCoreTables() {
     enhanceDataTable($('#streamRows')?.closest('table'), 'daksh_table_realtime_stream');
     enhanceDataTable($('#productGroupSummaryRows')?.closest('table'), 'daksh_table_product_group_summary');
-    enhanceDataTable($('#scanHistoryRows')?.closest('table'), 'daksh_table_scan_history');
+    const scanHistoryTable = $('#scanHistoryRows')?.closest('table');
+    enhanceDataTable(scanHistoryTable, 'daksh_table_scan_history');
+    initScanHistorySorting(scanHistoryTable);
+    enhanceDataTable($('#dealerStockPreviewTable'), 'daksh_table_dealer_stock_preview');
+    enhanceDataTable($('#localPartHistoryTable'), 'daksh_table_local_part_history');
   }
 
   function setUserChrome() {
@@ -2938,6 +3190,7 @@
     $$('.admin-only').forEach((node) => node.classList.toggle('hidden', !state.user || state.user.role !== 'admin'));
     updateSystemSubline();
     $('#manualStaff').value = state.user ? state.user.name || state.user.username || '' : '';
+    syncLocalPartFormIdentity();
     $('#barcodeDeviceId').value = ensureDeviceId();
     $('#allowUnknownToggle').checked = storageGet('dakshAllowUnknown') === 'true';
     bootLog('setUserChrome complete', {
@@ -3137,14 +3390,37 @@
 
   function updateDashboardCards(stats = {}) {
     setDashboardKpiValue('dashToday', wholeNumber(stats.totalScannedToday || 0));
-    setDashboardKpiValue('dashTotalScanQty', wholeNumber(stats.totalScannedQuantity || stats.totalScanQty || 0));
+    setDashboardKpiValue('dashTotalScanQty', wholeNumber(stats.totalScannedQuantity || stats.totalQuantity || stats.partsScanned || stats.totalScanQty || 0));
     setDashboardKpiValue('dashStockValueDlc', `₹ ${money2(stats.actualStockValueDLC || stats.totalScannedValue || 0)}`);
     setDashboardKpiValue('dashDamage', wholeNumber(stats.damageCount || 0));
     setDashboardKpiValue('dashDuplicates', wholeNumber(stats.duplicateCount || 0));
     setDashboardKpiValue('dashMultiBinParts', wholeNumber(stats.multipleBinPartCount || 0));
-    setDashboardKpiValue('dashInventoryCount', wholeNumber(stats.totalScanRecords || stats.totalUniqueScannedParts || 0));
+    setDashboardKpiValue('dashInventoryCount', wholeNumber(stats.totalUniqueScannedParts || stats.totalScanRecords || 0));
     setDashboardKpiValue('dashConnectedScanners', wholeNumber(stats.activeDevices || 0));
     setDashboardKpiValue('dashOfflineDevices', wholeNumber(stats.offlineDevices || 0));
+    setDashboardKpiValue('dashboardPendingKpi', wholeNumber(stats.pendingSyncCount || stats.pendingSync || 0));
+    const completion = Math.max(0, Math.min(100, Number(stats.auditCompletionPercent ?? stats.completionPercent ?? 0) || 0));
+    setText('dashboardCompletionPercent', `${Math.round(completion)}%`);
+    const completionRing = $('#dashboardCompletionRing');
+    if (completionRing) {
+      completionRing.setAttribute('aria-valuenow', String(Math.round(completion)));
+      completionRing.style.setProperty('--completion', `${completion}%`);
+    }
+    setDashboardKpiValue('auditLiveInventory', wholeNumber(stats.totalUniqueScannedParts || stats.totalScanRecords || 0));
+    setDashboardKpiValue('auditPending', wholeNumber(stats.pendingSyncCount || stats.pendingSync || 0));
+    setDashboardKpiValue('auditFailed', wholeNumber(stats.failedCount || 0));
+    setDashboardKpiValue('auditConnectedScanners', wholeNumber(stats.activeDevices || 0));
+    setDashboardKpiValue('auditOfflineDevices', wholeNumber(stats.offlineDevices || 0));
+    const scannedValue = Number(stats.actualStockValueDLC || stats.totalScannedValue || 0);
+    const systemValue = Number(stats.systemStockValue || stats.masterStockValue || stats.totalSystemValue || 0);
+    const chartMax = Math.max(systemValue, scannedValue, 1);
+    setDashboardKpiValue('dashboardSystemValue', `₹ ${money2(systemValue)}`);
+    setDashboardKpiValue('dashboardScannedValue', `₹ ${money2(scannedValue)}`);
+    const systemBar = $('#dashboardSystemValueBar');
+    const scannedBar = $('#dashboardScannedValueBar');
+    if (systemBar) systemBar.style.height = `${systemValue > 0 ? Math.max(4, Math.round((systemValue / chartMax) * 100)) : 0}%`;
+    if (scannedBar) scannedBar.style.height = `${scannedValue > 0 ? Math.max(4, Math.round((scannedValue / chartMax) * 100)) : 0}%`;
+    setDashboardKpiValue('dashboardDealerStockLineCount', wholeNumber(stats.dealerStockPartLines || stats.uploadedPartLineCount || 0));
     if (stats.activeDevices !== undefined) setHeaderDeviceStatus(Number(stats.activeDevices || 0));
   }
 
@@ -3182,53 +3458,50 @@
   }
 
   function dashboardOverviewCounts(stats = {}, scans = []) {
-    const streamRows = Array.isArray(scans) ? scans : [];
-    const inward = Math.max(0, Number(stats.totalInward || 0));
-    const outward = Math.max(0, Number(stats.totalOutward || 0));
-    const manualFromStats = Number(stats.manualCount || stats.manualScanCount || stats.manualScans || 0);
-    const failedFromStats = Number(stats.failedCount || stats.mismatchCount || 0);
-    const manualFromStream = streamRows.filter(dashboardIsManualScan).reduce((sum, scan) => sum + Number(scanQuantity(scan, 1) || 1), 0);
-    const failedFromStream = streamRows.filter(dashboardIsFailedScan).reduce((sum, scan) => sum + Number(scanQuantity(scan, 1) || 1), 0);
-    const manual = Math.max(manualFromStats, manualFromStream);
-    const failed = Math.max(failedFromStats, failedFromStream);
-    const total = (inward + outward + manual + failed) || Number(stats.totalScannedToday || streamRows.length || 0);
-    return { inward, outward, manual, failed, total };
+    void scans;
+    const toCount = (value) => {
+      const number = Number(value);
+      return Number.isFinite(number) && number > 0 ? number : 0;
+    };
+    const distribution = stats.scanTypeDistribution || {};
+    const inward = toCount(distribution.inward ?? stats.totalInward);
+    const outward = toCount(distribution.outward ?? stats.totalOutward);
+    const manual = toCount(distribution.manual ?? stats.manualCount ?? stats.manualScanCount ?? stats.manualScans);
+    const damage = toCount(distribution.damage ?? stats.damageCount);
+    const fitted = toCount(distribution.fitted ?? stats.fittedCount ?? stats.totalFitted);
+    const failed = toCount(stats.failedCount || stats.mismatchCount);
+    const total = [
+      distribution.total,
+      stats.totalScannedQuantity,
+      stats.totalQuantity,
+      stats.partsScanned,
+      stats.totalScanQty,
+      stats.totalScanRecords,
+      stats.scanRows,
+      stats.totalScannedToday
+    ].map(toCount).find((value) => value > 0) || (inward + outward + manual + damage + fitted);
+    return { inward, outward, manual, damage, fitted, failed, total };
   }
 
   function renderDashboardQuickOverview(stats = {}, scans = []) {
-    const ring = $('#dashboardOverviewRing');
-    if (!ring) return;
     const counts = dashboardOverviewCounts(stats, scans);
-    const total = Math.max(0, Number(counts.total || 0));
-    const segments = [
-      { key: 'inward', value: counts.inward, color: '#2f80ed' },
-      { key: 'outward', value: counts.outward, color: '#f59e0b' },
-      { key: 'manual', value: counts.manual, color: '#14b8a6' },
-      { key: 'failed', value: counts.failed, color: '#ef4444' }
-    ].filter((segment) => Number(segment.value || 0) > 0);
-    if (segments.length && total > 0) {
-      let current = 0;
-      const parts = segments.map((segment, index) => {
-        const percent = index === segments.length - 1 ? Math.max(0, 100 - current) : (Number(segment.value || 0) / total) * 100;
-        const end = index === segments.length - 1 ? 100 : Math.min(100, current + percent);
-        const piece = `${segment.color} ${current.toFixed(2)}% ${end.toFixed(2)}%`;
-        current = end;
-        return piece;
-      });
-      ring.style.background = `radial-gradient(circle at center, rgba(255,255,255,0.98) 0 39%, rgba(255,255,255,0.88) 39% 43%, transparent 43%), conic-gradient(${parts.join(', ')})`;
-    } else {
-      ring.style.background = 'radial-gradient(circle at center, rgba(255,255,255,0.98) 0 39%, rgba(255,255,255,0.88) 39% 43%, transparent 43%), conic-gradient(rgba(148, 163, 184, 0.26) 0 100%)';
+    const fallbackTotal = Number(String($('#dashTotalScanQty')?.textContent || '').replace(/[^\d.-]/g, '')) || 0;
+    if (!counts.total && fallbackTotal > 0) {
+      counts.total = fallbackTotal;
     }
-    ring.classList.toggle('is-empty', total === 0);
-    setText('dashboardOverviewTotal', wholeNumber(total));
-    [
-      ['dashboardOverviewInward', counts.inward],
-      ['dashboardOverviewOutward', counts.outward],
-      ['dashboardOverviewManual', counts.manual],
-      ['dashboardOverviewFailed', counts.failed]
-    ].forEach(([id, value]) => {
+    const total = Math.max(0, Number(counts.total || 0));
+    const values = [
+      ['Inward', 'dashboardDistributionInward', 'dashboardDistributionInwardBar', counts.inward],
+      ['Outward', 'dashboardDistributionOutward', 'dashboardDistributionOutwardBar', counts.outward],
+      ['Manual', 'dashboardDistributionManual', 'dashboardDistributionManualBar', counts.manual],
+      ['Damage', 'dashboardDistributionDamage', 'dashboardDistributionDamageBar', counts.damage],
+      ['Fitted', 'dashboardDistributionFitted', 'dashboardDistributionFittedBar', counts.fitted]
+    ];
+    values.forEach(([, id, barId, value]) => {
       const percent = total > 0 ? Math.round((Number(value || 0) / total) * 100) : 0;
       setText(id, `${wholeNumber(value)} (${percent}%)`);
+      const bar = $(`#${barId}`);
+      if (bar) bar.style.width = `${Math.min(100, percent)}%`;
     });
   }
 
@@ -3263,6 +3536,202 @@
     setText('scanHistoryTotalRows', wholeNumber(totals.scanRows));
     setText('scanHistoryUniqueParts', wholeNumber(totals.uniqueParts));
     setText('scanHistoryVisibleRows', wholeNumber(totals.visibleRows));
+  }
+
+  const SCAN_HISTORY_SORT_LABELS = {
+    time: 'Time',
+    partNumber: 'Part Number',
+    partDescription: 'Part Description',
+    productCategory: 'Product Category',
+    mrp: 'MRP',
+    dlc: 'DLC',
+    productGroup: 'Product Group',
+    model: 'Model',
+    year: 'Year',
+    qty: 'Qty',
+    totalQty: 'Total Qty',
+    type: 'Type',
+    bin: 'Bin',
+    dealer: 'Dealer',
+    device: 'Device',
+    status: 'Status'
+  };
+  const SCAN_HISTORY_NUMERIC_SORTS = new Set(['time', 'mrp', 'dlc', 'qty', 'totalQty']);
+  const SCAN_HISTORY_DESC_FIRST = new Set(['time', 'mrp', 'dlc', 'qty', 'totalQty']);
+
+  function scanHistoryDefaultSort() {
+    return { key: 'time', direction: 'desc' };
+  }
+
+  function normalizeScanHistorySort(sort = state.scanHistorySort) {
+    const fallback = scanHistoryDefaultSort();
+    const key = Object.prototype.hasOwnProperty.call(SCAN_HISTORY_SORT_LABELS, sort && sort.key) ? sort.key : fallback.key;
+    const direction = String(sort && sort.direction || fallback.direction).toLowerCase() === 'asc' ? 'asc' : 'desc';
+    return { key, direction };
+  }
+
+  function scanHistoryTimeValue(scan = {}) {
+    const value = scan.timestamp || scan.scanTime || scan.createdAt || scan.updatedAt || '';
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  function scanHistorySortValue(scan = {}, key = '') {
+    switch (key) {
+      case 'time':
+        return scanHistoryTimeValue(scan);
+      case 'partNumber':
+        return scanHistoryPartNumber(scan);
+      case 'partDescription':
+        return scan.partDescription || scan.partName || scan.description || scanHistoryPartNumber(scan);
+      case 'productCategory':
+        return scan.productCategory || scan.category || '';
+      case 'mrp':
+        return Number(scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.valuationMRP ?? scan.mrp ?? 0) || 0;
+      case 'dlc':
+        return Number(scan.currentCatalogueDLC ?? scan.dlc ?? 0) || 0;
+      case 'productGroup':
+        return scan.productGroup || '';
+      case 'model':
+        return scan.model || '';
+      case 'year':
+        return scan.manufacturingYear || scan.year || '';
+      case 'qty':
+        return Number(scanQuantity(scan, 0)) || 0;
+      case 'totalQty':
+        return Number(scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1)) || 0;
+      case 'type':
+        return scan.scanType || scan.type || '';
+      case 'bin':
+        return scan.binLocation || scan.bin || '';
+      case 'dealer':
+        return scan.dealerName || scan.dealerCode || '';
+      case 'device':
+        return scan.deviceName || scan.deviceId || '';
+      case 'status':
+        return normalizedDisplaySyncStatus(scan) || scan.syncStatus || scan.scanStatus || scan.status || '';
+      default:
+        return '';
+    }
+  }
+
+  function compareScanHistoryValues(left, right, key) {
+    const leftValue = scanHistorySortValue(left, key);
+    const rightValue = scanHistorySortValue(right, key);
+    if (SCAN_HISTORY_NUMERIC_SORTS.has(key)) {
+      return (Number(leftValue) || 0) - (Number(rightValue) || 0);
+    }
+    return String(leftValue || '').localeCompare(String(rightValue || ''), undefined, {
+      numeric: true,
+      sensitivity: 'base'
+    });
+  }
+
+  function sortScanHistoryRecords(records = [], sort = state.scanHistorySort) {
+    const sortState = normalizeScanHistorySort(sort);
+    state.scanHistorySort = sortState;
+    const direction = sortState.direction === 'asc' ? 1 : -1;
+    return (Array.isArray(records) ? records : []).slice().sort((left, right) => {
+      const primary = compareScanHistoryValues(left, right, sortState.key);
+      if (primary !== 0) return primary * direction;
+      const timeFallback = scanHistoryTimeValue(right) - scanHistoryTimeValue(left);
+      if (timeFallback !== 0) return timeFallback;
+      return scanHistoryRecordId(left).localeCompare(scanHistoryRecordId(right), undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }
+
+  function renderScanHistoryRecords(records = state.scanHistoryRecords || [], summary = state.scanHistorySummary || {}) {
+    const body = $('#scanHistoryRows');
+    if (!body) return;
+    const rows = Array.isArray(records) ? records : [];
+    body.innerHTML = rows.length ? rows.map(scanHistoryRow).join('') : '<tr><td colspan="18" class="muted">No scan history found</td></tr>';
+    updateScanHistorySummary(rows, summary);
+    bindScanHistoryActions();
+    renderScanHistorySortHeaders();
+  }
+
+  function initScanHistorySorting(table = $('#scanHistoryRows')?.closest('table')) {
+    if (!table || !table.tHead || !table.tHead.rows.length) return;
+    table.classList.add('scan-history-sortable-table');
+    Array.from(table.tHead.rows[0].children).forEach((th) => {
+      const key = th.dataset.sortKey || '';
+      if (!Object.prototype.hasOwnProperty.call(SCAN_HISTORY_SORT_LABELS, key)) return;
+      const label = th.dataset.sortLabel || String(th.textContent || SCAN_HISTORY_SORT_LABELS[key]).replace(/\s+/g, ' ').trim();
+      th.dataset.sortLabel = label || SCAN_HISTORY_SORT_LABELS[key];
+      th.classList.add('scan-history-sortable');
+      if (th.querySelector('.scan-history-sort-button')) return;
+      const resizer = th.querySelector('.column-resizer');
+      Array.from(th.childNodes).forEach((node) => {
+        if (node !== resizer) node.remove();
+      });
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'scan-history-sort-button';
+      button.dataset.sortKey = key;
+      button.setAttribute('aria-label', `Sort ${th.dataset.sortLabel}`);
+      button.title = `Sort ${th.dataset.sortLabel}`;
+      const labelNode = document.createElement('span');
+      labelNode.className = 'scan-history-sort-label';
+      labelNode.textContent = th.dataset.sortLabel;
+      const indicator = document.createElement('span');
+      indicator.className = 'scan-history-sort-indicator is-none';
+      indicator.setAttribute('aria-hidden', 'true');
+      const up = document.createElement('span');
+      up.className = 'scan-history-sort-caret scan-history-sort-up';
+      const down = document.createElement('span');
+      down.className = 'scan-history-sort-caret scan-history-sort-down';
+      const screenReader = document.createElement('span');
+      screenReader.className = 'sr-only scan-history-sort-status';
+      indicator.append(up, down);
+      button.append(labelNode, indicator, screenReader);
+      if (resizer) th.insertBefore(button, resizer);
+      else th.appendChild(button);
+    });
+    if (table.dataset.scanHistorySortBound !== 'true') {
+      table.dataset.scanHistorySortBound = 'true';
+      table.tHead.addEventListener('click', (event) => {
+        const button = event.target.closest('.scan-history-sort-button');
+        if (!button) return;
+        const key = button.dataset.sortKey || button.closest('th')?.dataset.sortKey || '';
+        if (!Object.prototype.hasOwnProperty.call(SCAN_HISTORY_SORT_LABELS, key)) return;
+        const current = normalizeScanHistorySort();
+        const direction = current.key === key
+          ? (current.direction === 'asc' ? 'desc' : 'asc')
+          : (SCAN_HISTORY_DESC_FIRST.has(key) ? 'desc' : 'asc');
+        state.scanHistorySort = { key, direction };
+        state.scanHistoryRecords = sortScanHistoryRecords(state.scanHistoryRecords || [], state.scanHistorySort);
+        renderScanHistoryRecords(state.scanHistoryRecords, state.scanHistorySummary || {});
+        enhanceCoreTables();
+      });
+    }
+    renderScanHistorySortHeaders(table);
+  }
+
+  function renderScanHistorySortHeaders(table = $('#scanHistoryRows')?.closest('table')) {
+    if (!table || !table.tHead || !table.tHead.rows.length) return;
+    const sort = normalizeScanHistorySort();
+    Array.from(table.tHead.rows[0].children).forEach((th) => {
+      const key = th.dataset.sortKey || '';
+      if (!Object.prototype.hasOwnProperty.call(SCAN_HISTORY_SORT_LABELS, key)) return;
+      const sorted = key === sort.key;
+      th.classList.toggle('sorted-asc', sorted && sort.direction === 'asc');
+      th.classList.toggle('sorted-desc', sorted && sort.direction === 'desc');
+      th.setAttribute('aria-sort', sorted ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+      const indicator = th.querySelector('.scan-history-sort-indicator');
+      if (indicator) {
+        indicator.classList.toggle('is-none', !sorted);
+        indicator.classList.toggle('is-asc', sorted && sort.direction === 'asc');
+        indicator.classList.toggle('is-desc', sorted && sort.direction === 'desc');
+      }
+      const label = th.dataset.sortLabel || SCAN_HISTORY_SORT_LABELS[key];
+      const button = th.querySelector('.scan-history-sort-button');
+      if (button) {
+        button.setAttribute('aria-label', sorted ? `${label}, sorted ${sort.direction === 'asc' ? 'ascending' : 'descending'}. Activate to sort ${sort.direction === 'asc' ? 'descending' : 'ascending'}.` : `Sort ${label}`);
+        button.title = sorted ? `${label} sorted ${sort.direction === 'asc' ? 'ascending' : 'descending'}` : `Sort ${label}`;
+      }
+      const status = th.querySelector('.scan-history-sort-status');
+      if (status) status.textContent = sorted ? `Sorted ${sort.direction === 'asc' ? 'ascending' : 'descending'}` : 'Not sorted';
+    });
   }
 
   function scanHistoryQueryParams() {
@@ -3337,6 +3806,7 @@
   function scanStreamRow(scan = {}) {
     const syncStatus = normalizedDisplaySyncStatus(scan) || 'pending';
     const partDescription = scan.partDescription || scan.partName || scan.description || scan.part || '-';
+    const entryBy = scan.enteredByName || scan.staffName || scan.userName || scan.userId || scanEntrySourceLabel(scan);
     return `
       <tr>
         <td>${escapeHtml(compactDateTime(scan.timestamp))}</td>
@@ -3349,18 +3819,15 @@
         })}</td>
         <td>${escapeHtml(partDescription)}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
-        <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? 0))}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin)}</td>
-        <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
-        <td>${deviceLink(scan.deviceId)}</td>
-        <td>${syncStatusBadge(syncStatus)}</td>
+        <td>${escapeHtml(entryBy)}</td>
       </tr>
     `;
   }
 
   function safeScanStreamRow(scan = {}) {
-    const syncStatus = normalizedDisplaySyncStatus(scan) || 'pending';
     const partDescription = scan.partDescription || scan.partName || scan.description || scan.part || '-';
+    const entryBy = scan.enteredByName || scan.staffName || scan.userName || scan.userId || scanEntrySourceLabel(scan);
     return `
       <tr>
         <td>${escapeHtml(compactDateTime(scan.timestamp || scan.scanTime || scan.createdAt || ''))}</td>
@@ -3373,11 +3840,8 @@
         })}</td>
         <td>${escapeHtml(partDescription)}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
-        <td>${escapeHtml(money(scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.mrp ?? 0))}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin || '-')}</td>
-        <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
-        <td>${escapeHtml(scan.deviceId || '-')}</td>
-        <td>${syncStatusBadge(syncStatus)}</td>
+        <td>${escapeHtml(entryBy)}</td>
       </tr>
     `;
   }
@@ -3396,8 +3860,9 @@
           : (options.skipActiveAuditFilter === true
             ? 'No scans yet'
             : (Array.isArray(scans) && scans.length ? 'No scans match the active dealer / audit filter' : 'No scans yet'));
-        body.innerHTML = rows.length
-          ? rows.map((scan, index) => {
+        const previewRows = rows.slice(0, 5);
+        body.innerHTML = previewRows.length
+          ? previewRows.map((scan, index) => {
             try {
               return scanStreamRow(scan);
             } catch (rowError) {
@@ -3408,7 +3873,7 @@
               return safeScanStreamRow(scan);
             }
           }).join('')
-          : `<tr><td colspan="9" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
+          : `<tr><td colspan="6" class="muted">${escapeHtml(emptyLabel)}</td></tr>`;
       }
       if (!rows.length && Array.isArray(merged) && merged.length && options.skipActiveAuditFilter !== true) {
         console.warn('[DASHBOARD] stream filtered to zero rows', {
@@ -3428,7 +3893,7 @@
       state.scanStreamRecords = [];
       renderDashboardQuickOverview(state.dashboardStats || {}, []);
       renderDashboardTopBins([]);
-      if (body) body.innerHTML = '<tr><td colspan="9" class="muted">No scans yet</td></tr>';
+      if (body) body.innerHTML = '<tr><td colspan="6" class="muted">No scans yet</td></tr>';
       return [];
     }
   }
@@ -3445,7 +3910,8 @@
     const counts = new Map();
     records.forEach((scan) => {
       const bin = dashboardBinLabel(scan);
-      counts.set(bin, (counts.get(bin) || 0) + 1);
+      const quantity = Math.abs(Number(scanQuantity(scan, 0)) || 0);
+      if (quantity > 0) counts.set(bin, (counts.get(bin) || 0) + quantity);
     });
     const rows = Array.from(counts.entries())
       .map(([bin, count]) => ({ bin, count }))
@@ -3457,16 +3923,17 @@
     }
     const max = Math.max(1, ...rows.map((row) => Number(row.count || 0)));
     body.innerHTML = rows.map((row) => {
-      const width = Math.max(10, Math.round((Number(row.count || 0) / max) * 100));
+      const width = Math.max(1, Math.round((Number(row.count || 0) / max) * 100));
       return `
         <div class="dashboard-top-bin-row">
           <strong class="dashboard-top-bin-label">${escapeHtml(row.bin)}</strong>
+          <div class="dashboard-top-bin-count">${wholeNumber(row.count || 0)}</div>
           <div class="dashboard-top-bin-copy">
             <div class="dashboard-top-bin-track">
               <span class="dashboard-top-bin-bar" style="width: ${width}%"></span>
             </div>
           </div>
-          <div class="dashboard-top-bin-count">${wholeNumber(row.count || 0)}</div>
+          <div class="dashboard-top-bin-percent">${width}%</div>
         </div>
       `;
     }).join('');
@@ -3517,7 +3984,7 @@
     const rows = search
       ? allRows.filter((item) => `${item.productGroup || ''} ${item.partSubGroup || item.productSubGroup || ''}`.toUpperCase().includes(search))
       : allRows;
-    if (body) {
+    if (body) { // This is a duplicate line
       body.innerHTML = rows.length ? rows.map((item) => {
         const totalScans = productGroupSummaryValue(item, 'totalScans', 'scanCount');
         const totalQuantity = productGroupSummaryValue(item, 'totalQuantity', 'qty');
@@ -3526,8 +3993,8 @@
         const rowKey = productGroupKey(productGroup, partSubGroup);
         return `
           <tr class="${rowKey === selectedKey ? 'selected' : ''}">
-            <td><button class="link-button product-group-detail-link" type="button" data-product-group="${escapeHtml(productGroup)}" data-part-sub-group="${escapeHtml(partSubGroup)}">${escapeHtml(productGroup)}</button></td>
-            <td><button class="link-button product-group-detail-link" type="button" data-product-group="${escapeHtml(productGroup)}" data-part-sub-group="${escapeHtml(partSubGroup)}">${escapeHtml(partSubGroup)}</button></td>
+            <td><button class="btn light product-group-detail-link" type="button" data-product-group="${escapeHtml(productGroup)}" data-part-sub-group="${escapeHtml(partSubGroup)}">${escapeHtml(productGroup)}</button></td>
+            <td><button class="btn light product-group-detail-link" type="button" data-product-group="${escapeHtml(productGroup)}" data-part-sub-group="${escapeHtml(partSubGroup)}">${escapeHtml(partSubGroup)}</button></td>
             <td class="number-cell">${escapeHtml(groupSummaryNumber(totalScans))}</td>
             <td class="number-cell">${escapeHtml(groupSummaryNumber(totalQuantity))}</td>
             <td class="number-cell">${escapeHtml(groupSummaryNumber(item.uniqueParts || 0))}</td>
@@ -3571,7 +4038,7 @@
     state.dashboardProductGroupLoadPromise = (async () => {
       try {
         const signal = options.signal || controller.signal;
-        const query = dashboardQueryString();
+        const query = dashboardQueryString({ forceRefresh: force });
         const data = await api(`/api/scans/dashboard/product-group-summary${query ? `?${query}` : ''}`, { signal });
         if (state.dashboardProductGroupLoadRequestId !== requestId) return state.dashboardProductGroupRows;
         state.dashboardProductGroupRows = Array.isArray(data.rows) ? data.rows : [];
@@ -3688,27 +4155,11 @@
     if (options.showSuccess === true) showScanPopup(scan);
     addScanToStream(scan);
     prependScanHistory(scan);
-    const currentToday = Number(String(($('#dashToday') || {}).textContent || 0).replace(/,/g, ''));
-    if (Number.isFinite(currentToday)) setDashboardKpiValue('dashToday', wholeNumber(currentToday + 1));
-    const currentScanQty = Number(String(($('#dashTotalScanQty') || {}).textContent || 0).replace(/,/g, ''));
-    const scanQty = Number(scanQuantity(scan, 1));
-    if (Number.isFinite(currentScanQty)) setDashboardKpiValue('dashTotalScanQty', wholeNumber(currentScanQty + (Number.isFinite(scanQty) ? scanQty : 1)));
-    const scanBucket = dashboardOverviewBucket(scan);
-    const bucketQty = Number.isFinite(scanQty) ? scanQty : 1;
-    const nextDashboardStats = { ...(state.dashboardStats || {}) };
-    if (scanBucket === 'inward') nextDashboardStats.totalInward = Number(nextDashboardStats.totalInward || 0) + bucketQty;
-    else if (scanBucket === 'outward') nextDashboardStats.totalOutward = Number(nextDashboardStats.totalOutward || 0) + bucketQty;
-    else if (scanBucket === 'manual') nextDashboardStats.manualCount = Number(nextDashboardStats.manualCount || 0) + bucketQty;
-    else if (scanBucket === 'failed') nextDashboardStats.failedCount = Number(nextDashboardStats.failedCount || 0) + bucketQty;
-    state.dashboardStats = {
-      ...nextDashboardStats,
-      totalScannedToday: Number.isFinite(currentToday) ? currentToday + 1 : Number(state.dashboardStats?.totalScannedToday || 0) + 1,
-      totalScannedQuantity: Number.isFinite(currentScanQty) ? currentScanQty + (Number.isFinite(scanQty) ? scanQty : 1) : Number(state.dashboardStats?.totalScannedQuantity || state.dashboardStats?.totalScanQty || 0) + (Number.isFinite(scanQty) ? scanQty : 1)
-    };
     setDashboardKpiValue('dashLastScanTime', compactDateTime(scan.timestamp || new Date()), { time: true });
     setDashboardKpiValue('dashLastScannedPart', scan.partNumber || scan.part || '-');
     setStatusPill('topRealtimeStatus', 'Realtime: Scan Received', 'blue');
     setDashboardKpiValue('dashRealtimeActivity', compactDateTime(scan.timestamp || new Date()), { time: true });
+    if (options.skipDashboardRefresh !== true) queueDashboardRefresh(350);
   }
 
   function setDashboardLoading(loading) {
@@ -3728,10 +4179,26 @@
     state.dashboardLoadRequestId = requestId;
     const controller = new AbortController();
     state.dashboardAbortController = controller;
+    setDashboardRefreshState(true);
+    updateDashboardScopeSummary();
     if (!state.dashboardLoaded) setDashboardLoading(true);
     state.dashboardLoadPromise = (async () => {
       try {
-        const query = dashboardQueryString();
+        const query = dashboardQueryString({ forceRefresh: force });
+        const healthPromise = api('/api/health', { signal: controller.signal })
+          .then((health) => {
+            applyServerInfo(health);
+            updateSyncBadges(health);
+            updateDashboardHealth(health);
+            return health;
+          })
+          .catch((error) => {
+            if (error && error.name !== 'AbortError') {
+              updateDashboardHealth({ server: 'offline', db: 'disconnected', storageStatus: 'unavailable' });
+              console.warn('[DASHBOARD] health load failed', error.message);
+            }
+            return null;
+          });
         const topBinsPromise = api(`/api/scans/live?limit=200${query ? `&${query}` : ''}`, { signal: controller.signal })
           .catch((error) => {
             if (error && error.name !== 'AbortError') {
@@ -3745,6 +4212,7 @@
           state.activeAudit = data.activeAudit;
           updateActiveAuditUi();
         }
+        updateDashboardScopeSummary();
         const stats = data.stats || {};
         state.dashboardStats = stats;
         updateDashboardCards(stats);
@@ -3755,7 +4223,7 @@
               const fallback = await api(`/api/scans/live?limit=12${query ? `&${query}` : ''}`, { signal: controller.signal });
               recent = fallback.records || fallback.scans || recent;
               if (!Array.isArray(recent) || !recent.length) {
-                const secondFallback = await api('/api/scans/recent?limit=12', { signal: controller.signal });
+                const secondFallback = await api(`/api/scans/recent?limit=12${query ? `&${query}` : ''}`, { signal: controller.signal });
                 recent = secondFallback.records || secondFallback.scans || recent;
               }
             } catch (fallbackError) {
@@ -3781,6 +4249,7 @@
             renderScanStream([]);
           }
         }
+        await healthPromise;
         state.dashboardLoaded = true;
         state.dashboardLastLoadedAt = Date.now();
         return data;
@@ -3796,6 +4265,7 @@
         state.dashboardLoadPromise = null;
         state.dashboardAbortController = null;
         setDashboardLoading(false);
+        setDashboardRefreshState(false);
       }
     }
   }
@@ -3827,18 +4297,16 @@
     state.scanHistoryLoadRequestId = requestId;
     const data = await api(`/api/scans/history?${query}`);
     if (state.scanHistoryLoadRequestId !== requestId) return;
-    const records = mergeScanHistoryRecords(data.records || []);
+    const records = sortScanHistoryRecords(mergeScanHistoryRecords(data.records || []));
     state.scanHistoryRecords = records;
     const summary = scanHistorySummary(records, {});
     state.scanHistorySummary = { ...(data.summary || {}), ...summary };
-    updateScanHistorySummary(records, state.scanHistorySummary);
-    $('#scanHistoryRows').innerHTML = records.map(scanHistoryRow).join('') || '<tr><td colspan="18" class="muted">No scan history found</td></tr>';
+    renderScanHistoryRecords(records, state.scanHistorySummary);
     enhanceCoreTables();
-    bindScanHistoryActions();
   }
 
   function canEditScanDetails(scan = {}) {
-    return Boolean(scan);
+    return Boolean(scan && isAdminUser() && scan.isDeleted !== true);
   }
 
   function scanHistoryRecord(scanId = '') {
@@ -3885,6 +4353,9 @@
     }
     if (title) title.textContent = 'Confirm Delete';
     if (text) text.textContent = message;
+    deleteModalDetails = { reason: '', remarks: '' };
+    if ($('#deleteReasonInput')) $('#deleteReasonInput').value = '';
+    if ($('#deleteRemarksInput')) $('#deleteRemarksInput').value = '';
     modal.classList.remove('hidden');
     return new Promise((resolve) => {
       deleteModalResolver = resolve;
@@ -3893,6 +4364,23 @@
   }
 
   function closeDeleteModal(confirmed = false) {
+    if (confirmed) {
+      const reason = clean($('#deleteReasonInput')?.value || '');
+      const remarks = clean($('#deleteRemarksInput')?.value || '');
+      if (!reason) {
+        toast('Select a deletion reason.', 'error');
+        $('#deleteReasonInput')?.focus();
+        return;
+      }
+      if (reason.toLowerCase() === 'other' && !remarks) {
+        toast('Remarks are required when the reason is Other.', 'error');
+        $('#deleteRemarksInput')?.focus();
+        return;
+      }
+      deleteModalDetails = { reason, remarks };
+    } else {
+      deleteModalDetails = { reason: '', remarks: '' };
+    }
     const modal = $('#deleteModal');
     if (modal) modal.classList.add('hidden');
     const resolve = deleteModalResolver;
@@ -3902,6 +4390,10 @@
 
   function confirmDeleteAction(message = 'Are you sure you want to delete this scan?') {
     return openDeleteModal(message);
+  }
+
+  function lastDeleteDetails() {
+    return { ...deleteModalDetails };
   }
 
   function deleteFailureError() {
@@ -3914,13 +4406,29 @@
     const form = $('#scanEditForm');
     if (!form) throw new Error('Scan edit form is unavailable');
     const scanType = String(scan.scanType || scan.type || '').trim().toUpperCase();
-    form.elements.scanId.value = scanId;
+    const identity = scanHistoryRecordIdentity(scan);
+    form.dataset.scanIdentity = JSON.stringify({
+      ...identity,
+      originalPartNumber: scan.partNumber || scan.part || scan.normalizedPartNumber || '',
+      originalQuantity: scanQuantity(scan, 1),
+      originalBinLocation: scan.binLocation || scan.bin || '',
+      originalScanType: scanType,
+      partNumber: scan.partNumber || scan.part || scan.normalizedPartNumber || '',
+      quantity: scanQuantity(scan, 1),
+      binLocation: scan.binLocation || scan.bin || '',
+      scanType,
+      dealerCode: scan.dealerCode || '',
+      timestamp: scan.timestamp || scan.createdAt || ''
+    });
+    form.elements.scanId.value = identity.id || identity.scanId || identity.uniqueScanId || scanId;
     form.elements.partNumber.value = scan.partNumber || scan.part || scan.normalizedPartNumber || '';
     form.elements.quantity.value = scanQuantity(scan, 1);
     form.elements.mrp.value = scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.valuationMRP ?? 0;
     form.elements.dlc.value = scan.currentCatalogueDLC ?? 0;
     form.elements.binLocation.value = scan.binLocation || scan.bin || '';
-    form.elements.scanType.value = scanType;
+    form.elements.scanType.value = ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType) ? scanType : 'INWARD';
+    if (form.elements.reason) form.elements.reason.value = '';
+    if (form.elements.remarks) form.elements.remarks.value = '';
     form.elements.binLocation.disabled = scanType === 'FITTED';
     form.elements.binLocation.required = ['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType);
     const title = $('#scanEditTitle');
@@ -4014,12 +4522,10 @@
     const nextRecords = recordKey
       ? (state.scanHistoryRecords || []).map((item) => scanHistoryRecordKey(item) === recordKey ? scan : item)
       : [scan].concat(state.scanHistoryRecords || []);
-    state.scanHistoryRecords = mergeScanHistoryRecords(nextRecords).slice(0, 500);
-    body.innerHTML = state.scanHistoryRecords.length ? state.scanHistoryRecords.map(scanHistoryRow).join('') : '<tr><td colspan="18" class="muted">No scan history found</td></tr>';
+    state.scanHistoryRecords = sortScanHistoryRecords(mergeScanHistoryRecords(nextRecords)).slice(0, 500);
     const summary = scanHistorySummary(state.scanHistoryRecords, {});
     state.scanHistorySummary = summary;
-    updateScanHistorySummary(state.scanHistoryRecords, state.scanHistorySummary);
-    bindScanHistoryActions();
+    renderScanHistoryRecords(state.scanHistoryRecords, state.scanHistorySummary);
     enhanceCoreTables();
   }
 
@@ -4266,6 +4772,37 @@
     }
   }
 
+  async function confirmManualDuplicateAndAddQuantity(form, normalized, error) {
+    const duplicate = error?.data || {};
+    const partNumber = duplicate.partNumber || normalized.partNumber;
+    const binLocation = duplicate.binLocation || normalized.binLocation || '-';
+    const existingQty = Number(duplicate.existingQty ?? duplicate.scan?.qty ?? duplicate.scan?.quantity ?? 0);
+    const addQty = Number(duplicate.requestedQty ?? normalized.qty ?? normalized.quantity ?? 0);
+    const message = `Part ${partNumber} is already available in bin ${binLocation}.\nCurrent quantity: ${existingQty}.\nDo you want to add ${addQty} more?`;
+    if (!window.confirm(message)) return;
+
+    normalized.reason = 'Manual quantity addition';
+    normalized.remarks = '';
+    normalized.addManualQuantity = true;
+    normalized.confirmAddQuantity = true;
+    normalized.manualAddRequestId = `MANUAL-ADD-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+    try {
+      const updateData = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 });
+      playScanTone('success');
+      toast(updateData.message || 'Manual quantity updated');
+      resetManualScanFields(form);
+      if (updateData.scan) {
+        prependScanHistory(updateData.scan);
+        handleNewScan(updateData.scan, { showSuccess: true }).catch(() => undefined);
+      }
+      loadScanHistory().catch(() => undefined);
+      queueRealtimeReportRefresh('manual quantity update');
+    } catch (updateError) {
+      playScanTone('error');
+      toast(updateError.message || 'Manual quantity update failed', 'error');
+    }
+  }
+
   async function submitScan(form, options = {}) {
     const payload = formObject(form);
     const isBarcodeForm = form.id === 'barcodeScanForm';
@@ -4321,32 +4858,26 @@
       }
       return;
     }
-    try {
-      const masterPart = await validatePartAgainstMaster(scanPartNumber, normalized.dealerCode || currentDealerCode());
-      if (!masterPart) {
-        playScanTone('error');
-        toast('Invalid part number - not found in master catalogue', 'error');
-        if (isBarcodeForm) {
-          setLivePill('barcodeReadyStatus', 'Rejected - Ready', false);
-          resetBarcodeScanFields(form, normalized, options.expectedRaw);
-          setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+    // Barcode scans are validated and enriched by the save request itself. Avoid
+    // a separate master lookup before every scan; it adds a full network roundtrip.
+    if (!isBarcodeForm) {
+      try {
+        const masterPart = await validatePartAgainstMaster(scanPartNumber, normalized.dealerCode || currentDealerCode());
+        if (!masterPart) {
+          playScanTone('error');
+          toast('Invalid part number - not found in master catalogue', 'error');
+          return;
         }
-        return;
-      }
-      Object.assign(normalized, masterPart);
-      fillPart(form, masterPart);
-    } catch (error) {
-      if (!isRetryableTransportError(error)) {
-        playScanTone('error');
-        toast(error.message || 'Unable to validate part number', 'error');
-        if (isBarcodeForm) {
-          setLivePill('barcodeReadyStatus', 'Validation failed', false);
-          resetBarcodeScanFields(form, normalized, options.expectedRaw);
-          setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+        Object.assign(normalized, masterPart);
+        fillPart(form, masterPart);
+      } catch (error) {
+        if (!isRetryableTransportError(error)) {
+          playScanTone('error');
+          toast(error.message || 'Unable to validate part number', 'error');
+          return;
         }
-        return;
+        addConnectionLog(`Master lookup deferred until sync: ${error.message}`, 'warning');
       }
-      addConnectionLog(`Master lookup deferred until sync: ${error.message}`, 'warning');
     }
     if (!isBarcodeForm && !payload.rawScan && !payload.rawScanString && !payload.rawBarcode && !payload.rawScanValue && !payload.barcode && !payload.barcodeValue && !payload.scanValue && !payload.scanText) {
       normalized.rawScan = '';
@@ -4390,7 +4921,7 @@
       : { enabled: true, requireReason: true };
     const smartBinEligibleScan = ['INWARD', 'DAMAGE', 'AUDIT'].includes(normalized.scanType);
     let smartBinPrompted = false;
-    if (smartBinSettings.enabled !== false && smartBinEligibleScan && normalized.dealerCode && normalized.auditId && normalized.partNumber && normalized.binLocation) {
+    if (!isBarcodeForm && smartBinSettings.enabled !== false && smartBinEligibleScan && normalized.dealerCode && normalized.auditId && normalized.partNumber && normalized.binLocation) {
       try {
         let suggestion = localSmartBinSuggestion(normalized);
         if (!suggestion?.shouldPrompt) {
@@ -4429,17 +4960,8 @@
       }
     }
 
-    const serverDuplicate = await checkServerBarcodeDuplicate(normalized);
-    if (serverDuplicate && serverDuplicate.duplicate) {
-      if (isBarcodeForm) {
-        handleBarcodeDuplicate(normalized, serverDuplicate);
-      } else {
-        const existing = serverDuplicate.scan || serverDuplicate.existing || normalized;
-        playScanTone('duplicate');
-        toast(serverDuplicate.message || barcodeDuplicateMessage(existing), 'error');
-      }
-      return;
-    }
+    // The save endpoint applies the same duplicate policy atomically. A separate
+    // duplicate-check request here only delays barcode saves and creates a race.
 
     if (!isBarcodeForm && options.confirmBeforeSave !== false && !smartBinPrompted) {
       const confirmMessage = [
@@ -4554,7 +5076,16 @@
             normalized.bin = selectedBin;
           }
         }
-        const retryData = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 });
+        let retryData;
+        try {
+          retryData = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 });
+        } catch (retryError) {
+          if (!isBarcodeForm && retryError.status === 409 && retryError.data?.manualDuplicate) {
+            await confirmManualDuplicateAndAddQuantity(form, normalized, retryError);
+            return;
+          }
+          throw retryError;
+        }
         if (retryData && retryData.scan) {
           const savedScan = retryData.scan || {};
           addSyncLog({
@@ -4610,27 +5141,14 @@
       }
       if (!isBarcodeForm && error.status === 409 && error.data?.manualDuplicate) {
         playScanTone('duplicate');
-        const duplicate = error.data;
-        const partNumber = duplicate.partNumber || normalized.partNumber;
-        const binLocation = duplicate.binLocation || normalized.binLocation || '-';
-        const existingQty = Number(duplicate.existingQty ?? duplicate.scan?.qty ?? duplicate.scan?.quantity ?? 0);
-        const addQty = Number(duplicate.requestedQty ?? normalized.qty ?? normalized.quantity ?? 0);
-        const message = `Part ${partNumber} is already available in bin ${binLocation}.\nCurrent quantity: ${existingQty}.\nDo you want to add ${addQty} more?`;
-        if (window.confirm(message)) {
-          normalized.addManualQuantity = true;
-          normalized.confirmAddQuantity = true;
-          const updateData = await api('/api/scans/process', { method: 'POST', body: normalized });
-          playScanTone('success');
-          toast(updateData.message || 'Manual quantity updated');
-          resetManualScanFields(form);
-          if (updateData.scan) handleNewScan(updateData.scan, { showSuccess: true }).catch(() => undefined);
-          queueRealtimeReportRefresh('manual quantity update');
-        }
+        await confirmManualDuplicateAndAddQuantity(form, normalized, error);
         return;
       }
       if (error.status === 409 && error.data?.fittedDuplicate) {
         playScanTone('duplicate');
         if (window.confirm(error.data.message || 'This fitted part already exists for this vehicle/job card. Add quantity?')) {
+          normalized.reason = 'Fitted quantity addition';
+          normalized.remarks = '';
           normalized.addFittedQuantity = true;
           const updateData = await api('/api/scans/process', { method: 'POST', body: normalized });
           playScanTone('success');
@@ -5064,6 +5582,23 @@
     return REPORT_TITLES[selected] ? selected : '';
   }
 
+  function initialReportType() {
+    const requested = new URLSearchParams(window.location.search).get('reportType') || '';
+    if (REPORT_TITLES[requested]) return requested;
+
+    try {
+      const saved = JSON.parse(localStorage.getItem(REPORT_STATE_KEY) || 'null');
+      if (saved && REPORT_TITLES[saved.reportType]) return saved.reportType;
+    } catch (error) {
+      // A malformed saved preference should not stop the report workspace from opening.
+    }
+
+    const current = activeReportType();
+    if (current) return current;
+    if (REPORT_TITLES[state.lastReportType]) return state.lastReportType;
+    return Object.keys(REPORT_TITLES)[0];
+  }
+
   function isProductGroupSummaryReport(reportType = activeReportType()) {
     return reportType === 'product-group-summary';
   }
@@ -5252,16 +5787,40 @@
     if (resolve) resolve(result);
   }
 
-  function smartBinExistingBinMarkup(existingBins = []) {
+  function smartBinExistingBinMarkup(existingBins = [], selectedBin = '') {
     if (!Array.isArray(existingBins) || !existingBins.length) {
       return '<div class="muted smart-bin-empty">No existing bin locations found.</div>';
     }
-    return existingBins.map((bin, index) => `
-      <div class="smart-bin-bin-row${index === 0 ? ' active' : ''}" data-bin="${escapeHtml(bin.binLocation || '')}">
+    const selected = cleanDealerCode(selectedBin || (existingBins[0] && existingBins[0].binLocation) || '');
+    return existingBins.map((bin) => {
+      const binLocation = cleanDealerCode(bin.binLocation || '');
+      const active = binLocation === selected;
+      return `
+      <button type="button" class="smart-bin-bin-row${active ? ' active' : ''}" data-bin="${escapeHtml(binLocation)}" aria-pressed="${active ? 'true' : 'false'}">
         <strong>${escapeHtml(bin.binLocation || '-')} ${bin.locationType ? `<span class="smart-bin-location-type">${escapeHtml(bin.locationType)}</span>` : ''}</strong>
         <span>Qty ${escapeHtml(wholeNumber(bin.qty || 0))}${bin.createdBy ? ` · ${escapeHtml(bin.createdBy)}` : ''}${bin.reason ? ` · ${escapeHtml(bin.reason)}` : ''}</span>
-      </div>
-    `).join('');
+      </button>
+    `;
+    }).join('');
+  }
+
+  function selectSmartBinExistingBin(selectedBin) {
+    const { bins, select } = smartBinPromptNodes();
+    const selected = cleanDealerCode(selectedBin || '');
+    if (!selected) return;
+    if (select) select.value = selected;
+    smartBinPromptPayload = {
+      ...(smartBinPromptPayload || {}),
+      selectedBin: selected
+    };
+    if (bins) {
+      $$('#smartBinExistingBins [data-bin]').forEach((row) => {
+        const active = cleanDealerCode(row.dataset.bin || '') === selected;
+        row.classList.toggle('active', active);
+        row.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+    }
+    refreshSmartBinActionLabels(smartBinPromptPayload || {});
   }
 
   function refreshSmartBinActionLabels(payload = {}) {
@@ -5303,24 +5862,17 @@
     if (message) {
       message.textContent = clean(payload.message || '') || `PART ${partNumber || '-'} IS AVAILABLE IN BIN ${existingBin || '-'}\n\nWill you continue scanning in ${existingBin || '-'} or continue with ${newBin || 'this bin'}?`;
     }
-    if (bins) bins.innerHTML = smartBinExistingBinMarkup(existingBins);
+    if (bins) {
+      bins.innerHTML = smartBinExistingBinMarkup(existingBins, smartBinPromptPayload.selectedBin);
+      $$('#smartBinExistingBins [data-bin]').forEach((row) => {
+        row.addEventListener('click', () => selectSmartBinExistingBin(row.dataset.bin || ''));
+      });
+    }
     if (selectWrap) selectWrap.classList.toggle('hidden', !showSelect);
     if (select) {
       select.innerHTML = existingBins.map((bin) => `<option value="${escapeHtml(bin.binLocation)}">${escapeHtml(bin.binLocation)} · Qty ${escapeHtml(wholeNumber(bin.qty || 0))}</option>`).join('');
       select.value = cleanDealerCode(payload.selectedBin || suggestedBin || (existingBins[0] ? existingBins[0].binLocation : ''));
-      select.onchange = () => {
-        const selected = cleanDealerCode(select.value || '');
-        smartBinPromptPayload = {
-          ...(smartBinPromptPayload || {}),
-          selectedBin: selected
-        };
-        if (bins) {
-          $$('#smartBinExistingBins [data-bin]').forEach((row) => {
-            row.classList.toggle('active', cleanDealerCode(row.dataset.bin || '') === selected);
-          });
-        }
-        refreshSmartBinActionLabels(smartBinPromptPayload || {});
-      };
+      select.onchange = () => selectSmartBinExistingBin(select.value || '');
     }
     if (useExisting) useExisting.hidden = !existingBin;
     refreshSmartBinActionLabels(smartBinPromptPayload || {});
@@ -5474,27 +6026,55 @@
   }
 
   function normalizeReportDealerCode(value) {
-    const code = cleanDealerCode(value || '');
+    const raw = String(value || '').trim();
+    const code = cleanDealerCode(raw);
     if (!code || code === 'ALL') return '';
     if (/^(SELECT DEALER|ALL DEALERS|ACTIVE AUDIT|DEALER CODE)$/.test(code)) return '';
+    const exactDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === code);
+    if (exactDealer?.dealerCode) return cleanDealerCode(exactDealer.dealerCode);
+    const leadingCode = raw.match(/^([A-Za-z0-9_]{3,})\b/);
+    if (leadingCode) {
+      const leading = cleanDealerCode(leadingCode[1]);
+      const leadingDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === leading);
+      if (leadingDealer?.dealerCode) return cleanDealerCode(leadingDealer.dealerCode);
+      if (!/^(SELECT|ALL|ACTIVE|DEALER)$/.test(leading)) return leading;
+    }
     return code;
   }
 
   function selectedReportDealerCode() {
     const form = $('#reportFilters');
     const dealerSelect = $('[name="dealerCode"]', form);
-    const selectedDealerCode = normalizeReportDealerCode(dealerSelect?.value || '')
-      || normalizeReportDealerCode(selectedOptionText(dealerSelect))
-      || normalizeReportDealerCode(currentDealerCode());
+    const candidates = [
+      dealerSelect?.value || '',
+      selectedOptionText(dealerSelect),
+      selectedDashboardDealerCode(),
+      state.dashboardDealerCode || '',
+      activeDealerId(),
+      state.activeAudit?.dealerCode || '',
+      currentDealerCode()
+    ];
+    const selectedDealerCode = candidates.map(normalizeReportDealerCode).find(Boolean) || '';
     const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === selectedDealerCode);
     return selectedDealer?.dealerCode || selectedDealerCode || '';
+  }
+
+  function syncReportDealerSelection() {
+    const form = $('#reportFilters');
+    const dealerSelect = $('[name="dealerCode"]', form);
+    const dealerCode = selectedReportDealerCode();
+    if (dealerSelect && dealerCode && normalizeReportDealerCode(dealerSelect.value) !== dealerCode) {
+      setDealerSelectValue(dealerSelect, dealerCode);
+      syncDealerSelectDisplay(dealerSelect);
+    }
+    return dealerCode;
   }
 
   function reportParams() {
     const form = $('#reportFilters');
     const formData = formObject(form);
     const reportType = activeReportType();
-    const dealerCode = selectedReportDealerCode();
+    const dealerCode = syncReportDealerSelection();
     const params = compactParams({
       reportType,
       dealerCode,
@@ -5546,8 +6126,9 @@
     }
     if (format) params.set('format', format);
     if (!format) {
-      params.set('page', '1');
-      params.set('limit', '100');
+      const reportType = paramsObject.reportType || activeReportType();
+      params.set('page', reportType === 'local-parts' ? String(state.localPartsReportPage || 1) : '1');
+      params.set('limit', reportType === 'local-parts' ? '50' : '100');
     }
     const query = params.toString();
     const url = `/api/reports/${paramsObject.reportType || activeReportType()}${query ? `?${query}` : ''}`;
@@ -5584,6 +6165,22 @@
   function renderMovementWiseStockSummary(summary = {}, reportType = activeReportType()) {
     const panel = $('#movementWiseStockSummary');
     if (!panel) return;
+    if (reportType === 'local-parts') {
+      const cards = [
+        ['Total Entries', wholeNumber(movementWiseSummaryValue(summary, ['totalRows']))],
+        ['Total Quantity', localPartQuantity(movementWiseSummaryValue(summary, ['grandTotalQuantity']))],
+        ['Total MRP Value', money2(movementWiseSummaryValue(summary, ['grandTotalMrpValue']))],
+        ['Total DLC Value', money2(movementWiseSummaryValue(summary, ['grandTotalDlcValue']))]
+      ];
+      panel.innerHTML = cards.map(([label, value]) => `
+        <div class="metric mini">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join('');
+      panel.hidden = false;
+      return;
+    }
     if (reportType !== 'movement_wise_stock_analysis') {
       panel.hidden = true;
       panel.innerHTML = '';
@@ -5617,6 +6214,18 @@
     state.reportTableSections = data.sections || null;
     renderMovementWiseStockSummary(data.summary || {}, reportType);
     renderReportTable(data.columns || [], rows, data.totalRows, data.grandTotal, reportType);
+    const localPagination = $('#localPartsReportPagination');
+    if (reportType === 'local-parts') {
+      state.localPartsReportStale = false;
+      state.localPartsReportPage = Number(data.pagination?.page || 1);
+      state.localPartsReportTotalPages = Number(data.pagination?.totalPages || 1);
+      if (localPagination) localPagination.hidden = false;
+      setText('localPartsReportPageInfo', `Page ${state.localPartsReportPage} of ${state.localPartsReportTotalPages}`);
+      if ($('#localPartsReportPrev')) $('#localPartsReportPrev').disabled = state.localPartsReportPage <= 1;
+      if ($('#localPartsReportNext')) $('#localPartsReportNext').disabled = state.localPartsReportPage >= state.localPartsReportTotalPages;
+    } else if (localPagination) {
+      localPagination.hidden = true;
+    }
     const message = $('#reportMessage');
     if (message) {
       message.className = rows.length ? 'form-message success' : 'form-message error';
@@ -5663,7 +6272,7 @@
       return false;
     }
     const box = $('#reportMessage');
-    if (box && box.textContent === missingDealerMessage) {
+    if (box && /select dealer code first/i.test(box.textContent || '')) {
       box.className = 'form-message';
       box.textContent = 'Select filters to load report automatically.';
     }
@@ -5675,7 +6284,8 @@
     state.reportAutoLoadTimer = null;
   }
 
-  function scheduleReportLoad(delay = 350, pendingMessage = 'Applying filters...') {
+  function scheduleReportLoad(delay = 350, pendingMessage = 'Applying filters...', options = {}) {
+    const { autoDownloadExcel = false } = options;
     cancelScheduledReportLoad();
     const params = reportParams();
     if (!params.reportType) return;
@@ -5684,6 +6294,7 @@
       updateReportButtons();
       return;
     }
+    syncReportDealerSelection();
     if (state.reportAbortController) state.reportAbortController.abort();
     const message = $('#reportMessage');
     if (message) {
@@ -5694,16 +6305,24 @@
     if (state.reportAbortController) {
       state.reportAbortController.abort('new-report-scheduled');
     }
-    state.reportAutoLoadTimer = setTimeout(() => {
+    const scheduledReportType = params.reportType;
+    state.reportAutoLoadTimer = setTimeout(async () => {
       state.reportAutoLoadTimer = null;
-      loadReport().catch((error) => toast(error.message, 'error'));
+      try {
+        await loadReport();
+        if (autoDownloadExcel && activeReportType() === scheduledReportType && state.reportLoaded) {
+          await downloadActiveReportExcel({ silent: true });
+        }
+      } catch (error) {
+        toast(error.message, 'error');
+      }
     }, delay);
   }
 
   function syncReportDealerAfterDealerRefresh() {
     const form = $('#reportFilters');
     if (!form || !$('#reports')?.classList.contains('active')) return;
-    const dealerCode = selectedReportDealerCode();
+    const dealerCode = syncReportDealerSelection();
     const dealerSelect = $('[name="dealerCode"]', form);
     if (dealerCode && dealerSelect && normalizeReportDealerCode(dealerSelect.value) !== cleanDealerCode(dealerCode)) {
       setDealerSelectValue(dealerSelect, dealerCode);
@@ -5724,7 +6343,7 @@
     state.dashboardProductGroupLoadedAt = 0;
     clearTimeout(state.dashboardRefreshTimer);
     state.dashboardRefreshTimer = setTimeout(() => {
-      if (document.hidden || !document.body.classList.contains('dashboard-view-active')) return;
+      if (document.hidden || !document.body.classList.contains('view-active-dashboard')) return;
       loadDashboard({ force: true }).catch((error) => console.warn('[DASHBOARD] queued refresh failed', error.message));
     }, delay);
   }
@@ -5732,7 +6351,7 @@
   function setScanFormSubmitting(form, submitting) {
     if (!form) return;
     form.dataset.submitting = submitting ? 'true' : 'false';
-    const submitButton = $('button[type="submit"]', form);
+    const submitButton = form.id === 'localPartForm' ? $('#localPartSaveBtn') : $('button[type="submit"]', form);
     if (!submitButton) return;
     if (submitting) {
       submitButton.dataset.idleText = submitButton.textContent;
@@ -5752,6 +6371,17 @@
     return `${(REPORT_TITLES[reportType] || 'Report').replace(/\s+/g, '_')}.${extension}`;
   }
 
+  async function downloadActiveReportExcel(options = {}) {
+    const { silent = false } = options;
+    if (!validateReportSelection(!silent)) return false;
+    if (isProductGroupSummaryReport()) {
+      await exportProductGroupSummary();
+      return true;
+    }
+    await downloadGet(reportPath('excel'), reportDownloadName('xlsx'));
+    return true;
+  }
+
   function updateReportButtons() {
     const reportType = activeReportType();
     const canShow = Boolean(reportType) && validateReportSelection(false);
@@ -5763,6 +6393,7 @@
     $('#reportRefresh').disabled = !canShow || state.reportLoading;
     $('#reportExcel').disabled = isCsvReport || !canShow || state.reportLoading;
     if ($('#reportPdf')) $('#reportPdf').disabled = isCsvReport || blocksPdfEmail || !state.reportLoaded || state.reportLoading;
+    if ($('#reportPrint')) $('#reportPrint').disabled = !state.reportLoaded || state.reportLoading;
     if ($('#reportEmail')) $('#reportEmail').disabled = isCsvReport || blocksPdfEmail || !state.reportLoaded || state.reportLoading;
     if (auditPackButton) {
       auditPackButton.disabled = !auditPackDealerCode || state.auditPackInProgress;
@@ -6257,6 +6888,7 @@
     $('#reportRows').innerHTML = '';
     if ($('#reportTableSearch')) $('#reportTableSearch').value = '';
     setText('reportCount', '0 rows');
+    setText('reportPartCount', 'Total Parts: 0');
     const box = $('#reportMessage');
     if (box) {
       box.className = 'form-message';
@@ -6517,6 +7149,12 @@
     return sortReportRows(reportVisibleRows(rows), columns, reportType);
   }
 
+  function updateReportPartCount(rows = [], totalRows = 0) {
+    const requestedTotal = Number(totalRows);
+    const count = Number.isFinite(requestedTotal) && requestedTotal >= 0 ? requestedTotal : (rows || []).length;
+    setText('reportPartCount', `Total Parts: ${wholeNumber(count)}`);
+  }
+
   function reportCellClass(column, value) {
     const key = column.key || '';
     const isNumber = typeof value === 'number' || (isNumericReportColumn(key) && value !== '' && value !== null && !Number.isNaN(Number(value)));
@@ -6562,7 +7200,8 @@
       const isSorted = sort.key === key;
       const direction = isSorted ? (sort.direction === 'desc' ? 'descending' : 'ascending') : 'none';
       const sortLabel = isSorted ? (sort.direction === 'desc' ? 'Sorted high to low' : 'Sorted low to high') : 'Not sorted';
-      return `<th class="${reportColumnClass(column, index)} ${isSorted ? `sorted-${escapeHtml(sort.direction)}` : ''}" draggable="true" data-col-index="${index}" data-col-key="${escapeHtml(key)}" aria-sort="${escapeHtml(direction)}" style="width:${width}px;text-align:left"><button type="button" class="report-sort-button" title="Sort ${escapeHtml(column.header)}" aria-label="Sort ${escapeHtml(column.header)}" style="justify-content:flex-start;text-align:left"><span class="report-th-content" style="text-align:left">${escapeHtml(column.header)}</span><span class="sr-only">${escapeHtml(sortLabel)}</span></button><span class="report-col-resize" role="separator" aria-label="Resize column. Double click to auto fit."></span></th>`;
+      const sortStateClass = isSorted ? `is-${sort.direction}` : 'is-none';
+      return `<th class="${reportColumnClass(column, index)} ${isSorted ? `sorted-${escapeHtml(sort.direction)}` : ''}" draggable="true" data-col-index="${index}" data-col-key="${escapeHtml(key)}" aria-sort="${escapeHtml(direction)}" style="width:${width}px;text-align:left"><button type="button" class="report-sort-button" title="Sort ${escapeHtml(column.header)}" aria-label="Sort ${escapeHtml(column.header)}" style="justify-content:flex-start;text-align:left"><span class="report-th-content" style="text-align:left">${escapeHtml(column.header)}</span><span class="report-sort-indicator ${escapeHtml(sortStateClass)}" aria-hidden="true"><span class="report-sort-caret report-sort-up"></span><span class="report-sort-caret report-sort-down"></span></span><span class="sr-only">${escapeHtml(sortLabel)}</span></button><span class="report-col-resize" role="separator" aria-label="Resize column. Double click to auto fit."></span></th>`;
     }).join('')}</tr>`;
   }
 
@@ -6589,6 +7228,7 @@
     state.reportTableColumns = columns || [];
     state.reportTableTotalRows = totalRows || rows.length;
     state.reportTableGrandTotal = grandTotal || null;
+    updateReportPartCount(rows || [], state.reportTableTotalRows);
     if (reportType === 'category-wise-variance-summary') {
       renderCategoryWiseVarianceTable(rows, totalRows, grandTotal, reportType);
       return;
@@ -6978,7 +7618,10 @@
     }
     $('#reportShow').disabled = true;
     try {
-      const data = await api(url, reportController ? { signal: reportController.signal } : {});
+      const data = await api(url, {
+        ...(reportController ? { signal: reportController.signal } : {}),
+        timeoutMs: REPORT_PREVIEW_TIMEOUT_MS
+      });
       if (state.reportLoadRequestId !== requestId) return;
       if (useCache) rememberReportCache(cacheKey, data);
       applyReportData(data, reportType);
@@ -7007,6 +7650,12 @@
 
   function setReportTab(type, options = {}) {
     if (!REPORT_TITLES[type]) return;
+    if (type === 'local-parts') {
+      state.localPartsReportPage = 1;
+      const statusFilter = $('#reportFilters [name="status"]');
+      if (statusFilter && !statusFilter.value) statusFilter.value = 'ACTIVE';
+    }
+    if ($('#localPartsReportPagination')) $('#localPartsReportPagination').hidden = true;
     cancelScheduledReportLoad();
     if (state.reportAbortController) state.reportAbortController.abort('report-tab-changed');
     state.reportLoadRequestId = Date.now();
@@ -7091,7 +7740,7 @@
   function initReportTabs() {
     const scroller = $('#reportTabsScroller');
     if (!scroller) {
-      setReportTab(activeReportType() || state.lastReportType || Object.keys(REPORT_TITLES)[0], { persist: false });
+      setReportTab(initialReportType(), { persist: false });
       return;
     }
     const widths = readReportTabWidths();
@@ -7115,7 +7764,7 @@
       const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
       scroller.scrollLeft = Math.min(maxLeft, Math.max(0, scroller.scrollLeft + delta));
     }, { passive: false });
-    setReportTab(activeReportType() || state.lastReportType || Object.keys(REPORT_TITLES)[0], { persist: false });
+    setReportTab(initialReportType(), { persist: false });
   }
 
   function readReportLayoutPrefs() {
@@ -7133,17 +7782,13 @@
   }
 
   function applyReportLayout(layout, dimensions = {}) {
+    // This function is deprecated. The report page now uses the standard global layout.
+    // The layout is no longer user-configurable to ensure consistency.
     const reports = $('#reports');
-    const card = $('#reportPreviewCard');
-    const wrap = $('#reportTableWrap');
-    if (!reports || !card || !wrap) return;
+    if (!reports) return;
     reports.classList.remove('report-layout-full', 'report-layout-compact', 'report-layout-split', 'report-layout-drag');
-    reports.classList.add(`report-layout-${layout}`);
-    $$('.report-layout-btn').forEach((button) => button.classList.toggle('active', button.dataset.reportLayout === layout));
-    card.style.width = dimensions.width || (layout === 'compact' ? '72%' : layout === 'split' ? '100%' : '100%');
-    wrap.style.height = dimensions.height || (layout === 'compact' ? '440px' : 'auto');
-    saveReportLayoutPrefs({ layout, width: card.style.width, height: wrap.style.height || 'auto' });
-    refreshReportTableLayout();
+    // All pages now use the same layout defined in global-layout.css
+    // No dynamic classes or styles are needed here.
   }
 
   function resetReportLayout() {
@@ -7164,59 +7809,14 @@
   }
 
   function saveCurrentReportLayout() {
-    const card = $('#reportPreviewCard');
-    const wrap = $('#reportTableWrap');
-    const columnWidths = {};
-    $$('th[data-col-key]', $('#reportHead')).forEach((th) => {
-      columnWidths[th.dataset.colKey] = Math.max(80, Math.round(th.getBoundingClientRect().width));
-    });
-    const columnOrder = $$('th[data-col-key]', $('#reportHead')).map((th) => th.dataset.colKey).filter(Boolean);
-    saveReportLayoutPrefs({
-      ...readReportLayoutPrefs(),
-      width: card?.style.width || '100%',
-      height: wrap?.style.height || 'auto',
-      columnWidths,
-      columnOrder
-    });
+    // This function is deprecated as the layout is no longer user-configurable.
     toast('Report layout saved');
   }
 
   function initReportLayout() {
-    const prefs = readReportLayoutPrefs();
-    applyReportLayout(prefs.layout || 'full', prefs);
-    $$('.report-layout-btn').forEach((button) => {
-      button.addEventListener('click', () => applyReportLayout(button.dataset.reportLayout));
-    });
-    $('#reportSaveLayout')?.addEventListener('click', saveCurrentReportLayout);
-    $('#reportResetSize')?.addEventListener('click', resetReportLayout);
-    $('#reportResetColumns')?.addEventListener('click', resetReportColumns);
-    const handle = $('#reportResizeHandle');
-    const card = $('#reportPreviewCard');
+    // This function is deprecated. The report layout is now fixed and standardized.
+    // The resizable/draggable layout has been removed for consistency.
     const wrap = $('#reportTableWrap');
-    if (!handle || !card || !wrap) return;
-    handle.addEventListener('pointerdown', (event) => {
-      event.preventDefault();
-      applyReportLayout('drag', readReportLayoutPrefs());
-      const startX = event.clientX;
-      const startY = event.clientY;
-      const startWidth = card.getBoundingClientRect().width;
-      const startHeight = wrap.getBoundingClientRect().height;
-      const maxWidth = Math.max(360, $('#reports').getBoundingClientRect().width);
-      const onMove = (moveEvent) => {
-        const width = Math.max(420, Math.min(maxWidth, startWidth + moveEvent.clientX - startX));
-        const height = Math.max(260, startHeight + moveEvent.clientY - startY);
-        card.style.width = `${Math.round(width)}px`;
-        wrap.style.height = `${Math.round(height)}px`;
-        refreshReportTableLayout();
-      };
-      const onUp = () => {
-        document.removeEventListener('pointermove', onMove);
-        document.removeEventListener('pointerup', onUp);
-        saveReportLayoutPrefs({ layout: 'drag', width: card.style.width, height: wrap.style.height });
-      };
-      document.addEventListener('pointermove', onMove);
-      document.addEventListener('pointerup', onUp);
-    });
     $('#reportHead')?.addEventListener('pointerdown', (event) => {
       const grip = event.target.closest('.report-col-resize');
       if (!grip) return;
@@ -7253,7 +7853,7 @@
       const th = grip.closest('th');
       autoFitReportColumn(Number(th?.dataset.colIndex), th?.dataset.colKey || '', activeReportType());
     });
-    wrap.addEventListener('wheel', (event) => {
+    wrap?.addEventListener('wheel', (event) => {
       if (event.ctrlKey) return;
       const horizontalIntent = event.shiftKey || Math.abs(event.deltaX) > Math.max(6, Math.abs(event.deltaY) * 1.25);
       if (!horizontalIntent) return;
@@ -7310,35 +7910,104 @@
     });
   }
 
-  function setReconciliationSummary(summary = {}) {
-    const dmsQty = summary.totalDmsStockQty ?? summary.dmsStock ?? 0;
-    const actualQty = summary.totalActualScannedQty ?? summary.physicalStock ?? summary.actualStock ?? 0;
-    setText('reconDms', dmsQty);
-    setText('reconPhysical', actualQty);
-    setText('reconMatched', summary.totalMatchedParts || 0);
-    setText('reconShortageParts', summary.totalShortageParts || 0);
-    setText('reconExcessParts', summary.totalExcessParts || 0);
-    setText('reconNet', summary.netDifference || 0);
-    setText('reconExcess', summary.excess || 0);
-    setText('reconShort', summary.short || 0);
-    setText('reconSummaryPartsUploaded', summary.totalPartsUploaded || 0);
-    setText('reconSummaryDms', dmsQty);
-    setText('reconSummaryPhysical', actualQty);
-    setText('reconSummaryMatched', summary.totalMatchedParts || 0);
-    setText('reconSummaryShortageParts', summary.totalShortageParts || 0);
-    setText('reconSummaryExcessParts', summary.totalExcessParts || 0);
-    setText('reconSummaryFast', summary.totalFastMovingParts || 0);
-    setText('reconSummarySlow', summary.totalSlowMovingParts || 0);
-    setText('reconSummaryDead', summary.totalDeadStockParts || 0);
+  function reconciliationNumber(value, fallback = 0) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  }
+
+  function setReconciliationSummary(summary = {}, stats = state.reconDashboardStats, rowCount = state.reconRows.length) {
+    const dmsQty = reconciliationNumber(summary.totalDmsStockQty ?? summary.dmsStock, 0);
+    const actualQty = reconciliationNumber(summary.totalActualScannedQty ?? summary.physicalStock ?? summary.actualStock, 0);
+    const netVariance = reconciliationNumber(summary.netDifference, actualQty - dmsQty);
+    const coverage = dmsQty > 0 ? (actualQty / dmsQty) * 100 : 0;
+    const partLineCount = dealerStockSummaryCount({
+      partLineCount: summary.totalPartsUploaded ?? stats?.dealerStockPartLines ?? stats?.uploadedPartLineCount
+    });
+    const stockValue = reconciliationNumber(
+      stats?.systemStockValue ?? stats?.dealerStockValue ?? stats?.masterStockValue ?? stats?.totalSystemValue ?? summary.totalInventoryValue,
+      0
+    );
+    const scanValue = reconciliationNumber(
+      stats?.actualStockValueDLC ?? stats?.totalScannedValue ?? summary.actualStockValueDLC ?? summary.actualStockValueMRP,
+      0
+    );
+    const totalRows = Math.max(0, Math.trunc(reconciliationNumber(rowCount, 0)));
+
+    setText('dealerStockUploadedLineCount', wholeNumber(partLineCount));
+    setText('dealerStockUploadedDmsQty', wholeNumber(dmsQty));
+    setText('dealerStockUploadedSystemValue', `₹ ${money2(stockValue)}`);
+    setText('reconScanValue', `₹ ${money2(scanValue)}`);
+    setText('reconPhysical', wholeNumber(actualQty));
+    setText('reconNet', wholeNumber(netVariance));
+    setText('reconQuantityCoverage', `${coverage.toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`);
+    setText('reconMatched', wholeNumber(summary.totalMatchedParts || 0));
+    setText('reconShortageParts', wholeNumber(summary.totalShortageParts || 0));
+    setText('reconExcessParts', wholeNumber(summary.totalExcessParts || 0));
+    setText('reconTotalRows', wholeNumber(totalRows));
+    setText('reconSummaryLastUpdated', state.reconLastUpdatedAt ? compactDateTime(state.reconLastUpdatedAt) : '-');
+
+    setText('reconSummaryPartsUploaded', wholeNumber(summary.totalPartsUploaded || 0));
+    setText('reconSummaryDms', wholeNumber(dmsQty));
+    setText('reconSummaryPhysical', wholeNumber(actualQty));
+    setText('reconSummaryMatched', wholeNumber(summary.totalMatchedParts || 0));
+    setText('reconSummaryShortageParts', wholeNumber(summary.totalShortageParts || 0));
+    setText('reconSummaryExcessParts', wholeNumber(summary.totalExcessParts || 0));
+    setText('reconSummaryFast', wholeNumber(summary.totalFastMovingParts || 0));
+    setText('reconSummarySlow', wholeNumber(summary.totalSlowMovingParts || 0));
+    setText('reconSummaryDead', wholeNumber(summary.totalDeadStockParts || 0));
     setText('reconSummaryInventoryValue', money2(summary.totalInventoryValue || 0));
     setText('reconSummaryShortageValue', money2(summary.totalShortageValue || 0));
     setText('reconSummaryExcessValue', money2(summary.totalExcessValue || 0));
-    setText('reconSummaryNotInDms', summary.totalScannedButNotInDms || 0);
-    setText('reconSummaryExcess', summary.excess || 0);
-    setText('reconSummaryShort', summary.short || 0);
-    setText('reconSummaryNet', summary.netDifference || 0);
+    setText('reconSummaryNotInDms', wholeNumber(summary.totalScannedButNotInDms || 0));
+    setText('reconSummaryExcess', wholeNumber(summary.excess || 0));
+    setText('reconSummaryShort', wholeNumber(summary.short || 0));
+    setText('reconSummaryNet', wholeNumber(summary.netDifference || 0));
     setText('reconSummaryMrp', money2(summary.varianceMrp || 0));
     setText('reconSummaryDlc', money2(summary.varianceDlc || 0));
+  }
+
+  function dealerStockSummaryCount(summary = {}) {
+    return Math.max(0, Math.trunc(Number(
+      summary.partLineCount ??
+      summary.totalPartsUploaded ??
+      summary.rows ??
+      summary.total ??
+      summary.savedCount ??
+      0
+    ) || 0));
+  }
+
+  function dealerStockLineRangeText(total) {
+    const count = dealerStockSummaryCount({ partLineCount: total });
+    return count > 0 ? `1-${count}` : '0';
+  }
+
+  function dealerStockPreviewRangeText(total, visible) {
+    const count = dealerStockSummaryCount({ partLineCount: total });
+    const shown = Math.min(count, Math.max(0, Math.trunc(Number(visible || 0) || 0)));
+    return count > 0 && shown > 0 ? `1-${shown} of ${count}` : `0 of ${count}`;
+  }
+
+  function setDealerStockUploadSummary(summary = {}) {
+    const partLineCount = dealerStockSummaryCount(summary);
+    const dmsStock = Number(summary.totalDmsStockQty ?? summary.dmsStockQty ?? summary.dmsStock ?? 0);
+    const scopedStats = state.reconDashboardStats
+      && cleanDealerCode(state.reconDashboardStats.dealerCode || '') === activeReconDealer()
+      ? state.reconDashboardStats
+      : null;
+    const stockValue = Number(
+      scopedStats?.systemStockValue ??
+      scopedStats?.dealerStockValue ??
+      summary.systemStockValue ??
+      summary.stockValue ??
+      summary.dmsStockValueDLC ??
+      summary.totalDmsStockValue ??
+      0
+    );
+    setText('dealerStockUploadedLineCount', wholeNumber(partLineCount));
+    setText('dealerStockUploadedLineRange', summary.lineRange?.text || dealerStockLineRangeText(partLineCount));
+    setText('dealerStockUploadedDmsQty', wholeNumber(dmsStock));
+    setText('dealerStockUploadedSystemValue', `₹ ${money2(stockValue)}`);
   }
 
   function activeReconDealer() {
@@ -7373,34 +8042,33 @@
     `;
   }
 
-  function renderDealerStockPreview(rows = [], total = rows.length) {
-    $('#dealerStockPreviewRows').innerHTML = rows.map((row) => `
+  function renderDealerStockPreview(rows = [], total = rows.length, summary = {}) {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    const panel = $('#dealerStockPreviewPanel');
+    if (panel) panel.hidden = false;
+    const totalRows = dealerStockSummaryCount({ partLineCount: summary.partLineCount ?? summary.totalPartsUploaded ?? summary.rows ?? total ?? safeRows.length });
+    const fallbackSummary = {
+      partLineCount: totalRows,
+      dmsStock: safeRows.reduce((sum, row) => sum + Number(row.dmsStock || row.systemQty || 0), 0),
+      stockValue: safeRows.reduce((sum, row) => sum + Number(row.stockValue || 0), 0)
+    };
+    setDealerStockUploadSummary({ ...fallbackSummary, ...summary, partLineCount: totalRows });
+    $('#dealerStockPreviewRows').innerHTML = safeRows.map((row) => `
       <tr>
+        <td>${escapeHtml(row.dealerCode)}</td>
         <td>${partLink(row.partNumber)}</td>
         <td>${escapeHtml(row.partDescription)}</td>
-        <td>${escapeHtml(row.productCategory)}</td>
-        <td>${escapeHtml(money(row.mrp))}</td>
-        <td>${escapeHtml(money(row.dlp || row.dlc))}</td>
         <td>${escapeHtml(row.dmsStock || row.systemQty || 0)}</td>
         <td>${escapeHtml(row.binLoc1 || row.systemBinLoc1 || '')}</td>
         <td>${escapeHtml(row.binLoc2 || row.systemBinLoc2 || '')}</td>
         <td>${escapeHtml(row.binLoc3 || row.systemBinLoc3 || '')}</td>
-        <td>${escapeHtml(row.reservedQty || 0)}</td>
-        <td>${escapeHtml(row.dealerCode)}</td>
-        <td>${escapeHtml([row.movementCodeA, row.movementCodeB].filter(Boolean).join(' / '))}</td>
-        <td>${escapeHtml(row.averageDemand || 0)}</td>
-        <td>${escapeHtml(row.forecast || 0)}</td>
-        <td>${escapeHtml(row.safetyStock || 0)}</td>
-        <td>${escapeHtml(row.rop || 0)}</td>
-        <td>${escapeHtml(row.pendingOrder || 0)}</td>
-        <td>${escapeHtml(money2(row.dmsStockValue ?? row.stockValue ?? 0))}</td>
-        <td>${escapeHtml(money2(row.actualStockValue || 0))}</td>
       </tr>
-    `).join('') || '<tr><td colspan="18" class="muted">No dealer stock uploaded yet</td></tr>';
+    `).join('') || '<tr><td colspan="7" class="muted">No dealer stock uploaded yet</td></tr>';
+    enhanceDataTable($('#dealerStockPreviewTable'), 'daksh_table_dealer_stock_preview');
     const message = $('#dealerStockUploadMessage');
-    if (message && rows.length) {
+    if (message && safeRows.length) {
       message.className = 'form-message success';
-      message.textContent = `Preview showing ${rows.length} of ${total} DMS stock row(s).`;
+      message.textContent = `Preview showing ${dealerStockPreviewRangeText(totalRows, safeRows.length)} DMS stock row(s).`;
     }
   }
 
@@ -7408,35 +8076,61 @@
     const dealerCode = activeReconDealer();
     if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
     const data = await api(`/api/reconciliation/stock-preview?dealerCode=${encodeURIComponent(dealerCode)}`);
-    renderDealerStockPreview(data.stock || [], data.total || 0);
+    renderDealerStockPreview(data.stock || [], data.total || 0, data.summary || {});
     renderDealerStockErrors([]);
     const message = $('#dealerStockUploadMessage');
     if (message) {
       message.className = (data.stock || []).length ? 'form-message success' : 'form-message';
-      message.textContent = (data.stock || []).length ? `Loaded ${data.total || 0} uploaded DMS stock row(s) for ${dealerCode}.` : `No uploaded DMS stock found for ${dealerCode}.`;
+      const lineRange = data.summary?.lineRange?.text || dealerStockLineRangeText(data.total || 0);
+      message.textContent = (data.stock || []).length ? `Loaded ${data.total || 0} uploaded DMS stock row(s) for ${dealerCode}. Line range ${lineRange}.` : `No uploaded DMS stock found for ${dealerCode}.`;
     }
+    loadReconciliation({ silent: true }).catch(() => undefined);
     return data;
   }
 
-  async function uploadDealerStock(form) {
+  async function uploadDealerStock(form, messageSelector = '#dealerStockUploadMessage') {
     const dealerCode = cleanDealerCode($('[name="dealerCode"]', form)?.value || '');
     if (!dealerCode) throw new Error('Select Dealer Code first');
-    const message = $('#dealerStockUploadMessage');
+    const message = $(messageSelector);
     if (message) {
       message.className = 'form-message loading';
       message.textContent = 'Uploading and validating dealer DMS stock...';
     }
     const data = await api('/api/reconciliation/upload-stock', { method: 'POST', body: new FormData(form) });
-    if ($('#reconDealer')) $('#reconDealer').value = data.dealerCode || dealerCode;
-    renderDealerStockPreview(data.preview || [], data.savedCount || 0);
+    syncReconDealer(data.dealerCode || dealerCode);
+    renderDealerStockPreview(data.preview || [], data.savedCount || 0, data.summary || {});
     renderDealerStockErrors(data.errorRows || [], data.skippedCount || 0, data.errorRowsTruncated);
     if (message) {
       message.className = 'form-message success';
-      message.textContent = data.message || `Saved ${data.savedCount || 0} DMS stock row(s).`;
+      const lineRange = data.summary?.lineRange?.text || dealerStockLineRangeText(data.savedCount || 0);
+      message.textContent = data.message || `Saved ${data.savedCount || 0} DMS stock row(s). Line range ${lineRange}.`;
     }
     loadReconciliation({ silent: true }).catch(() => undefined);
     toast('Dealer DMS stock saved');
     return data;
+  }
+
+  function syncReconDealer(dealerCode) {
+    const value = cleanDealerCode(dealerCode || '');
+    ['#reconDealer', '#dealerStockDealer'].forEach((selector) => {
+      const select = $(selector);
+      if (select) select.value = value;
+    });
+  }
+
+  function activateReconciliationTab(target) {
+    const targetTab = $(`.recon-tab[data-recon-tab="${target}"]`);
+    if (!targetTab || !document.getElementById(target)) return;
+    $$('.recon-tab').forEach((item) => {
+      const active = item === targetTab;
+      item.classList.toggle('active', active);
+      item.setAttribute('aria-selected', String(active));
+    });
+    $$('.recon-panel').forEach((panel) => {
+      const active = panel.id === target;
+      panel.classList.toggle('active', active);
+      panel.hidden = !active;
+    });
   }
 
   async function deleteDealerStock() {
@@ -7446,8 +8140,12 @@
     const data = await api(`/api/reconciliation/stock?dealerCode=${encodeURIComponent(dealerCode)}`, { method: 'DELETE' });
     renderDealerStockPreview([]);
     renderDealerStockErrors([]);
-    setReconciliationSummary({});
-    $('#reconRows').innerHTML = '';
+    state.reconRows = [];
+    state.reconDashboardStats = null;
+    state.reconLastUpdatedAt = null;
+    setDealerStockUploadSummary({});
+    setReconciliationSummary({}, null, 0);
+    renderReconciliationRows();
     toast(data.message || 'Dealer stock deleted');
   }
 
@@ -7456,17 +8154,81 @@
     if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
     const data = await api(`/api/reconciliation/reprocess?dealerCode=${encodeURIComponent(dealerCode)}`, { method: 'POST', body: {} });
     setReconciliationSummary(data.summary || {});
+    await loadReconciliation({ silent: true });
     toast(data.message || 'Reconciliation reprocessed');
     return data;
   }
 
+  function reconciliationStatusClass(status = '') {
+    const text = String(status || '').toLowerCase();
+    if (/matched/.test(text)) return 'matched';
+    if (/shortage/.test(text)) return 'shortage';
+    if (/excess/.test(text)) return 'excess';
+    if (/manual|not in dms|new/.test(text)) return 'manual';
+    return '';
+  }
+
+  function reconciliationValue(...values) {
+    for (const value of values) {
+      if (value === undefined || value === null || value === '') continue;
+      const number = Number(value);
+      if (Number.isFinite(number)) return number;
+    }
+    return 0;
+  }
+
+  function renderReconciliationRows() {
+    const rows = Array.isArray(state.reconRows) ? state.reconRows : [];
+    const totalRows = rows.length;
+    const totalPages = Math.max(1, Math.ceil(totalRows / state.reconPageSize));
+    state.reconPage = Math.max(1, Math.min(state.reconPage || 1, totalPages));
+    const start = totalRows ? (state.reconPage - 1) * state.reconPageSize : 0;
+    const visibleRows = rows.slice(start, start + state.reconPageSize);
+    const body = $('#reconRows');
+    if (body) {
+      body.innerHTML = visibleRows.map((row) => {
+        const status = row.status || '';
+        const dmsValue = reconciliationValue(row.stockValue, row.dmsStockValue, row.dmsMrpValue);
+        const scannedValue = reconciliationValue(row.actualStockValue, row.actualMrpValue, row.finalInventoryValue);
+        return `
+          <tr>
+            <td>${partLink(row.partNumber || row.partNo)}</td>
+            <td>${escapeHtml(row.partDescription || row.partName || '')}</td>
+            <td>${escapeHtml(row.productCategory || 'Uncategorized')}</td>
+            <td>${escapeHtml(wholeNumber(row.dmsStock || 0))}</td>
+            <td>${escapeHtml(wholeNumber(row.actualStock ?? row.physicalStock ?? 0))}</td>
+            <td>${escapeHtml(wholeNumber(row.variance ?? row.netDifference ?? 0))}</td>
+            <td><span class="recon-status ${reconciliationStatusClass(status)}">${escapeHtml(status)}</span></td>
+            <td>${escapeHtml(money2(row.mrp || 0))}</td>
+            <td>${escapeHtml(money2(row.dlp || row.dlc || 0))}</td>
+            <td>${escapeHtml(money2(dmsValue))}</td>
+            <td>${escapeHtml(money2(scannedValue))}</td>
+            <td>${escapeHtml(row.binLocation || row.bin || '')}</td>
+            <td>${escapeHtml(row.movementType || '')}</td>
+            <td>${escapeHtml(row.movementStatus || row.fastSlowDeadStatus || '')}</td>
+          </tr>
+        `;
+      }).join('') || '<tr><td colspan="14" class="muted">No reconciliation data found for selected dealer/filter</td></tr>';
+    }
+    setText('reconReportCount', `(${wholeNumber(totalRows)} records)`);
+    setText('reconPageSummary', totalRows ? `Showing ${wholeNumber(start + 1)} to ${wholeNumber(start + visibleRows.length)} of ${wholeNumber(totalRows)} records` : 'Showing 0 of 0 records');
+    setText('reconPageInfo', `Page ${wholeNumber(state.reconPage)} of ${wholeNumber(totalPages)}`);
+    const previous = $('#reconPrevPage');
+    const next = $('#reconNextPage');
+    if (previous) previous.disabled = state.reconPage <= 1;
+    if (next) next.disabled = state.reconPage >= totalPages;
+  }
+
   async function loadReconciliation(options = {}) {
     const silent = Boolean(options.silent);
-    const dealerCode = cleanDealerCode($('#reconDealer')?.value || '');
+    const dealerCode = activeReconDealer();
     const message = $('#reconMessage');
     if (!dealerCode || dealerCode === 'ALL') {
-      $('#reconRows').innerHTML = '';
-      setReconciliationSummary({});
+      state.reconRows = [];
+      state.reconDashboardStats = null;
+      state.reconLastUpdatedAt = null;
+      renderReconciliationRows();
+      setReconciliationSummary({}, null, 0);
       if (message && !silent) {
         message.className = 'form-message';
         message.textContent = 'Select Dealer Code to load the reconciliation report.';
@@ -7478,30 +8240,28 @@
       message.className = 'form-message loading';
       message.textContent = 'Loading reconciliation report...';
     }
-    const query = queryFromForm($('#reconFilters'));
-    const data = await api(`/api/reconciliation/report?${query}`);
+    syncReconDealer(dealerCode);
+    const params = new URLSearchParams(queryFromForm($('#reconFilters')));
+    if (!params.get('dealerCode')) params.set('dealerCode', dealerCode);
+    const query = params.toString();
+    const dashboardParams = new URLSearchParams();
+    dashboardParams.set('dealerCode', dealerCode);
+    if (params.get('auditId')) dashboardParams.set('auditId', params.get('auditId'));
+    dashboardParams.set('range', 'audit');
+    const [data, dashboardData] = await Promise.all([
+      api(`/api/reconciliation/report?${query}`),
+      api(`/api/scans/dashboard?${dashboardParams.toString()}`).catch(() => null)
+    ]);
     const summary = data.summary || {};
-    setReconciliationSummary(summary);
-    $('#reconRows').innerHTML = (data.rows || []).slice(0, 500).map((row) => `
-      <tr>
-        <td>${partLink(row.partNumber || row.partNo)}</td>
-        <td>${escapeHtml(row.partDescription || row.partName || '')}</td>
-        <td>${escapeHtml(row.productCategory || 'Uncategorized')}</td>
-        <td>${escapeHtml(row.dmsStock || 0)}</td>
-        <td>${escapeHtml(row.actualStock ?? row.physicalStock ?? 0)}</td>
-        <td>${escapeHtml(row.variance ?? row.netDifference ?? 0)}</td>
-        <td>${escapeHtml(row.status || '')}</td>
-        <td>${escapeHtml(money(row.mrp || 0))}</td>
-        <td>${escapeHtml(money(row.dlp || row.dlc || 0))}</td>
-        <td>${escapeHtml(money2(row.stockValue || 0))}</td>
-        <td>${escapeHtml(row.binLocation || row.bin || '')}</td>
-        <td>${escapeHtml(row.movementType || '')}</td>
-        <td>${escapeHtml(row.movementStatus || row.fastSlowDeadStatus || '')}</td>
-      </tr>
-    `).join('') || '<tr><td colspan="14" class="muted">No reconciliation data found for selected dealer/filter</td></tr>';
+    state.reconRows = Array.isArray(data.rows) ? data.rows : [];
+    state.reconDashboardStats = dashboardData && dashboardData.stats ? dashboardData.stats : null;
+    state.reconLastUpdatedAt = new Date();
+    state.reconPage = 1;
+    renderReconciliationRows();
+    setReconciliationSummary(summary, state.reconDashboardStats, state.reconRows.length);
     if (message && !silent) {
-      message.className = (data.rows || []).length ? 'form-message success' : 'form-message error';
-      message.textContent = (data.rows || []).length ? `${data.rows.length} reconciliation row(s) loaded.` : (data.message || 'No reconciliation data found for selected filter');
+      message.className = state.reconRows.length ? 'form-message success' : 'form-message error';
+      message.textContent = state.reconRows.length ? `${state.reconRows.length} reconciliation row(s) loaded.` : (data.message || 'No reconciliation data found for selected filter');
     }
     state.reconLoaded = true;
   }
@@ -7654,6 +8414,48 @@
     triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'Master_Part_Search_Result.csv');
   }
 
+  async function downloadCompletePartMaster() {
+    if (state.partMasterExportInFlight || state.catalogueUploadInFlight) return;
+    const button = $('#downloadCompletePartMasterBtn');
+    const status = $('#partMasterExportStatus');
+    state.partMasterExportInFlight = true;
+    button.disabled = true;
+    button.textContent = 'Preparing Download...';
+    button.setAttribute('aria-busy', 'true');
+    status.hidden = false;
+    status.textContent = `Preparing complete Part Master... ${wholeNumber(state.masterCatalogueCount)} records`;
+    let objectUrl;
+    try {
+      const response = await fetch(apiUrl('/api/master-catalogue/export'), {
+        credentials: 'include', cache: 'no-store',
+        headers: state.token ? { Authorization: `Bearer ${state.token}` } : {}
+      });
+      if (!response.ok || !String(response.headers.get('content-type') || '').includes('spreadsheetml.sheet')) {
+        throw new Error('Complete Part Master could not be downloaded. Please try again or contact administrator.');
+      }
+      const blob = await response.blob();
+      objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = resolveDownloadFileName(response, '/api/master-catalogue/export', 'Daksh_Complete_Part_Master.xlsx');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      const count = Number(response.headers.get('x-export-record-count'));
+      status.textContent = Number.isFinite(count) ? `Complete Part Master downloaded: ${wholeNumber(count)} records` : 'Complete Part Master downloaded';
+    } catch (error) {
+      status.textContent = 'Complete Part Master could not be downloaded. Please try again or contact administrator.';
+      toast(status.textContent, 'error');
+    } finally {
+      // Leave the Blob alive while the browser starts saving the attachment.
+      if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+      state.partMasterExportInFlight = false;
+      button.disabled = Boolean(state.catalogueUploadInFlight);
+      button.textContent = 'Download Complete Part Master';
+      button.setAttribute('aria-busy', 'false');
+    }
+  }
+
   function createCatalogueUploadSessionId() {
     if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
     return `catalogue-upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -7704,6 +8506,8 @@
     const updatedRowsCount = Number(progress.updatedRowsCount ?? 0);
     const failedRowsCount = Number(progress.failedRowsCount ?? 0);
     const duplicateRowsCount = Number(progress.duplicateRowsCount ?? 0);
+    const skippedExistingRowsCount = Number(progress.skippedExistingRowsCount ?? 0);
+    const skippedMissingRowsCount = Number(progress.skippedMissingRowsCount ?? 0);
     const deletedOldRowsCount = Number(progress.deletedOldRowsCount ?? 0);
     const deletedPriceHistoryRowsCount = Number(progress.deletedPriceHistoryRowsCount ?? 0);
     const currentCount = Number(progress.currentMasterRecordCount ?? progress.finalMasterRecordCount ?? progress.masterCatalogueCount ?? 0);
@@ -7720,6 +8524,8 @@
       parts.push(`Saved: ${wholeNumber(savedRowsCount)}`);
     }
     if (duplicateRowsCount) parts.push(`Duplicates merged: ${wholeNumber(duplicateRowsCount)}`);
+    if (skippedExistingRowsCount) parts.push(`Existing skipped: ${wholeNumber(skippedExistingRowsCount)}`);
+    if (skippedMissingRowsCount) parts.push(`Missing skipped: ${wholeNumber(skippedMissingRowsCount)}`);
     if (failedRowsCount || stage.includes('complete') || stage.includes('error')) parts.push(`Failed rows: ${wholeNumber(failedRowsCount)}`);
     if (currentCount) parts.push(`Final Part Master Records: ${wholeNumber(currentCount)}`);
     return parts.join(' | ');
@@ -7757,9 +8563,10 @@
 
   function setCatalogueUploadBusy(busy, progress = {}) {
     const form = $('#partUploadForm');
-    const submitButton = $('#partUploadForm button[type="submit"]');
+    const submitButtons = Array.from(document.querySelectorAll('#partUploadForm button[type="submit"]'));
     const deleteReuploadButton = $('#deleteReuploadCatalogueBtn');
     const deleteButton = $('#deleteCatalogueBtn');
+    const exportButton = $('#downloadCompletePartMasterBtn');
     const fileInput = $('[name="file"]', form);
     const failedRowsButton = $('#downloadCatalogueFailedRowsBtn');
     if (form) {
@@ -7767,11 +8574,13 @@
       form.setAttribute('aria-busy', busy ? 'true' : 'false');
     }
     if (fileInput) fileInput.disabled = Boolean(busy);
-    if (submitButton) submitButton.disabled = Boolean(busy);
+    submitButtons.forEach((button) => { button.disabled = Boolean(busy); });
     if (deleteReuploadButton) deleteReuploadButton.disabled = Boolean(busy);
     if (deleteButton) deleteButton.disabled = Boolean(busy);
+    if (exportButton) exportButton.disabled = Boolean(busy || state.partMasterExportInFlight);
     if (failedRowsButton) failedRowsButton.disabled = Boolean(busy);
     state.catalogueUploadInFlight = Boolean(busy);
+    updateAuditPriceRefreshUi();
     if (busy) {
       const uploadStats = $('#uploadStats');
       if (uploadStats) uploadStats.textContent = 'Upload in progress...';
@@ -7800,7 +8609,9 @@
       ['Blank mandatory fields', Number(reasons['Blank mandatory fields'] || data.blankMandatoryFieldsCount || data.blankRowsCount || 0)],
       ['Invalid MRP/DLC', Number(reasons['Invalid MRP/DLC'] || data.invalidMrpDlcCount || 0)],
       ['Duplicate conflict', Number(reasons['Duplicate conflict'] || data.duplicateConflictCount || data.duplicateRowsCount || 0)],
-      ['Database insert error', Number(reasons['Database insert error'] || data.databaseInsertErrorCount || 0)]
+      ['Database insert error', Number(reasons['Database insert error'] || data.databaseInsertErrorCount || 0)],
+      ['Already exists in part master', Number(reasons['Already exists in part master'] || data.skippedExistingRowsCount || 0)],
+      ['Part not found in master catalogue', Number(reasons['Part not found in master catalogue'] || data.skippedMissingRowsCount || 0)]
     ].filter(([, count]) => count > 0);
     return entries.length ? `Failure reasons: ${entries.map(([label, count]) => `${label}: ${wholeNumber(count)}`).join(' | ')}` : '';
   }
@@ -7815,12 +8626,19 @@
     const updatedRowsCount = Number(data.updatedRowsCount ?? data.updatedDuplicateCount ?? 0);
     const duplicateRowsCount = Number(data.duplicateRowsCount ?? data.duplicateMergedRowsCount ?? data.duplicateSkippedRows ?? 0);
     const failedRowsCount = Number(data.failedRowsCount ?? 0);
+    const skippedExistingRowsCount = Number(data.skippedExistingRowsCount ?? 0);
+    const skippedMissingRowsCount = Number(data.skippedMissingRowsCount ?? 0);
+    const modeSkippedRowsCount = Number(data.modeSkippedRowsCount ?? (skippedExistingRowsCount + skippedMissingRowsCount));
     const savedRowsCount = Number(data.savedRowsCount ?? data.importedRowsCount ?? data.importedCount ?? (insertedRowsCount + updatedRowsCount));
     const currentCount = Number(data.currentMasterRecordCount ?? data.finalMasterRecordCount ?? data.masterCatalogueCount ?? savedRowsCount ?? 0);
     const deletedOldRowsCount = Number(data.deletedOldRowsCount ?? 0);
     const deletedPriceHistoryRowsCount = Number(data.deletedPriceHistoryRowsCount ?? 0);
     const accountingGapCount = Number(data.accountingGapCount ?? 0);
-    const mismatch = Boolean(data.rowCountMismatch) || (action !== 'delete' && fileRowsCount > 0 && savedRowsCount !== fileRowsCount);
+    const selectedModeUpload = action === 'missing-upload' || action === 'price-update';
+    const accountedClientRows = savedRowsCount + duplicateRowsCount + failedRowsCount + modeSkippedRowsCount;
+    const mismatch = selectedModeUpload
+      ? Boolean(accountingGapCount) || (fileRowsCount > 0 && accountedClientRows !== fileRowsCount)
+      : Boolean(data.rowCountMismatch) || (action !== 'delete' && fileRowsCount > 0 && savedRowsCount !== fileRowsCount);
     const failureBreakdown = catalogueUploadFailureBreakdown(data);
     setPartMasterRecordCount(currentCount);
 
@@ -7835,6 +8653,8 @@
       summarySegments.push(`Inserted: ${wholeNumber(insertedRowsCount)}`);
       summarySegments.push(`Updated existing: ${wholeNumber(updatedRowsCount)}`);
       summarySegments.push(`Duplicates merged: ${wholeNumber(duplicateRowsCount)}`);
+      if (skippedExistingRowsCount) summarySegments.push(`Existing skipped: ${wholeNumber(skippedExistingRowsCount)}`);
+      if (skippedMissingRowsCount) summarySegments.push(`Missing skipped: ${wholeNumber(skippedMissingRowsCount)}`);
       summarySegments.push(`Failed rows: ${wholeNumber(failedRowsCount)}`);
       summarySegments.push(`Final Part Master Records: ${wholeNumber(currentCount)}`);
     } else {
@@ -7860,6 +8680,8 @@
         lines.push(`Successfully inserted: ${wholeNumber(insertedRowsCount)}`);
         lines.push(`Updated existing: ${wholeNumber(updatedRowsCount)}`);
         lines.push(`Duplicates merged: ${wholeNumber(duplicateRowsCount)}`);
+        if (skippedExistingRowsCount) lines.push(`Existing skipped: ${wholeNumber(skippedExistingRowsCount)}`);
+        if (skippedMissingRowsCount) lines.push(`Missing skipped: ${wholeNumber(skippedMissingRowsCount)}`);
         lines.push(`Failed rows: ${wholeNumber(failedRowsCount)}`);
         lines.push(`Final Part Master Records: ${wholeNumber(currentCount)}`);
         if (failureBreakdown) lines.push(failureBreakdown);
@@ -7887,7 +8709,105 @@
     return status === 'COMPLETED' || status === 'CLOSED' ? 'COMPLETED' : 'IN_PROGRESS';
   }
 
+  function auditPriceRefreshTarget() {
+    const dealerCode = cleanDealerCode($('#auditPriceDealerSelect')?.value || '');
+    const dealer = dealerCode && dealerCode !== 'ALL' ? dealerByCode(dealerCode) : null;
+    const auditId = String(dealer?.currentAuditId || '').trim();
+    const status = String(dealer?.auditStatus || dealer?.status || '').trim().toUpperCase();
+    const ongoing = Boolean(auditId && dealer?.active !== false && ['IN_PROGRESS', 'ACTIVE'].includes(status));
+    return { dealerCode, dealer, auditId, ongoing };
+  }
+
+  function setAuditPriceRefreshMessage(message = '', variant = '') {
+    const node = $('#auditPriceRefreshMessage');
+    if (!node) return;
+    node.hidden = !message;
+    node.className = `form-message ${variant}`.trim();
+    node.textContent = message;
+  }
+
+  function updateAuditPriceRefreshUi() {
+    const select = $('#auditPriceDealerSelect');
+    if (!select) return;
+    const target = auditPriceRefreshTarget();
+    const busy = state.auditPriceRefreshInFlight || state.auditPriceScopeLoading;
+    select.disabled = Boolean(busy || !isAdminUser());
+    syncDealerSelectDisplay(select);
+    $('#auditPriceCurrentAudit').value = target.auditId || '';
+    $('#auditPriceAuditStatus').value = target.dealer ? (target.ongoing ? 'In Progress' : (target.auditId ? 'Not ongoing' : 'No current audit')) : '';
+    const button = $('#refreshAuditPricesBtn');
+    button.disabled = Boolean(!isAdminUser() || busy || state.catalogueUploadInFlight || !target.ongoing);
+    button.textContent = state.auditPriceRefreshInFlight ? 'Refreshing MRP / DLC...' : 'Refresh MRP / DLC from Master';
+    $('#auditPriceRefreshForm').setAttribute('aria-busy', String(Boolean(busy)));
+    setText('auditPriceRefreshHint', state.auditPriceScopeLoading ? 'Checking current audit...' : state.catalogueUploadInFlight
+      ? 'Wait for the catalogue upload to finish before refreshing audit prices.'
+      : !target.dealer ? 'Select one dealer with an ongoing audit.'
+        : !target.ongoing ? 'This dealer has no ongoing current audit. Prices cannot be refreshed.'
+          : `Refresh applies only to ${formatDealerDisplay(target.dealer)}, audit ${target.auditId}.`);
+  }
+
+  function renderAuditPriceDealers() {
+    const select = $('#auditPriceDealerSelect');
+    if (!select) return;
+    const selected = cleanDealerCode(select.value || '');
+    select.innerHTML = '<option value="">Select Dealer</option>' + state.dealers.filter((dealer) => !isTestDealer(dealer)).map((dealer) => (
+      `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
+    )).join('');
+    select.value = Array.from(select.options).some((option) => option.value === selected) ? selected : '';
+    updateAuditPriceRefreshUi();
+  }
+
+  async function loadAuditPriceRefreshScope() {
+    if (!isAdminUser() || state.auditPriceScopeLoading) return;
+    state.auditPriceScopeLoading = true;
+    updateAuditPriceRefreshUi();
+    try {
+      await loadDealers({ force: true });
+    } catch (error) {
+      setAuditPriceRefreshMessage(`Could not check the current audit: ${error.message}`, 'error');
+      throw error;
+    } finally {
+      state.auditPriceScopeLoading = false;
+      updateAuditPriceRefreshUi();
+    }
+  }
+
+  function refreshViewsAfterAuditPriceRefresh() {
+    state.partMasterLookupCache.clear();
+    queueRealtimeReportRefresh('manual audit price refresh');
+    queueDashboardRefresh(400);
+    if ($('#scan')?.classList.contains('active')) queueScanRefresh(400);
+  }
+
+  async function refreshAuditPricesFromMaster() {
+    if (state.auditPriceRefreshInFlight || state.auditPriceScopeLoading || state.catalogueUploadInFlight) return;
+    try {
+      if (!isAdminUser()) throw new Error('Only administrators can refresh audit prices.');
+      const target = auditPriceRefreshTarget();
+      if (!target.dealer || !target.ongoing) throw new Error('Select one dealer with an ongoing current audit.');
+      if (!window.confirm(`Refresh saved MRP and DLC from Part Master for ${formatDealerDisplay(target.dealer)}?\n\nAudit: ${target.auditId}\n\nMatched scans in this audit will use the latest master prices and their valuation totals will change. Continue?`)) return;
+      state.auditPriceRefreshInFlight = true;
+      updateAuditPriceRefreshUi();
+      setAuditPriceRefreshMessage(`Refreshing MRP and DLC for audit ${target.auditId}...`);
+      const data = await api('/api/master-catalogue/refresh-audit-prices', {
+        method: 'POST',
+        body: { dealerCode: target.dealerCode, auditId: target.auditId }
+      });
+      if (!data.success) throw new Error(data.message || 'Audit prices could not be refreshed.');
+      refreshViewsAfterAuditPriceRefresh();
+      setAuditPriceRefreshMessage(`${data.message || 'Audit prices refreshed.'} Audit: ${target.auditId}. Updated scans: ${wholeNumber(data.updatedScanCount || 0)}. Matched parts: ${wholeNumber(data.matchedPartCount || 0)}.`, 'success');
+      toast('Audit MRP and DLC refreshed from master', 'success');
+    } catch (error) {
+      setAuditPriceRefreshMessage(error.message || 'Audit prices could not be refreshed.', 'error');
+      toast(error.message || 'Audit prices could not be refreshed.', 'error');
+    } finally {
+      state.auditPriceRefreshInFlight = false;
+      updateAuditPriceRefreshUi();
+    }
+  }
+
   function renderDealerMaster() {
+    renderAuditPriceDealers();
     $('#dealerMasterRows').innerHTML = state.dealers.length ? state.dealers.map((dealer) => {
       const auditStatus = normalizeAuditWorkflowStatus(dealer.auditStatus || dealer.status || (dealer.active === false ? 'COMPLETED' : 'IN_PROGRESS'));
       const auditStatusDisplay = auditStatus === 'COMPLETED' ? 'Completed' : 'In Progress';
@@ -8210,9 +9130,9 @@
           <td>${escapeHtml(part.partDescription)}</td>
           <td>${escapeHtml(part.productCategory || part.category)}</td>
           <td>${escapeHtml(part.currentBin)}</td>
-          <td><select class="bin-transfer-row-to">${destinationOptions(defaultDestination)}</select></td>
+          <td><select class="bin-transfer-row-to select-control">${destinationOptions(defaultDestination)}</select></td>
           <td>${escapeHtml(availableQty)}</td>
-          <td><input class="bin-transfer-qty" type="number" min="1" max="${escapeHtml(availableQty)}" value="${escapeHtml(availableQty || 1)}" data-part="${escapeHtml(part.partNumber)}"></td>
+          <td><input class="bin-transfer-qty input-control" type="number" min="1" max="${escapeHtml(availableQty)}" value="${escapeHtml(availableQty || 1)}" data-part="${escapeHtml(part.partNumber)}"></td>
           <td>${escapeHtml(part.dealerCode)}</td>
           <td><span class="muted">Ready</span></td>
         </tr>
@@ -8535,7 +9455,10 @@
     const values = selectedMultiValues($('#binLabelBins'));
     const button = $('#binLabelBinsButton');
     if (!button) return;
-    button.textContent = values.length ? (values.length === 1 ? values[0] : `${values.length} bins selected`) : 'Select Bin(s)';
+    const label = values.length ? (values.length === 1 ? values[0] : `${values.length} bins selected`) : 'Select Bin(s)';
+    const labelNode = button.querySelector('.ds-select-label');
+    if (labelNode) labelNode.textContent = label;
+    else button.textContent = label;
     button.title = values.join(', ');
   }
 
@@ -9160,7 +10083,8 @@
       toast('Select dealer first', 'error');
       return;
     }
-    if (!window.confirm(DELETE_CONFIRM_TEXT)) return;
+    if (!(await confirmDeleteAction(DELETE_CONFIRM_TEXT))) return;
+    const deleteDetails = lastDeleteDetails();
     const data = await api('/api/admin/cleanup-delete', {
       method: 'POST',
       body: { scope, dealerCode: code }
@@ -9226,11 +10150,10 @@
         <td>${escapeHtml(archive.totalScans || 0)}</td>
         <td>${archiveStatusBadge(archive.backupStatus)}${archive.existingDealer ? '<span class="pill">Dealer exists</span>' : ''}</td>
         <td>
-          <div class="archive-row-actions">
-            <button class="btn light small preview-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button">Preview Backup</button>
-            <button class="btn primary small restore-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button" ${archive.backupStatus !== 'valid' ? 'disabled' : ''}>Restore Audit</button>
-            <button class="btn light small download-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button">Download Backup</button>
-            <button class="btn danger-soft small remove-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button">Delete Backup Permanently</button>
+          <div class="archive-row-actions"> <button class="btn light preview-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button">Preview Backup</button> <button class="btn primary restore-audit-backup" data-id="${
+        escapeHtml(archive.archiveId)
+      }" type="button" ${archive.backupStatus !== 'valid' ? 'disabled' : ''}>Restore Audit</button> <button class="btn light download-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button">Download Backup</button>
+            <button class="btn danger-soft remove-audit-backup" data-id="${escapeHtml(archive.archiveId)}" type="button">Delete Backup Permanently</button> 
           </div>
         </td>
       </tr>
@@ -9399,13 +10322,25 @@
     const form = event.currentTarget;
     const message = $('#scanEditMessage');
     const scanId = String(form.elements.scanId.value || '').trim();
+    let scanIdentity = {};
+    if (form.dataset?.scanIdentity) {
+      try {
+        scanIdentity = JSON.parse(form.dataset.scanIdentity);
+      } catch (error) {
+        scanIdentity = {};
+      }
+    }
     const quantity = Number(form.elements.quantity.value);
     const scanType = String(form.elements.scanType.value || '').trim().toUpperCase();
     const binLocation = scanType === 'FITTED' ? '' : cleanDealerCode(form.elements.binLocation.value || '');
+    const reason = clean(form.elements.reason?.value || '');
+    const remarks = clean(form.elements.remarks?.value || '');
     if (!scanId) throw new Error('Scan record not found');
     if (!String(form.elements.partNumber.value || '').trim()) throw new Error('Part number is required');
     if (!(quantity > 0)) throw new Error('Quantity must be greater than zero');
     if (['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType) && !binLocation) throw new Error('Bin location is required');
+    if (!reason) throw new Error('Select a modification reason');
+    if (reason.toLowerCase() === 'other' && !remarks) throw new Error('Remarks are required when the reason is Other');
     if (message) {
       message.className = 'form-message loading';
       message.textContent = 'Saving changes...';
@@ -9416,6 +10351,10 @@
         partNumber: normalizePartText(form.elements.partNumber.value),
         quantity,
         binLocation,
+        scanType,
+        reason,
+        remarks,
+        scanIdentity: JSON.stringify(scanIdentity || {}),
         deviceId: ensureDeviceId()
       }
     });
@@ -9433,15 +10372,16 @@
   }
 
   async function deleteSingleScan(scanId) {
-    const id = cleanId(scanId);
+    const id = String(scanId || '').trim();
     if (!id) {
       toast('Select a scan first', 'error');
       return;
     }
     if (!(await confirmDeleteAction('Are you sure you want to delete this scan?'))) return;
+    const deleteDetails = lastDeleteDetails();
     const scan = scanHistoryRecord(id) || scanHistoryDeleteReference(id);
     try {
-      await api(`/api/admin/scans/${encodeURIComponent(id)}`, { method: 'DELETE', body: {} });
+      await api(`/api/admin/scans/${encodeURIComponent(id)}`, { method: 'DELETE', body: deleteDetails });
     } catch (error) {
       throw deleteFailureError();
     }
@@ -9462,10 +10402,12 @@
       return;
     }
     if (!(await confirmDeleteAction(`Are you sure you want to delete all scans for part ${part}?`))) return;
+    const deleteDetails = lastDeleteDetails();
     const payload = {
       dealerCode,
       parts: part,
-      deleteType: 'single-part'
+      deleteType: 'single-part',
+      ...deleteDetails
     };
     if (options.auditId) payload.auditId = String(options.auditId).trim();
     let data;
@@ -9489,9 +10431,10 @@
       return;
     }
     if (!(await confirmDeleteAction('Are you sure you want to delete the selected scans?'))) return;
+    const deleteDetails = lastDeleteDetails();
     const scans = ids.map((id) => scanHistoryRecord(id) || scanHistoryDeleteReference(id));
     try {
-      await api('/api/admin/scans/delete-selected', { method: 'POST', body: { ids } });
+      await api('/api/admin/scans/delete-selected', { method: 'POST', body: { ids, ...deleteDetails } });
     } catch (error) {
       throw deleteFailureError();
     }
@@ -9502,8 +10445,9 @@
 
   async function cleanUnknownParts(criteria = {}) {
     if (!(await confirmDeleteAction('Are you sure you want to delete unknown part scans?'))) return;
+    const deleteDetails = lastDeleteDetails();
     try {
-      await api('/api/admin/cleanup-unknown-parts', { method: 'POST', body: criteria });
+      await api('/api/admin/cleanup-unknown-parts', { method: 'POST', body: { ...criteria, ...deleteDetails } });
     } catch (error) {
       throw deleteFailureError();
     }
@@ -9519,8 +10463,9 @@
       return;
     }
     if (!(await confirmDeleteAction(`Are you sure you want to delete all scans for dealer ${dealer}?`))) return;
+    const deleteDetails = lastDeleteDetails();
     try {
-      await api(`/api/admin/dealer/${encodeURIComponent(dealer)}/scans`, { method: 'DELETE', body: {} });
+      await api(`/api/admin/dealer/${encodeURIComponent(dealer)}/scans`, { method: 'DELETE', body: deleteDetails });
     } catch (error) {
       throw deleteFailureError();
     }
@@ -9541,29 +10486,29 @@
       if (action === 'single-scan') {
         const ids = selectedScanIds();
         if (!ids.length) throw new Error('Select one scan in Scan History first');
-        await api(`/api/admin/scans/${encodeURIComponent(ids[0])}`, { method: 'DELETE', body: {} });
+        await api(`/api/admin/scans/${encodeURIComponent(ids[0])}`, { method: 'DELETE', body: deleteDetails });
         removeScanHistoryRecords([scanHistoryRecord(ids[0]) || { scanId: ids[0], uniqueScanId: ids[0], localId: ids[0] }]);
       } else if (action === 'selected-scans') {
         const ids = selectedScanIds();
         if (!ids.length) throw new Error('Select scans in Scan History first');
-        await api('/api/admin/scans/delete-selected', { method: 'POST', body: { ids } });
+        await api('/api/admin/scans/delete-selected', { method: 'POST', body: { ids, ...deleteDetails } });
         removeScanHistoryRecords(ids.map((id) => scanHistoryRecord(id) || { scanId: id, uniqueScanId: id, localId: id }));
       } else if (action === 'multiple-parts') {
-        await api('/api/admin/scans/delete-by-parts', { method: 'POST', body: criteria });
+        await api('/api/admin/scans/delete-by-parts', { method: 'POST', body: { ...criteria, ...deleteDetails } });
         removeLocalMatching(criteria);
       } else if (action === 'dealer-scans') {
         if (!criteria.dealerCode) throw new Error('Dealer code is required');
-        await api(`/api/admin/dealer/${encodeURIComponent(cleanDealerCode(criteria.dealerCode))}/scans`, { method: 'DELETE', body: {} });
+        await api(`/api/admin/dealer/${encodeURIComponent(cleanDealerCode(criteria.dealerCode))}/scans`, { method: 'DELETE', body: deleteDetails });
         removeLocalMatching({ dealerCode: cleanDealerCode(criteria.dealerCode) });
       } else if (action === 'dealer-master') {
         if (!criteria.dealerCode) throw new Error('Dealer code is required');
         await api(`/api/admin/dealer/${encodeURIComponent(cleanDealerCode(criteria.dealerCode))}/master`, { method: 'DELETE', body: {} });
       } else if (action === 'dealer-full') {
         if (!criteria.dealerCode) throw new Error('Dealer code is required');
-        await api(`/api/admin/dealer/${encodeURIComponent(cleanDealerCode(criteria.dealerCode))}/all`, { method: 'DELETE', body: {} });
+        await api(`/api/admin/dealer/${encodeURIComponent(cleanDealerCode(criteria.dealerCode))}/all`, { method: 'DELETE', body: deleteDetails });
         removeLocalMatching({ dealerCode: cleanDealerCode(criteria.dealerCode) });
       } else if (action === 'unknown') {
-        await api('/api/admin/cleanup-unknown-parts', { method: 'POST', body: criteria });
+        await api('/api/admin/cleanup-unknown-parts', { method: 'POST', body: { ...criteria, ...deleteDetails } });
         removeLocalMatching(criteria);
       }
     }
@@ -9609,8 +10554,8 @@
       toast('Enter part number first', 'error');
       return;
     }
-    if (!window.confirm('Are you sure? This will permanently delete selected part data.')) return;
-    const data = await api(`/api/admin/part/${scope}`, { method: 'DELETE', body: payload });
+    if (!(await confirmDeleteAction('Are you sure? This will archive selected part data and keep it in scan history.'))) return;
+    const data = await api(`/api/admin/part/${scope}`, { method: 'DELETE', body: { ...payload, ...lastDeleteDetails() } });
     toast(`Part delete complete: ${data.deletedCount ?? data.scansDeleted ?? 0} removed`);
     await refreshAll();
     await checkPartCleanup(form).catch(() => {});
@@ -9623,9 +10568,9 @@
       toast('Enter part numbers first', 'error');
       return;
     }
-    if (!window.confirm('Preview checked? This will permanently delete listed part data.')) return;
+    if (!(await confirmDeleteAction('Preview checked? This will archive listed part data and keep it in scan history.'))) return;
     const endpoint = scope === 'all' ? '/api/admin/parts/all' : '/api/admin/parts/scans';
-    const data = await api(endpoint, { method: 'DELETE', body: payload });
+    const data = await api(endpoint, { method: 'DELETE', body: { ...payload, ...lastDeleteDetails() } });
     toast(scope === 'all' ? `Deleted master ${data.masterDeleted || 0}, scans ${data.scansDeleted || 0}` : `Deleted scans ${data.deletedCount || 0}`);
     await refreshAll();
     await checkMultiPartCleanup(form).catch(() => {});
@@ -9636,6 +10581,28 @@
     if (!node) return;
     node.className = `form-message ${type}`;
     node.textContent = message || '';
+  }
+
+  async function loadScanModificationHistory() {
+    if (!isAdminUser()) return;
+    const form = $('#scanModificationHistoryFilters');
+    const query = form ? queryFromForm(form) : '';
+    const data = await api(`/api/scan-audit/history${query ? `?${query}` : ''}`);
+    const rows = data.rows || data.history || [];
+    const tbody = $('#scanModificationHistoryRows');
+    if (!tbody) return;
+    tbody.innerHTML = rows.length ? rows.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.timestamp ? dateTime(row.timestamp) : '-')}</td>
+        <td><span class="status-pill">${escapeHtml(row.action || '-')}</span></td>
+        <td>${escapeHtml(row.scanId || '-')}</td>
+        <td>${escapeHtml(row.dealerCode || '-')}</td>
+        <td>${escapeHtml(row.partNumber || '-')}</td>
+        <td>${escapeHtml(row.performedByUsername || row.performedByName || '-')}</td>
+        <td>${escapeHtml(row.reason || '-')}<br><span class="muted">${escapeHtml(row.remarks || '')}</span></td>
+        <td><details><summary>View snapshots</summary><pre class="scan-audit-snapshot">${escapeHtml(JSON.stringify({ oldData: row.oldData, newData: row.newData }, null, 2))}</pre>${row.action === 'DELETE' ? `<button class="btn light restore-audited-scan" type="button" data-scan-id="${escapeHtml(row.scanId || '')}">Restore</button>` : ''}</details></td>
+      </tr>
+    `).join('') : '<tr><td colspan="8" class="muted">No scan modifications found.</td></tr>';
   }
 
   function dealerDeleteCriteria() {
@@ -9741,8 +10708,8 @@
     const preview = await previewDealerDelete();
     const count = Number(preview.totalCount ?? preview.count ?? ids.length);
     if (!count) throw new Error('Preview count is 0. Nothing will be deleted.');
-    if (!window.confirm(`Preview count: ${count}. Permanently delete selected rows for dealer ${dealerDeleteCriteria().dealerCode}?`)) return;
-    const data = await api('/api/admin-delete/delete-selected', { method: 'POST', body: { dealerCode: dealerDeleteCriteria().dealerCode, ids } });
+    if (!(await confirmDeleteAction(`Preview count: ${count}. Archive selected rows for dealer ${dealerDeleteCriteria().dealerCode}?`))) return;
+    const data = await api('/api/admin-delete/delete-selected', { method: 'POST', body: { dealerCode: dealerDeleteCriteria().dealerCode, ids, ...lastDeleteDetails() } });
     toast(`Deleted selected rows: ${data.deletedCount || 0}`);
     await showDealerDeleteParts();
     await refreshAfterDelete();
@@ -9754,8 +10721,8 @@
     const preview = await previewDealerDelete({ allDealer: true });
     const count = Number(preview.totalCount ?? preview.count ?? 0);
     if (!count) throw new Error('Preview count is 0. Nothing will be deleted.');
-    if (!window.confirm(`Preview count: ${count}. Permanently delete ALL selected type data for dealer ${criteria.dealerCode}?`)) return;
-    const data = await api('/api/admin-delete/delete-all-dealer', { method: 'POST', body: criteria });
+    if (!(await confirmDeleteAction(`Preview count: ${count}. Archive ALL selected type data for dealer ${criteria.dealerCode}?`))) return;
+    const data = await api('/api/admin-delete/delete-all-dealer', { method: 'POST', body: { ...criteria, ...lastDeleteDetails() } });
     toast(`Dealer delete complete: scans ${data.scansDeleted || 0}, master ${data.masterDeleted || 0}, bins ${data.binsDeleted || 0}, transfers ${data.transferDeleted || 0}`);
     await showDealerDeleteParts().catch(() => {
       state.adminDeleteRows = [];
@@ -9829,11 +10796,12 @@
     if (!criteria.dealerCode) throw new Error('Dealer Code required');
     const preview = await checkLocationDeleteCount();
     if (!preview.total) throw new Error('Preview count is 0. Nothing will be deleted.');
-    if (!window.confirm(`Preview count: ${preview.total}. Permanently delete ${criteria.dataType} from ${criteria.dataLocation} for dealer ${criteria.dealerCode}?`)) return;
+    if (!(await confirmDeleteAction(`Preview count: ${preview.total}. Archive ${criteria.dataType} from ${criteria.dataLocation} for dealer ${criteria.dealerCode}?`))) return;
+    const deleteDetails = lastDeleteDetails();
     let local = { deletedCount: 0 };
     let server = { deletedCount: 0 };
     if (['local', 'both'].includes(criteria.dataLocation)) local = deleteLocalDealerData(criteria);
-    if (['server', 'both'].includes(criteria.dataLocation)) server = await api('/api/admin-delete/delete-location-data', { method: 'POST', body: criteria });
+    if (['server', 'both'].includes(criteria.dataLocation)) server = await api('/api/admin-delete/delete-location-data', { method: 'POST', body: { ...criteria, ...deleteDetails } });
     toast(`Delete complete. Local ${local.deletedCount || 0}, Server ${server.totalDeleted || server.deletedCount || 0}`);
     await checkLocationDeleteCount().catch(() => {});
     await refreshAfterDelete();
@@ -9909,7 +10877,7 @@
   }
 
   function auditUserLabel(user = {}) {
-    const role = user.role === 'mobile_user' ? 'Mobile User' : (user.role || 'staff');
+    const role = user.role === 'admin' ? 'Admin' : user.role === 'mobile_user' ? 'Mobile User' : 'Audit User';
     const name = user.name || user.username || user.email || 'User';
     const username = user.username ? ` (${user.username})` : '';
     return `${name}${username} - ${role}`;
@@ -9968,7 +10936,7 @@
         <td>${escapeHtml(user.name)}</td>
         <td>${escapeHtml(user.username)}</td>
         <td>${escapeHtml(user.email)}</td>
-        <td>${escapeHtml(user.role === 'mobile_user' ? 'Mobile User' : user.role)}</td>
+        <td>${escapeHtml(user.role === 'admin' ? 'Admin' : user.role === 'mobile_user' ? 'Mobile User' : 'Audit User')}</td>
         <td>${escapeHtml(dealerAccessDisplay(user.dealerAccess || []))}</td>
         <td>${user.approved ? '<span class="status-ok">Approved</span>' : '<span class="status-warn">Pending</span>'}</td>
         <td>${user.active ? '<span class="status-ok">Active</span>' : '<span class="status-warn">Blocked</span>'}</td>
@@ -10076,7 +11044,7 @@
     form.elements.name.value = user.name || '';
     form.elements.username.value = user.username || '';
     form.elements.email.value = user.email || '';
-    form.elements.role.value = user.role || 'staff';
+    form.elements.role.value = ['admin', 'audit_user', 'mobile_user'].includes(user.role) ? user.role : 'audit_user';
     renderDealerAccessOptions();
     setMultiSelectValues(form.elements.dealerAccess, user.dealerAccess || []);
     form.elements.password.value = '';
@@ -10163,7 +11131,7 @@
     if (!state.serverInfo || !state.serverInfo.serverUrl) await loadPairingQr();
     const url = state.serverInfo ? state.serverInfo.serverUrl : '';
     if (!url || isLocalhostUrl(url)) {
-      toast('Do not use localhost on mobile. Use the cloud server URL from pairing QR.', 'error');
+      toast('Use automatic discovery, daksh.local, or the temporary pairing QR for mobile.', 'error');
       return;
     }
     await copyTextValue(url, 'Server URL');
@@ -10178,7 +11146,7 @@
     if (!state.serverInfo || !state.serverInfo.mobileScannerUrl) await loadPairingQr();
     const url = resolveMobileScannerUrl(state.serverInfo || {});
     if (!url || isLocalhostUrl(url)) {
-      toast('Do not use localhost on mobile. Use the cloud server URL from pairing QR.', 'error');
+      toast('Use automatic discovery, daksh.local, or the temporary pairing QR for mobile.', 'error');
       return;
     }
     await copyTextValue(url, 'Mobile scanner URL');
@@ -10232,9 +11200,9 @@
     if (state.dashboardFallbackTimer) clearInterval(state.dashboardFallbackTimer);
     state.dashboardFallbackTimer = setInterval(async () => {
       if (document.hidden || state.dashboardFallbackBusy) return;
-      if (!document.body.classList.contains('dashboard-view-active')) return;
+      if (!document.body.classList.contains('view-active-dashboard')) return;
       const realtimeQuietMs = Date.now() - Number(state.lastRealtimeAt || 0);
-      if (realtimeQuietMs < 120000) return;
+      if (realtimeQuietMs < 300000) return;
       state.dashboardFallbackBusy = true;
       try {
         await loadDashboard({ force: true });
@@ -10243,7 +11211,7 @@
       } finally {
         state.dashboardFallbackBusy = false;
       }
-    }, 120000);
+    }, 300000);
   }
 
   function expandCodeRange(startValue, endValue) {
@@ -10395,7 +11363,10 @@
     const values = plainBinSelectedValues();
     const button = $('#plainBinSelectButton');
     if (button) {
-      button.textContent = values.length ? (values.length === 1 ? values[0] : `${values.length} bins selected`) : 'Select bin location(s)';
+      const label = values.length ? (values.length === 1 ? values[0] : `${values.length} bins selected`) : 'Select bin location(s)';
+      const labelNode = button.querySelector('.ds-select-label');
+      if (labelNode) labelNode.textContent = label;
+      else button.textContent = label;
       button.title = values.join(', ');
     }
     const list = $('#plainBinSelectedList');
@@ -10688,12 +11659,12 @@
     if (viewId === 'admin') viewId = 'master';
     if (!$(`#${viewId}`)) viewId = 'dashboard';
     localStorage.setItem(ACTIVE_VIEW_KEY, viewId);
-    document.body.classList.toggle('dashboard-view-active', viewId === 'dashboard');
+    document.body.className = `view-active-${viewId}`;
     $$('.side-link').forEach((item) => item.classList.toggle('active', item.dataset.view === viewId));
     $$('.view').forEach((view) => view.classList.remove('active'));
     const target = $(`#${viewId}`);
     if (target) target.classList.add('active');
-    const viewTitle = VIEW_TITLES[viewId] || title || viewId;
+    const viewTitle = VIEW_TITLES[viewId] || title || 'Dashboard';
     $('#viewTitle').textContent = viewTitle;
     document.title = `DAKSH INVENTORY SYSTEM - ${viewTitle}`;
     updateSystemSubline();
@@ -10715,6 +11686,8 @@
       setReportProductGroupSummaryVisible(isProductGroupSummaryReport());
       if (isProductGroupSummaryReport()) {
         loadReport({ forceRefresh: false }).catch((error) => toast(error.message, 'error'));
+      } else if (activeReportType() === 'local-parts' && (state.localPartsReportStale || !state.reportLoaded || state.lastReportType !== 'local-parts')) {
+        loadReport({ forceRefresh: state.localPartsReportStale }).catch((error) => toast(error.message, 'error'));
       }
     }
     if (viewId === 'master') {
@@ -10791,7 +11764,12 @@
         $$('.subtab').forEach((item) => item.classList.remove('active'));
         button.classList.add('active');
         $$('.subview').forEach((view) => view.classList.remove('active'));
-        $(`#${button.dataset.subview}`).classList.add('active');
+        const target = $(`#${button.dataset.subview}`);
+        target.classList.add('active');
+        if (button.dataset.subview === 'localPartEntry') {
+          syncLocalPartFormIdentity();
+          if (!state.localPartHistoryLoaded) loadLocalPartHistory({ page: 1 }).catch((error) => toast(error.message, 'error'));
+        }
       });
     });
     $$('.master-tab').forEach((button) => {
@@ -10807,6 +11785,8 @@
           panel.classList.toggle('active', active);
           panel.hidden = !active;
         });
+        if (target === 'scanModificationHistoryTab') loadScanModificationHistory().catch((error) => toast(error.message, 'error'));
+        if (target === 'auditPriceRefreshTab') loadAuditPriceRefreshScope().catch((error) => toast(error.message, 'error'));
       });
     });
     $$('.bin-transfer-tab').forEach((button) => {
@@ -10901,7 +11881,6 @@
     $('#scanEditModal')?.addEventListener('click', (event) => {
       if (event.target.id === 'scanEditModal') closeScanEditModal();
     });
-    window.addEventListener('resize', () => fitDashboardDealerSelect());
     $('#copyServerUrlBtn').addEventListener('click', () => copyServerUrl().catch((error) => toast(error.message, 'error')));
     $('#copyHealthUrlBtn')?.addEventListener('click', () => copyHealthUrl().catch((error) => toast(error.message, 'error')));
     $('#copyMobileScannerUrlBtn')?.addEventListener('click', () => copyMobileScannerUrl().catch((error) => toast(error.message, 'error')));
@@ -11051,6 +12030,61 @@
         setScanFormSubmitting(form, false);
       }
     });
+    $('#localPartForm')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      if (form.dataset.submitting === 'true') return;
+      try {
+        await saveLocalPart(form);
+      } catch (error) {
+        const message = $('#localPartFormMessage');
+        if (message) {
+          message.className = 'form-message error';
+          message.textContent = error.message || 'Local Part could not be saved';
+        }
+        toast(error.message || 'Local Part could not be saved', 'error');
+      }
+    });
+    $('#localPartSaveBtn')?.addEventListener('click', () => {
+      const form = $('#localPartForm');
+      if (!form || form.dataset.submitting === 'true') return;
+      if (typeof form.requestSubmit === 'function') {
+        form.requestSubmit();
+      } else {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      }
+    });
+    $('#localPartClearBtn')?.addEventListener('click', () => resetLocalPartForm());
+    $('#localPartForm [name="dealerCode"]')?.addEventListener('change', syncLocalPartFormIdentity);
+    $('#localPartForm [name="partNumber"]')?.addEventListener('blur', (event) => {
+      event.target.value = clean(event.target.value).toUpperCase();
+    });
+    $('#localPartHistoryRefreshBtn')?.addEventListener('click', () => loadLocalPartHistory({ page: state.localPartPage }).catch((error) => toast(error.message, 'error')));
+    const localPartHistoryFilters = $('#localPartHistoryFilters');
+    const scheduleLocalPartHistory = (delay = 300) => {
+      clearTimeout(state.localPartFilterTimer);
+      state.localPartPage = 1;
+      state.localPartFilterTimer = setTimeout(() => {
+        loadLocalPartHistory({ page: 1 }).catch((error) => toast(error.message, 'error'));
+      }, delay);
+    };
+    localPartHistoryFilters?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      scheduleLocalPartHistory(0);
+    });
+    localPartHistoryFilters?.addEventListener('change', () => scheduleLocalPartHistory(120));
+    localPartHistoryFilters?.addEventListener('input', (event) => {
+      if (event.target.matches('input[type="date"], select')) return;
+      scheduleLocalPartHistory(350);
+    });
+    $('#localPartHistoryRows')?.addEventListener('click', (event) => {
+      const editButton = event.target.closest('.local-part-edit');
+      const deleteButton = event.target.closest('.local-part-delete');
+      if (editButton) editLocalPart(editButton.dataset.id).catch((error) => toast(error.message, 'error'));
+      if (deleteButton) deleteLocalPart(deleteButton.dataset.id).catch((error) => toast(error.message, 'error'));
+    });
+    $('#localPartPrevPage')?.addEventListener('click', () => loadLocalPartHistory({ page: Math.max(1, state.localPartPage - 1) }).catch((error) => toast(error.message, 'error')));
+    $('#localPartNextPage')?.addEventListener('click', () => loadLocalPartHistory({ page: Math.min(state.localPartTotalPages, state.localPartPage + 1) }).catch((error) => toast(error.message, 'error')));
     $('#barcodeScanForm').addEventListener('submit', (event) => {
       event.preventDefault();
       const raw = String($('#barcodeRaw')?.value || '').trim();
@@ -11076,7 +12110,7 @@
       });
     });
     $('#manualSyncBtn').addEventListener('click', runSync);
-    $('#homeManualSyncBtn').addEventListener('click', runSync);
+    $('#homeManualSyncBtn')?.addEventListener('click', runSync);
     $('#quickActionStartScan')?.addEventListener('click', () => {
       openView('scan');
       $('#scan [data-subview="barcodeEntry"]')?.click();
@@ -11087,6 +12121,20 @@
       $('#scan [data-subview="manualEntry"]')?.click();
       setTimeout(() => $('#manualScanForm [name="part"]')?.focus(), 0);
     });
+    $('#dashboardViewAllScans')?.addEventListener('click', () => {
+      openView('scan');
+      setTimeout(() => {
+        $('#scanHistorySearchBtn')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 0);
+    });
+    $('#dashboardRefreshButton')?.addEventListener('click', () => {
+      loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
+    });
+    $('#dashboardDateRange')?.addEventListener('change', () => {
+      state.dashboardLoaded = false;
+      loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
+    });
+    $('#dashboardViewBins')?.addEventListener('click', () => openView('reports'));
     $('#quickActionViewReports')?.addEventListener('click', () => openView('reports'));
     $('#quickActionBinTransfer')?.addEventListener('click', () => openView('binTransfer'));
     $('#quickActionSyncNow')?.addEventListener('click', () => runSync().catch((error) => toast(error.message, 'error')));
@@ -11113,6 +12161,7 @@
         if (select.id === 'dashboardDealerSelect') {
           state.dashboardDealerCode = cleanDealerCode(select.value || '');
           syncScanDealerScope(state.dashboardDealerCode, select);
+          updateDashboardScopeSummary();
           state.selectedProductGroupSummary = null;
           state.productGroupDetailRows = [];
           state.productGroupDetailTotals = null;
@@ -11275,6 +12324,20 @@
     $('#scanHistoryDeleteSelectedBtn')?.addEventListener('click', () => deleteSelectedScans().catch((error) => toast(error.message, 'error')));
     $('#scanHistoryDeleteUnknownBtn')?.addEventListener('click', () => cleanUnknownParts({}).catch((error) => toast(error.message, 'error')));
     $('#scanHistoryDeleteDealerBtn')?.addEventListener('click', () => deleteByDealerCode().catch((error) => toast(error.message, 'error')));
+    $('#scanModificationHistoryRefreshBtn')?.addEventListener('click', () => loadScanModificationHistory().catch((error) => toast(error.message, 'error')));
+    $$('#scanModificationHistoryFilters input, #scanModificationHistoryFilters select').forEach((field) => {
+      field.addEventListener('change', () => loadScanModificationHistory().catch((error) => toast(error.message, 'error')));
+    });
+    $('#scanModificationHistoryRows')?.addEventListener('click', async (event) => {
+      const button = event.target.closest('.restore-audited-scan');
+      if (!button || !button.dataset.scanId) return;
+      if (!(await confirmDeleteAction('Restore this deleted scan?'))) return;
+      const details = lastDeleteDetails();
+      await api(`/api/inventory/${encodeURIComponent(button.dataset.scanId)}/restore`, { method: 'POST', body: details });
+      toast('Scan restored');
+      await loadScanModificationHistory();
+      await refreshAfterDelete();
+    });
     $('#cancelDeleteButton')?.addEventListener('click', () => closeDeleteModal(false));
     $('#confirmDeleteButton')?.addEventListener('click', () => closeDeleteModal(true));
     $('#deleteModal')?.addEventListener('click', (event) => {
@@ -11320,6 +12383,7 @@
       if (!field || field.disabled) return;
       if (field.type === 'checkbox' || field.type === 'radio' || field.type === 'button' || field.type === 'submit' || field.type === 'reset' || field.type === 'file') return;
       if (!field.name || field.name === 'reportTableSearch') return;
+      if (activeReportType() === 'local-parts') state.localPartsReportPage = 1;
       scheduleReportLoad(field.type === 'date' || field.type === 'datetime-local' ? 220 : 450);
     });
     reportFiltersForm?.addEventListener('change', (event) => {
@@ -11328,6 +12392,7 @@
       if (field.type === 'submit' || field.type === 'button' || field.type === 'reset') return;
       const fieldName = String(field.name || '').trim();
       if (!fieldName) return;
+      if (activeReportType() === 'local-parts') state.localPartsReportPage = 1;
       if (fieldName === 'productGroup') refreshReportSubGroupOptions();
       if (fieldName === 'showScannedPartsOnly' && field.checked) {
         const opposite = $('[name="showFullMasterWithZeroScan"]', reportFiltersForm);
@@ -11348,7 +12413,7 @@
         scheduleReportLoad(220, 'Loading report...');
         return;
       }
-      if (!reportParams().dealerCode) {
+      if (!reportParams().dealerCode && !syncReportDealerSelection()) {
         cancelScheduledReportLoad();
         resetReportPreview('Select dealer code first to load report automatically.');
         return;
@@ -11359,7 +12424,7 @@
       setReportTab(event.target.value);
       state.reportCache.clear();
       updateReportButtons();
-      scheduleReportLoad(220, 'Loading report...');
+      scheduleReportLoad(220, 'Loading report...', { autoDownloadExcel: true });
     });
     $('#reportShow').addEventListener('click', () => loadReport().catch((error) => toast(error.message, 'error')));
     $('#reportRefresh')?.addEventListener('click', () => loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error')));
@@ -11425,15 +12490,24 @@
       }, 500);
     });
     $('#reportExcel').addEventListener('click', () => {
-      if (!validateReportSelection(true)) return;
-      if (isProductGroupSummaryReport()) {
-        exportProductGroupSummary().catch((error) => toast(error.message, 'error'));
-        return;
-      }
-      downloadGet(reportPath('excel'), reportDownloadName('xlsx')).catch((error) => toast(error.message, 'error'));
+      downloadActiveReportExcel().catch((error) => toast(error.message, 'error'));
     });
     $('#downloadCompleteAuditPackBtn')?.addEventListener('click', () => openAuditPackModal());
     $('#reportPdf')?.addEventListener('click', () => downloadGet(reportPath('pdf'), reportDownloadName('pdf')).catch((error) => toast(error.message, 'error')));
+    $('#reportPrint')?.addEventListener('click', () => {
+      if (!state.reportLoaded) return;
+      window.print();
+    });
+    $('#localPartsReportPrev')?.addEventListener('click', () => {
+      if (state.localPartsReportPage <= 1) return;
+      state.localPartsReportPage -= 1;
+      loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error'));
+    });
+    $('#localPartsReportNext')?.addEventListener('click', () => {
+      if (state.localPartsReportPage >= state.localPartsReportTotalPages) return;
+      state.localPartsReportPage += 1;
+      loadReport({ forceRefresh: true }).catch((error) => toast(error.message, 'error'));
+    });
     $('#partsRefreshTemplateCsv')?.addEventListener('click', () => downloadGet(partsRefreshTemplatePath(), 'Parts_Inventory_Refresh_Template.csv').catch((error) => toast(error.message, 'error')));
     $('#reportEmail')?.addEventListener('click', async () => {
       const to = window.prompt('To');
@@ -11504,28 +12578,14 @@
       event.preventDefault();
       loadReconciliation().catch((error) => toast(error.message, 'error'));
     });
-    $$('.recon-tab').forEach((button) => {
-      button.addEventListener('click', () => {
-        const target = button.dataset.reconTab;
-        $$('.recon-tab').forEach((item) => {
-          const active = item === button;
-          item.classList.toggle('active', active);
-          item.setAttribute('aria-selected', String(active));
-        });
-        $$('.recon-panel').forEach((panel) => {
-          const active = panel.id === target;
-          panel.classList.toggle('active', active);
-          panel.hidden = !active;
-        });
-      });
-    });
+    $$('.recon-tab').forEach((button) => button.addEventListener('click', () => activateReconciliationTab(button.dataset.reconTab)));
     $('#dealerStockDealer')?.addEventListener('change', (event) => {
-      const dealerCode = cleanDealerCode(event.target.value || '');
-      if ($('#reconDealer')) $('#reconDealer').value = dealerCode;
+      syncReconDealer(event.target.value);
+      loadReconciliation().catch((error) => toast(error.message, 'error'));
     });
     $('#reconDealer')?.addEventListener('change', (event) => {
-      const dealerCode = cleanDealerCode(event.target.value || '');
-      if ($('#dealerStockDealer')) $('#dealerStockDealer').value = dealerCode;
+      syncReconDealer(event.target.value);
+      loadReconciliation().catch((error) => toast(error.message, 'error'));
     });
     $('#dealerStockUploadForm')?.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -11539,6 +12599,7 @@
         toast(error.message, 'error');
       });
     });
+    $('#dealerStockTemplateDownloadBtn')?.addEventListener('click', () => downloadGet('/api/reconciliation/dealer-stock-template', 'Daksh_Dealer_Stock_Upload_Template.xlsx').catch((error) => toast(error.message, 'error')));
     $('#reconPreviewBtn')?.addEventListener('click', () => loadDealerStockPreview().catch((error) => toast(error.message, 'error')));
     $('#reconDeleteStockBtn')?.addEventListener('click', () => deleteDealerStock().catch((error) => toast(error.message, 'error')));
     $('#reconReprocessBtn')?.addEventListener('click', () => reprocessReconciliation().catch((error) => toast(error.message, 'error')));
@@ -11548,13 +12609,36 @@
     });
     $('#reconExcel').addEventListener('click', () => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('excel')}`, 'Daksh_Reconciliation.xlsx').catch((error) => toast(error.message, 'error')));
     $('#reconPdf').addEventListener('click', () => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('pdf')}`, 'Daksh_Reconciliation.pdf').catch((error) => toast(error.message, 'error')));
+    $('#reconPrevPage')?.addEventListener('click', () => {
+      state.reconPage = Math.max(1, (state.reconPage || 1) - 1);
+      renderReconciliationRows();
+    });
+    $('#reconNextPage')?.addEventListener('click', () => {
+      state.reconPage += 1;
+      renderReconciliationRows();
+    });
 
+    $('#auditPriceDealerSelect')?.addEventListener('change', () => {
+      setAuditPriceRefreshMessage();
+      updateAuditPriceRefreshUi();
+    });
+    $('#auditPriceRefreshForm')?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      refreshAuditPricesFromMaster();
+    });
     $('#partUploadForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       try {
+        const submitter = event.submitter;
+        const mode = String(submitter?.dataset?.catalogueUploadMode || 'add-missing');
+        const confirmMessage = mode === 'price-only'
+          ? 'Update only latest MRP and DLC for existing part master records? Missing parts in the file will be skipped. Saved audit prices stay unchanged until you use Refresh Audit Prices.'
+          : 'Upload only part master records that are missing? Existing part master records will not be changed.';
+        if (!window.confirm(confirmMessage)) return;
         const uploadId = createCatalogueUploadSessionId();
         const formData = new FormData(event.currentTarget);
         formData.set('uploadId', uploadId);
+        formData.set('mode', mode);
         state.catalogueUploadSessionId = uploadId;
         setCatalogueUploadBusy(true, {
           uploadId,
@@ -11564,20 +12648,28 @@
         });
         const data = await api('/api/master-catalogue/upload', { method: 'POST', body: formData });
         setCatalogueUploadBusy(false);
-        updateCatalogueUploadStats(data, { action: 'upload' });
-        const uploadMismatch = Boolean(data.rowCountMismatch) || (Number(data.fileRowsCount || 0) > 0 && Number(data.savedRowsCount ?? data.importedRowsCount ?? 0) !== Number(data.fileRowsCount || 0));
+        const action = mode === 'price-only' ? 'price-update' : 'missing-upload';
+        updateCatalogueUploadStats(data, { action });
+        const fileRowsCount = Number(data.fileRowsCount || 0);
+        const savedRowsCount = Number(data.savedRowsCount ?? data.importedRowsCount ?? 0);
+        const duplicateRowsCount = Number(data.duplicateRowsCount ?? 0);
+        const failedRowsCount = Number(data.failedRowsCount ?? 0);
+        const skippedRowsCount = Number(data.modeSkippedRowsCount ?? ((data.skippedExistingRowsCount || 0) + (data.skippedMissingRowsCount || 0)));
+        const accountedRowsCount = savedRowsCount + duplicateRowsCount + failedRowsCount + skippedRowsCount;
+        const uploadMismatch = Boolean(data.accountingGapCount) || (fileRowsCount > 0 && accountedRowsCount !== fileRowsCount);
+        const completedMessage = mode === 'price-only' ? 'MRP/DLC update completed' : 'Missing part upload completed';
         setCatalogueUploadProgress({
           ...data,
           stage: 'completed',
-          message: uploadMismatch ? 'Upload completed with mismatch' : 'Upload completed'
+          message: uploadMismatch ? `${completedMessage} with mismatch` : completedMessage
         }, {
           visible: true,
           variant: uploadMismatch ? 'warning' : 'success',
           text: catalogueUploadProgressText(data)
         });
         toast(uploadMismatch
-          ? 'Upload completed with mismatch. Download failed rows to check missing parts.'
-          : 'Upload completed', uploadMismatch ? 'warning' : 'success');
+          ? `${completedMessage} with mismatch. Download failed rows to check details.`
+          : completedMessage, uploadMismatch ? 'warning' : 'success');
         if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) await loadParts(state.masterSearch.page || 1);
       } catch (error) {
         setCatalogueUploadBusy(false);
@@ -11596,6 +12688,7 @@
       }
     });
     $('#downloadCatalogueTemplateBtn')?.addEventListener('click', () => downloadGet('/api/master-catalogue/template', 'Part_Master_Catalogue_Template.xlsx').catch((error) => toast(error.message, 'error')));
+    $('#downloadCompletePartMasterBtn')?.addEventListener('click', downloadCompletePartMaster);
     $('#deleteCatalogueBtn')?.addEventListener('click', async () => {
       if (!window.confirm('This will permanently delete the current Part Master catalogue. Scan and audit data will not be deleted. Continue?')) return;
       try {
@@ -11963,7 +13056,7 @@
   function bindSocket() {
     if (!window.io) return;
     if (state.dashboardSocket) return;
-    const socketOptions = { transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000, reconnectionDelayMax: 5000 };
+    const socketOptions = { transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000, reconnectionDelayMax: 5000, auth: { token: state.token } };
     const socket = apiBaseUrl() ? window.io(apiBaseUrl(), socketOptions) : window.io(socketOptions);
     state.dashboardSocket = socket;
     socket.on('connect', () => {
@@ -11981,7 +13074,7 @@
         serverUrl: state.serverInfo ? state.serverInfo.serverUrl : '',
         appVersion: 'web-dashboard'
       });
-    }, 30000);
+    }, 60000);
     socket.on('disconnect', (reason) => {
       console.warn('[DASHBOARD] socket disconnected', reason);
       addConnectionLog(`Socket disconnected: ${reason}`, 'warning');
@@ -12028,16 +13121,24 @@
       state.lastRealtimeAt = Date.now();
       queueRealtimeReportRefresh('dashboard update');
       if (!dashboardPayloadMatchesActiveAudit(payload)) return;
-      if (payload.stats && dashboardStatsMatchesActiveAudit(payload.stats)) updateDashboardCards(payload.stats);
-      if (Array.isArray(payload.recent)) renderScanStream(payload.recent, { skipActiveAuditFilter: true });
+      if (selectedDashboardRange() !== 'audit') {
+        queueDashboardRefresh(350);
+      } else {
+        if (payload.stats && dashboardStatsMatchesActiveAudit(payload.stats)) updateDashboardCards(payload.stats);
+        if (Array.isArray(payload.recent)) renderScanStream(payload.recent, { skipActiveAuditFilter: true });
+      }
       updateScannerStatusBar({ at: new Date() });
     });
     socket.on('inventory:update', (payload = {}) => {
       state.lastRealtimeAt = Date.now();
       queueRealtimeReportRefresh('inventory update');
       if (!dashboardPayloadMatchesActiveAudit(payload)) return;
-      if (payload.stats && dashboardStatsMatchesActiveAudit(payload.stats)) updateDashboardCards(payload.stats);
-      if (Array.isArray(payload.recent)) renderScanStream(payload.recent, { skipActiveAuditFilter: true });
+      if (selectedDashboardRange() !== 'audit') {
+        queueDashboardRefresh(350);
+      } else {
+        if (payload.stats && dashboardStatsMatchesActiveAudit(payload.stats)) updateDashboardCards(payload.stats);
+        if (Array.isArray(payload.recent)) renderScanStream(payload.recent, { skipActiveAuditFilter: true });
+      }
     });
     socket.on('reports:update', () => {
       state.lastRealtimeAt = Date.now();
@@ -12049,6 +13150,19 @@
       if (activeReconDealer() && (!payload.dealerCode || cleanDealerCode(payload.dealerCode) === activeReconDealer())) {
         loadDealerStockPreview().catch(() => undefined);
         queueReconciliationRefresh('dealer stock update');
+      }
+    });
+    socket.on('local-parts:update', (payload = {}) => {
+      state.lastRealtimeAt = Date.now();
+      markLocalPartsReportStale();
+      const payloadDealer = cleanDealerCode(payload.dealerCode || '');
+      const localDealer = localPartSelectedDealer();
+      if ($('#localPartEntry')?.classList.contains('active') && (!payloadDealer || !localDealer || payloadDealer === localDealer)) {
+        loadLocalPartHistory({ page: state.localPartPage }).catch(() => undefined);
+      }
+      if ($('#reports')?.classList.contains('active') && activeReportType() === 'local-parts') {
+        const reportDealer = cleanDealerCode(reportParams().dealerCode || '');
+        if (!payloadDealer || !reportDealer || payloadDealer === reportDealer) refreshLocalPartsReportIfVisible().catch(() => undefined);
       }
     });
     socket.on('mrp:updated', (scan = {}) => {
@@ -12143,7 +13257,12 @@
       renderSyncQueue();
     });
     socket.on('dealers:update', () => loadDealers({ force: true }).catch(console.warn));
-    socket.on('master:update', () => {
+    socket.on('audit:prices-refreshed', () => {
+      state.lastRealtimeAt = Date.now();
+      refreshViewsAfterAuditPriceRefresh();
+    });
+    socket.on('master:update', (payload = {}) => {
+      state.partMasterLookupCache.clear();
       state.reportFilterDropdownsLoadedAt = 0;
       markReportsStale('master update');
       const jobs = [];

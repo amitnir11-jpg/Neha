@@ -1,6 +1,7 @@
 require('dotenv').config();
 const Inventory = require('../models/Inventory');
 const DeletedScanLog = require('../models/DeletedScanLog');
+const scanModification = require('../services/ScanModificationService');
 const { normalizePartNumber } = require('../utils/normalize');
 const { connectDatabase, disconnectDatabase } = require('../services/prisma');
 
@@ -60,8 +61,11 @@ async function main() {
       archivedDocument: scan
     })));
     archivedCount += duplicates.length;
-    await Inventory.updateOne({ _id: keeper._id }, {
-      $set: {
+    const systemReq = {
+      user: { id: 'system:migrate-fitted-duplicates', username: 'system', name: 'System migration', role: 'admin' },
+      body: { reason: 'Fitted duplicate merge', remarks: 'Merged duplicate FITTED rows by vehicle and job card.' }
+    };
+    await scanModification.updateScan(keeper, {
         qty: totalQty,
         quantity: totalQty,
         fittedQty: totalQty,
@@ -70,9 +74,12 @@ async function main() {
         fittedLocation: 'VEHICLE',
         status: 'FITTED_ON_VEHICLE',
         isFitted: true
-      }
-    });
-    await Inventory.deleteMany({ _id: { $in: duplicates.map((scan) => scan._id) } });
+      }, systemReq, { action: 'UPDATE' });
+    await scanModification.softDeleteScans(
+      { _id: { $in: duplicates.map((scan) => scan._id) } },
+      systemReq,
+      { reason: 'Fitted duplicate merge', remarks: 'Merged duplicate FITTED rows by vehicle and job card.' }
+    );
   }
 
   await disconnectDatabase();

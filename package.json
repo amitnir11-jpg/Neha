@@ -1,6 +1,6 @@
 {
   "name": "daksh-inventory-v2",
-  "version": "2.0.0",
+  "version": "2.0.35",
   "description": "Advanced part inventory audit software with Railway PostgreSQL, Prisma, Socket.IO, Excel, PDF, email, backup, and device sync.",
   "main": "server.js",
   "scripts": {
@@ -8,10 +8,23 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
+    "migrate:user-roles": "node scripts/migrate-user-roles.js",
+    "dev": "node server.js",
+    "offline": "node server.js",
     "start:api": "node server.js",
     "start:web": "node scripts/web-server.js",
-    "test": "node scripts/master-price-logic-check.js && node scripts/stock-valuation-check.js && node scripts/category-alignment-check.js && node scripts/duplicate-upi-check.js && node scripts/part-bin-duplicate-check.js && node scripts/cache-safety-check.js && node scripts/prisma-mirror-types-check.js && node scripts/mobile-scanner-regression-check.js",
+    "test": "node scripts/master-price-logic-check.js && node scripts/stock-valuation-check.js && node scripts/category-alignment-check.js && node scripts/duplicate-upi-check.js && node scripts/part-bin-duplicate-check.js && node scripts/report-scan-quantity-check.js && node scripts/cache-safety-check.js && node scripts/prisma-mirror-types-check.js && node scripts/mobile-scanner-regression-check.js && node scripts/dealer-stock-template-check.js && node scripts/local-parts-isolation-check.js && node --test test/network-discovery.test.js",
+    "test:network": "node --test test/network-discovery.test.js",
     "test:catalogue-upload": "node scripts/catalogue-upload-check.js",
+    "test:local-parts-browser": "node scripts/local-parts-browser-smoke.js",
+    "license:status": "node scripts/license-status.js",
+    "license:activate": "node scripts/license-activate.js",
+    "license-server": "node license-server/server.js",
+    "license:keys": "node scripts/generate-license-keys.js",
+    "license:create": "node scripts/create-license.js",
+    "test:license": "node --test test/license-security.test.js",
+    "test:license:integration": "node --test test/license-server.integration.test.js",
+    "test:app:readiness": "node --test test/app-readiness.test.js",
     "backfill:scan-categories": "node scripts/backfill-scan-categories.js",
     "start": "node scripts/railway-start.js"
   },
@@ -27,10 +40,11 @@
   "author": "Daksh Inventory",
   "license": "MIT",
   "dependencies": {
-    "@zxing/library": "^0.21.3",
     "@prisma/client": "^6.16.3",
+    "@zxing/library": "^0.21.3",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
+    "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
     "exceljs": "3.4.0",
     "express": "^4.21.2",
@@ -38,10 +52,11 @@
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
     "multer": "^2.1.1",
+    "multicast-dns": "^7.2.5",
     "nodemailer": "^8.0.7",
+    "prisma": "^6.16.3",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.1",
-    "prisma": "^6.16.3",
     "xlsx": "^0.18.5"
   }
 }

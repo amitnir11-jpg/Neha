@@ -2,6 +2,7 @@ const express = require('express');
 const ExcelJS = require('exceljs');
 const { randomUUID } = require('crypto');
 const Inventory = require('../models/Inventory');
+const DealerStock = require('../models/DealerStock');
 const Bin = require('../models/Bin');
 const MasterPart = require('../models/MasterPart');
 const MasterCatalogue = require('../models/MasterCatalogue');
@@ -15,6 +16,7 @@ const DuplicateScanLog = require('../models/DuplicateScanLog');
 const VerificationLog = require('../models/VerificationLog');
 const AuditLog = require('../models/AuditLog');
 const auth = require('./auth');
+const scanModification = require('../services/ScanModificationService');
 const { normalizePartNumber } = require('../utils/normalize');
 const { findCataloguePart, cataloguePayload } = require('../utils/catalogue');
 const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentity');
@@ -24,7 +26,8 @@ const { dateDebugPayload, formatIstDateTime, parseIstFilterDate, validDate } = r
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { canonicalizePartCategory, resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
-const { reportTotals } = require('../utils/reportTotals');
+const { applyMovementCountRules, reportTotals } = require('../utils/reportTotals');
+const { calculateDealerStockSystemValue } = require('../utils/stockValuation');
 const { buildSmartBinSuggestion, normalizeBinLocation } = require('../utils/smartBinSuggestion');
 const smartBinSettingsRoute = require('./settings');
 const {
@@ -47,7 +50,9 @@ const {
   getPricesFromPartMaster,
   masterPriceScanFields,
   masterPriceMissing,
-  priceFromPartMasterRecord
+  priceFromPartMasterRecord,
+  savedAuditPrice,
+  scanWithSavedAuditPrice
 } = require('../utils/partMasterPrice');
 
 const router = express.Router();
@@ -158,8 +163,20 @@ async function findMasterPart(partNumber, dealerCode = '') {
   return masterValidation.findMasterPart(partNumber, dealerCode);
 }
 
-async function getMasterPrice(partNumber, dealerCode = '', master = null) {
-  return getPriceFromPartMaster(partNumber, dealerCode);
+async function getMasterPrice(partNumber, dealerCode = '', master = null, auditId = '') {
+  const current = await getPriceFromPartMaster(partNumber, dealerCode);
+  if (!auditId) return current;
+  const part = normalizePartNumber(partNumber);
+  const filter = {
+    dealerCode: normalizeDealerCode(dealerCode),
+    auditId: String(auditId).trim(),
+    $or: [{ normalizedPartNumber: part }, { partNumber: part }, { part: part }]
+  };
+  const [savedScan, savedStock] = await Promise.all([
+    Inventory.findOne(filter).sort({ timestamp: 1, createdAt: 1 }).lean(),
+    DealerStock.findOne(filter).sort({ createdAt: 1 }).lean()
+  ]);
+  return savedAuditPrice(savedScan || savedStock, current || master) || current;
 }
 
 function missingMasterPriceResponse(res, partNumber = '') {
@@ -287,7 +304,6 @@ function duplicateScanFilter(uniqueScanId, qrFingerprint, dealerCode = '', rawSc
   if (scanKey) terms.push({ uniqueScanId: scanKey }, { scanId: scanKey }, { syncKey: scanKey });
   if (!terms.length) return null;
   const filter = {
-    scanStatus: { $ne: 'deleted' },
     $or: terms
   };
   if (dealer) filter.dealerCode = dealer;
@@ -382,8 +398,9 @@ async function findBackendDuplicate(input = {}, options = {}) {
   return null;
 }
 
-function fittedIdentityFilter({ dealerCode, partNumber, regdNo, jobCardNo } = {}) {
+function fittedScanIdentityFilter({ dealerCode, auditId, partNumber, regdNo, jobCardNo } = {}, includeDeleted = false) {
   const dealer = normalizeDealerCode(dealerCode);
+  const audit = clean(auditId);
   const part = normalizePartNumber(partNumber);
   const regd = upper(regdNo);
   const job = upper(jobCardNo);
@@ -393,12 +410,25 @@ function fittedIdentityFilter({ dealerCode, partNumber, regdNo, jobCardNo } = {}
     scanType: 'FITTED',
     regdNo: regd,
     jobCardNo: job,
-    scanStatus: { $in: acceptedStatuses() },
-    syncStatus: 'synced',
-    isDuplicate: { $ne: true },
     $or: [{ normalizedPartNumber: part }, { partNumber: part }, { part }]
   };
+  if (audit) filter.auditId = audit;
+  if (!includeDeleted) {
+    filter.scanStatus = { $in: acceptedStatuses() };
+    filter.syncStatus = 'synced';
+    filter.isDuplicate = { $ne: true };
+    filter.isDeleted = { $ne: true };
+    filter.deletedAt = null;
+  }
   return filter;
+}
+
+function fittedIdentityFilter(fields = {}) {
+  return fittedScanIdentityFilter(fields, false);
+}
+
+function fittedAnyIdentityFilter(fields = {}) {
+  return fittedScanIdentityFilter(fields, true);
 }
 
 function prepareFittedScan(scan = {}, qty = 0) {
@@ -436,12 +466,13 @@ function valuationFields({ masterPrice = null, master = null, qty = 0 } = {}) {
 
 async function backfillDuplicateMrp(existing = {}, { partNumber = '', masterPrice = null, qty = 1 } = {}) {
   if (!existing || !existing._id) return existing;
-  const price = masterPrice || await getPriceFromPartMaster(partNumber || existing.partNumber || existing.part, existing.dealerCode).catch(() => null);
-  if (masterPriceMissing(price)) return existing;
-  const quantity = Number(existing.quantity || existing.qty || qty || 1);
-  const update = masterPriceScanFields(price, quantity);
-  await Inventory.updateOne({ _id: existing._id }, { $set: update });
-  return { ...existing, ...update };
+  // Existing scan records are immutable during duplicate detection. Pricing
+  // corrections must use the admin-only correction endpoint so they receive
+  // an actor, reason, snapshot, and audit entry.
+  void partNumber;
+  void masterPrice;
+  void qty;
+  return existing;
 }
 
 const DASHBOARD_BLANK_MARKERS = ['', 'NULL', 'UNDEFINED', 'N/A', 'NA', '-'];
@@ -575,14 +606,14 @@ function parseRawScan(rawScan) {
     // Not JSON; continue with UPI/barcode text parsing.
   }
   const slashParts = raw.split('/');
-  if (slashParts.length >= 6 && slashParts[3] && slashParts[4] && slashParts[5]) {
+  if (slashParts.length >= 4 && slashParts[3]) {
     const slashQty = optionalNumber(slashParts[4]);
     const slashMrp = optionalNumber(slashParts[5]);
     return {
       upiNo: upper(slashParts[1]),
       upiId: upper(slashParts[1]),
       part: upper(slashParts[3]).replace(/\s+/g, ''),
-      qty: slashQty !== undefined ? slashQty : 1,
+      qty: slashQty !== undefined && slashQty > 0 ? slashQty : undefined,
       mrp: slashMrp,
       mrpProvided: slashMrp !== undefined,
       dlc: undefined,
@@ -735,7 +766,9 @@ function applyTestScanMode(filter = {}, mode = 'real') {
   if (selected !== 'all') clauses.push(selected === 'test' ? testScanClause() : { $nor: testScanClause().$or });
   clauses.push(
     masterValidation.validScanClause(),
-    { scanStatus: { $in: acceptedStatuses() } }
+    { scanStatus: { $in: acceptedStatuses() } },
+    { isDeleted: { $ne: true } },
+    { deletedAt: null }
   );
   filter.syncStatus = 'synced';
   filter.isDuplicate = { $ne: true };
@@ -745,6 +778,25 @@ function applyTestScanMode(filter = {}, mode = 'real') {
 
 function applyRecentScanMode(filter = {}, mode = 'real') {
   return applyTestScanMode(filter, mode);
+}
+
+function dashboardDateScope(value, now = new Date()) {
+  const range = String(value || '').trim().toLowerCase();
+  if (!['today', '7d', '30d', 'audit'].includes(range)) return { range: '', timestamp: null, from: '', to: '' };
+  if (range === 'audit') return { range, timestamp: null, from: '', to: '' };
+  const days = range === '30d' ? 30 : (range === '7d' ? 7 : 1);
+  const istDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(now);
+  const from = new Date(`${istDate}T00:00:00+05:30`);
+  from.setUTCDate(from.getUTCDate() - (days - 1));
+  const to = new Date(now);
+  return {
+    range,
+    timestamp: { $gte: from, $lte: to },
+    from: from.toISOString(),
+    to: to.toISOString()
+  };
 }
 
 async function activeDashboardScope(query = {}) {
@@ -762,8 +814,19 @@ async function activeDashboardScope(query = {}) {
     filter.auditId = clean(activeAudit.auditId);
   }
 
+  const dateScope = dashboardDateScope(query.range || query.dateRange || '');
+  if (dateScope.timestamp) filter.timestamp = dateScope.timestamp;
+  const reportQuery = {
+    ...(filter.dealerCode ? { dealerCode: filter.dealerCode } : {}),
+    ...(filter.auditId ? { auditId: filter.auditId } : {}),
+    ...(dateScope.from ? { from: dateScope.from } : {}),
+    ...(dateScope.to ? { to: dateScope.to } : {})
+  };
+
   return {
     filter,
+    reportQuery,
+    range: dateScope.range,
     activeAudit: activeAudit ? publicAudit(activeAudit) : null
   };
 }
@@ -835,6 +898,7 @@ function dashboardUniqueScanStages(filter = {}) {
         __dashboardIdentity: dashboardIdentityExpression(),
         __dashboardEventAt: { $ifNull: ['$timestamp', { $ifNull: ['$scanTime', '$createdAt'] }] },
         __dashboardType: dashboardUpperExpression(['scanType', 'type'], 'INWARD'),
+        __dashboardSource: dashboardUpperExpression(['source', 'scanSource', 'entryMode', 'entryChannel', 'scanMode']),
         __dashboardPart: dashboardUpperExpression(['normalizedPartNumber', 'partNumber', 'part']),
         __dashboardQty: numberExpression(['qty', 'quantity']),
         __dashboardMrp: numberExpression(['valuationMRP', 'currentCatalogueMRP', 'finalMRP']),
@@ -907,7 +971,55 @@ async function dashboardRecentRows(filter = {}, limit = 12) {
   return scans.map((record) => publicScanWithMaster(record, masterLookup));
 }
 
-async function dashboardStats(filter) {
+async function dashboardDealerStockSummary(filter = {}) {
+  const dealerCode = normalizeDealerCode(filter && filter.dealerCode);
+  const auditId = clean(filter && filter.auditId);
+  if (!dealerCode || dealerCode === 'ALL' || !auditId) {
+    return {
+      partLineCount: 0,
+      dmsStockQty: 0,
+      stockValue: 0,
+      missingPriceLineCount: 0
+    };
+  }
+
+  const rows = await DealerStock.find({ dealerCode, auditId })
+    .select('dealerCode auditId partNumber normalizedPartNumber partNo part dmsStock systemQty mrp dlp dlc currentCatalogueMRP currentCatalogueDLC')
+    .lean();
+  if (!rows.length) {
+    return {
+      partLineCount: 0,
+      dmsStockQty: 0,
+      stockValue: 0,
+      missingPriceLineCount: 0
+    };
+  }
+
+  const partNumbers = Array.from(new Set(rows
+    .map((row) => normalizePartNumber(row.normalizedPartNumber || row.partNumber || row.partNo || row.part))
+    .filter(Boolean)));
+  const priceByPart = partNumbers.length ? await getPricesFromPartMaster(partNumbers, dealerCode) : new Map();
+
+  let dmsStockQty = 0;
+  let stockValue = 0;
+  let missingPriceLineCount = 0;
+  rows.forEach((row) => {
+    const partNumber = normalizePartNumber(row.normalizedPartNumber || row.partNumber || row.partNo || row.part);
+    const valuation = calculateDealerStockSystemValue(row, priceByPart.get(partNumber) || null);
+    dmsStockQty += valuation.quantity;
+    stockValue += Number(valuation.stockValue || 0);
+    if (valuation.missingMrp) missingPriceLineCount += 1;
+  });
+
+  return {
+    partLineCount: rows.length,
+    dmsStockQty,
+    stockValue: money(stockValue),
+    missingPriceLineCount
+  };
+}
+
+async function dashboardStats(filter, reportQuery = filter) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const liveCutoff = new Date(Date.now() - 30 * 1000);
@@ -929,27 +1041,19 @@ async function dashboardStats(filter) {
       { $ifNull: ['$remarks', ''] }
     ]
   };
-  const [aggregateRows, activeDevices, duplicateCount] = await Promise.all([
+
+  const deviceScope = filter && filter.dealerCode ? { dealerCode: filter.dealerCode } : {};
+  const catalogueScope = filter && filter.dealerCode ? { dealerCode: filter.dealerCode } : {};
+  const failedFilter = { ...deviceScope };
+  if (filter && filter.auditId) failedFilter.auditId = filter.auditId;
+  if (filter && filter.timestamp) failedFilter.timestamp = filter.timestamp;
+
+  const [reportData, aggregateRows, activeDevices, allDevices, duplicateCount, failedCount, cataloguePartCount, dealerStockSummary] = await Promise.all([
+    require('./report').buildReportData(reportQuery),
     Inventory.aggregate([
       ...dashboardUniqueScanStages(filter),
       {
         $facet: {
-          summary: [{
-            $group: {
-              _id: null,
-              totalScanRecords: { $sum: 1 },
-              totalScannedQuantity: { $sum: '$__dashboardQty' },
-              uniqueParts: { $addToSet: '$__dashboardPart' },
-              totalInward: { $sum: { $cond: [{ $eq: ['$__dashboardType', 'INWARD'] }, '$__dashboardQty', 0] } },
-              totalOutward: { $sum: { $cond: [{ $eq: ['$__dashboardType', 'OUTWARD'] }, '$__dashboardQty', 0] } },
-              fittedCount: { $sum: { $cond: [{ $eq: ['$__dashboardType', 'FITTED'] }, '$__dashboardQty', 0] } },
-              auditCount: { $sum: { $cond: [{ $eq: ['$__dashboardType', 'AUDIT'] }, '$__dashboardQty', 0] } },
-              damageCount: { $sum: { $cond: [{ $eq: ['$__dashboardType', 'DAMAGE'] }, '$__dashboardQty', 0] } },
-              pendingSync: { $sum: { $cond: [{ $eq: ['$synced', true] }, 0, 1] } },
-              mismatchCount: { $sum: { $cond: [{ $regexMatch: { input: mismatchText, regex: /mismatch|inactive|not found/i } }, 1, 0] } },
-              totalScannedValue: { $sum: '$__dashboardValue' }
-            }
-          }],
           today: [{ $match: { __dashboardEventAt: { $gte: today } } }, { $count: 'count' }],
           last: [{ $sort: { __dashboardEventAt: -1, _id: -1 } }, { $limit: 1 }, { $project: { _id: 0, time: '$__dashboardEventAt', part: '$__dashboardPart' } }],
           activeUsers: [
@@ -957,22 +1061,22 @@ async function dashboardStats(filter) {
             { $group: { _id: '$userId' } },
             { $count: 'count' }
           ],
-          partQuantities: [
+          distribution: [
             {
               $group: {
-                _id: '$__dashboardPart',
-                quantity: {
-                  $sum: {
-                    $switch: {
-                      branches: [
-                        { case: { $in: ['$__dashboardType', ['INWARD', 'AUDIT']] }, then: { $abs: '$__dashboardQty' } },
-                        { case: { $in: ['$__dashboardType', ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: '$__dashboardQty' }, -1] } },
-                        { case: { $eq: ['$__dashboardType', 'VERIFICATION'] }, then: 0 }
-                      ],
-                      default: { $abs: '$__dashboardQty' }
-                    }
+                _id: {
+                  $switch: {
+                    branches: [
+                      { case: { $regexMatch: { input: '$__dashboardSource', regex: /MANUAL/i } }, then: 'MANUAL' },
+                      { case: { $eq: ['$__dashboardType', 'DAMAGE'] }, then: 'DAMAGE' },
+                      { case: { $eq: ['$__dashboardType', 'FITTED'] }, then: 'FITTED' },
+                      { case: { $eq: ['$__dashboardType', 'OUTWARD'] }, then: 'OUTWARD' },
+                      { case: { $in: ['$__dashboardType', ['INWARD', 'AUDIT']] }, then: 'INWARD' }
+                    ],
+                    default: 'INWARD'
                   }
-                }
+                },
+                quantity: { $sum: { $abs: '$__dashboardQty' } }
               }
             }
           ],
@@ -1005,48 +1109,80 @@ async function dashboardStats(filter) {
         }
       }
     ]).allowDiskUse(true),
-    Device.countDocuments({ status: 'online', lastSeen: { $gte: liveCutoff } }),
-    DuplicateScanLog.countDocuments(duplicateFilter)
+    Device.countDocuments({ ...deviceScope, status: 'online', lastSeen: { $gte: liveCutoff } }),
+    Device.countDocuments(deviceScope),
+    DuplicateScanLog.countDocuments(duplicateFilter),
+    Inventory.countDocuments({ ...failedFilter, syncStatus: 'failed', isDeleted: { $ne: true }, deletedAt: null }),
+    MasterCatalogue.countDocuments(catalogueScope),
+    dashboardDealerStockSummary(filter)
   ]);
+
   const aggregate = aggregateRows[0] || {};
-  const summary = (aggregate.summary && aggregate.summary[0]) || {};
+  const summary = Array.isArray(reportData.summary) && reportData.summary.length ? reportData.summary[0] : {};
   const lastScan = (aggregate.last && aggregate.last[0]) || {};
-  const uniqueParts = Array.isArray(summary.uniqueParts) ? summary.uniqueParts.filter(Boolean).length : 0;
-  const partQuantities = (aggregate.partQuantities || []).filter((row) => row._id);
   const multipleBinPartCount = Number((aggregate.multipleBinParts && aggregate.multipleBinParts[0] ? aggregate.multipleBinParts[0].count : 0) || 0);
-  const currentPrices = await getPricesFromPartMaster(partQuantities.map((row) => row._id), filter && filter.dealerCode);
-  const actualStockValueDLC = money(partQuantities.reduce((sum, row) => {
-    const price = currentPrices.get(normalizePartNumber(row._id));
-    return sum + Number(row.quantity || 0) * Number(price && price.dlc || 0);
-  }, 0));
-  const actualStockValueMRP = money(partQuantities.reduce((sum, row) => {
-    const price = currentPrices.get(normalizePartNumber(row._id));
-    return sum + Number(row.quantity || 0) * Number(price && price.mrp || 0);
-  }, 0));
+  const todayCount = Number(aggregate.today && aggregate.today[0] ? aggregate.today[0].count : 0);
+  const activeUserCount = Number(aggregate.activeUsers && aggregate.activeUsers[0] ? aggregate.activeUsers[0].count : 0);
+  const distribution = Object.fromEntries((aggregate.distribution || []).map((row) => [String(row._id || '').toUpperCase(), Number(row.quantity || 0)]));
+  const inwardCount = Number(distribution.INWARD || 0);
+  const outwardCount = Number(distribution.OUTWARD || 0);
+  const manualCount = Number(distribution.MANUAL || 0);
+  const damageCount = Number(distribution.DAMAGE || 0);
+  const fittedCount = Number(distribution.FITTED || 0);
+  const distributionTotal = inwardCount + outwardCount + manualCount + damageCount + fittedCount;
+  const totalMasterParts = Number(cataloguePartCount || summary.totalMasterParts || 0);
+  const uniqueParts = Number(summary.uniqueParts || 0);
+  const auditCompletionPercent = totalMasterParts > 0 ? Math.min(100, (uniqueParts / totalMasterParts) * 100) : 0;
+  const uploadedPartLineCount = Number(dealerStockSummary.partLineCount || summary.totalPartsUploaded || 0);
+  const uploadedStockValue = Number(dealerStockSummary.partLineCount ? dealerStockSummary.stockValue : 0);
+  const reportSystemStockValue = Number(summary.totalDmsStockValue || summary.totalDmsDlcValue || summary.dmsStockValueDLC || 0);
+  const systemStockValue = Number(dealerStockSummary.partLineCount ? uploadedStockValue : reportSystemStockValue);
+
   return {
     totalUniqueScannedParts: uniqueParts,
-    totalScanRecords: Number(summary.totalScanRecords || 0),
-    totalScannedQuantity: Number(summary.totalScannedQuantity || 0),
+    totalScanRecords: Number(summary.scanRows || summary.totalScans || 0),
+    totalScannedQuantity: Number(summary.totalQuantity || summary.partsScanned || 0),
     categoryWiseScannedCount: {},
     last10Scans: [],
-    totalScannedToday: Number(aggregate.today && aggregate.today[0] ? aggregate.today[0].count : 0),
-    totalInward: Number(summary.totalInward || 0),
-    totalOutward: Number(summary.totalOutward || 0),
-    fittedCount: Number(summary.fittedCount || 0),
+    totalScannedToday: todayCount,
+    totalInward: inwardCount,
+    totalOutward: outwardCount,
+    manualCount,
+    fittedCount,
     auditCount: Number(summary.auditCount || 0),
-    damageCount: Number(summary.damageCount || 0),
+    damageCount,
+    failedCount: Number(failedCount || 0),
     activeDevices,
-    activeUsers: Number(aggregate.activeUsers && aggregate.activeUsers[0] ? aggregate.activeUsers[0].count : 0),
+    offlineDevices: Math.max(0, Number(allDevices || 0) - Number(activeDevices || 0)),
+    activeUsers: activeUserCount,
     pendingSync: Number(summary.pendingSync || 0),
-    duplicateCount,
+    duplicateCount: Number(summary.duplicateCount || duplicateCount || 0),
     mismatchCount: Number(summary.mismatchCount || 0),
     multipleBinPartCount,
-    totalScannedValue: actualStockValueDLC,
-    actualStockValueDLC,
-    actualStockValueMRP,
+    totalMasterParts,
+    auditCompletionPercent: Number(auditCompletionPercent.toFixed(1)),
+    scanTypeDistribution: {
+      inward: inwardCount,
+      outward: outwardCount,
+      manual: manualCount,
+      damage: damageCount,
+      fitted: fittedCount,
+      total: distributionTotal
+    },
+    totalScannedValue: Number(summary.totalActualStockValue || summary.totalPhysicalDlcValue || 0),
+    actualStockValueDLC: Number(summary.totalActualStockValue || summary.totalPhysicalDlcValue || 0),
+    systemStockValue,
+    masterStockValue: systemStockValue,
+    totalSystemValue: systemStockValue,
+    uploadedPartLineCount,
+    dealerStockPartLines: uploadedPartLineCount,
+    dealerStockDmsQty: Number(dealerStockSummary.dmsStockQty || summary.totalDmsStockQty || 0),
+    dealerStockValue: Number(dealerStockSummary.stockValue || 0),
+    dealerStockMissingPriceLines: Number(dealerStockSummary.missingPriceLineCount || 0),
+    actualStockValueMRP: Number(summary.totalActualMrpValue || summary.totalPhysicalMrpValue || 0),
     valuationBasis: 'DLC',
-    lastScanTime: lastScan.time || null,
-    lastScannedPart: lastScan.part || ''
+    lastScanTime: summary.lastScanTime || lastScan.time || null,
+    lastScannedPart: summary.lastScannedPart || lastScan.part || ''
   };
 }
 
@@ -1276,6 +1412,16 @@ function publicScan(scan = {}) {
     scanTime: scan.scanTime || scan.timestamp || scan.createdAt,
     createdAt: scan.createdAt,
     source: scan.source || 'server',
+    isDeleted: scan.isDeleted === true,
+    deletedAt: scan.deletedAt || null,
+    deletedBy: scan.deletedBy || '',
+    deleteReason: scan.deleteReason || '',
+    lastModifiedBy: scan.lastModifiedBy || '',
+    lastModifiedAt: scan.lastModifiedAt || null,
+    createdBy: scan.createdBy || scan.userId || '',
+    createdByUsername: scan.createdByUsername || scan.loginId || scan.username || '',
+    createdByName: scan.createdByName || scan.userName || scan.staffName || '',
+    createdByRole: scan.createdByRole || scan.role || '',
     entryMode: labels.entryMode,
     entryChannel: labels.entryChannel,
     scanSourceLabel: labels.scanSourceLabel
@@ -1310,12 +1456,10 @@ function publicScanWithMaster(record = {}, masterLookup = {}) {
       isMasterMatched: false
     };
   }
-  const masterDlc = numberValue(master.dlc, 0);
-  const masterMrp = numberValue(master.mrp, 0);
-  const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
+  const saved = scanWithSavedAuditPrice(scan, master);
   const masterCategory = resolveCategoryFromMaster(master);
   return {
-    ...scan,
+    ...saved,
     partName: master.partName || master.partDescription || scan.partName || scan.partDescription || '',
     partDescription: master.partDescription || master.partName || scan.partDescription || scan.partName || '',
     category: masterCategory,
@@ -1325,16 +1469,6 @@ function publicScanWithMaster(record = {}, masterLookup = {}) {
     model: master.model || '',
     year: master.year || master.manufacturingYear || '',
     manufacturingYear: master.manufacturingYear || master.year || '',
-    currentCatalogueMRP: masterMrp,
-    displayMRP: masterMrp,
-    mrp: masterMrp,
-    scanMRP: 0,
-    manualMRP: 0,
-    valuationMRP: masterMrp,
-    valuationSource: masterMrp > 0 ? MASTER_PRICE_SOURCE : 'PART_MASTER_PRICE_MISSING',
-    finalMRP: masterMrp,
-    finalInventoryValue: money(qty * masterMrp),
-    dlc: masterDlc,
     _masterLookupComplete: true,
     masterFound: true,
     masterMatch: true,
@@ -1383,11 +1517,9 @@ function outwardDoneFilter(raw, dealerCode = '', auditId = '') {
 }
 
 function roleScanError(role, scanType) {
-  const value = String(role || '').trim().toLowerCase();
-  if (!value || value === 'admin' || value === 'supervisor') return '';
-  if (value === 'outward_counter') return scanType === 'OUTWARD' ? '' : 'Outward Counter can only perform OUTWARD scans';
-  if (['scanner', 'staff', 'mobile_user'].includes(value)) return scanType === 'OUTWARD' ? 'Scanner users cannot perform OUTWARD scans' : '';
-  return '';
+  void scanType;
+  const value = auth.normalizeRole(role, '');
+  return auth.ROLES.includes(value) ? '' : 'Authenticated scan role is required.';
 }
 
 function isWebServerSavedScan(scan = {}) {
@@ -1398,6 +1530,7 @@ function isWebServerSavedScan(scan = {}) {
 
 function normalizedSyncStatus(scan = {}) {
   const explicit = String(scan.syncStatus || '').trim().toLowerCase();
+  if (scan.isDeleted === true || explicit === 'deleted') return 'deleted';
   if (['failed', 'rejected', 'duplicate'].includes(explicit)) return explicit;
   if (explicit === 'synced' || scan.synced === true || scan.isSynced === true || isWebServerSavedScan(scan)) return 'synced';
   return 'pending';
@@ -1475,6 +1608,7 @@ function manualDuplicatePayload(existing = {}, requestedQty = 1) {
 }
 
 async function addManualQuantity(existing = {}, input = {}, req) {
+  if (!req || !req.user || auth.normalizeRole(req.user.role) !== 'admin') return { error: 'Admin permission required.' };
   const addQty = Math.abs(numberValue(firstValue(input, ['qty', 'quantity', 'count']), 0));
   if (!(addQty > 0)) return { error: 'Quantity to add must be greater than zero.' };
   const requestId = clean(input.manualAddRequestId || input.uniqueScanId || input.scanId || input.clientScanId || input.syncKey || '');
@@ -1495,29 +1629,42 @@ async function addManualQuantity(existing = {}, input = {}, req) {
   const nextQtyExpression = { $add: [currentQtyExpression, addQty] };
   const priceFields = masterPriceScanFields(masterPrice, 0);
   const masterMrp = numberValue(priceFields.valuationMRP, 0);
-  let updated = await Inventory.findOneAndUpdate(
-    { _id: existing._id, lastManualAddRequestId: { $ne: requestId } },
-    [{
-      $set: {
-        part: partNumber,
-        partNumber,
-        normalizedPartNumber: partNumber,
-        qty: nextQtyExpression,
-        quantity: nextQtyExpression,
-        ...priceFields,
-        finalInventoryValue: { $multiply: [nextQtyExpression, masterMrp] },
-        lastManualAddRequestId: requestId,
-        lastManualMergedAt: now,
-        syncStatus: 'synced',
-        synced: true,
-        isSynced: true,
-        updatedAt: now
-      }
-    }],
-    { new: true }
-  ).lean();
-  const alreadyApplied = !updated;
-  if (!updated) updated = await Inventory.findById(existing._id).lean();
+  let before = await Inventory.findById(existing._id).lean();
+  if (!before) return { error: 'Existing manual scan record was not found.' };
+  if (before.isDeleted === true) return { error: 'Deleted scans must be restored before quantity can be changed.' };
+  let updated = null;
+  let alreadyApplied = before.lastManualAddRequestId === requestId;
+  if (!alreadyApplied) {
+    try {
+      updated = await scanModification.updateScan(before, [{
+        $set: {
+          part: partNumber,
+          partNumber,
+          normalizedPartNumber: partNumber,
+          qty: nextQtyExpression,
+          quantity: nextQtyExpression,
+          ...priceFields,
+          finalInventoryValue: { $multiply: [nextQtyExpression, masterMrp] },
+          lastManualAddRequestId: requestId,
+          lastManualMergedAt: now,
+          syncStatus: 'synced',
+          synced: true,
+          isSynced: true
+        }
+      }], req, {
+        action: 'UPDATE',
+        filter: { lastManualAddRequestId: { $ne: requestId } },
+        reason: input.reason,
+        remarks: input.remarks
+      });
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      before = await Inventory.findById(existing._id).lean();
+      alreadyApplied = Boolean(before && before.lastManualAddRequestId === requestId);
+      if (!alreadyApplied) throw error;
+    }
+  }
+  if (!updated) updated = alreadyApplied ? before : await Inventory.findById(existing._id).lean();
   if (!updated) return { error: 'Existing manual scan record was not found.' };
 
   const actor = req.user || {};
@@ -1559,6 +1706,30 @@ async function addManualQuantity(existing = {}, input = {}, req) {
   return { updated: publicRow, alreadyApplied, addQty };
 }
 
+async function updateFittedScanQuantity(existing = {}, addQty = 1, req) {
+  const quantity = Math.abs(numberValue(addQty, 1));
+  if (!(quantity > 0)) {
+    const error = new Error('Quantity to add must be greater than zero.');
+    error.status = 400;
+    throw error;
+  }
+  const updated = await scanModification.updateScan(existing, {
+    $inc: { qty: quantity, quantity, fittedQty: quantity },
+    $set: {
+      fittedLocation: 'VEHICLE',
+      status: 'FITTED_ON_VEHICLE',
+      syncStatus: 'synced',
+      synced: true,
+      isSynced: true
+    }
+  }, req, {
+    action: 'UPDATE',
+    reason: req.body?.reason,
+    remarks: req.body?.remarks
+  });
+  return updated;
+}
+
 function partStockMatch({ dealerCode = '', auditId = '', partNumber = '', rawScan = '' } = {}) {
   const dealer = normalizeDealerCode(dealerCode);
   const audit = clean(auditId);
@@ -1582,6 +1753,8 @@ function partStockMatch({ dealerCode = '', auditId = '', partNumber = '', rawSca
     scanStatus: { $in: acceptedStatuses() },
     syncStatus: 'synced',
     isDuplicate: { $ne: true },
+    isDeleted: { $ne: true },
+    deletedAt: null,
     $and: [nonVerificationScanClause()]
   };
   if (dealer) match.dealerCode = dealer;
@@ -1735,6 +1908,8 @@ async function autoDetectOutwardBin({ dealerCode, auditId, partNumber }) {
     scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] },
     syncStatus: 'synced',
     isDuplicate: { $ne: true },
+    isDeleted: { $ne: true },
+    deletedAt: null,
     $or: [{ normalizedPartNumber: part }, { partNumber: part }, { part }],
     $and: [{
       $or: [
@@ -1781,17 +1956,9 @@ function escapeRegex(value) {
 }
 
 function applyScanVisibility(req, filter = {}) {
-  if (req.user && req.user.role === 'admin') return filter;
-  const userId = String((req.user && (req.user.id || req.user.username || req.user.email)) || req.query.userId || req.query.loginId || '').trim();
-  const deviceId = String(req.query.deviceId || '').trim();
-  const staffName = String((req.user && (req.user.name || req.user.username)) || '').trim();
-  const terms = [
-    userId ? { userId } : null,
-    userId ? { loginId: userId } : null,
-    deviceId ? { deviceId } : null,
-    staffName ? { staffName } : null
-  ].filter(Boolean);
-  if (terms.length) filter.$and = (filter.$and || []).concat([{ $or: terms }]);
+  // Dealer authorization is enforced by requireAuth before this handler.
+  // An Audit User may review the complete history for assigned dealers.
+  void req;
   return filter;
 }
 
@@ -1877,10 +2044,10 @@ function queueRealtimeDashboardUpdate(io, dashboardFilter = {}, plainScan = {}) 
 
 async function cleanupTestScans(req, res) {
   try {
-    const result = await Inventory.deleteMany(testScanClause());
-    invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
-    req.io.emit('scan:deleted');
-    req.io.emit('stats:update');
+    const result = await scanModification.softDeleteScans(testScanClause(), req, {
+      reason: req.body?.reason || 'Test data cleanup',
+      remarks: req.body?.remarks || 'Removed test rows from live inventory.'
+    });
     res.json({ success: true, deletedCount: result.deletedCount || 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1948,9 +2115,9 @@ async function logValidationFailure(payload = {}, reason = INVALID_PART_MESSAGE,
 
 function scanLookupFilter(scanId = '') {
   const id = String(scanId || '').trim();
-  const clauses = [{ scanId: id }, { uniqueScanId: id }];
+  const clauses = [{ scanId: id }, { uniqueScanId: id }, { localId: id }, { rowId: id }, { id: id }];
   if (/^[a-f\d]{24}$/i.test(id)) clauses.push({ _id: id });
-  return { $or: clauses };
+  return { $and: [{ $or: clauses }, { isDeleted: { $ne: true } }] };
 }
 
 function isManualScanRecord(scan = {}) {
@@ -1982,7 +2149,7 @@ async function updateManualMrp(req, res) {
       ...valuationFields({ masterPrice, qty }),
       mrpPendingUpdatedAt: now
     };
-    const updated = await Inventory.findByIdAndUpdate(scan._id, { $set: update }, { new: true }).lean();
+    const updated = await scanModification.updateScan(scan, update, req, { action: 'UPDATE' });
     const actor = req.user || {};
     await AuditLog.create({
       eventType: 'scan_pricing.updated',
@@ -2024,22 +2191,70 @@ async function updateManualMrp(req, res) {
     }
     return res.json({ success: true, scan: publicRow, message: 'MRP/DLC refreshed from Part Master' });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 }
 
 async function updateScanDetails(req, res) {
   try {
-    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+    const rawIdentity = firstValue(req.body || {}, ['scanIdentity']);
+    let scanIdentity = {};
+    if (rawIdentity && typeof rawIdentity === 'object') {
+      scanIdentity = rawIdentity;
+    } else if (typeof rawIdentity === 'string') {
+      try {
+        scanIdentity = JSON.parse(rawIdentity);
+      } catch (error) {
+        scanIdentity = {};
+      }
+    }
+
+    const lookupValues = [
+      req.params.scanId,
+      scanIdentity.id,
+      scanIdentity.scanId,
+      scanIdentity.uniqueScanId,
+      scanIdentity.localId,
+      scanIdentity.rowId,
+      scanIdentity.syncKey
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+
+    let scan = null;
+    for (const value of lookupValues) {
+      scan = await Inventory.findOne(scanLookupFilter(value)).lean();
+      if (scan) break;
+    }
+
+    if (!scan) {
+      const partNumberHint = normalizePartNumber(scanIdentity.originalPartNumber || scanIdentity.partNumber || firstValue(req.body || {}, ['partNumber', 'part', 'partNo']) || '');
+      const qtyHint = optionalNumber(scanIdentity.originalQuantity || scanIdentity.quantity || firstValue(req.body || {}, ['qty', 'quantity']) || '');
+      const binHint = upper(scanIdentity.originalBinLocation || scanIdentity.binLocation || firstValue(req.body || {}, ['binLocation', 'bin']) || '');
+      const scanTypeHint = normalizeScanType(scanIdentity.originalScanType || scanIdentity.scanType || firstValue(req.body || {}, ['scanType']) || '');
+      const dealerCodeHint = upper(firstValue(req.body || {}, ['dealerCode']) || scanIdentity.dealerCode || '');
+      const fallbackClauses = [];
+      if (partNumberHint) fallbackClauses.push({ $or: [{ partNumber: partNumberHint }, { normalizedPartNumber: partNumberHint }, { part: partNumberHint }] });
+      if (Number(qtyHint) > 0) fallbackClauses.push({ $or: [{ qty: Number(qtyHint) }, { quantity: Number(qtyHint) }] });
+      if (binHint) fallbackClauses.push({ $or: [{ bin: binHint }, { binLocation: binHint }] });
+      if (scanTypeHint) fallbackClauses.push({ $or: [{ scanType: scanTypeHint }, { type: scanTypeHint }] });
+      if (dealerCodeHint) fallbackClauses.push({ dealerCode: dealerCodeHint });
+      if (fallbackClauses.length) {
+        scan = await Inventory.findOne({ $and: fallbackClauses }).sort({ createdAt: -1, updatedAt: -1, _id: -1 }).lean();
+      }
+    }
+
     if (!scan) return res.status(404).json({ success: false, message: 'Scan record not found' });
 
     const oldPartNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part || '');
     const partNumber = normalizePartNumber(firstValue(req.body || {}, ['partNumber', 'part', 'partNo']) || oldPartNumber);
     const qty = optionalNumber(firstValue(req.body || {}, ['qty', 'quantity']));
     const binLocation = upper(firstValue(req.body || {}, ['binLocation', 'bin']));
-    const scanType = normalizeScanType(scan.scanType || scan.type || 'INWARD');
-
+    const scanType = normalizeScanType(firstValue(req.body || {}, ['scanType', 'type']) || scan.scanType || scan.type || 'INWARD');
     if (!partNumber) return res.status(400).json({ success: false, message: 'Part number is required.' });
+    if (!['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE', 'AUDIT', 'VERIFICATION'].includes(scanType)) {
+      return res.status(400).json({ success: false, message: 'Valid scan type is required.' });
+    }
     if (!(Number(qty) > 0)) return res.status(400).json({ success: false, message: 'Quantity must be greater than zero.' });
     if (['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType) && !binLocation) {
       return res.status(400).json({ success: false, message: 'Bin location is required for this scan type.' });
@@ -2099,7 +2314,12 @@ async function updateScanDetails(req, res) {
         .join(', ');
     }
 
-    const updated = await Inventory.findByIdAndUpdate(scan._id, { $set: update }, { new: true, runValidators: true }).lean();
+    update.scanType = scanType;
+    update.type = scanType;
+    update.movementType = movementTypeValue({ scanType });
+    update.activeInventory = activeInventoryValue({ ...scan, ...update, scanType });
+    update.remainingQty = remainingQtyValue({ ...scan, ...update, scanType });
+    const updated = await scanModification.updateScan(scan, update, req, { action: 'UPDATE' });
     const actor = req.user || {};
     await AuditLog.create({
       eventType: 'scan.details.updated',
@@ -2143,7 +2363,7 @@ async function updateScanDetails(req, res) {
     }
     return res.json({ success: true, scan: publicRow, message: 'Part details updated successfully' });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 }
 
@@ -2274,11 +2494,12 @@ async function saveScanRequest(req, res) {
       source: entrySource,
       scanMode: req.body.scanMode || (entrySource === 'manual' ? 'Manual' : 'Barcode/Web Scan')
     });
+    const trustedUser = req.user || {};
     const requestUser = {
-      userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || '').trim(),
-      loginId: String(req.body.loginId || req.body.userId || (req.user ? req.user.username || req.user.email : '') || '').trim(),
-      staffName: String(req.body.staffName || parsed.staffName || (req.user ? req.user.name : '') || '').trim(),
-      userName: String(req.body.userName || req.body.staffName || parsed.userName || parsed.staffName || (req.user ? req.user.name || req.user.username : '') || '').trim()
+      userId: String(trustedUser.id || trustedUser._id || trustedUser.username || '').trim(),
+      loginId: String(trustedUser.username || trustedUser.email || '').trim().toLowerCase(),
+      staffName: String(trustedUser.name || trustedUser.username || trustedUser.email || '').trim(),
+      userName: String(trustedUser.name || trustedUser.username || trustedUser.email || '').trim()
     };
     const duplicateUserKey = requestUser.userId || requestUser.loginId || requestUser.userName || requestUser.staffName;
     const serverSavedSynced = serverSavedStatus === 'synced';
@@ -2332,7 +2553,7 @@ async function saveScanRequest(req, res) {
     let upiDuplicate = false;
 
     if (!existing && type === 'FITTED' && regdNo && jobCardNo) {
-      existing = await Inventory.findOne(fittedIdentityFilter({ dealerCode, partNumber: part, regdNo, jobCardNo, auditId })).lean();
+      existing = await Inventory.findOne(fittedAnyIdentityFilter({ dealerCode, partNumber: part, regdNo, jobCardNo, auditId })).lean();
     } else if (!existing) {
       existing = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
     }
@@ -2413,17 +2634,14 @@ async function saveScanRequest(req, res) {
         });
       if (type === 'FITTED') {
         if (booleanFlag(req.body.addFittedQuantity || req.body.confirmAddQuantity)) {
+          if (existing.isDeleted === true) {
+            return res.status(409).json({ success: false, message: 'Deleted scans must be restored before quantity can be changed.' });
+          }
+          if (!req.user || auth.normalizeRole(req.user.role) !== 'admin') {
+            return res.status(403).json({ success: false, message: 'Admin permission required.' });
+          }
           const addQty = numberValue(firstValue(req.body, ['qty', 'quantity', 'count']) || parsed.qty, 1);
-          const updated = await Inventory.findByIdAndUpdate(existing._id, {
-            $inc: { qty: addQty, quantity: addQty, fittedQty: addQty },
-            $set: {
-              fittedLocation: 'VEHICLE',
-              status: 'FITTED_ON_VEHICLE',
-              syncStatus: 'synced',
-              synced: true,
-              isSynced: true
-            }
-          }, { new: true }).lean();
+          const updated = await updateFittedScanQuantity(existing, addQty, req);
           if (req.io) {
             req.io.emit('scan:saved', publicScan(updated || existing));
             req.io.emit('stats:update');
@@ -2525,12 +2743,12 @@ async function saveScanRequest(req, res) {
       scanDebug('[MANUAL SCAN] validation failed', { reason: 'Invalid scan type', type, part, dealerCode });
       return res.status(400).json({ success: false, message: 'Invalid scan type' });
     }
-    const role = String(req.body.role || (req.user ? req.user.role : '') || '').trim().toLowerCase();
+    const role = auth.normalizeRole(req.user?.role, '');
     const roleError = roleScanError(role, type);
     if (roleError) return res.status(403).json({ success: false, message: roleError });
 
     const qty = preQty;
-    const masterPrice = master ? await getMasterPrice(part, dealerCode, master) : null;
+    const masterPrice = master ? await getMasterPrice(part, dealerCode, master, auditId) : null;
     if (master && masterPriceMissing(masterPrice)) {
       return missingMasterPriceResponse(res, part);
     }
@@ -2650,10 +2868,10 @@ async function saveScanRequest(req, res) {
       scanMode: req.body.scanMode || (entrySource === 'manual' ? 'Manual' : 'Barcode/Web Scan'),
       deviceId: String(req.body.deviceId || ''),
       deviceName: String(req.body.deviceName || req.body.device || ''),
-      userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || ''),
-      loginId: String(req.body.loginId || req.body.userId || (req.user ? req.user.username || req.user.email : '') || ''),
-      staffName: String(req.body.staffName || parsed.staffName || (req.user ? req.user.name : '') || ''),
-      userName: String(req.body.userName || req.body.staffName || parsed.userName || parsed.staffName || (req.user ? req.user.name || req.user.username : '') || ''),
+      userId: requestUser.userId,
+      loginId: requestUser.loginId,
+      staffName: requestUser.staffName,
+      userName: requestUser.userName,
       role,
       timestamp,
       scanTime: timestamp,
@@ -2776,7 +2994,7 @@ async function saveScanRequest(req, res) {
     res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
   } catch (error) {
     console.error('[MANUAL SCAN] save failed', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 }
 
@@ -2809,7 +3027,7 @@ async function updateManualMrp(req, res) {
       ...valuationFields({ masterPrice, qty }),
       mrpPendingUpdatedAt: now
     };
-    const updated = await Inventory.findByIdAndUpdate(scan._id, { $set: update }, { new: true }).lean();
+    const updated = await scanModification.updateScan(scan, update, req, { action: 'UPDATE' });
     const actor = req.user || {};
     await AuditLog.create({
       eventType: 'scan_pricing.updated',
@@ -2851,7 +3069,7 @@ async function updateManualMrp(req, res) {
     }
     return res.json({ success: true, scan: publicRow, message: 'MRP/DLC refreshed from Part Master' });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 }
 
@@ -2864,7 +3082,8 @@ async function updateScanDetails(req, res) {
     const partNumber = normalizePartNumber(firstValue(req.body || {}, ['partNumber', 'part', 'partNo']) || oldPartNumber);
     const qty = optionalNumber(firstValue(req.body || {}, ['qty', 'quantity']));
     const binLocation = upper(firstValue(req.body || {}, ['binLocation', 'bin']));
-    const scanType = normalizeScanType(scan.scanType || scan.type || 'INWARD');
+    const scanType = normalizeScanType(firstValue(req.body || {}, ['scanType', 'type']) || scan.scanType || scan.type || 'INWARD');
+    if (!VALID_TYPES.includes(scanType)) return res.status(400).json({ success: false, message: 'Valid scan type is required.' });
 
     if (!partNumber) return res.status(400).json({ success: false, message: 'Part number is required.' });
     if (!(Number(qty) > 0)) return res.status(400).json({ success: false, message: 'Quantity must be greater than zero.' });
@@ -2926,7 +3145,12 @@ async function updateScanDetails(req, res) {
         .join(', ');
     }
 
-    const updated = await Inventory.findByIdAndUpdate(scan._id, { $set: update }, { new: true, runValidators: true }).lean();
+    update.scanType = scanType;
+    update.type = scanType;
+    update.movementType = movementTypeValue({ scanType });
+    update.activeInventory = activeInventoryValue({ ...scan, ...update, scanType });
+    update.remainingQty = remainingQtyValue({ ...scan, ...update, scanType });
+    const updated = await scanModification.updateScan(scan, update, req, { action: 'UPDATE' });
     const actor = req.user || {};
     await AuditLog.create({
       eventType: 'scan.details.updated',
@@ -2970,7 +3194,7 @@ async function updateScanDetails(req, res) {
     }
     return res.json({ success: true, scan: publicRow, message: 'Part details updated successfully' });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 }
 
@@ -3101,11 +3325,12 @@ async function saveScanRequest(req, res) {
       source: entrySource,
       scanMode: req.body.scanMode || (entrySource === 'manual' ? 'Manual' : 'Barcode/Web Scan')
     });
+    const trustedUser = req.user || {};
     const requestUser = {
-      userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || '').trim(),
-      loginId: String(req.body.loginId || req.body.userId || (req.user ? req.user.username || req.user.email : '') || '').trim(),
-      staffName: String(req.body.staffName || parsed.staffName || (req.user ? req.user.name : '') || '').trim(),
-      userName: String(req.body.userName || req.body.staffName || parsed.userName || parsed.staffName || (req.user ? req.user.name || req.user.username : '') || '').trim()
+      userId: String(trustedUser.id || trustedUser._id || trustedUser.username || '').trim(),
+      loginId: String(trustedUser.username || trustedUser.email || '').trim().toLowerCase(),
+      staffName: String(trustedUser.name || trustedUser.username || trustedUser.email || '').trim(),
+      userName: String(trustedUser.name || trustedUser.username || trustedUser.email || '').trim()
     };
     const duplicateUserKey = requestUser.userId || requestUser.loginId || requestUser.userName || requestUser.staffName;
     const serverSavedSynced = serverSavedStatus === 'synced';
@@ -3145,7 +3370,7 @@ async function saveScanRequest(req, res) {
     let duplicateMessage = '';
     let upiDuplicate = false;
     if (!existing && type === 'FITTED' && regdNo && jobCardNo) {
-      existing = await Inventory.findOne(fittedIdentityFilter({ dealerCode, partNumber: part, regdNo, jobCardNo, auditId })).lean();
+      existing = await Inventory.findOne(fittedAnyIdentityFilter({ dealerCode, partNumber: part, regdNo, jobCardNo, auditId })).lean();
     } else if (!existing) {
       existing = duplicateQuery ? await Inventory.findOne(duplicateQuery).lean() : null;
     }
@@ -3201,17 +3426,14 @@ async function saveScanRequest(req, res) {
         });
       if (type === 'FITTED') {
         if (booleanFlag(req.body.addFittedQuantity || req.body.confirmAddQuantity)) {
+          if (existing.isDeleted === true) {
+            return res.status(409).json({ success: false, message: 'Deleted scans must be restored before quantity can be changed.' });
+          }
+          if (!req.user || auth.normalizeRole(req.user.role) !== 'admin') {
+            return res.status(403).json({ success: false, message: 'Admin permission required.' });
+          }
           const addQty = numberValue(firstValue(req.body, ['qty', 'quantity', 'count']) || parsed.qty, 1);
-          const updated = await Inventory.findByIdAndUpdate(existing._id, {
-            $inc: { qty: addQty, quantity: addQty, fittedQty: addQty },
-            $set: {
-              fittedLocation: 'VEHICLE',
-              status: 'FITTED_ON_VEHICLE',
-              syncStatus: 'synced',
-              synced: true,
-              isSynced: true
-            }
-          }, { new: true }).lean();
+          const updated = await updateFittedScanQuantity(existing, addQty, req);
           if (req.io) {
             req.io.emit('scan:saved', publicScan(updated || existing));
             req.io.emit('stats:update');
@@ -3313,12 +3535,12 @@ async function saveScanRequest(req, res) {
       scanDebug('[MANUAL SCAN] validation failed', { reason: 'Invalid scan type', type, part, dealerCode });
       return res.status(400).json({ success: false, message: 'Invalid scan type' });
     }
-    const role = String(req.body.role || (req.user ? req.user.role : '') || '').trim().toLowerCase();
+    const role = auth.normalizeRole(req.user?.role, '');
     const roleError = roleScanError(role, type);
     if (roleError) return res.status(403).json({ success: false, message: roleError });
 
     const qty = preQty;
-    const masterPrice = master ? await getMasterPrice(part, dealerCode, master) : null;
+    const masterPrice = master ? await getMasterPrice(part, dealerCode, master, auditId) : null;
     if (master && masterPriceMissing(masterPrice)) {
       return missingMasterPriceResponse(res, part);
     }
@@ -3417,10 +3639,10 @@ async function saveScanRequest(req, res) {
       scanMode: req.body.scanMode || (entrySource === 'manual' ? 'Manual' : 'Barcode/Web Scan'),
       deviceId: String(req.body.deviceId || ''),
       deviceName: String(req.body.deviceName || req.body.device || ''),
-      userId: String(req.body.userId || req.body.loginId || (req.user ? req.user.id : '') || ''),
-      loginId: String(req.body.loginId || req.body.userId || (req.user ? req.user.username || req.user.email : '') || ''),
-      staffName: String(req.body.staffName || parsed.staffName || (req.user ? req.user.name : '') || ''),
-      userName: String(req.body.userName || req.body.staffName || parsed.userName || parsed.staffName || (req.user ? req.user.name || req.user.username : '') || ''),
+      userId: requestUser.userId,
+      loginId: requestUser.loginId,
+      staffName: requestUser.staffName,
+      userName: requestUser.userName,
       role,
       timestamp,
       scanTime: timestamp,
@@ -3524,7 +3746,7 @@ async function saveScanRequest(req, res) {
     res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
   } catch (error) {
     console.error('[MANUAL SCAN] save failed', { message: error.message, stack: error.stack });
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 }
 
@@ -3802,8 +4024,8 @@ async function processScanRequest(req, res) {
   }
 }
 
-router.get('/verify', auth.optionalAuth, verifyPartRequest);
-router.post('/verify', auth.optionalAuth, verifyPartRequest);
+router.get('/verify', auth.requireAuth, verifyPartRequest);
+router.post('/verify', auth.requireAuth, verifyPartRequest);
 
 async function duplicateCheckHandler(req, res) {
   try {
@@ -3876,18 +4098,30 @@ async function smartBinCheckHandler(req, res) {
 
 router.post('/duplicate-check', auth.requireAuth, duplicateCheckHandler);
 router.post('/check-duplicate', auth.requireAuth, duplicateCheckHandler);
-router.post('/smart-bin-check', auth.optionalAuth, smartBinCheckHandler);
+router.post('/smart-bin-check', auth.requireAuth, smartBinCheckHandler);
 
-router.post('/process', auth.optionalAuth, processScanRequest);
-router.post('/process-scan', auth.optionalAuth, processScanRequest);
-router.post('/scan', auth.optionalAuth, processScanRequest);
-router.post('/manual', auth.optionalAuth, processScanRequest);
-router.post('/', auth.optionalAuth, processScanRequest);
-router.patch('/:scanId/details', auth.requireAuth, updateScanDetails);
-router.patch('/:scanId/mrp', auth.requireAuth, updateManualMrp);
-router.post('/sync', auth.optionalAuth, async (req, res) => {
+router.post('/process', auth.requireAuth, processScanRequest);
+router.post('/process-scan', auth.requireAuth, processScanRequest);
+router.post('/scan', auth.requireAuth, processScanRequest);
+router.post('/manual', auth.requireAuth, processScanRequest);
+router.post('/', auth.requireAuth, processScanRequest);
+router.patch('/:scanId/details', auth.requireAuth, auth.requireAdmin, updateScanDetails);
+router.patch('/:scanId/mrp', auth.requireAuth, auth.requireAdmin, updateManualMrp);
+router.post('/:scanId/restore', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const scan = await scanModification.restoreScan(req.params.scanId, req);
+    return res.json({ success: true, scan: publicScan(scan), message: 'Scan restored successfully.' });
+  } catch (error) {
+    return res.status(error.status || 500).json({ success: false, message: error.message });
+  }
+});
+router.post('/sync', auth.requireAuth, async (req, res) => {
   try {
     const incoming = Array.isArray(req.body.scans) ? req.body.scans : [];
+    const trustedUserId = String(req.user?.id || '').trim();
+    const trustedUsername = String(req.user?.username || req.user?.email || '').trim().toLowerCase();
+    const trustedUserName = String(req.user?.name || req.user?.username || '').trim();
+    const trustedRole = auth.normalizeRole(req.user?.role);
     const failed = [];
     const saved = [];
     const verificationResults = [];
@@ -3963,7 +4197,7 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           upiNo
         });
         const globalUpiKey = duplicatePolicy.globalUpiKey({ ...item, rawScanString: rawScanText, upiId, upiNo });
-        const masterPrice = master ? await getMasterPrice(part, dealerCode, master) : null;
+        const masterPrice = master ? await getMasterPrice(part, dealerCode, master, auditId) : null;
         if (master && masterPriceMissing(masterPrice)) {
           failed.push({ uniqueScanId, message: MISSING_PART_MASTER_PRICE_MESSAGE, item });
           continue;
@@ -4106,9 +4340,14 @@ router.post('/sync', auth.optionalAuth, async (req, res) => {
           rawUpi: String(item.rawUpi || rawScanText),
           source: entrySource,
           deviceId: String(item.deviceId || req.body.deviceId || ''),
-          userId: String(item.userId || item.loginId || (req.user ? req.user.id : '') || ''),
-          loginId: String(item.loginId || item.userId || (req.user ? req.user.username || req.user.email : '') || ''),
-          staffName: String(item.staffName || (req.user ? req.user.name : '') || ''),
+          userId: trustedUserId,
+          loginId: trustedUsername,
+          staffName: trustedUserName,
+          createdBy: trustedUserId,
+          createdByUsername: trustedUsername,
+          createdByName: trustedUserName,
+          createdByRole: trustedRole,
+          role: trustedRole,
           timestamp,
           synced: true,
           isSynced: true,
@@ -4248,8 +4487,12 @@ router.get('/history', auth.requireAuth, async (req, res) => {
     const publicRecords = records.map((record) => publicScanWithMaster(record, masterLookup));
     const aggregateTotals = totals[0] || {};
     const uniqueParts = (aggregateTotals.uniqueParts || []).map((part) => normalizePartNumber(part || '')).filter(Boolean);
-    const visibleTotals = reportTotals(publicRecords, { visibleRows: publicRecords.length, duplicateCount });
-    const partsScanned = Number(aggregateTotals.totalQuantity || 0);
+    const normalizedRecords = applyMovementCountRules(uniqueReportScans(publicRecords));
+    const visibleTotals = reportTotals(normalizedRecords, {
+      visibleRows: normalizedRecords.length,
+      duplicateCount
+    });
+    const partsScanned = Number(visibleTotals.totalQuantity || 0);
     res.json({
       success: true,
       records: publicRecords,
@@ -4261,16 +4504,16 @@ router.get('/history', auth.requireAuth, async (req, res) => {
         totalPages: Math.max(1, Math.ceil(totalRecords / limit))
       },
       summary: {
-        scanRows: totalRecords,
+        scanRows: visibleTotals.scanRows,
         totalRows: totalRecords,
         totalRecords,
-        visibleRows: publicRecords.length,
-        uniqueParts: new Set(uniqueParts).size,
+        visibleRows: visibleTotals.visibleRows,
+        uniqueParts: visibleTotals.uniqueParts || new Set(uniqueParts).size,
         visibleUniqueParts: visibleTotals.uniqueParts,
         partsScanned,
         visiblePartsScanned: visibleTotals.partsScanned,
         totalQuantity: partsScanned,
-        databaseQuantity: partsScanned,
+        databaseQuantity: Number(aggregateTotals.totalQuantity || 0),
         duplicateCount,
         unknownPartsCount: visibleTotals.unknownPartsCount,
         inwardCount: visibleTotals.inwardCount,
@@ -4375,9 +4618,9 @@ router.get('/dashboard/product-group-summary/details', auth.requireAuth, async (
 router.get('/dashboard', auth.requireAuth, async (req, res) => {
   try {
     return await sendCachedJson(res, 'dashboard', { ...req.query, view: 'dashboard' }, async (normalizedQuery) => {
-      const { filter, activeAudit } = await activeDashboardScope(normalizedQuery);
+      const { filter, reportQuery, range, activeAudit } = await activeDashboardScope(normalizedQuery);
     const [stats, recent] = await Promise.all([
-      dashboardStats(filter),
+      dashboardStats(filter, reportQuery),
       dashboardRecentRows(filter, 12)
     ]);
     const reconciliation = filter.dealerCode ? await require('./report').validateValuationReports(filter) : null;
@@ -4388,10 +4631,12 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
     }
     const recentMasterLookup = await masterLookupForScans(recent);
     stampDashboardScope(stats, filter);
+    stats.dashboardRange = range || 'audit';
 
     return {
       success: true,
       activeAudit,
+      range: range || 'audit',
       dealerCode: filter.dealerCode || '',
       auditId: filter.auditId || '',
       stats,
@@ -4417,7 +4662,7 @@ router.get('/recent', auth.requireAuth, async (req, res) => {
   }
 });
 
-router.get('/live', auth.optionalAuth, async (req, res) => {
+router.get('/live', auth.requireAuth, async (req, res) => {
   try {
     return await sendCachedJson(res, 'dashboard', { ...req.query, view: 'live' }, async (normalizedQuery) => {
       const limit = Math.min(Number(normalizedQuery.limit || 50), 200);
@@ -4497,7 +4742,11 @@ router.post('/repair-sync-status', auth.requireAuth, auth.requireAdmin, async (r
       })));
     }
     if (invalidRows.length) {
-      await Inventory.deleteMany({ _id: { $in: invalidRows.map((row) => row._id) } });
+      await scanModification.softDeleteScans(
+        { _id: { $in: invalidRows.map((row) => row._id) } },
+        req,
+        { reason: req.body?.reason || 'Repair cleanup', remarks: req.body?.remarks || 'Removed failed or duplicate rows during repair.' }
+      );
       await refreshInventoryUpiScopes(invalidRows);
     }
 
@@ -4534,7 +4783,13 @@ router.post('/deduplicate', auth.requireAuth, auth.requireAdmin, async (req, res
     ]);
     const deleteIds = duplicates.flatMap((item) => item.ids.slice(1));
     const deleteRows = deleteIds.length ? await Inventory.find({ _id: { $in: deleteIds } }).lean() : [];
-    const result = deleteIds.length ? await Inventory.deleteMany({ _id: { $in: deleteIds } }) : { deletedCount: 0 };
+    const result = deleteIds.length
+      ? await scanModification.softDeleteScans(
+        { _id: { $in: deleteIds } },
+        req,
+        { reason: req.body?.reason || 'Duplicate cleanup', remarks: req.body?.remarks || 'Duplicate scan rows retained in history.' }
+      )
+      : { deletedCount: 0 };
     await refreshInventoryUpiScopes(deleteRows);
     invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
@@ -4569,7 +4824,13 @@ router.post('/move-not-in-master-to-rejected', auth.requireAuth, auth.requireAdm
       }
     }
     const deleteRows = movedIds.length ? await Inventory.find({ _id: { $in: movedIds } }).lean() : [];
-    const deleteResult = movedIds.length ? await Inventory.deleteMany({ _id: { $in: movedIds } }) : { deletedCount: 0 };
+    const deleteResult = movedIds.length
+      ? await scanModification.softDeleteScans(
+        { _id: { $in: movedIds } },
+        req,
+        { reason: req.body?.reason || 'Moved to rejected', remarks: req.body?.remarks || 'Part was not found in the active master catalogue.' }
+      )
+      : { deletedCount: 0 };
     await refreshInventoryUpiScopes(deleteRows);
     invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
@@ -4610,19 +4871,10 @@ router.post('/delete-selected', auth.requireAuth, auth.requireAdmin, async (req,
       return res.status(400).json({ success: false, message: 'Select records to delete' });
     }
     const rows = await Inventory.find({ _id: { $in: ids } }).lean();
-    if (rows.length) {
-      await DeletedScanLog.insertMany(rows.map((scan) => ({
-        deletedBy: req.user.username || req.user.name || 'admin',
-        dealerCode: scan.dealerCode || '',
-        partNumber: scan.partNumber || scan.part || '',
-        qty: Number(scan.qty || scan.quantity || 0),
-        scanType: scan.scanType || scan.type || '',
-        reason: req.body.reason || 'Selected scan delete',
-        source: 'PC',
-        scanId: scan.scanId || scan.uniqueScanId || String(scan._id)
-      })));
-    }
-    const result = await Inventory.deleteMany({ _id: { $in: ids } });
+    const result = await scanModification.softDeleteScans({ _id: { $in: ids } }, req, {
+      reason: req.body.reason,
+      remarks: req.body.remarks
+    });
     await refreshInventoryUpiScopes(rows);
     invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
     req.io.emit('scan:deleted');
@@ -4671,7 +4923,10 @@ router.post('/delete-all', auth.requireAuth, auth.requireAdmin, async (req, res)
     }
 
     const rows = await Inventory.find(filter).lean();
-    const result = await Inventory.deleteMany(filter);
+    const result = await scanModification.softDeleteScans(filter, req, {
+      reason: req.body.reason,
+      remarks: req.body.remarks
+    });
     let duplicateLogsDeleted = 0;
     if (scope === 'dealer' || scope === 'date') {
       duplicateLogsDeleted = (await DuplicateScanLog.deleteMany(filter)).deletedCount || 0;
@@ -4707,6 +4962,7 @@ module.exports.publicScan = publicScan;
 module.exports.manualDuplicatePayload = manualDuplicatePayload;
 module.exports.addManualQuantity = addManualQuantity;
 module.exports.fittedIdentityFilter = fittedIdentityFilter;
+module.exports.fittedAnyIdentityFilter = fittedAnyIdentityFilter;
 module.exports.findBackendDuplicate = findBackendDuplicate;
 module.exports.duplicateLookupPayload = duplicateLookupPayload;
 module.exports.prepareFittedScan = prepareFittedScan;

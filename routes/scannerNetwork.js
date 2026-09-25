@@ -20,11 +20,17 @@ function scannerManager(req) {
 }
 
 function qrPairService(req) {
-  return req.app.get('qrPairService') || new QRPairService({ portProvider: () => req.app.locals.activePort || process.env.PORT || 3001 });
+  return req.app.get('qrPairService') || new QRPairService({
+    portProvider: () => req.app.locals.activePort || process.env.PORT || 3000,
+    identityService: req.app.locals.serverIdentity
+  });
 }
 
 function discoveryService(req) {
-  return req.app.get('deviceDiscoveryService') || new DeviceDiscoveryService({ portProvider: () => req.app.locals.activePort || process.env.PORT || 3001 });
+  return req.app.get('deviceDiscoveryService') || new DeviceDiscoveryService({
+    portProvider: () => req.app.locals.activePort || process.env.PORT || 3000,
+    identityService: req.app.locals.serverIdentity
+  });
 }
 
 function offlineSyncService(req) {

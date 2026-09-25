@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20260629-smart-bin-popup-v1';
+  const APP_VERSION = '20260704-lite-apk-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -8,6 +8,7 @@
   const MODE_KEY = 'dakshFreshMode';
   const BIN_KEY = 'dakshFreshActiveBin';
   const LAST_SYNC_KEY = 'dakshFreshLastSync';
+  const VERSION_RELOAD_KEY = '__dakshFreshVersionReloadAttempt';
   const SYNC_INTERVAL_MS = 45000;
   const RECENT_REFRESH_INTERVAL_MS = 8000;
   const HEARTBEAT_INTERVAL_MS = 90000;
@@ -94,6 +95,9 @@
     paused: false,
     syncRunning: false,
     syncAgain: false,
+    captureDecodeBusy: false,
+    capturePickerOpen: false,
+    capturePickerTimer: null,
     syncTimer: null,
     syncDelayTimer: null,
     recentRefreshTimer: null,
@@ -112,6 +116,7 @@
     nativeDetectorRunId: 0,
     nativeDetectorRunning: false,
     cameraStream: null,
+    liveCameraFallback: false,
     partMasterCache: new Map(),
     partMasterLookupPromise: new Map(),
     liveRecentRows: null,
@@ -262,7 +267,7 @@
 
   function scanUrl() {
     const origin = window.location.origin.replace(/\/+$/, '');
-    return `${origin}/mobile-scanner`;
+    return `${origin}/mobile-web`;
   }
 
   function canonicalScanUrl() {
@@ -271,6 +276,29 @@
 
   function isSecureScannerContext() {
     return window.isSecureContext || LOCALHOST_NAMES.has(window.location.hostname) || window.location.hostname.endsWith('.localhost');
+  }
+
+  function hasLiveCameraApi() {
+    return Boolean(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function');
+  }
+
+  function isHttpCameraBlocked() {
+    return !isSecureScannerContext();
+  }
+
+  function shouldUseCaptureScanner() {
+    return false;
+  }
+
+  function insecureCameraMessage() {
+    return isHttpCameraBlocked()
+      ? 'Android Chrome blocks camera on this HTTP URL. Install Lite APK to scan on this network.'
+      : 'Live camera unavailable in this browser. Use manual entry or the Android scanner app.';
+  }
+
+  function isCameraAccessError(error) {
+    const text = `${error?.name || ''} ${error?.message || ''}`.toLowerCase();
+    return /notallowed|permission|denied|security|secure|notfound|notreadable|overconstrained|abort/i.test(text);
   }
 
   function escapeHtml(value) {
@@ -409,12 +437,10 @@
   }
 
   function scanIdentityKey(scan = {}) {
-    console.log("Generating scan identity key for:", scan);
     const type = upper(scan.scanType || scan.type || state.mode);
     if (type === 'VERIFICATION') return '';
     const upi = extractUpiIdFromText(scan);
     if (upi) {
-      console.log("QR ID:", upi, "PART:", duplicatePartKey(scan), "BIN:", rowBin(scan));
       return ['UPI', upi].join('|');
     }
     const raw = normalizeText(scan.rawScanString || scan.rawScan || scan.rawBarcode || scan.rawQR || scan.rawUpi || '');
@@ -528,7 +554,7 @@
       const data = await api('/api/mobile/config', { auth: false, timeoutMs: LOGIN_CONFIG_TIMEOUT_MS });
       if (await reloadForScannerBuild(data.webScannerBuild)) return null;
       state.authReady = true;
-      state.canonicalUrl = data.mobileScannerUrl || data.scanUrl || state.canonicalUrl;
+      state.canonicalUrl = data.mobileWebUrl || data.mobileScannerUrl || data.scanUrl || state.canonicalUrl;
       state.loginUrl = data.loginUrl || state.loginUrl;
       state.recommendedDealerCode = upper(data.recommendedDealerCode || data.activeAudit?.dealerCode || '');
       state.loginDealers = normalizeLoginDealers(data.loginDealers || []);
@@ -554,7 +580,11 @@
 
   async function reloadForScannerBuild(serverBuild = '') {
     const build = clean(serverBuild);
-    if (!build || build === CACHE_VERSION) return false;
+    if (!build) return false;
+    if (build === CACHE_VERSION) {
+      storageRemove(VERSION_RELOAD_KEY);
+      return false;
+    }
     try {
       if (window.DAKSH_RUNTIME && typeof window.DAKSH_RUNTIME.refreshForVersionMismatch === 'function') {
         return await window.DAKSH_RUNTIME.refreshForVersionMismatch(build, { quiet: false });
@@ -562,8 +592,15 @@
     } catch (error) {
       console.warn('[VERSION] runtime refresh failed', error);
     }
-    const confirmed = window.confirm('New update available. Please refresh application.');
-    if (!confirmed) return true;
+    const signature = `${CACHE_VERSION}->${build}`;
+    if (storageGet(VERSION_RELOAD_KEY, '') === signature) {
+      console.warn('[VERSION] Scanner build mismatch remained after reload; continuing without another reload.', {
+        scannerBuild: CACHE_VERSION,
+        serverBuild: build
+      });
+      return false;
+    }
+    storageSet(VERSION_RELOAD_KEY, signature);
     try {
       if (window.DAKSH_RUNTIME && typeof window.DAKSH_RUNTIME.clearClientCaches === 'function') {
         await window.DAKSH_RUNTIME.clearClientCaches();
@@ -603,19 +640,25 @@
 
     fetchOptions.cache = fetchOptions.cache || 'no-store';
 
-    return fetch(apiUrl(path), fetchOptions).then(async (response) => {
+    const fullUrl = apiUrl(path);
+    console.log('[API DEBUG]', { method: fetchOptions.method || 'GET', path, fullUrl, baseUrl: apiBaseUrl() });
+    
+    return fetch(fullUrl, fetchOptions).then(async (response) => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.success === false) {
         const error = new Error(data.message || response.statusText || 'Request failed');
         error.status = response.status;
         error.data = data;
+        console.error('[API ERROR]', { status: response.status, message: error.message, data });
         throw error;
       }
       return data;
     }).catch((error) => {
       if (error && error.name === 'AbortError') {
+        console.error('[API TIMEOUT]', { path, timeoutMs });
         throw new Error('Request timed out. Check network and retry.');
       }
+      console.error('[API FETCH ERROR]', { path, error: error?.message || error });
       throw error;
     }).finally(() => {
       if (timeout) clearTimeout(timeout);
@@ -1034,9 +1077,14 @@
   }
 
   function removeStateRow(identifier = '') {
-    const key = typeof identifier === 'object' ? recordKey(identifier) : clean(identifier);
-    if (!key) return;
-    state.allRows = stateRows().filter((row) => recordKey(row) !== key);
+    const keys = typeof identifier === 'string'
+      ? [clean(identifier)].filter(Boolean)
+      : recordIdentityKeys(identifier);
+    if (!keys.length) return;
+    state.allRows = stateRows().filter((row) => {
+      const rowKeys = recordIdentityKeys(row);
+      return !keys.some((key) => rowKeys.includes(key));
+    });
   }
 
   function rowStatus(row = {}) {
@@ -1364,19 +1412,20 @@
     if (copyScannerUrlBtn) copyScannerUrlBtn.dataset.url = url;
     const notice = byId('contextNotice');
     const secure = isSecureScannerContext();
+    const liveCameraReady = hasLiveCameraApi();
     const secureBadge = byId('secureBadge');
     if (secureBadge) {
-      secureBadge.textContent = secure ? 'Secure' : 'Insecure';
-      secureBadge.className = `status-pill ${secure ? 'online' : 'warning'}`;
+      secureBadge.textContent = secure || liveCameraReady ? 'Camera Ready' : 'HTTPS Needed';
+      secureBadge.className = `status-pill ${secure || liveCameraReady ? 'online' : 'warning'}`;
     }
 
     if (notice) {
-      if (secure) {
+      if (secure || liveCameraReady) {
         notice.hidden = true;
         notice.textContent = '';
       } else {
         notice.hidden = false;
-        notice.textContent = `Camera access is blocked on this HTTP page. Open the secure Railway URL instead: ${url}`;
+        notice.textContent = `${insecureCameraMessage()} Fixed offline URL: ${url}`;
       }
     }
   }
@@ -1423,9 +1472,9 @@
   function renderModeMeta() {
     const info = currentModeInfo();
     const cameraHint = byId('cameraHint');
-    cameraHint.textContent = isSecureScannerContext()
+    cameraHint.textContent = hasLiveCameraApi() && !state.liveCameraFallback
       ? 'Ready to scan'
-      : 'Camera blocked on non-HTTPS pages. Use the secure Railway scanner URL.';
+      : insecureCameraMessage();
     const manualNote = byId('manualNote');
     manualNote.textContent = info.note;
     byId('manualTitle').textContent = info.label === 'Fitted'
@@ -1520,7 +1569,7 @@
     return bin;
   }
 
-  function saveBinAndStartCamera() {
+  function saveBinAndStartCamera({ openCapture = true } = {}) {
     const input = byId('activeBinLocation');
     const bin = setActiveBin(input?.value || '');
     if (!bin) {
@@ -1540,7 +1589,7 @@
     if (state.scanning) {
       cameraState('Ready to scan');
     } else {
-      requestAutoCameraStart();
+      startCamera({ allowCaptureFallback: false }).catch((error) => toast(error.message || 'Camera failed to start', 'error'));
     }
     return bin;
   }
@@ -1691,6 +1740,8 @@
 
   function cameraState(text) {
     byId('cameraState').textContent = text;
+    const frame = cameraFrame();
+    if (frame) frame.dataset.message = text || '';
   }
 
   function cameraFrame() {
@@ -1700,7 +1751,11 @@
   function renderCameraControlState({ live = state.scanning, starting = false } = {}) {
     const button = byId('startScanBtn');
     if (!button) return;
-    button.textContent = starting ? 'Starting...' : live ? 'Camera Off' : 'Camera On';
+    button.textContent = starting
+      ? 'Starting...'
+      : live
+        ? 'Camera Off'
+        : 'Camera On';
     button.disabled = Boolean(starting);
     button.setAttribute('aria-pressed', live ? 'true' : 'false');
   }
@@ -1876,6 +1931,250 @@
       state.cameraRequested = false;
     }
     cameraState(preserveRequest ? 'Camera stopped' : 'Camera off');
+  }
+
+  function decodeResultText(result) {
+    return clean(typeof result?.getText === 'function' ? result.getText() : result?.text || result?.rawValue || result);
+  }
+
+  function waitForImageLoad(image) {
+    if (image?.complete && image.naturalWidth > 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error('Photo could not be loaded'));
+    });
+  }
+
+  async function decodeImageWithNativeDetector(image) {
+    const detector = await nativeBarcodeDetector().catch(() => null);
+    if (!detector?.detect) return '';
+    const codes = await detector.detect(image).catch(() => []);
+    return nativeBarcodeText(codes && codes[0]);
+  }
+
+  async function decodeImageWithZxing(image, imageUrl) {
+    const reader = await ensureReader();
+    const attempts = [];
+    if (typeof reader.decodeFromImageElement === 'function') {
+      attempts.push(() => reader.decodeFromImageElement(image));
+    }
+    if (typeof reader.decodeFromImage === 'function') {
+      attempts.push(() => reader.decodeFromImage(image));
+    }
+    if (typeof reader.decodeFromImageUrl === 'function') {
+      attempts.push(() => reader.decodeFromImageUrl(imageUrl));
+    }
+
+    let lastError = null;
+    for (const attempt of attempts) {
+      try {
+        const raw = decodeResultText(await attempt());
+        if (raw) return raw;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) throw lastError;
+    return '';
+  }
+
+  function drawCaptureVariant(image, { sx, sy, sw, sh, maxSize = 1600 } = {}) {
+    const sourceWidth = Number(sw || image.naturalWidth || image.width || 0);
+    const sourceHeight = Number(sh || image.naturalHeight || image.height || 0);
+    if (!sourceWidth || !sourceHeight) return null;
+    const scale = Math.min(1, Number(maxSize || 1600) / Math.max(sourceWidth, sourceHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return null;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(
+      image,
+      Number(sx || 0),
+      Number(sy || 0),
+      sourceWidth,
+      sourceHeight,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+    return canvas.toDataURL('image/jpeg', 0.92);
+  }
+
+  async function imageFromUrl(url, alt = 'Barcode capture') {
+    const image = new Image();
+    image.alt = alt;
+    image.src = url;
+    await waitForImageLoad(image);
+    return image;
+  }
+
+  async function capturedImageCandidates(image, imageUrl) {
+    const candidates = [{ image, imageUrl }];
+    const width = Number(image.naturalWidth || image.width || 0);
+    const height = Number(image.naturalHeight || image.height || 0);
+    if (!width || !height) return candidates;
+
+    const variantUrls = [];
+    if (Math.max(width, height) > 1600) {
+      const scaled = drawCaptureVariant(image, { sx: 0, sy: 0, sw: width, sh: height, maxSize: 1600 });
+      if (scaled) variantUrls.push(scaled);
+    }
+
+    const side = Math.min(width, height);
+    if (side > 0) {
+      const square = drawCaptureVariant(image, {
+        sx: Math.max(0, (width - side) / 2),
+        sy: Math.max(0, (height - side) / 2),
+        sw: side,
+        sh: side,
+        maxSize: 1400
+      });
+      if (square) variantUrls.push(square);
+    }
+
+    for (const url of variantUrls) {
+      try {
+        candidates.push({ image: await imageFromUrl(url), imageUrl: url });
+      } catch (_) {}
+    }
+    return candidates;
+  }
+
+  async function decodeCapturedImageCandidate(candidate) {
+    const nativeRaw = await decodeImageWithNativeDetector(candidate.image);
+    if (nativeRaw) return nativeRaw;
+    const zxingRaw = await decodeImageWithZxing(candidate.image, candidate.imageUrl);
+    if (zxingRaw) return zxingRaw;
+    return '';
+  }
+
+  async function decodeCapturedBarcodeFile(file) {
+    if (!file) throw new Error('No photo selected');
+    if (file.type && !String(file.type).toLowerCase().startsWith('image/')) {
+      throw new Error('Select a barcode photo');
+    }
+
+    const imageUrl = URL.createObjectURL(file);
+    try {
+      const image = await imageFromUrl(imageUrl);
+      const candidates = await capturedImageCandidates(image, imageUrl);
+      let lastError = null;
+      for (const candidate of candidates) {
+        try {
+          const raw = await decodeCapturedImageCandidate(candidate);
+          if (raw) return raw;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (lastError) throw lastError;
+      throw new Error('Barcode not found. Retake closer with good light.');
+    } finally {
+      URL.revokeObjectURL(imageUrl);
+    }
+  }
+
+  function captureReadyMessage(fallback = '') {
+    const bin = loadActiveBin();
+    if (fallback) return fallback;
+    return bin ? `Bin ${bin} ready. Camera will scan here when live preview is available.` : insecureCameraMessage();
+  }
+
+  function finishCapturePicker(message = '') {
+    state.capturePickerOpen = false;
+    clearTimeout(state.capturePickerTimer);
+    state.capturePickerTimer = null;
+    if (!state.captureDecodeBusy) {
+      setCameraStarting(false);
+      setCameraLive(false);
+      cameraState(captureReadyMessage(message));
+      renderCameraControlState({ live: false, starting: false });
+    }
+  }
+
+  function startCaptureScan() {
+    if (!ensureScanSession()) return;
+    if (requiresBin() && !loadActiveBin()) {
+      state.cameraRequested = true;
+      cameraState('Enter bin first, then turn the camera on.');
+      toast('Bin location is required before inward or damage scans', 'error');
+      byId('activeBinLocation')?.focus();
+      renderCameraControlState({ live: false, starting: false });
+      return;
+    }
+
+    const input = byId('cameraCaptureInput');
+    if (!input) {
+      cameraState('Capture scanner unavailable. Use manual entry.');
+      toast('Capture scanner unavailable. Use manual entry.', 'error');
+      return;
+    }
+    if (state.capturePickerOpen || state.captureDecodeBusy) return;
+
+    state.cameraRequested = true;
+    state.paused = false;
+    state.scanning = false;
+    state.capturePickerOpen = true;
+    input.value = '';
+    setCameraLive(false);
+    setCameraStarting(true);
+    cameraState('Opening camera. Take barcode photo...');
+    clearTimeout(state.capturePickerTimer);
+    try {
+      input.click();
+    } catch (_) {
+      finishCapturePicker('Turn the camera on again.');
+      return;
+    }
+    state.capturePickerTimer = setTimeout(() => {
+      if (state.capturePickerOpen && !state.captureDecodeBusy && document.visibilityState === 'visible') {
+        finishCapturePicker('Camera did not open. Turn the camera on again.');
+      }
+    }, 1600);
+  }
+
+  async function handleCaptureFile(event) {
+    const input = event?.target;
+    const file = input?.files && input.files[0];
+    if (!file) {
+      finishCapturePicker('Capture cancelled. Turn the camera on again.');
+      return;
+    }
+    if (state.captureDecodeBusy) return;
+
+    state.capturePickerOpen = false;
+    clearTimeout(state.capturePickerTimer);
+    state.capturePickerTimer = null;
+    state.captureDecodeBusy = true;
+    state.cameraRequested = true;
+    state.paused = false;
+    setCameraLive(false);
+    setCameraStarting(true);
+    cameraState('Reading barcode photo...');
+    try {
+      const raw = await decodeCapturedBarcodeFile(file);
+      cameraState('Scanned');
+      handleDecodeResult({ text: raw, rawValue: raw });
+    } catch (error) {
+      const message = clean(error?.message || 'Barcode not found. Retake photo.');
+      cameraState(message);
+      toast(message, 'error');
+      beep('error');
+      vibrate([30, 30, 30]);
+    } finally {
+      state.captureDecodeBusy = false;
+      state.capturePickerOpen = false;
+      clearTimeout(state.capturePickerTimer);
+      state.capturePickerTimer = null;
+      if (input) input.value = '';
+      setCameraStarting(false);
+      setCameraLive(false);
+      renderCameraControlState({ live: false, starting: false });
+    }
   }
 
   async function loadZxingLibrary() {
@@ -2681,11 +2980,27 @@
     };
   }
 
+  function recordIdentityKeys(record = {}) {
+    return Array.from(new Set([
+      record.scanId,
+      record.uniqueLocalId,
+      record.uniqueScanId,
+      record.localId,
+      record.clientScanId,
+      record.syncKey,
+      record.clientSyncKey
+    ].map(clean))).filter(Boolean);
+  }
+
   async function removeStoredQueueRecord(record = {}) {
-    const key = clean(record.uniqueLocalId || record.scanId || record.uniqueScanId || record.localId || record.clientScanId || record.syncKey || '');
-    if (!key) return;
-    await deleteRecord(key).catch(() => undefined);
-    removeStateRow({ uniqueLocalId: key, scanId: key, uniqueScanId: key, localId: key, clientScanId: key, syncKey: key });
+    const keys = recordIdentityKeys(record);
+    if (!keys.length) return;
+
+    for (const key of keys) {
+      await deleteRecord(key).catch(() => undefined);
+    }
+
+    removeStateRow(record);
   }
 
   async function saveRecordToServer(record = {}, options = {}) {
@@ -2796,8 +3111,8 @@
     try {
       const health = await api('/api/health', { auth: false, timeoutMs: LOGIN_CONFIG_TIMEOUT_MS });
       state.health = health;
-      if (health.mobileScannerUrl) {
-        state.canonicalUrl = health.mobileScannerUrl;
+      if (health.mobileWebUrl || health.mobileScannerUrl) {
+        state.canonicalUrl = health.mobileWebUrl || health.mobileScannerUrl;
       }
       renderAll();
       return health;
@@ -2816,7 +3131,7 @@
         deviceId: deviceId()
       });
       const data = await api(`/api/mobile/status?${query.toString()}`, { auth: true });
-      if (data.mobileScannerUrl) state.canonicalUrl = data.mobileScannerUrl;
+      if (data.mobileWebUrl || data.mobileScannerUrl) state.canonicalUrl = data.mobileWebUrl || data.mobileScannerUrl;
       if (data.activeAudit || data.auditId) {
         const nextSession = {
           ...state.session,
@@ -2920,10 +3235,6 @@
     state.paused = false;
     clearTimeout(state.autoCameraTimer);
     state.autoCameraTimer = null;
-    if (!isSecureScannerContext() && !LOCALHOST_NAMES.has(window.location.hostname)) {
-      cameraState('Open the secure Railway URL to use the camera.');
-      return;
-    }
     if (requiresBin() && !loadActiveBin() && focusBin) byId('activeBinLocation')?.focus();
     if (forceRestart && state.scanning) stopCamera({ preserveRequest: true });
     cameraState('Ready to scan');
@@ -2941,14 +3252,17 @@
     state.autoCameraTimer = setTimeout(startAttempt, 150);
   }
 
-  async function startCamera() {
+  async function startCamera({ allowCaptureFallback = false } = {}) {
     if (!ensureScanSession()) return;
-    if (!isSecureScannerContext() && !LOCALHOST_NAMES.has(window.location.hostname)) {
-      cameraState('Open the secure Railway URL to use the camera.');
+    if (shouldUseCaptureScanner()) {
+      cameraState(captureReadyMessage());
+      renderCameraControlState({ live: false, starting: false });
       return;
     }
-    if (!navigator.mediaDevices?.getUserMedia) {
-      cameraState('Camera API unavailable. Use manual entry.');
+    if (!hasLiveCameraApi()) {
+      state.liveCameraFallback = true;
+      cameraState(insecureCameraMessage());
+      renderCameraControlState({ live: false, starting: false });
       return;
     }
     stopCamera({ preserveRequest: true });
@@ -2982,6 +3296,7 @@
             try {
               if (state.scanReader?.stopContinuousDecode) state.scanReader.stopContinuousDecode();
               if (state.scanReader?.decodeContinuously) state.scanReader.decodeContinuously(video, onDecode);
+              else if (state.scanReader?.decodeFromVideoElementContinuously) state.scanReader.decodeFromVideoElementContinuously(video, onDecode);
             } catch (_) {}
           }, 220);
         }
@@ -3004,22 +3319,31 @@
       setCameraLive(true);
       setCameraStarting(false);
       if (!state.scanning || runId !== state.cameraRunId) return;
+      state.liveCameraFallback = false;
       const nativeDetector = await nativeDetectorPromise.catch(() => null);
       if (nativeDetector) {
         cameraState('Ready to scan');
         startNativeDetector(video).catch(() => undefined);
-      } else {
+      }
+      let zxingStarted = false;
+      const startZxingFromVideo = (reader) => {
+        if (typeof reader.decodeContinuously === 'function') {
+          reader.decodeContinuously(video, onDecode);
+          return true;
+        }
+        if (typeof reader.decodeFromVideoElementContinuously === 'function') {
+          reader.decodeFromVideoElementContinuously(video, onDecode);
+          return true;
+        }
+        return false;
+      };
+      try {
         const reader = await ensureReader();
         if (!state.scanning || runId !== state.cameraRunId) return;
         state.scanReader = reader;
         cameraState('Ready to scan');
-        if (typeof reader.decodeContinuously === 'function') {
-          try {
-            reader.decodeContinuously(video, onDecode);
-          } catch (error) {
-            throw error;
-          }
-        } else if (reader && typeof reader.decodeFromConstraints === 'function') {
+        zxingStarted = startZxingFromVideo(reader);
+        if (!zxingStarted && !nativeDetector && reader && typeof reader.decodeFromConstraints === 'function') {
           state.cameraStream = null;
           try {
             stream.getTracks().forEach((track) => track.stop());
@@ -3036,8 +3360,15 @@
             }
           });
           promise.catch(() => undefined);
-        } else {
+          zxingStarted = true;
+        } else if (!zxingStarted && !nativeDetector) {
           throw new Error('Scanner library failed to initialize');
+        }
+      } catch (error) {
+        if (!nativeDetector) {
+          throw error;
+        } else {
+          console.warn('ZXing scanner fallback failed:', error.message || error);
         }
       }
       await enableCameraFocus(video);
@@ -3069,14 +3400,20 @@
         } catch (_) {}
         video.srcObject = null;
       }
-      cameraState(error.message || 'Camera failed to start');
+      if (isCameraAccessError(error)) {
+        state.liveCameraFallback = true;
+        cameraState(insecureCameraMessage());
+        renderCameraControlState({ live: false, starting: false });
+      } else {
+        cameraState(error.message || 'Camera failed to start');
+      }
       toast(error.message || 'Camera failed to start', 'error');
     }
   }
 
   function handleDecodeResult(result) {
     if (state.smartBinPromptOpen || state.duplicateAlertOpen) return;
-    const raw = clean(typeof result?.getText === 'function' ? result.getText() : result?.text || result?.rawValue || result);
+    const raw = decodeResultText(result);
     if (!raw) return;
     const key = `${state.mode}|${raw}`;
     const lastSeen = state.lastDecodeAtByKey.get(key) || 0;
@@ -3114,14 +3451,11 @@
       binLocation: requiresBin() ? loadActiveBin() : ''
     });
     try {
-      console.log("Starting validation for:", record.partNumber, "in bin", record.binLocation);
       record = await preflightSmartBinDecision(record);
       if (!record) {
-        console.log("VALIDATION STATUS: SMART_BIN_CANCELLED");
         cameraState('Ready to scan');
         return;
       }
-      console.log("Smart bin check complete, proceeding to save.");
       await saveRecord(record, { silent: true, deferSync: false });
       byId('manualRawPreview').hidden = true;
       cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
@@ -3132,7 +3466,6 @@
       if (authExpired(error)) {
         handleAuthExpired(error);
       } else {
-        console.log("VALIDATION STATUS: SAVE_FAILED", error.message);
         const message = clean(error?.message || 'Unable to queue scan');
         cameraState('Network pending');
         toast(message, 'error');
@@ -3439,7 +3772,7 @@
     if (state.manualResumeAfterClose) {
       state.manualResumeAfterClose = false;
       state.paused = false;
-      startCamera().catch((error) => toast(error.message || 'Camera failed to resume', 'error'));
+      startCamera({ allowCaptureFallback: false }).catch((error) => toast(error.message || 'Camera failed to resume', 'error'));
     }
   }
 
@@ -3543,7 +3876,7 @@
       }
     }, true);
     byId('saveBinBtn').addEventListener('click', () => {
-      saveBinAndStartCamera();
+      saveBinAndStartCamera({ openCapture: true });
     });
     byId('clearBinBtn').addEventListener('click', () => {
       setActiveBin('');
@@ -3566,6 +3899,17 @@
       state.cameraRequested = true;
       startCamera().catch((error) => toast(error.message || 'Camera failed to start', 'error'));
     });
+    byId('cameraCaptureInput')?.addEventListener('change', (event) => {
+      handleCaptureFile(event).catch((error) => toast(error.message || 'Capture scan failed', 'error'));
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !state.capturePickerOpen || state.captureDecodeBusy) return;
+      setTimeout(() => {
+        if (state.capturePickerOpen && !state.captureDecodeBusy && document.visibilityState === 'visible') {
+          finishCapturePicker('Capture cancelled. Turn the camera on again.');
+        }
+      }, 500);
+    });
     byId('manualBtn').addEventListener('click', () => openManualDialog({}));
     byId('syncNowBtn').addEventListener('click', () => {
       syncQueue({ silent: false }).catch((error) => toast(error.message || 'Sync failed', 'error'));
@@ -3582,10 +3926,10 @@
     byId('activeBinLocation').addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;
       event.preventDefault();
-      saveBinAndStartCamera();
+      saveBinAndStartCamera({ openCapture: true });
     });
     byId('activeBinLocation').addEventListener('change', () => {
-      if (byId('activeBinLocation').value) saveBinAndStartCamera();
+      if (byId('activeBinLocation').value) saveBinAndStartCamera({ openCapture: false });
     });
     qsa('.mode-btn').forEach((button) => {
       button.addEventListener('click', () => setMode(button.dataset.mode));
@@ -3622,7 +3966,7 @@
         refreshLiveRecentScans({ force: true, reason: 'visible' }).catch(() => undefined);
         syncQueue({ silent: true }).catch(() => undefined);
         sendHeartbeat().catch(() => undefined);
-        startCamera().catch(() => undefined);
+        startCamera({ allowCaptureFallback: false }).catch(() => undefined);
       }
     });
     window.addEventListener('pagehide', () => stopCamera({ preserveRequest: true }));
@@ -3709,9 +4053,9 @@
       state.cameraRequested = true;
       state.paused = false;
       updateScannerPanel();
-      byId('cameraState').textContent = isSecureScannerContext()
+      byId('cameraState').textContent = hasLiveCameraApi() && !state.liveCameraFallback
         ? 'Ready to scan'
-        : 'Camera blocked on this HTTP page. Use the secure scanner URL.';
+        : insecureCameraMessage();
       startTimers();
       requestAutoCameraStart({ focusBin: false });
       toast('Login successful', 'success');
@@ -3870,9 +4214,9 @@
       document.body.classList.add('scanner-active');
       state.cameraRequested = true;
       renderAll();
-      byId('cameraState').textContent = isSecureScannerContext()
+      byId('cameraState').textContent = hasLiveCameraApi() && !state.liveCameraFallback
         ? 'Ready to scan'
-        : 'Camera is blocked on this HTTP page. Use the secure scanner URL.';
+        : insecureCameraMessage();
       requestAutoCameraStart({ focusBin: false });
     } else {
       byId('scannerPanel').classList.add('hidden');

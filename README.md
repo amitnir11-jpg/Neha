@@ -2,6 +2,8 @@
 
 Node.js, Express, Prisma, Railway PostgreSQL, Socket.IO, HTML/CSS/JavaScript, ExcelJS, jsPDF, and Nodemailer inventory audit software.
 
+For zero-manual-network local operation, see [docs/NETWORK_SETUP.md](docs/NETWORK_SETUP.md) and [README_OFFLINE_SETUP.md](README_OFFLINE_SETUP.md). Local mode uses PostgreSQL, `daksh.local` mDNS discovery, a persistent server identity, temporary QR pairing, and a Windows service.
+
 ## Railway Project Layout
 
 Create one Railway project with three services:

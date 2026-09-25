@@ -8,6 +8,7 @@ const VerificationLog = require('../models/VerificationLog');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const auth = require('./auth');
 const inventory = require('./inventory');
+const scanModification = require('../services/ScanModificationService');
 const { cleanText, normalizePartNumber } = require('../utils/normalize');
 
 const router = express.Router();
@@ -127,7 +128,7 @@ async function emitRefresh(req) {
   req.io.emit('stats:update');
 }
 
-async function cleanupDeleteByScope(scope, code = '') {
+async function cleanupDeleteByScope(scope, code = '', req = {}) {
   const dealerFilter = code ? { dealerCode: code } : {};
   if (scope === 'old-bin-data') {
     const [binsDeleted, masterUpdated, scanUpdated] = await Promise.all([
@@ -144,7 +145,11 @@ async function cleanupDeleteByScope(scope, code = '') {
 
   if (scope === 'unknown-part-scan-data') {
     const [legacyUnknownDeleted, verificationDeleted] = await Promise.all([
-      Inventory.deleteMany({ ...dealerFilter, $or: [{ masterFound: false }, { masterMatch: false }, { isMasterMatched: false }] }),
+      scanModification.softDeleteScans(
+        { ...dealerFilter, $or: [{ masterFound: false }, { masterMatch: false }, { isMasterMatched: false }] },
+        req,
+        { reason: req.body?.reason, remarks: req.body?.remarks }
+      ),
       VerificationLog.deleteMany({ ...dealerFilter, found: false })
     ]);
     return {
@@ -155,7 +160,11 @@ async function cleanupDeleteByScope(scope, code = '') {
 
   if (scope === 'mobile-scan-data') {
     const [scanResult, verificationResult, duplicateLogsDeleted] = await Promise.all([
-      Inventory.deleteMany({ ...dealerFilter, source: { $in: ['mobile', 'camera'] } }),
+      scanModification.softDeleteScans(
+        { ...dealerFilter, source: { $in: ['mobile', 'camera'] } },
+        req,
+        { reason: req.body?.reason, remarks: req.body?.remarks }
+      ),
       VerificationLog.deleteMany({ ...dealerFilter, source: { $in: ['mobile', 'camera'] } }),
       DuplicateScanLog.deleteMany({ ...dealerFilter, source: { $in: ['mobile', 'camera', ''] } })
     ]);
@@ -168,7 +177,11 @@ async function cleanupDeleteByScope(scope, code = '') {
 
   if (scope === 'manual-entry-data') {
     const [scanResult, verificationResult, duplicateLogsDeleted] = await Promise.all([
-      Inventory.deleteMany({ ...dealerFilter, source: 'manual' }),
+      scanModification.softDeleteScans(
+        { ...dealerFilter, source: 'manual' },
+        req,
+        { reason: req.body?.reason, remarks: req.body?.remarks }
+      ),
       VerificationLog.deleteMany({ ...dealerFilter, source: 'manual' }),
       DuplicateScanLog.deleteMany({ ...dealerFilter, source: 'manual' })
     ]);
@@ -181,7 +194,7 @@ async function cleanupDeleteByScope(scope, code = '') {
 
   if (scope === 'selected-dealer-data') {
     return deleteDealerData(
-      { params: { dealerCode: code }, io: null },
+      { ...req, params: { ...(req.params || {}), dealerCode: code } },
       {
         status() { return this; },
         json(payload) { this.payload = payload; return payload; }
@@ -200,7 +213,11 @@ async function deleteDealerData(req, res, scope) {
 
     const result = { dealerCode: code, scansDeleted: 0, duplicateLogsDeleted: 0, masterPartsDeleted: 0, binsDeleted: 0, dealersDeleted: 0 };
     if (scope === 'scans' || scope === 'all') {
-      result.scansDeleted = (await Inventory.deleteMany({ dealerCode: code })).deletedCount || 0;
+      result.scansDeleted = (await scanModification.softDeleteScans(
+        { dealerCode: code },
+        req,
+        { reason: req.body?.reason, remarks: req.body?.remarks }
+      )).deletedCount || 0;
       result.duplicateLogsDeleted = (await DuplicateScanLog.deleteMany({ dealerCode: code })).deletedCount || 0;
     }
     if (scope === 'master-parts' || scope === 'all') result.masterPartsDeleted = (await MasterPart.deleteMany({ dealerCode: code })).deletedCount || 0;
@@ -351,7 +368,9 @@ router.delete('/parts/scans', auth.requireAuth, auth.requireAdmin, async (req, r
     const code = dealerCode(req.body.dealerCode || req.query.dealerCode);
     const parts = listedParts(req.body);
     const filters = parts.map((partNo) => partMatch(partNo, code));
-    const result = filters.length ? await Inventory.deleteMany({ $or: filters }) : { deletedCount: 0 };
+    const result = filters.length
+      ? await scanModification.softDeleteScans({ $or: filters }, req, { reason: req.body?.reason, remarks: req.body?.remarks })
+      : { deletedCount: 0 };
     await emitRefresh(req);
     res.json({ success: true, deletedCount: result.deletedCount || 0, count: parts.length });
   } catch (error) {
@@ -366,7 +385,7 @@ router.delete('/parts/all', auth.requireAuth, auth.requireAdmin, async (req, res
     const filters = parts.map((partNo) => partMatch(partNo, code));
     const [masterResult, scanResult] = filters.length ? await Promise.all([
       MasterPart.deleteMany({ $or: filters }),
-      Inventory.deleteMany({ $or: filters })
+      scanModification.softDeleteScans({ $or: filters }, req, { reason: req.body?.reason, remarks: req.body?.remarks })
     ]) : [{ deletedCount: 0 }, { deletedCount: 0 }];
     await emitRefresh(req);
     res.json({ success: true, masterDeleted: masterResult.deletedCount || 0, scansDeleted: scanResult.deletedCount || 0, count: parts.length });
@@ -389,7 +408,7 @@ router.delete('/part/master', auth.requireAuth, auth.requireAdmin, async (req, r
 
 router.delete('/scans/:scanId', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
-    const result = await Inventory.deleteOne(scanIdMatch(req.params.scanId));
+    const result = await scanModification.softDeleteScans(scanIdMatch(req.params.scanId), req, { reason: req.body?.reason, remarks: req.body?.remarks });
     await emitRefresh(req);
     res.json({ success: true, message: DELETE_MESSAGE, deletedCount: result.deletedCount || 0 });
   } catch (error) {
@@ -401,7 +420,7 @@ router.post('/scans/delete-selected', auth.requireAuth, auth.requireAdmin, async
   try {
     const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
     if (!ids.length) return res.status(400).json({ success: false, message: 'Select scans to delete' });
-    const result = await Inventory.deleteMany({ $or: ids.map(scanIdMatch) });
+    const result = await scanModification.softDeleteScans({ $or: ids.map(scanIdMatch) }, req, { reason: req.body?.reason, remarks: req.body?.remarks });
     await emitRefresh(req);
     res.json({ success: true, message: DELETE_MESSAGE, deletedCount: result.deletedCount || 0 });
   } catch (error) {
@@ -415,7 +434,9 @@ router.post('/scans/delete-by-parts', auth.requireAuth, auth.requireAdmin, async
     const code = dealerCode(req.body.dealerCode || req.query.dealerCode);
     const base = dateRangeFilter(req.body);
     const filters = parts.map((partNo) => ({ ...base, ...partMatch(partNo, code) }));
-    const result = filters.length ? await Inventory.deleteMany({ $or: filters }) : { deletedCount: 0 };
+    const result = filters.length
+      ? await scanModification.softDeleteScans({ $or: filters }, req, { reason: req.body?.reason, remarks: req.body?.remarks })
+      : { deletedCount: 0 };
     await emitRefresh(req);
     res.json({ success: true, message: DELETE_MESSAGE, deletedCount: result.deletedCount || 0, count: parts.length });
   } catch (error) {
@@ -426,7 +447,7 @@ router.post('/scans/delete-by-parts', auth.requireAuth, auth.requireAdmin, async
 router.post('/cleanup-unknown-parts', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const filter = await unknownScanFilter(scanCriteria(req.body));
-    const result = await Inventory.deleteMany(filter);
+    const result = await scanModification.softDeleteScans(filter, req, { reason: req.body?.reason, remarks: req.body?.remarks });
     await emitRefresh(req);
     res.json({ success: true, message: DELETE_MESSAGE, deletedCount: result.deletedCount || 0 });
   } catch (error) {
@@ -441,7 +462,7 @@ router.post('/cleanup-delete', auth.requireAuth, auth.requireAdmin, async (req, 
     if (scope === 'selected-dealer-data' && !code) {
       return res.status(400).json({ success: false, message: 'Dealer code is required' });
     }
-    const result = await cleanupDeleteByScope(scope, code);
+    const result = await cleanupDeleteByScope(scope, code, req);
     await emitRefresh(req);
     return res.json({ success: true, scope, dealerCode: code, ...result });
   } catch (error) {
@@ -453,7 +474,7 @@ router.delete('/part/scans', auth.requireAuth, auth.requireAdmin, async (req, re
   try {
     const partNo = normalizedPartNumber(req.body.partNumber || req.query.partNumber);
     const code = dealerCode(req.body.dealerCode || req.query.dealerCode);
-    const result = await Inventory.deleteMany(partMatch(partNo, code));
+    const result = await scanModification.softDeleteScans(partMatch(partNo, code), req, { reason: req.body?.reason, remarks: req.body?.remarks });
     await emitRefresh(req);
     res.json({ success: true, deletedCount: result.deletedCount || 0 });
   } catch (error) {
@@ -467,7 +488,7 @@ router.delete('/part/all', auth.requireAuth, auth.requireAdmin, async (req, res)
     const code = dealerCode(req.body.dealerCode || req.query.dealerCode);
     const [masterResult, scanResult] = await Promise.all([
       MasterPart.deleteMany(partMatch(partNo, code)),
-      Inventory.deleteMany(partMatch(partNo, code))
+      scanModification.softDeleteScans(partMatch(partNo, code), req, { reason: req.body?.reason, remarks: req.body?.remarks })
     ]);
     await emitRefresh(req);
     res.json({ success: true, masterDeleted: masterResult.deletedCount || 0, scansDeleted: scanResult.deletedCount || 0 });

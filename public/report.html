@@ -6,7 +6,9 @@
   <title>Daksh Inventory v2 Reports</title>
   <link rel="icon" href="/brand/favicon.ico" type="image/x-icon">
   <link rel="apple-touch-icon" sizes="512x512" href="/brand/app-icon.png">
-  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/style.css?v=20260902-bin-label-select-v1">
+  <link rel="stylesheet" href="/professional-theme.css?v=20260908-enterprise-theme-v3">
+  <link rel="stylesheet" href="/css/select-system.css?v=20260908-enterprise-select-v3">
 </head>
 <body data-page="report">
   <div class="app-shell">
@@ -44,8 +46,8 @@
               <option value="">All dealers</option>
             </select>
           </label>
-          <label data-report-filter-key="dateRange">From Date<input name="from" type="date"></label>
-          <label data-report-filter-key="dateRange">To Date<input name="to" type="date"></label>
+          <label class="ds-date-field" data-report-filter-key="dateRange">From Date<input name="from" type="date"></label>
+          <label class="ds-date-field" data-report-filter-key="dateRange">To Date<input name="to" type="date"></label>
           <label class="hidden" data-report-filter-key="productCategory">Part Category<input name="category" placeholder="All categories"></label>
           <label class="hidden" data-report-filter-key="productGroup">Product Group<input name="productGroup" placeholder="All groups"></label>
           <label class="hidden" data-report-filter-key="productSubGroup">Product SubGroup<input name="partSubGroup" placeholder="All subgroups"></label>
@@ -181,8 +183,9 @@
   <div id="toast" class="toast"></div>
 
   <script src="/config.js"></script>
-  <script src="/js/runtime.js?v=20260628-exact-qr-duplicate-v1"></script>
+  <script src="/js/runtime.js?v=20260923-recon-upload-dashboard-v1"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/js/app.js?v=20260628-exact-qr-duplicate-v1"></script>
+  <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
+  <script src="/js/app.js?v=20260630-report-dealer-fix-v1"></script>
 </body>
 </html>

@@ -261,12 +261,13 @@ async function getCachedResponse(namespace, query, builder, options = {}) {
     ttlMs: defaults.ttlMs,
     tags: defaults.tags,
     ignoreKeys: defaults.ignoreKeys,
-    skipCache: true,
+    skipCache: false,
     ...options
   };
   const prepared = cacheKey(namespace, query, mergedOptions);
   const ttlMs = Math.max(5_000, Number(mergedOptions.ttlMs || defaults.ttlMs || DEFAULT_TTL_MS));
-  if (mergedOptions.skipCache !== false) {
+  const refreshRequested = ['1', 'true', 'yes', 'on'].includes(String((query && (query.refresh ?? query.forceRefresh ?? query.cacheBust)) ?? '').trim().toLowerCase());
+  if (mergedOptions.skipCache === true || refreshRequested) {
     const dataVersion = currentDataVersion(prepared.tags, prepared.scope);
     const payload = await Promise.resolve().then(() => builder(prepared.normalizedQuery, {
       namespace,

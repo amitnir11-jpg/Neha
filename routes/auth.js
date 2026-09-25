@@ -13,17 +13,44 @@ const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
 const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();
 const DEFAULT_ADMIN_PASSWORD = String(process.env.DEFAULT_ADMIN_PASSWORD || 'admin');
 const DEFAULT_OTP_MAIL_ID = 'amitsvision4u@gmail.com';
+const MOBILE_TOKEN_TTL = String(process.env.MOBILE_JWT_EXPIRES_IN || '30d').trim() || '30d';
 const RESET_TTL_MINUTES = 15;
-const ROLES = ['admin', 'supervisor', 'scanner', 'outward_counter', 'staff', 'mobile_user'];
+const AUTH_COOKIE_NAME = 'daksh_auth';
+const AUTH_COOKIE_MAX_AGE_SECONDS = 12 * 60 * 60;
+const ROLES = ['admin', 'audit_user', 'mobile_user'];
+const LEGACY_ROLE_MAP = {
+  admin: 'admin',
+  audit_user: 'audit_user',
+  mobile_user: 'mobile_user',
+  staff: 'audit_user',
+  supervisor: 'audit_user',
+  scanner: 'audit_user',
+  outward_counter: 'audit_user'
+};
+
+function normalizeRole(value, fallback = 'audit_user') {
+  const role = String(value || '').trim().toLowerCase();
+  return LEGACY_ROLE_MAP[role] || fallback;
+}
+
+function roleDisplayName(role) {
+  return {
+    admin: 'Admin',
+    audit_user: 'Audit User',
+    mobile_user: 'Mobile User'
+  }[normalizeRole(role)] || 'Audit User';
+}
 
 function publicUser(user) {
+  const role = normalizeRole(user.role);
   return {
     id: user._id,
     username: user.username,
     email: user.email,
     name: user.name,
     mobileNumber: user.mobileNumber || '',
-    role: user.role,
+    role,
+    roleName: roleDisplayName(role),
     responsibility: user.responsibility || '',
     dealerAccess: normalizeDealerAccess(user.dealerAccess),
     permissions: user.permissions || {},
@@ -34,8 +61,82 @@ function publicUser(user) {
   };
 }
 
-function signToken(user) {
-  return jwt.sign(publicUser(user), JWT_SECRET, { expiresIn: '12h' });
+function signToken(user, expiresIn = '12h') {
+  return jwt.sign(publicUser(user), JWT_SECRET, { expiresIn });
+}
+
+function signMobileToken(user) {
+  return signToken(user, MOBILE_TOKEN_TTL);
+}
+
+function requestIsSecure(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return Boolean(req.secure || forwardedProto === 'https');
+}
+
+function setAuthCookie(res, req, token) {
+  const value = encodeURIComponent(String(token || ''));
+  const attributes = [
+    `${AUTH_COOKIE_NAME}=${value}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${AUTH_COOKIE_MAX_AGE_SECONDS}`
+  ];
+  if (requestIsSecure(req)) attributes.push('Secure');
+  res.append('Set-Cookie', attributes.join('; '));
+}
+
+function clearAuthCookie(res, req) {
+  const attributes = [`${AUTH_COOKIE_NAME}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0', 'Expires=Thu, 01 Jan 1970 00:00:00 GMT'];
+  if (requestIsSecure(req)) attributes.push('Secure');
+  res.append('Set-Cookie', attributes.join('; '));
+}
+
+function readCookie(req, name) {
+  const header = String(req.headers.cookie || '');
+  for (const item of header.split(';')) {
+    const [rawName, ...rawValue] = item.trim().split('=');
+    if (rawName !== name) continue;
+    try {
+      return decodeURIComponent(rawValue.join('='));
+    } catch (error) {
+      return '';
+    }
+  }
+  return '';
+}
+
+async function requirePageAuth(req, res, next) {
+  const token = readCookie(req, AUTH_COOKIE_NAME);
+  if (!token) return res.redirect(302, '/?forceLogin=1');
+
+  try {
+    const claims = jwt.verify(token, JWT_SECRET);
+    const freshUser = await User.findOne({ _id: claims.id, approved: { $ne: false } }).lean();
+    if (!freshUser || !isUserActive(freshUser)) throw new Error('Session is no longer active');
+    req.user = { ...publicUser(freshUser), dealerAccess: await userDealerAccessCodes(freshUser) };
+    return next();
+  } catch (error) {
+    clearAuthCookie(res, req);
+    return res.redirect(302, '/?forceLogin=1');
+  }
+}
+
+async function authenticateSocket(socket, next) {
+  const authHeader = String(socket.handshake.headers.authorization || '');
+  const token = String(socket.handshake.auth?.token || (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '')).trim();
+  if (!token) return next(new Error('Authentication required'));
+
+  try {
+    const claims = jwt.verify(token, JWT_SECRET);
+    const freshUser = await User.findOne({ _id: claims.id, approved: { $ne: false } }).lean();
+    if (!freshUser || !isUserActive(freshUser)) return next(new Error('User is inactive or not approved'));
+    socket.user = { ...publicUser(freshUser), dealerAccess: await userDealerAccessCodes(freshUser) };
+    return next();
+  } catch (error) {
+    return next(new Error('Authentication required'));
+  }
 }
 
 async function optionalAuth(req, res, next) {
@@ -87,6 +188,11 @@ async function requireAuth(req, res, next) {
         });
       }
       applyRequestDealer(req, access.requestedDealer);
+    } else if (requestedDealer === 'ALL' && req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only Admin can access All Dealers.'
+      });
     } else if (req.user.role !== 'admin' && isDealerScopedRequest(req)) {
       return res.status(400).json({
         success: false,
@@ -108,10 +214,10 @@ async function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (!req.user || req.user.role !== 'admin') {
+  if (!req.user || normalizeRole(req.user.role) !== 'admin') {
     return res.status(403).json({
       success: false,
-      message: 'Admin access required'
+      message: 'Admin permission required.'
     });
   }
   return next();
@@ -222,7 +328,7 @@ async function userDealerAccessCodes(user = {}) {
 
 async function activeDealersForUser(user = {}) {
   const access = await userDealerAccessCodes(user);
-  const canSeeAll = user.role === 'admin' || access.includes('ALL');
+  const canSeeAll = normalizeRole(user.role) === 'admin';
   const filter = {
     dealerCode: { $not: /^SYNC/i },
     dealerName: { $not: /Sync Test/i },
@@ -280,7 +386,8 @@ function isDealerScopedRequest(req) {
 async function validateUserDealerAccess(user, dealerCode) {
   const requestedDealer = normalizeAccessCode(dealerCode);
   const userDealerAccess = await userDealerAccessCodes(user);
-  const allowed = user.role === 'admin' || userDealerAccess.includes('ALL') || userDealerAccess.includes(requestedDealer);
+  const allowed = normalizeRole(user.role) === 'admin' || userDealerAccess.includes(requestedDealer)
+    || (requestedDealer !== 'ALL' && userDealerAccess.includes('ALL') && normalizeRole(user.role) === 'admin');
   return { requestedDealer, userDealerAccess, allowed };
 }
 
@@ -321,7 +428,7 @@ function loginRuleError(user, allowedRoles = []) {
   if (!user) return 'Invalid username or password';
   if (!isUserApproved(user)) return unapprovedMessage();
   if (!isUserActive(user)) return inactiveMessage();
-  if (allowedRoles.length && !allowedRoles.includes(user.role)) return 'Role permission does not allow login.';
+  if (allowedRoles.length && !allowedRoles.includes(normalizeRole(user.role))) return 'Role permission does not allow login.';
   return '';
 }
 
@@ -367,13 +474,15 @@ async function compareAndUpgradeSecret(user, input, hashFields) {
 }
 
 function cleanPublicUser(user) {
+  const role = normalizeRole(user.role);
   return {
     id: user._id,
     username: user.username || '',
     email: user.email || '',
     name: user.name || '',
     mobileNumber: user.mobileNumber || '',
-    role: user.role || 'staff',
+    role,
+    roleName: roleDisplayName(role),
     responsibility: user.responsibility || '',
     dealerAccess: normalizeDealerAccess(user.dealerAccess),
     permissions: user.permissions || {},
@@ -437,8 +546,8 @@ async function createResetRequest(user, req) {
 async function createUserFromPayload(payload, defaults = {}) {
   const username = cleanUsername(payload.username);
   const email = cleanEmail(payload.email);
-  const name = String(payload.name || payload.fullName || username || 'Staff').trim();
-  const role = ROLES.includes(payload.role) ? payload.role : (defaults.role || 'staff');
+  const name = String(payload.name || payload.fullName || username || 'Audit User').trim();
+  const role = normalizeRole(payload.role || defaults.role || 'audit_user');
   const password = String(payload.password || '');
   const pin = String(payload.pin || '').trim();
 
@@ -446,7 +555,7 @@ async function createUserFromPayload(payload, defaults = {}) {
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Valid email ID is required');
   if (pin && !/^\d{4}$/.test(pin)) throw new Error('PIN must be exactly 4 digits');
   if (role === 'admin' && !password) throw new Error('Admin users require a password');
-  if (['staff', 'mobile_user'].includes(role) && !pin && !password) throw new Error('Staff and Mobile users require a password or 4-digit PIN');
+  if (['audit_user', 'mobile_user'].includes(role) && !pin && !password) throw new Error('Audit and Mobile users require a password or 4-digit PIN');
 
   const duplicate = await User.findOne({ username }).lean();
   if (duplicate) throw new Error('Username already exists');
@@ -512,13 +621,14 @@ router.post('/login', async (req, res) => {
     const pin = String(req.body.pin || req.body.passwordOrPin || '').trim();
     const user = await findUserByLogin(username);
 
-    const ruleError = loginRuleError(user, ['admin', 'staff']);
+    const ruleError = loginRuleError(user, ['admin', 'audit_user', 'mobile_user']);
     if (ruleError) return res.status(401).json({ success: false, message: ruleError });
 
     let valid = false;
-    if (user.role === 'admin') {
+    const role = normalizeRole(user.role);
+    if (role === 'admin') {
       valid = await compareAndUpgradeSecret(user, password, ['passwordHash', 'password']);
-    } else if (user.role === 'staff') {
+    } else if (role === 'audit_user') {
       const secret = pin || password;
       valid = await compareAndUpgradeSecret(user, secret, ['pinHash', 'pin']);
       if (!valid && password) {
@@ -533,16 +643,18 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid username or password' });
     }
 
+    const token = signToken(user);
+    setAuthCookie(res, req, token);
     const dealerAccess = await userDealerAccessCodes(user);
     const assignedDealers = await activeDealersForUser(user);
     return res.json({
       success: true,
-      token: signToken(user),
+      token,
       user: { ...publicUser(user), dealerAccess },
       assignedDealers,
       activeDealers: assignedDealers,
-      needsDealerSelection: user.role !== 'admin' && assignedDealers.length > 1,
-      activeDealerId: user.role !== 'admin' && assignedDealers.length === 1 ? assignedDealers[0].dealerCode : ''
+      needsDealerSelection: role !== 'admin' && assignedDealers.length > 1,
+      activeDealerId: role !== 'admin' && assignedDealers.length === 1 ? assignedDealers[0].dealerCode : ''
     });
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });
@@ -603,7 +715,7 @@ async function mobileLoginHandler(req, res) {
     return res.json({
       success: true,
       message: 'Login successful',
-      token: signToken(user),
+      token: signMobileToken(user),
       user: { ...publicUser(user), dealerAccess },
       dealerCode: accessCheck.requestedDealer,
       activeDealerId: accessCheck.requestedDealer,
@@ -632,7 +744,7 @@ router.post('/pin-login', async (req, res) => {
     if (!username) return res.status(400).json({ success: false, message: 'Username is required for PIN login' });
 
     const user = await findUserByLogin(username);
-    const ruleError = loginRuleError(user, ['staff', 'mobile_user']);
+    const ruleError = loginRuleError(user, ['audit_user', 'mobile_user']);
     if (ruleError) return res.status(401).json({ success: false, message: ruleError });
     const accessCheck = await validateUserDealerAccess(user, dealerCode);
     if (!accessCheck.userDealerAccess.length || !accessCheck.allowed) {
@@ -647,11 +759,13 @@ router.post('/pin-login', async (req, res) => {
     if (!user.pinHash && !user.pin) return res.status(400).json({ success: false, message: 'PIN login is not enabled for this user' });
     const valid = await compareAndUpgradeSecret(user, pin, ['pinHash', 'pin']);
     if (valid) {
+      const token = signToken(user);
+      setAuthCookie(res, req, token);
       const dealerAccess = await userDealerAccessCodes(user);
       const assignedDealers = await activeDealersForUser(user);
       return res.json({
         success: true,
-        token: signToken(user),
+        token,
         user: { ...publicUser(user), dealerAccess },
         dealerCode: accessCheck.requestedDealer,
         activeDealerId: accessCheck.requestedDealer,
@@ -664,6 +778,11 @@ router.post('/pin-login', async (req, res) => {
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });
   }
+});
+
+router.post('/logout', (req, res) => {
+  clearAuthCookie(res, req);
+  return res.json({ success: true });
 });
 
 router.get('/me', requireAuth, async (req, res) => {
@@ -684,7 +803,7 @@ router.get('/me', requireAuth, async (req, res) => {
 router.post('/register', async (req, res) => {
   try {
     const user = await createUserFromPayload(req.body, {
-      role: 'staff',
+      role: 'audit_user',
       active: false,
       approved: false
     });
@@ -800,7 +919,7 @@ router.post(['/users', '/users/create'], requireAuth, requireAdmin, async (req, 
   try {
     const approved = req.body.approved !== false && req.body.approved !== 'false';
     const user = await createUserFromPayload(req.body, {
-      role: req.body.role || 'staff',
+      role: req.body.role || 'audit_user',
       active: req.body.active !== false && req.body.active !== 'false',
       approved,
       approvedBy: req.user.username || req.user.name || 'admin'
@@ -865,7 +984,7 @@ router.put('/users/:id/block', requireAuth, requireAdmin, async (req, res) => {
 
 router.put('/users/:id/role', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const role = ROLES.includes(req.body.role) ? req.body.role : '';
+    const role = ROLES.includes(normalizeRole(req.body.role, '')) ? normalizeRole(req.body.role, '') : '';
     if (!role) return res.status(400).json({ success: false, message: 'Valid role is required' });
     const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
@@ -908,22 +1027,37 @@ router.post('/users/:id/email', requireAuth, requireAdmin, async (req, res) => {
 
 router.post('/users/:id/reset-password', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const password = String(req.body.password || '');
-    if (!password) {
-      return res.status(400).json({ success: false, message: 'Password is required' });
+    const password = String(req.body.password || '').trim();
+    const pin = String(req.body.pin || '').trim();
+    if (!password && !pin) {
+      return res.status(400).json({ success: false, message: 'Password or 4-digit PIN is required' });
+    }
+    if (pin && !/^\d{4}$/.test(pin)) {
+      return res.status(400).json({ success: false, message: 'PIN must be exactly 4 digits' });
     }
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    const passwordHash = await bcrypt.hash(password, 10);
-    user.passwordHash = passwordHash;
-    user.password = passwordHash;
+    if (password) {
+      const passwordHash = await bcrypt.hash(password, 10);
+      user.passwordHash = passwordHash;
+      user.password = passwordHash;
+    }
+    if (pin) {
+      const pinHash = await bcrypt.hash(pin, 10);
+      user.pinHash = pinHash;
+      user.pin = pinHash;
+    }
     user.forcePasswordChange = req.body.forcePasswordChange === true || req.body.forcePasswordChange === 'true';
     user.resetOtpHash = '';
     user.resetTokenHash = '';
     user.resetExpiresAt = undefined;
     user.resetRequestedAt = undefined;
     await user.save();
-    res.json({ success: true, user: cleanPublicUser(user), message: 'Password reset by admin' });
+    res.json({
+      success: true,
+      user: cleanPublicUser(user),
+      message: password && pin ? 'Password and PIN reset by admin' : password ? 'Password reset by admin' : 'PIN reset by admin'
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -947,6 +1081,18 @@ router.post('/users/:id/send-reset', requireAuth, requireAdmin, async (req, res)
   }
 });
 
+async function migrateLegacyUserRoles() {
+  const users = await User.find({}).lean();
+  let migrated = 0;
+  for (const user of users) {
+    const normalized = normalizeRole(user.role);
+    if (String(user.role || '').trim().toLowerCase() === normalized) continue;
+    await User.updateOne({ _id: user._id }, { $set: { role: normalized } });
+    migrated += 1;
+  }
+  return { scanned: users.length, migrated };
+}
+
 module.exports = router;
 module.exports.optionalAuth = optionalAuth;
 module.exports.requireAuth = requireAuth;
@@ -964,4 +1110,12 @@ module.exports.activeDealersForUser = activeDealersForUser;
 module.exports.validateUserDealerAccess = validateUserDealerAccess;
 module.exports.mobileLoginHandler = mobileLoginHandler;
 module.exports.publicUser = publicUser;
+module.exports.requirePageAuth = requirePageAuth;
+module.exports.authenticateSocket = authenticateSocket;
+module.exports.setAuthCookie = setAuthCookie;
+module.exports.clearAuthCookie = clearAuthCookie;
 module.exports.ROLES = ROLES;
+module.exports.LEGACY_ROLE_MAP = LEGACY_ROLE_MAP;
+module.exports.normalizeRole = normalizeRole;
+module.exports.roleDisplayName = roleDisplayName;
+module.exports.migrateLegacyUserRoles = migrateLegacyUserRoles;

@@ -230,7 +230,7 @@ function userContextFromRequest(req, defaults = {}) {
 function cleanDevicePayload(req, defaults = {}) {
   const serverUrl = clean(req.body.serverUrl || defaults.serverUrl);
   if (isLocalhostUrl(serverUrl)) {
-    const error = new Error('Do not use localhost on mobile. Use the PC LAN IP from QR or manual connect, for example http://192.168.x.x:3001.');
+    const error = new Error('This mobile connection is local-only. Use automatic discovery, daksh.local, or the temporary pairing QR from the PC.');
     error.status = 400;
     throw error;
   }
@@ -334,7 +334,7 @@ async function listDevices(req, res) {
 
 router.get('/', auth.requireAuth, listDevices);
 router.get('/list', auth.requireAuth, listDevices);
-router.get('/connected', auth.optionalAuth, listDevices);
+router.get('/connected', auth.requireAuth, listDevices);
 
 router.use('/bluetooth', (req, res) => {
   res.status(410).json({ success: false, disabled: true, message: 'Bluetooth scanner features are disabled.' });
@@ -772,6 +772,10 @@ router.get('/network-test', auth.requireAuth, async (req, res) => {
       portOpen: true,
       firewallBlocked: false,
       serverUrl: info.serverUrl,
+      scanUrl: info.scanUrl,
+      mobileWebUrl: info.mobileWebUrl,
+      mobileScannerUrl: info.mobileScannerUrl,
+      legacyMobileScannerUrl: info.legacyMobileScannerUrl,
       healthUrl: info.healthUrl,
       connectUrl: info.connectUrl,
       syncUrl: info.syncUrl,
@@ -798,6 +802,10 @@ router.get('/discovery', auth.optionalAuth, async (req, res) => {
       ip: info.ip,
       port: info.port,
       serverUrl: info.serverUrl,
+      scanUrl: info.scanUrl,
+      mobileWebUrl: info.mobileWebUrl,
+      mobileScannerUrl: info.mobileScannerUrl,
+      legacyMobileScannerUrl: info.legacyMobileScannerUrl,
       healthUrl: info.healthUrl,
       connectUrl: info.connectUrl,
       syncUrl: info.syncUrl,

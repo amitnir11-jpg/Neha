@@ -16,10 +16,11 @@ const RejectedScan = require('../models/RejectedScan');
 const ReportSnapshot = require('../models/ReportSnapshot');
 const AuditRestoreLog = require('../models/AuditRestoreLog');
 const auth = require('./auth');
+const scanModification = require('../services/ScanModificationService');
 const { createZip, readZipEntries } = require('../utils/zipArchive');
 
 const router = express.Router();
-const AUDIT_DATA_DIR = path.resolve(__dirname, '..', 'Audit Data');
+const AUDIT_DATA_DIR = require('../utils/writablePaths').writablePath('Audit Data');
 const restoreSessions = new Map();
 
 const COLLECTION_ALIASES = {
@@ -285,6 +286,10 @@ async function restoreCollection(key, docs, options) {
   for (const item of docs) {
     assertNotCancelled(options.sessionId);
     let doc = cleanDocument(item);
+    if (key === 'inventory') {
+      doc.isDeleted = false;
+      doc.deletedAt = null;
+    }
     if (options.restoreMode === 'new-audit-session') doc = rewriteForNewAuditSession(key, doc, options.sessionId, options.newAuditId);
     const filter = identityFilter(key, doc);
     if (!filter) continue;
@@ -298,12 +303,15 @@ async function restoreCollection(key, docs, options) {
   return restored;
 }
 
-async function deleteExistingForReplace(keys, dealerCode, auditId) {
+async function deleteExistingForReplace(keys, dealerCode, auditId, req) {
   const scoped = restoreScopeFilter(dealerCode, auditId);
   const dealerScoped = dealerCode ? { dealerCode } : {};
   const deletes = [];
   if (keys.includes('reportSnapshots')) deletes.push(ReportSnapshot.deleteMany(scoped));
-  if (keys.includes('inventory')) deletes.push(Inventory.deleteMany(scoped));
+  if (keys.includes('inventory')) deletes.push(scanModification.softDeleteScans(scoped, req, {
+    reason: req.body?.reason || 'Audit backup replacement',
+    remarks: req.body?.remarks || 'Existing scan rows retained as soft-deleted history before restore.'
+  }));
   if (keys.includes('bins')) deletes.push(Bin.deleteMany(dealerScoped));
   if (keys.includes('binTransferHistory')) deletes.push(BinTransferHistory.deleteMany(dealerScoped));
   if (keys.includes('verificationLogs')) deletes.push(VerificationLog.deleteMany(dealerScoped));
@@ -427,7 +435,7 @@ router.post('/restore', auth.requireAuth, auth.requireAdmin, asyncRoute(async (r
     sessionProgress(sessionId, { percent: 8, duplicates }, logLines[logLines.length - 1]);
 
     if (restoreMode === 'replace') {
-      await deleteExistingForReplace(keys, dealerCode, auditId);
+      await deleteExistingForReplace(keys, dealerCode, auditId, req);
       logLines.push(`Existing data removed for ${dealerCode}${auditId ? ` / ${auditId}` : ''}`);
       sessionProgress(sessionId, { percent: 14 }, logLines[logLines.length - 1]);
     }

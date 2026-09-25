@@ -91,6 +91,38 @@ model AuditLog {
   @@map("auditlogs")
 }
 
+model ScanAuditLog {
+  id                   String    @id @default(cuid())
+  data                 Json      @default("{}")
+  action               String
+  scanId               String?
+  dealerCode           String?
+  dealerName           String?
+  partNumber           String?
+  performedByUserId    String?
+  performedByUsername  String?
+  performedByName      String?
+  performedByRole      String?
+  reason               String
+  remarks              String?
+  oldData              Json?
+  newData              Json?
+  timestamp            DateTime  @default(now())
+  ipAddress            String?
+  deviceId             String?
+  userAgent            String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([action])
+  @@index([scanId])
+  @@index([dealerCode])
+  @@index([partNumber])
+  @@index([performedByUsername])
+  @@index([timestamp])
+  @@map("scanauditlogs")
+}
+
 model AuditRestoreLog {
   id                   String    @id @default(cuid())
   data                 Json      @default("{}")
@@ -641,6 +673,26 @@ model Inventory {
   activeInventory      Boolean?  @default(false)
   remainingQty         Float?    @default(0)
   deletedAt            DateTime?
+  isDeleted            Boolean   @default(false)
+  deletedBy            String?
+  deletedByUsername    String?
+  deletedByName        String?
+  deletedByRole        String?
+  deleteReason         String?
+  preDeleteStatus      String?
+  preDeleteScanStatus  String?
+  preDeleteSyncStatus  String?
+  lastModifiedBy       String?
+  lastModifiedByUsername String?
+  lastModifiedByName   String?
+  lastModifiedByRole   String?
+  lastModifiedAt       DateTime?
+  createdBy            String?
+  createdByUsername    String?
+  createdByName        String?
+  createdByRole        String?
+  restoredAt           DateTime?
+  restoredBy           String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -665,6 +717,7 @@ model Inventory {
   @@index([activeInventory])
   @@index([dealerCode, scanStatus, createdAt])
   @@index([deletedAt])
+  @@index([isDeleted])
   @@index([syncStatus])
   @@index([scanStatus])
   @@index([globalUpiKey])
@@ -672,6 +725,37 @@ model Inventory {
   @@index([uniqueScanId])
   @@index([scanId])
   @@map("inventories")
+}
+
+model LocalPartEntry {
+  id                   String    @id @default(cuid())
+  dealerCode           String
+  referenceAuditId     String?
+  partNumber           String
+  normalizedPartNumber String
+  partDescription      String
+  quantity             Decimal   @db.Decimal(18, 3)
+  mrp                  Decimal   @db.Decimal(18, 2)
+  dlc                  Decimal   @db.Decimal(18, 2)
+  remarks              String?
+  enteredByUserId      String
+  enteredByName        String
+  lastUpdatedByUserId  String?
+  lastUpdatedByName    String?
+  deletedByUserId      String?
+  deletedByName        String?
+  status               String    @default("ACTIVE")
+  deletedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([dealerCode])
+  @@index([referenceAuditId])
+  @@index([normalizedPartNumber])
+  @@index([createdAt])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("local_part_entries")
 }
 
 model PartBinLocation {
@@ -691,6 +775,7 @@ model PartBinLocation {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
+  @@unique([dealerCode, auditId, normalizedPartNumber, binLocation])
   @@index([dealerCode])
   @@index([auditId])
   @@index([partNumber])
@@ -699,7 +784,6 @@ model PartBinLocation {
   @@index([locationType])
   @@index([dealerCode, auditId, normalizedPartNumber])
   @@index([dealerCode, auditId, normalizedPartNumber, binLocation])
-  @@unique([dealerCode, auditId, normalizedPartNumber, binLocation])
   @@map("part_bin_locations")
 }
 
@@ -1038,6 +1122,26 @@ model Scan {
   activeInventory      Boolean?  @default(false)
   remainingQty         Float?    @default(0)
   deletedAt            DateTime?
+  isDeleted            Boolean   @default(false)
+  deletedBy            String?
+  deletedByUsername    String?
+  deletedByName        String?
+  deletedByRole        String?
+  deleteReason         String?
+  preDeleteStatus      String?
+  preDeleteScanStatus  String?
+  preDeleteSyncStatus  String?
+  lastModifiedBy       String?
+  lastModifiedByUsername String?
+  lastModifiedByName   String?
+  lastModifiedByRole   String?
+  lastModifiedAt       DateTime?
+  createdBy            String?
+  createdByUsername    String?
+  createdByName        String?
+  createdByRole        String?
+  restoredAt           DateTime?
+  restoredBy           String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -1061,6 +1165,7 @@ model Scan {
   @@index([dealerCode, auditId, partNumber, binLocation])
   @@index([activeInventory])
   @@index([deletedAt])
+  @@index([isDeleted])
   @@map("scans")
 }
 
@@ -1350,4 +1455,79 @@ model VerificationLog {
   @@index([auditId])
   @@index([time])
   @@map("verificationlogs")
+}
+
+// These models are used only by the separate license-server process. They are
+// kept in the shared Prisma schema so the central service can use the same
+// PostgreSQL deployment tooling without adding a second database technology.
+// The customer application never writes these tables.
+model LicenseRecord {
+  id             String   @id @default(cuid())
+  customerId     String?
+  licenseKeyHash String   @unique
+  status         String   @default("active")
+  maxDevices     Int      @default(1)
+  expiresAt      DateTime?
+  features       Json     @default("{}")
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status])
+  @@index([customerId])
+  @@map("license_records")
+}
+
+model LicenseDevice {
+  id                    String    @id @default(cuid())
+  licenseId             String
+  deviceFingerprintHash String
+  devicePublicKey       String
+  deviceName            String?
+  status                String    @default("active")
+  leaseId               String?
+  activatedAt           DateTime  @default(now())
+  lastSeenAt            DateTime  @default(now())
+  lastIp                String?
+  revokedAt             DateTime?
+  releasedAt            DateTime?
+  releaseReason         String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([licenseId, deviceFingerprintHash])
+  @@index([licenseId, status])
+  @@index([deviceFingerprintHash])
+  @@map("license_devices")
+}
+
+model LicenseActivationAudit {
+  id        String   @id @default(cuid())
+  licenseId String?
+  deviceId  String?
+  requestId String   @unique
+  eventType String
+  success   Boolean
+  reason    String?
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([licenseId, createdAt])
+  @@index([deviceId, createdAt])
+  @@index([eventType, createdAt])
+  @@map("license_activation_audits")
+}
+
+model LicenseAdminAudit {
+  id          String   @id @default(cuid())
+  adminSubject String
+  action      String
+  licenseId   String?
+  deviceId    String?
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  @@index([licenseId, createdAt])
+  @@index([adminSubject, createdAt])
+  @@map("license_admin_audits")
 }

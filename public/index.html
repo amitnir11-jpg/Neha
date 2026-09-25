@@ -6,7 +6,10 @@
   <title>Daksh Inventory v2 Login</title>
   <link rel="icon" href="/brand/favicon.ico" type="image/x-icon">
   <link rel="apple-touch-icon" sizes="512x512" href="/brand/app-icon.png">
-  <link rel="stylesheet" href="/css/style.css?v=20260612-login-professional" onerror="console.error('[DAKSH_LOGIN_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/css/style.css?v=20260902-login-shell-v1" onerror="console.error('[DAKSH_LOGIN_ASSET] style.css failed', this.href)">
+  <link rel="stylesheet" href="/professional-theme.css?v=20260908-enterprise-theme-v3">
+  <link rel="stylesheet" href="/css/select-system.css?v=20260908-enterprise-select-v3">
+  <link rel="stylesheet" href="/css/login.css?v=20260912-login-v9" onerror="console.error('[DAKSH_LOGIN_ASSET] login.css failed', this.href)">
   <script>
     (function () {
       var startedAt = Date.now();
@@ -74,67 +77,50 @@
 </head>
 <body data-page="login" class="login-body">
   <main class="login-shell" aria-label="Daksh Inventory authentication">
-    <section class="login-brand" aria-labelledby="loginHeroTitle">
-      <div class="login-brand-content">
-        <div class="brand-lockup">
-          <img class="brand-logo" src="/brand/logo-app.svg" alt="Daksh Inventory Pro" loading="eager">
-        </div>
-
-        <div class="hero-copy">
-          <span class="hero-eyebrow">Inventory operations platform</span>
-          <h1 id="loginHeroTitle">Daksh Inventory v2</h1>
-          <p>One reliable workspace for dealership stock audits, bin control, barcode scanning, and inventory reporting.</p>
-        </div>
-
-        <div class="capability-list" aria-label="Platform capabilities">
-          <div class="capability-item">
-            <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 3h14v18H5z"/><path d="M9 7h6M9 11h6"/><path d="m9 16 2 2 4-5"/></svg></span>
-            <strong>Controlled audits</strong>
-            <small>Trace every counted part, user, bin, and adjustment.</small>
-          </div>
-          <div class="capability-item">
-            <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 7V4h3M17 4h3v3M20 17v3h-3M7 20H4v-3"/><path d="M7 9h10v6H7z"/><path d="M9 12h.01M12 12h.01M15 12h.01"/></svg></span>
-            <strong>Fast scanning</strong>
-            <small>Capture stock from web, mobile, and connected devices.</small>
-          </div>
-          <div class="capability-item">
-            <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 19h16"/><path d="M7 16V9M12 16V5M17 16v-4"/></svg></span>
-            <strong>Decision-ready reports</strong>
-            <small>Review movement, variance, value, and reconciliation.</small>
-          </div>
-        </div>
-      </div>
-
-      <div class="hero-status" aria-label="System availability">
-        <span><i aria-hidden="true"></i>Cloud database connected</span>
-        <span>Secure role-based access</span>
-      </div>
-    </section>
-
     <section class="login-panel" aria-label="Secure login">
-      <header class="login-panel-header">
-        <span class="panel-kicker">Secure workspace</span>
-        <h2>Welcome back</h2>
-        <p>Sign in with your assigned account.</p>
-      </header>
-      <div class="login-tabs" role="tablist" aria-label="Login options">
-        <button class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="adminLoginForm" data-login-tab="admin">
-          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg></span>
-          Admin Login
-        </button>
-        <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="staffLoginForm" data-login-tab="staff">
-          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
-          PIN Login
-        </button>
-        <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="registerLoginForm" data-login-tab="register">
-          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg></span>
-          New User
-        </button>
-        <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="resetLoginForm" data-login-tab="reset">
-          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12A9 9 0 0 1 18.5 5.8"/><path d="M18 2v4h4"/><path d="M6 22v-4H2"/></svg></span>
-          Reset
-        </button>
+      <div class="login-logo-lockup">
+        <img class="login-logo" src="/brand/logo-app.svg" alt="Daksh Inventory Pro" loading="eager">
       </div>
+      <header class="login-panel-header">
+        <h1>Log In</h1>
+        <p>Please enter your login details below</p>
+      </header>
+
+      <section id="licenseActivationPanel" class="license-activation hidden" aria-label="Product activation">
+        <div class="license-activation-copy">
+          <span class="panel-kicker">Product activation</span>
+          <h3>Activate this PC</h3>
+          <p id="licenseActivationText">Enter the license key assigned to this installation.</p>
+        </div>
+        <form id="licenseActivationForm" autocomplete="off">
+          <label class="login-field">
+            <span class="field-label">License Key</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 7h.01"/><path d="M10 14 21 3"/><path d="M21 3h-6v6"/><circle cx="8" cy="16" r="5"/></svg>
+              <input name="licenseKey" placeholder="LICENSE-XXXX-XXXX" spellcheck="false" required>
+            </span>
+          </label>
+          <label class="login-field">
+            <span class="field-label">Email ID</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+              <input name="customerEmail" type="email" autocomplete="email">
+            </span>
+          </label>
+          <label class="login-field">
+            <span class="field-label">Device ID</span>
+            <span class="input-wrap">
+              <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg>
+              <input id="licenseDeviceId" readonly>
+            </span>
+          </label>
+          <button class="primary-button login-submit" type="submit">
+            <span>Activate</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
+          </button>
+        </form>
+        <div id="licenseStatusText" class="form-message" aria-live="polite"></div>
+      </section>
 
       <div class="login-panel-body">
         <form id="adminLoginForm" class="login-form active" autocomplete="on">
@@ -156,14 +142,14 @@
             </span>
           </label>
           <div class="login-options">
-            <label class="remember-option"><input type="checkbox" checked><span>Remember me</span></label>
+            <label class="remember-option"><input type="checkbox" name="rememberMe" value="on"><span>Remember me</span></label>
             <button class="text-link" type="button" data-login-tab="reset">Forgot Password?</button>
           </div>
           <button class="primary-button login-submit" type="submit">
-            <span>Login</span>
+            <span>Log in</span>
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
           </button>
-          <div class="login-divider"><span>or continue with</span></div>
+          <div class="login-divider"><span>or</span></div>
           <button class="email-button" id="emailLoginButton" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
             Continue with Email
@@ -189,7 +175,7 @@
             </span>
           </label>
           <div class="login-options">
-            <label class="remember-option"><input type="checkbox" checked><span>Remember me</span></label>
+            <label class="remember-option"><input type="checkbox" name="rememberMe" value="on"><span>Remember me</span></label>
             <button class="text-link" type="button" data-login-tab="reset">Forgot Password?</button>
           </div>
           <button class="primary-button login-submit" type="submit">
@@ -313,6 +299,25 @@
 
         <div id="loginMessage" class="form-message" aria-live="polite"></div>
 
+        <div class="login-tabs" role="tablist" aria-label="Alternative login options">
+          <button class="tab-button admin-tab" type="button" role="tab" aria-selected="true" aria-controls="adminLoginForm" data-login-tab="admin">
+            <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg></span>
+            Admin Login
+          </button>
+          <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="staffLoginForm" data-login-tab="staff">
+            <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+            PIN Login
+          </button>
+          <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="registerLoginForm" data-login-tab="register">
+            <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg></span>
+            New User
+          </button>
+          <button class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="resetLoginForm" data-login-tab="reset">
+            <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12A9 9 0 0 1 18.5 5.8"/><path d="M18 2v4h4"/><path d="M6 22v-4H2"/></svg></span>
+            Reset
+          </button>
+        </div>
+
         <aside class="secure-access" aria-label="Secure access">
           <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/><path d="M12 15v2"/></svg></span>
           <div>
@@ -322,21 +327,15 @@
         </aside>
       </div>
     </section>
+
+    <footer class="login-footer" aria-label="Copyright">
+      <span>&copy; 2026 Daksh Inventory Pro. All rights reserved.</span>
+    </footer>
   </main>
 
-  <footer class="login-footer">
-    <div>
-      <strong>Daksh Inventory v2</strong>
-      <span>&copy; 2026 Daksh Technologies. All Rights Reserved.</span>
-    </div>
-    <div>
-      <span>Version 2.5.0</span>
-      <span class="status-online"><i aria-hidden="true"></i>Online</span>
-    </div>
-  </footer>
-
   <script src="/config.js"></script>
-  <script src="/js/runtime.js?v=20260628-exact-qr-duplicate-v1"></script>
-  <script src="/js/app.js?v=20260628-exact-qr-duplicate-v1" onerror="console.error('[DAKSH_LOGIN_ASSET] app.js failed', this.src)"></script>
+  <script src="/js/runtime.js?v=20260923-recon-upload-dashboard-v1"></script>
+  <script src="/js/app.js?v=20260630-report-dealer-fix-v1" onerror="console.error('[DAKSH_LOGIN_ASSET] app.js failed', this.src)"></script>
+  <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
 </body>
 </html>

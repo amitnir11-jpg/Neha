@@ -23,13 +23,13 @@ const { formatDateLikeFields } = require('../utils/time');
 const { decorateScanValue } = require('../utils/inventoryValueEngine');
 const { uniqueReportScans, reportScanIdentity } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
-const { getPriceFromPartMaster, getPricesFromPartMaster, scanWithPartMasterPrice } = require('../utils/partMasterPrice');
+const { getPriceFromPartMaster, getPricesFromPartMaster, scanWithSavedAuditPrice } = require('../utils/partMasterPrice');
 const { applyCacheHeaders, getCachedResponse } = require('../utils/safeCache');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
-const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.2.2';
-const WEB_SCANNER_BUILD = '20260629-smart-bin-popup-v1';
+const MOBILE_APP_VERSION = 'Daksh Scan Lite v1.2.11';
+const WEB_SCANNER_BUILD = '20260704-lite-apk-v1';
 const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 const MOBILE_SCAN_SELECT = [
   'uniqueScanId scanId syncKey qrFingerprint rawUpiHash',
@@ -218,7 +218,7 @@ async function withCurrentMasterPrices(scans = [], dealerCode = '') {
   );
   return scans.map((scan) => {
     const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
-    return scanWithPartMasterPrice(scan, priceByPart.get(partNumber) || null);
+    return scanWithSavedAuditPrice(scan, priceByPart.get(partNumber) || null);
   });
 }
 
@@ -333,7 +333,7 @@ router.post('/login', auth.mobileLoginHandler);
 router.get('/dealers', auth.requireAuth, async (req, res) => {
   try {
     const userAccess = auth.normalizeDealerAccess(req.user.dealerAccess);
-    const canSeeAll = req.user.role === 'admin' || userAccess.includes('ALL');
+    const canSeeAll = req.user.role === 'admin';
     const filter = canSeeAll ? {} : userAccess.length ? { dealerCode: { $in: userAccess } } : { dealerCode: '__none__' };
     const dealersList = await Dealer.find(filter).sort({ dealerName: 1, dealerCode: 1 }).limit(1000).lean();
     return res.json({ success: true, count: dealersList.length, dealers: dealersList.map(compactDealer) });
@@ -389,7 +389,9 @@ router.get('/config', auth.optionalAuth, async (req, res) => {
       serverTime: new Date(),
       serverUrl: info.serverUrl,
       scanUrl: info.scanUrl,
+      mobileWebUrl: info.mobileWebUrl,
       mobileScannerUrl: info.mobileScannerUrl,
+      legacyMobileScannerUrl: info.legacyMobileScannerUrl,
       healthUrl: info.healthUrl,
       connectUrl: info.connectUrl,
       syncUrl: `${info.serverUrl}/api/mobile/sync-bulk`,
@@ -493,7 +495,9 @@ router.get('/status', auth.optionalAuth, async (req, res) => {
       loginVerified: Boolean(req.user),
       serverUrl: info.serverUrl,
       scanUrl: info.scanUrl,
+      mobileWebUrl: info.mobileWebUrl,
       mobileScannerUrl: info.mobileScannerUrl,
+      legacyMobileScannerUrl: info.legacyMobileScannerUrl,
       healthUrl: info.healthUrl,
       syncUrl: `${info.serverUrl}/api/mobile/sync-bulk`,
       activeAudit: activeAudit ? publicAudit(activeAudit) : null,
@@ -590,7 +594,7 @@ router.get('/master-search', auth.requireAuth, async (req, res) => {
   }
 });
 
-router.get('/validate-part', auth.optionalAuth, async (req, res) => {
+router.get('/validate-part', auth.requireAuth, async (req, res) => {
   try {
     return await sendCachedJson(res, 'lookup', req.query, async (normalizedQuery) => {
       const partNumber = normalizePartNumber(normalizedQuery.partNumber || normalizedQuery.part || '');
@@ -618,7 +622,7 @@ router.get('/validate-part', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.post('/verification-log', auth.optionalAuth, async (req, res) => {
+router.post('/verification-log', auth.requireAuth, async (req, res) => {
   try {
     const partNumber = clean(req.body.partNumber || req.body.part || '').toUpperCase();
     const dealerCode = clean(req.body.dealerCode || '').toUpperCase();
@@ -673,7 +677,7 @@ router.get('/status/:deviceId', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.get('/inventory', auth.optionalAuth, async (req, res) => {
+router.get('/inventory', auth.requireAuth, async (req, res) => {
   try {
     const records = await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT)
       .sort({ timestamp: -1 })
@@ -685,7 +689,7 @@ router.get('/inventory', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.get('/reports/unique-upi', auth.optionalAuth, async (req, res) => {
+router.get('/reports/unique-upi', auth.requireAuth, async (req, res) => {
   try {
     const records = await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT)
       .sort({ timestamp: -1 })
@@ -698,7 +702,7 @@ router.get('/reports/unique-upi', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.get('/reports/summary', auth.optionalAuth, async (req, res) => {
+router.get('/reports/summary', auth.requireAuth, async (req, res) => {
   try {
     const filter = transactionFilter(req.query);
     const [rawRecords, duplicateCount] = await Promise.all([
@@ -754,7 +758,7 @@ router.get('/reports/summary', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.get('/recent-scans', auth.optionalAuth, async (req, res) => {
+router.get('/recent-scans', auth.requireAuth, async (req, res) => {
   try {
     const records = await buildRecentScans(req.query);
     return res.json({ success: true, count: records.length, records });
@@ -763,7 +767,7 @@ router.get('/recent-scans', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.get('/reports/last-scans', auth.optionalAuth, async (req, res) => {
+router.get('/reports/last-scans', auth.requireAuth, async (req, res) => {
   try {
     const records = await buildRecentScans(req.query);
     return res.json({ success: true, count: records.length, records });
@@ -772,7 +776,7 @@ router.get('/reports/last-scans', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.get('/reports/verify-scan', auth.optionalAuth, async (req, res) => {
+router.get('/reports/verify-scan', auth.requireAuth, async (req, res) => {
   try {
     const value = clean(req.query.value);
     const partNumber = partFromVerificationValue(value);
@@ -791,12 +795,12 @@ router.get('/reports/verify-scan', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.get('/reports/inward', auth.optionalAuth, (req, res) => scanReport(req, res, 'INWARD'));
-router.get('/reports/outward', auth.optionalAuth, (req, res) => scanReport(req, res, 'OUTWARD'));
-router.get('/reports/fitted', auth.optionalAuth, (req, res) => scanReport(req, res, 'FITTED'));
-router.get('/reports/damage', auth.optionalAuth, (req, res) => scanReport(req, res, 'DAMAGE'));
+router.get('/reports/inward', auth.requireAuth, (req, res) => scanReport(req, res, 'INWARD'));
+router.get('/reports/outward', auth.requireAuth, (req, res) => scanReport(req, res, 'OUTWARD'));
+router.get('/reports/fitted', auth.requireAuth, (req, res) => scanReport(req, res, 'FITTED'));
+router.get('/reports/damage', auth.requireAuth, (req, res) => scanReport(req, res, 'DAMAGE'));
 
-router.get('/reports/verification', auth.optionalAuth, async (req, res) => {
+router.get('/reports/verification', auth.requireAuth, async (req, res) => {
   try {
     const rows = await VerificationLog.find({ ...dealerFilter(req.query), scanType: { $ne: 'VERIFICATION' } }).sort({ time: -1 }).limit(1000).lean();
     return res.json({ success: true, count: rows.length, rows: rows.map((row) => ({
@@ -817,7 +821,7 @@ router.get('/reports/verification', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.get('/reports/deleted', auth.optionalAuth, async (req, res) => {
+router.get('/reports/deleted', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const rows = await DeletedScanLog.find(dealerFilter(req.query)).sort({ deletedTime: -1 }).limit(1000).lean();
     return res.json({ success: true, count: rows.length, rows });
@@ -826,9 +830,12 @@ router.get('/reports/deleted', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.get('/reports/export-excel', auth.optionalAuth, async (req, res) => {
+router.get('/reports/export-excel', auth.requireAuth, async (req, res) => {
   try {
     const type = clean(req.query.type || 'inward').toLowerCase();
+    if (type === 'deleted' && req.user?.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin permission required.' });
+    }
     const map = { inward: 'INWARD', outward: 'OUTWARD', fitted: 'FITTED', damage: 'DAMAGE' };
     let rows = [];
     if (map[type]) {
@@ -866,7 +873,7 @@ router.get('/reports/export-excel', auth.optionalAuth, async (req, res) => {
   }
 });
 
-router.get('/reports/bin-wise', auth.optionalAuth, async (req, res) => {
+router.get('/reports/bin-wise', auth.requireAuth, async (req, res) => {
   try {
     const scans = await withCurrentMasterPrices(
       applyMovementCountRules(uniqueReportScans(await Inventory.find(transactionFilter(req.query)).select(MOBILE_SCAN_SELECT).sort({ timestamp: 1, createdAt: 1 }).limit(5000).lean())),

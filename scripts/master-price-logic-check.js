@@ -6,7 +6,8 @@ const {
   masterPriceMissing,
   masterPriceScanFields,
   pickBestPriceRecord,
-  scanWithPartMasterPrice
+  scanWithPartMasterPrice,
+  scanWithSavedAuditPrice
 } = require('../utils/partMasterPrice');
 const { getFinalInventoryMRP } = require('../utils/inventoryValueEngine');
 const { resolvePartPricing } = require('../utils/partPricing');
@@ -71,6 +72,21 @@ assert.equal(pricedScan.scanMRP, 0);
 assert.equal(pricedScan.manualMRP, 0);
 assert.equal(pricedScan.finalInventoryValue, 720);
 assert.equal(pricedScan.partDescription, 'LATEST PART');
+
+const savedAuditScan = scanWithSavedAuditPrice({
+  partNumber: 'ABC-123',
+  qty: 3,
+  mrp: 100,
+  valuationMRP: 100,
+  currentCatalogueMRP: 100,
+  currentCatalogueDLC: 70,
+  dlc: 70
+}, latest);
+assert.equal(savedAuditScan.mrp, 100);
+assert.equal(savedAuditScan.currentCatalogueMRP, 100);
+assert.equal(savedAuditScan.currentCatalogueDLC, 70);
+assert.equal(savedAuditScan.finalInventoryValue, 300);
+assert.equal(savedAuditScan.partDescription, 'LATEST PART');
 
 const reportPricing = resolvePartPricing({
   partNumber: 'ABC-123',

@@ -5,6 +5,7 @@ build/
 *.log
 uploads/temp/
 backup*/
+_local_backups/
 _cleanup_quarantine/
 _archive_unused/
 Audit Data/
@@ -14,10 +15,34 @@ DEPLOYMENT_NOTES_*.md
 
 # Runtime markers and local caches
 server_process.pid
+server_pid.txt
 server_port.txt
+runtime/
 logs/
+local-data/
 .dart_tool/
 .gradle/
 .idea/
 .codex-artifacts/
+.chrome-check-profile*/
 *.code-workspace
+installer/output/
+installer/prerequisites/
+license-private*.pem
+*.private.pem
+*.key
+license-server/.env
+license-server/keys/
+installer/resources/vendor/
+installer/payload/
+release/
+*.pfx
+*.p12
+DAKSH-DEPLOYMENT/build/
+DAKSH-DEPLOYMENT/staging/
+DAKSH-DEPLOYMENT/runtime/
+DAKSH-DEPLOYMENT/output/
+DAKSH-DEPLOYMENT/migrations/
+DAKSH-DEPLOYMENT/manifest/build.log*
+DAKSH-DEPLOYMENT/manifest/release-manifest.json
+DAKSH-DEPLOYMENT/manifest/last-successful-build.json

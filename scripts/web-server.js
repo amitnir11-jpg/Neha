@@ -50,7 +50,7 @@ app.get('/socket.io/socket.io.js', (req, res) => {
 app.get(['/', '/login'], (req, res) => sendPublicFile(res, 'index.html'));
 app.get(['/dashboard', '/dashboard/'], (req, res) => sendPublicFile(res, 'Daksh.html'));
 app.get(['/report', '/report/'], (req, res) => sendPublicFile(res, 'report.html'));
-app.get(['/scan', '/scan/', '/mobile', '/mobile-scanner', '/mobile-scanner/'], (req, res) => sendPublicFile(res, 'scan.html'));
+app.get(['/scan', '/scan/', '/mobile', '/mobile-scanner', '/mobile-scanner/', '/mobile-web', '/mobile-web/'], (req, res) => sendPublicFile(res, 'scan.html'));
 
 app.use('/vendor/zxing', express.static(path.join(__dirname, '..', 'node_modules', '@zxing', 'library', 'umd')));
 app.use(express.static(PUBLIC_DIR));

@@ -1,6 +1,6 @@
 const assert = require('assert');
 const { Prisma } = require('../services/prisma');
-const { booleanMirrorValue, valueForMirror } = require('../models/prismaModel');
+const { booleanMirrorValue, modelMirrorFields, valueForMirror } = require('../models/prismaModel');
 const { activeInventoryValue } = require('../utils/inventoryMovementState');
 
 const inventory = Prisma.dmmf.datamodel.models.find((model) => model.name === 'Inventory');
@@ -15,5 +15,7 @@ assert.strictEqual(valueForMirror({ activeInventory: 'false' }, 'activeInventory
 assert.strictEqual(valueForMirror({ remainingQty: '1.25' }, 'remainingQty', field('remainingQty')), 1.25);
 assert.ok(valueForMirror({ timestamp: '2026-06-22T04:39:46.184Z' }, 'timestamp', field('timestamp')) instanceof Date);
 assert.strictEqual(valueForMirror({ dealerCode: 24780 }, 'dealerCode', field('dealerCode')), '24780');
+assert.ok(modelMirrorFields('ScanAuditLog').includes('action'), 'ScanAuditLog.action must be mirrored as a required Prisma column');
+assert.ok(modelMirrorFields('ScanAuditLog').includes('reason'), 'ScanAuditLog.reason must be mirrored as a required Prisma column');
 
 console.log('Prisma mirror type checks passed.');

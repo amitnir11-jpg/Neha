@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/dealer.dart';
 import '../services/api_client.dart';
+import '../services/server_discovery.dart';
 import '../services/settings_store.dart';
 import 'server_qr_screen.dart';
 
@@ -22,7 +23,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
   final _pinController = TextEditingController();
   final _dealerController = TextEditingController();
-  bool _busy = false;
+  bool _busy = true;
   String _message = '';
 
   @override
@@ -32,10 +33,17 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _load() async {
-    _serverController.text = await _settings.serverUrl;
-    _dealerController.text = await _settings.dealerCode;
-    if (mounted) setState(() {});
-    await _testServer(silent: true);
+    try {
+      final serverUrl = await _settings.serverUrl;
+      final dealerCode = await _settings.dealerCode;
+      if (!mounted) return;
+      _serverController.text = serverUrl;
+      _dealerController.text = dealerCode;
+      setState(() {});
+      await _autoDetectServer(silent: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -51,10 +59,45 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _scanServerQr() async {
     final url = await Navigator.of(context).push<String>(
         MaterialPageRoute(builder: (_) => const ServerQrScreen()));
-    if (url == null || url.isEmpty) return;
-    _serverController.text = url;
+    if (!mounted || url == null || url.isEmpty) return;
+    final wasLocalhost = SettingsStore.isPhoneLocalhostUrl(url);
     await _settings.saveServerUrl(url);
-    setState(() => _message = 'Server URL loaded from QR');
+    final savedUrl = await _settings.serverUrl;
+    if (!mounted) return;
+    _serverController.text = savedUrl;
+    setState(() => _message = wasLocalhost
+        ? 'The QR contained a PC-only address. Automatic discovery will select the reachable server.'
+        : 'Server URL loaded from QR');
+  }
+
+  Future<void> _autoDetectServer({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _busy = true;
+        _message = 'Searching for Daksh PC server on this WiFi...';
+      });
+    }
+    try {
+      final server = await ServerDiscovery().discoverAndSave(_settings);
+      if (!mounted) return;
+      if (server == null) {
+        if (!silent && mounted) {
+          setState(
+              () => _message = 'Daksh PC server not found on this network.');
+        }
+        return;
+      }
+      _serverController.text = server.serverUrl;
+      if (mounted) {
+        setState(() {
+          _message = silent
+              ? _message
+              : 'Connected to ${server.serverUrl}${server.displayStatus.isNotEmpty ? ' - ${server.displayStatus}' : ''}';
+        });
+      }
+    } finally {
+      if (!silent && mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _testServer({bool silent = false}) async {
@@ -65,11 +108,18 @@ class _LoginScreenState extends State<LoginScreen> {
       });
     }
     try {
+      final wasLocalhost =
+          SettingsStore.isPhoneLocalhostUrl(_serverController.text);
       await _settings.saveServerUrl(_serverController.text);
+      _serverController.text = await _settings.serverUrl;
       final data = await ApiClient(_settings).health();
+      final connectedUrl = await _settings.serverUrl;
+      if (!mounted) return;
+      _serverController.text = connectedUrl;
       if (!silent && mounted) {
-        setState(() => _message =
-            'Server connected: ${data['db'] ?? data['postgresStatus'] ?? 'OK'}');
+        setState(() => _message = wasLocalhost
+            ? 'The PC-only address was replaced. Server connected: ${data['db'] ?? data['postgresStatus'] ?? 'OK'}'
+            : 'Server connected: ${data['db'] ?? data['postgresStatus'] ?? 'OK'}');
       }
     } catch (error) {
       if (!silent && mounted) setState(() => _message = error.toString());
@@ -85,12 +135,22 @@ class _LoginScreenState extends State<LoginScreen> {
       _message = '';
     });
     try {
+      final enteredWasLocalhost =
+          SettingsStore.isPhoneLocalhostUrl(_serverController.text);
+      if (enteredWasLocalhost) {
+        await _autoDetectServer(silent: true);
+      }
       await _settings.saveServerUrl(_serverController.text);
+      _serverController.text = await _settings.serverUrl;
       final deviceId = await _settings.deviceId;
+      final passwordText = _passwordController.text.trim();
+      final pinText = _pinController.text.trim();
+      final passwordLooksLikePin =
+          pinText.isEmpty && RegExp(r'^\d{4}$').hasMatch(passwordText);
       final session = await ApiClient(_settings).login(
         username: _userController.text.trim(),
-        password: _passwordController.text,
-        pin: _pinController.text,
+        password: passwordLooksLikePin ? '' : passwordText,
+        pin: passwordLooksLikePin ? passwordText : pinText,
         dealerCode: _dealerController.text.trim().toUpperCase(),
         deviceId: deviceId,
       );
@@ -189,11 +249,13 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 18),
                 TextFormField(
                   controller: _serverController,
+                  enabled: !_busy,
                   keyboardType: TextInputType.url,
                   decoration: const InputDecoration(
-                      labelText: 'Cloud Server',
+                      labelText: 'Daksh Server',
                       prefixIcon: Icon(Icons.cloud),
-                      helperText: 'Auto configured'),
+                      helperText:
+                          'Automatic: saved identity → daksh.local → mDNS → QR'),
                   validator: (_) => null,
                 ),
                 const SizedBox(height: 10),
@@ -207,11 +269,16 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(width: 10),
                     Expanded(
                         child: OutlinedButton.icon(
-                            onPressed: _busy ? null : _testServer,
+                            onPressed: _busy ? null : _autoDetectServer,
                             icon: const Icon(Icons.wifi_tethering),
-                            label: const Text('Test'))),
+                            label: const Text('Auto Detect'))),
                   ],
                 ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                    onPressed: _busy ? null : _testServer,
+                    icon: const Icon(Icons.network_check),
+                    label: const Text('Test Server')),
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _dealerController,

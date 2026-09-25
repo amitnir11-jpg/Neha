@@ -43,8 +43,17 @@ function lowercaseFields(data, fields) {
 function prepareUser(data) {
   lowercaseFields(data, ['username', 'email']);
   syncAliases(data, [['active', 'isActive'], ['passwordHash', 'password'], ['pinHash', 'pin']]);
-  if (!data.role) data.role = 'staff';
-  if (!data.name) data.name = 'Staff';
+  const legacyRole = String(data.role || '').trim().toLowerCase();
+  data.role = {
+    admin: 'admin',
+    audit_user: 'audit_user',
+    mobile_user: 'mobile_user',
+    staff: 'audit_user',
+    supervisor: 'audit_user',
+    scanner: 'audit_user',
+    outward_counter: 'audit_user'
+  }[legacyRole] || 'audit_user';
+  if (!data.name) data.name = data.role === 'admin' ? 'Admin' : data.role === 'mobile_user' ? 'Mobile User' : 'Audit User';
   if (data.active === undefined) data.active = true;
   if (data.isActive === undefined) data.isActive = data.active !== false;
   if (data.approved === undefined) data.approved = false;
@@ -61,6 +70,13 @@ function prepareUser(data) {
       canManageUsers: false
     };
   }
+}
+
+function prepareScanAuditLog(data) {
+  uppercaseFields(data, ['action', 'dealerCode', 'partNumber', 'performedByRole']);
+  if (!data.action) data.action = 'UPDATE';
+  if (!data.reason) data.reason = 'Other';
+  if (!data.timestamp) data.timestamp = new Date();
 }
 
 function prepareDealer(data) {
@@ -193,6 +209,7 @@ function prepareInventory(data) {
   data.masterFound = Boolean(data.masterFound || data.masterMatch || data.isMasterMatched);
   data.movementType = movementTypeValue(data);
   data.upiCode = upiCodeValue(data);
+  if (data.isDeleted === undefined) data.isDeleted = false;
   data.remainingQty = remainingQtyValue(data);
   data.activeInventory = activeInventoryValue(data);
   if (!data.timestamp) data.timestamp = new Date();
@@ -316,6 +333,7 @@ module.exports = {
   ReportFilterSetting: model('ReportFilterSetting', 'reportFilterSetting', 'reportfiltersettings', { prepare: prepareCommonLog }),
   ReportSnapshot: model('ReportSnapshot', 'reportSnapshot', 'reportsnapshots', { prepare: prepareCommonLog }),
   Scan: model('Scan', 'scan', 'scans', { prepare: prepareInventory, indexes: scanIndexes }),
+  ScanAuditLog: model('ScanAuditLog', 'scanAuditLog', 'scanauditlogs', { prepare: prepareScanAuditLog }),
   ScannerLog: model('ScannerLog', 'scannerLog', 'scannerlogs', { prepare: prepareCommonLog }),
   ScannerSession: model('ScannerSession', 'scannerSession', 'scannersessions', { prepare: prepareCommonLog }),
   Setting: model('Setting', 'setting', 'settings', { prepare: prepareCommonLog }),

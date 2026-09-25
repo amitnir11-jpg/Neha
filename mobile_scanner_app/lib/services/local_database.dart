@@ -133,6 +133,27 @@ class LocalDatabase {
     return rows.isNotEmpty;
   }
 
+  Future<ScanRecord?> latestMatchingScan({
+    required String rawValue,
+    required String scanType,
+    required String dealerCode,
+    required String userId,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'scans',
+      where:
+          'rawValue = ? AND scanType = ? AND dealerCode = ? AND userId = ? AND status = ?',
+      // A Pending/Failed row only exists on this phone.  It must not be used
+      // as proof that the part is already in the central inventory.
+      whereArgs: [rawValue, scanType, dealerCode, userId, 'Synced'],
+      orderBy: 'createdAt DESC, localId DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return ScanRecord.fromMap(rows.first);
+  }
+
   Future<String> exportJson() async {
     final db = await database;
     final rows = await db.query('scans', orderBy: 'createdAt ASC');

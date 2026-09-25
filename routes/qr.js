@@ -641,10 +641,18 @@ router.get('/pairing', auth.requireAuth, async (req, res) => {
       ? await pairService.createPairing({ user: req.user, activeAudit, req, deviceId: req.query.deviceId })
       : null;
     const pairing = securePairing ? securePairing.pairing : {
+      type: 'daksh-pairing',
+      serverId: req.app.locals.serverIdentity ? req.app.locals.serverIdentity.get(info.port).serverId : '',
+      hostname: info.hostname,
       serverIp: info.ip,
+      lanIp: info.lanIp,
       port: info.port,
       serverUrl: info.serverUrl,
+      mdnsUrl: info.mdnsUrl,
+      lanUrl: info.lanUrl,
+      mobileWebUrl: info.mobileWebUrl,
       mobileScannerUrl: info.mobileScannerUrl,
+      legacyMobileScannerUrl: info.legacyMobileScannerUrl,
       healthUrl: info.healthUrl,
       connectUrl: info.connectUrl,
       syncUrl: info.syncUrl,
@@ -671,7 +679,9 @@ router.get('/pairing', auth.requireAuth, async (req, res) => {
       ip: info.ip,
       port: info.port,
       serverUrl: info.serverUrl,
+      mobileWebUrl: info.mobileWebUrl,
       mobileScannerUrl: info.mobileScannerUrl,
+      legacyMobileScannerUrl: info.legacyMobileScannerUrl,
       healthUrl: info.healthUrl,
       connectUrl: info.connectUrl,
       syncUrl: info.syncUrl,

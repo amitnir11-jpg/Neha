@@ -6,6 +6,8 @@ const autoTableModule = require('jspdf-autotable');
 const nodemailer = require('nodemailer');
 const reportModule = require('./report');
 const reconciliationRoute = require('./reconciliation');
+const localPartsRoute = require('./localParts');
+const inventoryRoute = require('./inventory');
 const Inventory = require('../models/Inventory');
 const Dealer = require('../models/Dealer');
 const router = reportModule;
@@ -49,6 +51,7 @@ const VerificationLog = require('../models/VerificationLog');
 const { formatDateLikeFields, formatIstDateTime, parseIstFilterDate } = require('../utils/time');
 const { scanValueRow } = require('../utils/inventoryValueEngine');
 const { normalizePartNumber } = require('../utils/normalize');
+const { buildMultipleBinLocationAlertRows } = require('../utils/smartBinSuggestion');
 const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
   ? categoryResolver.canonicalizePartCategory
   : (value, options = {}) => {
@@ -295,11 +298,10 @@ async function multipleBinLocationAlertRows(query = {}) {
     if (from && !Number.isNaN(from.getTime())) filter.timestamp.$gte = from;
     if (to && !Number.isNaN(to.getTime())) filter.timestamp.$lte = to;
   }
-  const scopedFilter = applyTestScanMode(filter, query.testScanMode || 'real');
+  const scopedFilter = inventoryRoute.applyTestScanMode(filter, query.testScanMode || 'real');
 
   const rows = await Inventory.find(scopedFilter)
     .select('dealerCode auditId partNumber normalizedPartNumber partDescription partName binLocation bin scanType type qty quantity timestamp scanTime createdAt updatedAt userName loginId username staffName reason remarks smartBinReason smartBinDecisionReason syncStatus scanStatus status deletedAt')
-    .sort({ timestamp: 1, createdAt: 1, _id: 1 })
     .lean();
   const report = buildMultipleBinLocationAlertRows(rows);
   return {
@@ -378,7 +380,10 @@ const BIN_COLUMNS = [
   { header: 'PRODUCT CATEGORY', key: 'productCategory', width: 20 },
   { header: 'QTY', key: 'qty', width: 12 },
   { header: 'PHYSICAL BIN QTY', key: 'physicalBinQty', width: 18 },
+  { header: 'DLC', key: 'dlc', width: 12 },
+  { header: 'ACTUAL STOCK VALUE (DLC)', key: 'finalInventoryValue', width: 24 },
   { header: 'MRP', key: 'mrp', width: 12 },
+  { header: 'MRP VALUE (QTY x MRP)', key: 'mrpValueReference', width: 22 },
   { header: 'SCAN TYPE', key: 'scanType', width: 16 },
   { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
   { header: 'FITTED STATUS', key: 'fittedStatus', width: 16 },
@@ -397,6 +402,10 @@ const SCAN_COLUMNS = [
   { header: 'PART NUMBER', key: 'partNumber', width: 18 },
   { header: 'PART DESCRIPTION', key: 'partDescription', width: 34 },
   { header: 'QTY', key: 'quantity', width: 10 },
+  { header: 'DLC', key: 'dlc', width: 12 },
+  { header: 'ACTUAL STOCK VALUE (DLC)', key: 'finalInventoryValue', width: 24 },
+  { header: 'MRP', key: 'mrp', width: 12 },
+  { header: 'MRP VALUE (REFERENCE)', key: 'mrpValueReference', width: 22 },
   { header: 'RAW QR / UPI', key: 'rawBarcode', width: 34 },
   { header: 'BIN LOCATION', key: 'binLocation', width: 16 },
   { header: 'REGD NO', key: 'regdNo', width: 16 },
@@ -479,6 +488,8 @@ const DEVICE_COLUMNS = [
   { header: 'FITTED QTY', key: 'fittedQty', width: 14 },
   { header: 'DAMAGE QTY', key: 'damageQty', width: 14 },
   { header: 'USERS', key: 'users', width: 34 },
+  { header: 'ACTUAL STOCK VALUE (DLC)', key: 'totalDlcValue', width: 24 },
+  { header: 'MRP VALUE (REFERENCE)', key: 'totalMrpValue', width: 22 },
   { header: 'LAST SCAN TIME', key: 'lastScanTime', width: 22 }
 ];
 
@@ -511,6 +522,7 @@ const COMPLETE_AUDIT_PACK_REPORTS = [
   { key: 'category-wise-variance-summary', label: 'Category Wise Variance Summary' },
   { key: 'partwise-inventory-audit', label: 'Partwise Inventory Report' },
   { key: 'parts-inventory-refresh-template', label: 'Part Inventory Refresh Template' },
+  { key: 'local-parts', label: 'Local Parts Report' },
   { key: 'reconciliation-report', label: 'Reconciliation Report' },
   { key: 'dealer-reconciliation-report', label: 'Dealer Reconciliation Report' },
   { key: 'dead-stock-report', label: 'Dead Stock Report' },
@@ -562,7 +574,9 @@ const RAW_UPI_COLUMNS = [
   { header: 'Manufacturing Year', key: 'manufacturingYear', width: 18 },
   { header: 'Product Category', key: 'productCategory', width: 20 },
   { header: 'MRP', key: 'mrp', width: 12 },
+  { header: 'MRP VALUE (REFERENCE)', key: 'mrpValueReference', width: 22 },
   { header: 'DLC', key: 'dlc', width: 12 },
+  { header: 'ACTUAL STOCK VALUE (DLC)', key: 'finalInventoryValue', width: 24 },
   { header: 'Qty', key: 'qty', width: 10 },
   { header: 'Type', key: 'type', width: 12 },
   { header: 'Bin', key: 'bin', width: 12 },
@@ -718,6 +732,8 @@ function scanAuditRow(scan) {
 
 function validScanRow(scan) {
   const isFitted = (scan.scanType || scan.type) === 'FITTED' || scan.isFitted;
+  const valueRow = scanValueRow(scan);
+  const dlc = scanDlc(scan);
   return {
     scanTime: scan.timestamp,
     scanStatus: scan.scanStatus || ((scan.scanType || scan.type) === 'OUTWARD' ? 'OUTWARD_DONE' : 'ACCEPTED'),
@@ -725,6 +741,10 @@ function validScanRow(scan) {
     partNumber: scan.partNumber || scan.part || '',
     partDescription: scan.partDescription || scan.partName || '',
     quantity: scanQuantity(scan),
+    dlc,
+    finalInventoryValue: scanDlcValue(scan),
+    mrp: Number(scan.currentCatalogueMRP || valueRow.valuationMRP || 0),
+    mrpValueReference: Number(valueRow.finalInventoryValue || 0),
     rawBarcode: scan.rawBarcode || scan.rawQR || scan.rawUpi || scan.rawScan || scan.rawScanString || '',
     binLocation: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin || ''),
     regdNo: scan.regdNo || '',
@@ -782,6 +802,7 @@ function scanRegisterInventoryRow(scan) {
   const status = registerScanStatus({ scanStatus: scan.scanStatus, syncStatus });
   const isFitted = (scan.scanType || scan.type) === 'FITTED' || scan.isFitted;
   const valueRow = scanValueRow(scan);
+  const dlc = scanDlc(scan);
   return {
     scanTime: scan.timestamp,
     scanStatus: status,
@@ -794,8 +815,8 @@ function scanRegisterInventoryRow(scan) {
     mrp: Number(scan.currentCatalogueMRP || valueRow.valuationMRP || 0),
     scanUPIMRP: valueRow.valuationSource === 'UPI_SCANNED_MRP' ? Number(valueRow.valuationMRP || 0) : '',
     manualMRP: valueRow.valuationSource === 'MANUAL_ENTERED_MRP' ? Number(valueRow.valuationMRP || 0) : '',
-    dlc: Number(scan.currentCatalogueDLC || 0),
-    finalInventoryValue: money(scanQuantity(scan) * Number(scan.currentCatalogueDLC || 0)),
+    dlc,
+    finalInventoryValue: scanDlcValue(scan),
     mrpValueReference: Number(valueRow.finalInventoryValue || 0),
     binLocation: isFitted ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin || ''),
     regdNo: scan.regdNo || '',
@@ -828,7 +849,9 @@ function scanRegisterDuplicateRow(row) {
     mrp: '',
     scanUPIMRP: '',
     manualMRP: '',
+    dlc: '',
     finalInventoryValue: '',
+    mrpValueReference: '',
     binLocation: row.duplicateBin || row.binLocation || '',
     fittedStatus: 'Not Fitted',
     rawQrUpi: row.duplicateRawBarcodeUpi || row.upiCode || row.rawScan || '',
@@ -943,6 +966,14 @@ function scanQuantity(scan) {
   return 0;
 }
 
+function scanDlc(scan = {}) {
+  return Number(scan.currentCatalogueDLC || scan.dlc || 0);
+}
+
+function scanDlcValue(scan = {}) {
+  return money(scanQuantity(scan) * scanDlc(scan));
+}
+
 function scanUserLabel(scan) {
   return scan.userName || scan.staffName || scan.loginId || scan.userId || '';
 }
@@ -1008,7 +1039,12 @@ function selectRows(data, type) {
         partNumber: scan.partNumber || scan.part || '',
         partDescription: scan.partDescription || scan.partName || '',
         productCategory: canonicalizePartCategory(scan.productCategory || ''),
-        mrp: scan.currentCatalogueMRP || 0,
+        mrp: scan.currentCatalogueMRP || scanValueRow(scan).valuationMRP || 0,
+        dlc: scanDlc(scan),
+        finalInventoryValue: 0,
+        totalDlcValue: 0,
+        mrpValueReference: 0,
+        totalMrpValue: 0,
         scanType: scan.scanType || scan.type || '',
         fittedQty: 0,
         fittedStatus: '',
@@ -1023,9 +1059,17 @@ function selectRows(data, type) {
         deviceId: scan.deviceId || ''
       }),
       (target, scan) => {
-        target.qty += scanQuantity(scan);
+        const qty = scanQuantity(scan);
+        const valueRow = scanValueRow(scan);
+        if (!target.mrp) target.mrp = Number(scan.currentCatalogueMRP || valueRow.valuationMRP || 0);
+        if (!target.dlc) target.dlc = scanDlc(scan);
+        target.qty += qty;
         target.physicalBinQty = target.qty;
         target.actualAuditQty = target.qty;
+        target.finalInventoryValue = money(target.qty * Number(target.dlc || 0));
+        target.totalDlcValue = target.finalInventoryValue;
+        target.mrpValueReference = money(target.qty * Number(target.mrp || 0));
+        target.totalMrpValue = target.mrpValueReference;
         if (!target.partDescription) target.partDescription = scan.partDescription || scan.partName || '';
         if (!target.productCategory) target.productCategory = canonicalizePartCategory(scan.productCategory || '');
         if (!target.deviceId) target.deviceId = scan.deviceId || '';
@@ -2108,6 +2152,8 @@ function buildSummaryStatusRows(reportData = {}, selectedReports = [], extras = 
       ['Total System Qty', packNumber(totals.totalSystemQty || 0, 0)],
       ['Inventory Value (DLC)', packCurrency(totals.totalPhysicalDlcValue || 0)],
       ['DMS Value (DLC)', packCurrency(totals.totalDmsDlcValue || 0)],
+      ['Inventory Value (MRP)', packCurrency(totals.totalPhysicalMrpValue || 0)],
+      ['DMS Value (MRP)', packCurrency(totals.totalDmsMrpValue || 0)],
       ['Net Difference (DLC)', packCurrency(totals.totalVarianceDlcValue || 0)]
     ]),
     ...packMetricRows('Variance Summary', [
@@ -2162,9 +2208,14 @@ function buildAuditSummaryRows(reportData = {}, context = null, productGroupSumm
     ]),
     ...packMetricRows('Audit Totals', [
       ['Total Scan Qty', packNumber(totals.totalQuantity || 0, 0)],
+      ['Total Parts', packNumber(totals.totalParts || 0, 0)],
       ['Actual Stock Value (DLC)', packCurrency(totals.totalPhysicalDlcValue || 0)],
+      ['Actual Stock Value (MRP)', packCurrency(totals.totalPhysicalMrpValue || 0)],
+      ['DMS Value (DLC)', packCurrency(totals.totalDmsDlcValue || 0)],
+      ['DMS Value (MRP)', packCurrency(totals.totalDmsMrpValue || 0)],
       ['Shortage / Excess', `Shortage ${packCurrency(totals.totalShortValue || 0)} | Excess ${packCurrency(totals.totalExcessValue || 0)}`],
-      ['Final Net Difference', packCurrency(totals.netDifference || 0)]
+      ['Final Net Difference (DLC)', packCurrency(totals.netDifference || 0)],
+      ['Final Net Difference (MRP)', packCurrency(totals.totalVarianceMrpValue || 0)]
     ]),
     ...packMetricRows('Product Group Summary', [
       ['Total Groups', packNumber(Array.isArray(productGroupSummary.rows) ? productGroupSummary.rows.length : 0, 0)],
@@ -2629,6 +2680,10 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
           { label: 'Categories', value: packNumber(categoryCount, 0) },
           { label: 'Total Scanned Parts', value: packNumber(totals.totalParts || sumBy(rows, (row) => firstNumericValue(row.totalScannedParts, 0)), 0) },
           { label: 'Total Scanned Qty', value: packNumber(totals.totalQuantity || sumBy(rows, (row) => firstNumericValue(row.totalScannedQuantity, 0)), 0) },
+          { label: 'Actual Stock Value (DLC)', value: packCurrency(totals.totalPhysicalDlcValue || sumBy(rows, (row) => firstNumericValue(row.sumPhysicalValueOnDLC, 0))) },
+          { label: 'DMS Stock Value (DLC)', value: packCurrency(totals.totalDmsDlcValue || sumBy(rows, (row) => firstNumericValue(row.sumDmsValueOnDLC, 0))) },
+          { label: 'Actual Stock Value (MRP)', value: packCurrency(totals.totalPhysicalMrpValue || sumBy(rows, (row) => firstNumericValue(row.sumPhysicalValueOnMRP, 0))) },
+          { label: 'DMS Stock Value (MRP)', value: packCurrency(totals.totalDmsMrpValue || sumBy(rows, (row) => firstNumericValue(row.sumDmsValueOnMRP, 0))) },
           { label: 'Variance Value', value: packCurrency(totals.totalVarianceDlcValue || sumBy(rows, (row) => firstNumericValue(row.sumVarianceOnDLC, 0))) }
         ];
       }
@@ -2655,6 +2710,14 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
           { label: 'Rows', value: packNumber(rowCount, 0) },
           { label: 'Unique Parts', value: packNumber(uniqueParts, 0) },
           { label: 'Total Qty', value: packNumber(totalQty, 0) }
+        ];
+      case 'local-parts':
+        return [
+          { label: 'Rows', value: packNumber(rowCount, 0) },
+          { label: 'Unique Parts', value: packNumber(uniqueParts, 0) },
+          { label: 'Total Quantity', value: packNumber(totalQty, 3) },
+          { label: 'Total MRP Value', value: packCurrency(sumBy(rows, (row) => firstNumericValue(row.totalMrpValue, 0))) },
+          { label: 'Total DLC Value', value: packCurrency(sumBy(rows, (row) => firstNumericValue(row.totalDlcValue, 0))) }
         ];
       case 'dead-stock-report':
       case 'fast-moving-report':
@@ -2877,6 +2940,26 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
         auditInfo: buildAuditInfoRows(),
         summaryMetrics: buildSummaryMetricsForReport('parts-inventory-refresh-template', rows, packContext),
         reportKey: 'parts-inventory-refresh-template'
+      };
+    },
+    'local-parts': async () => {
+      const { auditId, referenceAuditId, ...localQuery } = resolvedQuery;
+      const localReport = await localPartsRoute.buildReportData(localQuery, user);
+      const columns = (localPartsRoute.LOCAL_PART_REPORT_COLUMNS || []).map((column) => ({
+        header: column.header,
+        key: column.key,
+        width: column.width,
+        numFmt: column.numberFormat || column.numFmt
+      }));
+      return {
+        title: 'LOCAL PARTS REPORT',
+        kind: 'table',
+        columns,
+        rows: localReport.entries || [],
+        dealerInfo: buildDealerInfoRows(),
+        auditInfo: buildAuditInfoRows(),
+        summaryMetrics: buildSummaryMetricsForReport('local-parts', localReport.entries || [], packContext),
+        reportKey: 'local-parts'
       };
     },
     'reconciliation-report': async () => {
@@ -3406,6 +3489,10 @@ async function handleReport(req, res, type, title) {
   }
 }
 
+function reportAttachmentFilename(title = 'Report', extension = 'xlsx') {
+  return `${clean(title).replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'Report'}.${extension}`;
+}
+
 async function emailReport(req, res, type, title) {
   try {
     if (!selectedDealerCode(req.body.filters || {})) return requireDealerSelection(res);
@@ -3569,7 +3656,7 @@ async function handleCompleteAuditPack(req, res) {
       };
     }, {
       scope: { dealerCode: normalized.dealerCode, auditId: normalized.auditId },
-      tags: ['report', 'reconciliation', 'scan', 'stock', 'master', 'catalogue', 'dealer', 'bin', 'price', 'audit']
+      tags: ['report', 'reconciliation', 'scan', 'stock', 'master', 'catalogue', 'dealer', 'bin', 'price', 'audit', 'local-parts', 'complete-audit-pack']
     });
 
     applyCacheHeaders(res, cached);
@@ -3594,6 +3681,7 @@ async function handleCompleteAuditPack(req, res) {
 
 router.get('/invalid-scan-report', auth.requireAuth, handleInvalidScanReport);
 router.get('/wrong-not-found-master', auth.requireAuth, handleInvalidScanReport);
+router.get('/local-parts', auth.requireAuth, localPartsRoute.reportHandler);
 router.post('/download-complete-audit-pack', auth.requireAuth, handleCompleteAuditPack);
 router.get('/multiple-bin-location-alert', auth.requireAuth, (req, res) => handleReport(req, res, 'multiple-bin-location-alert', 'Multiple Bin Location Alert Report'));
 router.post('/multiple-bin-location-alert/email', auth.requireAuth, auth.requireAdmin, (req, res) => emailReport(req, res, 'multiple-bin-location-alert', 'Multiple Bin Location Alert Report'));

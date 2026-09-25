@@ -19,7 +19,7 @@ function buildAuditId(dealerCode, auditName) {
 router.get('/', auth.requireAuth, async (req, res) => {
   try {
     const userAccess = await auth.userDealerAccessCodes(req.user);
-    const canSeeAll = req.user.role === 'admin' || userAccess.includes('ALL');
+    const canSeeAll = req.user.role === 'admin';
     const dealerFilter = { dealerCode: { $not: /^SYNC/i }, dealerName: { $not: /Sync Test/i } };
     const auditFilter = {};
     if (!canSeeAll) {

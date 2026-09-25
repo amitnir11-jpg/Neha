@@ -1,4 +1,6 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
@@ -14,9 +16,9 @@ const { validScanClause } = require('../utils/masterValidation');
 const { normalizePartNumber } = require('../utils/normalize');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, signedScanQuantity } = require('../utils/reportTotals');
-const { calculateStockValuation } = require('../utils/stockValuation');
+const { calculateDealerStockSystemValue, calculateStockValuation } = require('../utils/stockValuation');
 const { resolvePartPricing } = require('../utils/partPricing');
-const { getPricesFromPartMaster } = require('../utils/partMasterPrice');
+const { getPricesFromPartMaster, savedAuditPrice } = require('../utils/partMasterPrice');
 const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
 
@@ -52,6 +54,8 @@ function numberValue(value, fallback = 0) {
 function parseNumber(value) {
   if (typeof value === 'number') return Number.isFinite(value) ? value : NaN;
   const text = clean(value)
+    .replace(/\bRS\.?\b/gi, '')
+    .replace(/\bINR\b/gi, '')
     .replace(/[₹$,\s]/g, '')
     .replace(/^\((.*)\)$/, '-$1');
   if (!text || text === '-' || /^na$/i.test(text)) return NaN;
@@ -138,6 +142,8 @@ function acceptedPhysicalScanClause() {
   return {
     syncStatus: 'synced',
     isDuplicate: { $ne: true },
+    isDeleted: { $ne: true },
+    deletedAt: null,
     $and: [
       nonVerificationScanClause(),
       acceptedScanStatusClause(),
@@ -149,16 +155,21 @@ function acceptedPhysicalScanClause() {
 
 const HEADER_ALIASES = {
   dealerCode: ['DEALER CODE', 'DEALERCODE', 'DEALER', 'DEALER NAME', 'LOCATION CODE', 'BRANCH CODE'],
-  partNumber: ['PART NUMBER', 'PART NO', 'PARTNO', 'PART', 'PART CODE', 'ITEM CODE', 'MATERIAL CODE', 'SKU'],
+  partNumber: ['PART NUMBER', 'PART NO', 'PARTNO', 'PART', 'PART #', 'PART#', 'PART CODE', 'ITEM CODE', 'MATERIAL CODE', 'SKU'],
   partDescription: ['PART DESCRIPTION', 'DESCRIPTION', 'PART NAME', 'ITEM DESCRIPTION', 'MATERIAL DESCRIPTION', 'PRODUCT DESCRIPTION', 'PRODUCT DESC'],
+  hsn: ['HSN', 'HSN CODE', 'HSN/SAC', 'HSN SAC'],
   productCategory: ['PRODUCT CATEGORY', 'CATEGORY', 'PRODUCT CAT', 'ITEM CATEGORY'],
+  productType: ['PRODUCT TYPE', 'PART TYPE', 'ITEM TYPE'],
   model: ['MODEL'],
   year: ['YEAR', 'MANUFACTURING YEAR', 'MFG YEAR'],
   productGroup: ['PRODUCT GROUP', 'GROUP', 'PG'],
   partSubGroup: ['PRODUCT SUBGROUP', 'PART SUBGROUP', 'SUB GROUP', 'SUBGROUP', 'SPG'],
   mrp: ['MRP', 'PRICE', 'MAX RETAIL PRICE'],
   dlp: ['DLP', 'DLC', 'DLC DLP', 'DLP DLC', 'DEALER LANDING COST', 'LANDING COST', 'DEALER LIST PRICE'],
+  moq: ['MOQ', 'MIN ORDER QTY', 'MINIMUM ORDER QTY'],
   dmsStock: ['SYSTEM QUANTITY', 'SYSTEM QTY', 'SYSTEM STOCK', 'DMS STOCK', 'DMS QTY', 'STOCK', 'QUANTITY', 'QTY', 'STOCK ON HAND', 'STOCK IN HAND', 'STOCK INHAND', 'SOH', 'SIH'],
+  actualStock: ['ACTUAL STOCK', 'ACTUAL QTY', 'PHYSICAL STOCK'],
+  inventoryLocation: ['INVENTORY LOCATION', 'LOCATION', 'STOCK LOCATION', 'WAREHOUSE', 'WORKSHOP'],
   binLoc1: ['SYSTEM BIN LOC 1', 'SYSTEM BIN LOCATION 1', 'BIN LOC 1', 'BIN LOCATION 1', 'BIN 1', 'BIN LOC1'],
   binLoc2: ['SYSTEM BIN LOC 2', 'SYSTEM BIN LOCATION 2', 'BIN LOC 2', 'BIN LOCATION 2', 'BIN 2', 'BIN LOC2'],
   binLoc3: ['SYSTEM BIN LOC 3', 'SYSTEM BIN LOCATION 3', 'BIN LOC 3', 'BIN LOCATION 3', 'BIN 3', 'BIN LOC3'],
@@ -172,7 +183,7 @@ const HEADER_ALIASES = {
   pendingOrder: ['PENDING ORDER', 'PENDING ORDERS', 'BACKORDER', 'BACK ORDER', 'BACKORDER QTY', 'BACK ORDER QTY', 'B2B PENDING', 'B2B BACK ORDER', 'B2B BACKORDER', 'B2B GIT', 'ANC AFM BACKORDER', 'ANC/AFM BACKORDER']
 };
 
-const NUMERIC_KEYS = new Set(['mrp', 'dlp', 'dmsStock', 'reservedQty', 'averageDemand', 'forecast', 'safetyStock', 'rop', 'pendingOrder']);
+const NUMERIC_KEYS = new Set(['mrp', 'dlp', 'moq', 'dmsStock', 'actualStock', 'reservedQty', 'averageDemand', 'forecast', 'safetyStock', 'rop', 'pendingOrder']);
 const SUM_NUMERIC_KEYS = new Set(['reservedQty', 'pendingOrder']);
 const JOIN_TEXT_KEYS = new Set(['movementCodeA', 'movementCodeB']);
 
@@ -184,6 +195,26 @@ const HEADER_LOOKUP = Object.entries(HEADER_ALIASES).reduce((map, [key, aliases]
   aliases.forEach((alias) => map.set(normalizeHeader(alias), key));
   return map;
 }, new Map());
+
+const DEALER_STOCK_TEMPLATE_PATH = path.join(
+  __dirname,
+  '..',
+  'assets',
+  'templates',
+  'Daksh_Dealer_Stock_Upload_Template.xlsx'
+);
+
+async function sendDealerStockTemplate(req, res) {
+  try {
+    const buffer = await fs.promises.readFile(DEALER_STOCK_TEMPLATE_PATH);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Dealer_Stock_Upload_Template.xlsx"');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(buffer);
+  } catch (error) {
+    return res.status(500).json({ success: false, message: `Could not load dealer stock template: ${error.message}` });
+  }
+}
 
 function canonicalHeader(header) {
   return HEADER_LOOKUP.get(normalizeHeader(header)) || '';
@@ -279,8 +310,10 @@ function valueForKey(values = [], indexes = [], key = '') {
 function mergeRecord(target, item) {
   const textFields = [
     'partDescription',
+    'hsn',
     'productCategory',
     'category',
+    'productType',
     'model',
     'year',
     'manufacturingYear',
@@ -292,13 +325,14 @@ function mergeRecord(target, item) {
     'systemBinLoc1',
     'systemBinLoc2',
     'systemBinLoc3',
+    'inventoryLocation',
     'movementCodeA',
     'movementCodeB'
   ];
   textFields.forEach((field) => {
     if (!target[field] && item[field]) target[field] = item[field];
   });
-  ['mrp', 'dlp', 'dlc', 'averageDemand', 'forecast', 'safetyStock', 'rop'].forEach((field) => {
+  ['mrp', 'dlp', 'dlc', 'moq', 'actualStock', 'averageDemand', 'forecast', 'safetyStock', 'rop'].forEach((field) => {
     if (Number(item[field] || 0) > 0) target[field] = Number(item[field] || 0);
   });
   target.dmsStock += Number(item.dmsStock || 0);
@@ -339,6 +373,7 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
 
   const now = new Date();
   const byPart = new Map();
+  const seenSourceRows = new Set();
   const errorRows = [];
   let duplicateRowsMerged = 0;
   let skippedCount = 0;
@@ -369,14 +404,28 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
       return;
     }
 
+    const sourceSignature = [
+      partNumber,
+      upper(item.inventoryLocation),
+      Number(item.dmsStock || 0),
+      upper(item.partDescription)
+    ].join('|');
+    if (seenSourceRows.has(sourceSignature)) {
+      duplicateRowsMerged += 1;
+      return;
+    }
+    seenSourceRows.add(sourceSignature);
+
     const record = {
       auditId,
       dealerCode,
       partNumber,
       normalizedPartNumber: partNumber,
       partDescription: clean(item.partDescription),
+      hsn: clean(item.hsn),
       productCategory: clean(item.productCategory),
       category: clean(item.productCategory),
+      productType: clean(item.productType),
       model: clean(item.model),
       year: clean(item.year),
       manufacturingYear: clean(item.year),
@@ -385,8 +434,12 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
       mrp: Number(item.mrp || 0),
       dlp: Number(item.dlp || 0),
       dlc: Number(item.dlp || 0),
+      moq: Number(item.moq || 0),
       dmsStock: Number(item.dmsStock || 0),
       systemQty: Number(item.dmsStock || 0),
+      actualStock: Number(item.actualStock || 0),
+      inventoryLocation: clean(item.inventoryLocation),
+      source: 'DEALER_STOCK_UPLOAD',
       binLoc1: upper(item.binLoc1),
       binLoc2: upper(item.binLoc2),
       binLoc3: upper(item.binLoc3),
@@ -426,10 +479,13 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
 }
 
 function publicStock(row, pricing = null) {
+  pricing = savedAuditPrice(row, pricing) || pricing;
   const hasMasterRecord = Boolean(pricing && (pricing.partNumber || pricing.normalizedPartNumber || pricing.description || pricing.partDescription || pricing.partName || pricing.productGroup || pricing.productCategory || pricing.category));
-  const hasValidPrice = Boolean(Number(pricing && pricing.mrp || 0) > 0 && Number(pricing && (pricing.dlc ?? pricing.dlp) || 0) > 0);
-  const mrp = hasValidPrice ? Number(pricing.mrp || 0) : 0;
-  const dlp = hasValidPrice ? Number(pricing.dlc ?? pricing.dlp ?? 0) : 0;
+  const hasValidMrp = Boolean(Number(pricing && pricing.mrp || 0) > 0);
+  const hasValidDlc = Boolean(Number(pricing && (pricing.dlc ?? pricing.dlp) || 0) > 0);
+  const hasValidPrice = hasValidMrp && hasValidDlc;
+  const mrp = hasValidMrp ? Number(pricing.mrp || 0) : 0;
+  const dlp = hasValidDlc ? Number(pricing.dlc ?? pricing.dlp ?? 0) : 0;
   const category = hasMasterRecord ? resolveCategoryFromMaster(pricing) : 'Uncategorized';
   const partDescription = hasMasterRecord
     ? clean(pricing.description || pricing.partDescription || pricing.partName || '')
@@ -467,13 +523,63 @@ function publicStock(row, pricing = null) {
     safetyStock: Number(row.safetyStock || 0),
     rop: Number(row.rop || 0),
     pendingOrder: Number(row.pendingOrder || 0),
-    stockValue: hasValidPrice ? money(dmsStock * dlp) : 0,
+    stockValue: hasValidDlc ? money(dmsStock * dlp) : 0,
     uploadBatchId: row.uploadBatchId || '',
     uploadedAt: row.uploadedAt || row.updatedAt || row.createdAt,
     pricingStatus: hasMasterRecord ? (hasValidPrice ? (pricing.pricingStatus || '') : 'PART_MASTER_PRICE_MISSING') : 'PART_MASTER_PRICE_MISSING',
     pricingSource: hasMasterRecord ? (pricing.pricingSource || '') : 'PART_MASTER_PRICE_MISSING',
     pricingWarnings: hasMasterRecord ? (pricing.pricingWarnings || []) : [],
     warnings: hasMasterRecord ? (pricing.warnings || []) : [MASTER_NOT_FOUND_LABEL]
+  };
+}
+
+function pricedDealerStockRows(rows = [], priceByPart = new Map()) {
+  return rows.map((row) => {
+    const partNumber = normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo || row.part);
+    return publicStock(row, resolvePartPricing({
+      partNumber,
+      partMasterPrice: savedAuditPrice(row, priceByPart.get(partNumber) || null),
+      actualQty: 0,
+      dmsQty: Number(row.dmsStock || row.systemQty || 0)
+    }));
+  });
+}
+
+function dealerStockRange(total) {
+  const count = Math.max(0, Math.trunc(Number(total || 0)));
+  return {
+    from: count > 0 ? 1 : 0,
+    to: count,
+    total: count,
+    text: count > 0 ? `1-${count}` : '0'
+  };
+}
+
+function dealerStockPreviewRange(total, visible) {
+  const count = Math.max(0, Math.trunc(Number(total || 0)));
+  const shown = Math.min(count, Math.max(0, Math.trunc(Number(visible || 0))));
+  return {
+    from: count > 0 && shown > 0 ? 1 : 0,
+    to: shown,
+    total: count,
+    text: count > 0 && shown > 0 ? `1-${shown} of ${count}` : `0 of ${count}`
+  };
+}
+
+function dealerStockSummaryFromPublicRows(rows = [], total = rows.length, visible = rows.length) {
+  const lineRange = dealerStockRange(total);
+  const systemStockValue = money(rows.reduce((sum, row) => (
+    sum + Number(calculateDealerStockSystemValue(row).stockValue || 0)
+  ), 0));
+  return {
+    rows: lineRange.total,
+    partLineCount: lineRange.total,
+    totalPartsUploaded: lineRange.total,
+    lineRange,
+    previewRange: dealerStockPreviewRange(total, visible),
+    dmsStock: rows.reduce((sum, row) => sum + Number(row.dmsStock || row.systemQty || 0), 0),
+    systemStockValue,
+    stockValue: money(rows.reduce((sum, row) => sum + Number(row.stockValue || row.dmsStockValue || 0), 0))
   };
 }
 
@@ -606,10 +712,12 @@ async function physicalRows(scope, filters = {}) {
       sources: new Set(),
       scanModes: new Set(),
       valuationSources: new Set(),
-      scanCount: 0
+      scanCount: 0,
+      priceSnapshot: null
     };
     group.actualStock += scanQty(scan);
     group.scanCount += 1;
+    if (!group.priceSnapshot) group.priceSnapshot = scan;
     const bin = clean(scan.binLocation || scan.bin);
     if (bin) group.bins.add(bin);
     if (scan.source) group.sources.add(scan.source);
@@ -622,7 +730,7 @@ async function physicalRows(scope, filters = {}) {
   return Array.from(groups.values())
     .filter((row) => row.actualStock !== 0 && row._id)
     .map((row) => {
-      const pricing = prices.get(row.partNumber) || null;
+      const pricing = savedAuditPrice(row.priceSnapshot, prices.get(row.partNumber) || null);
       const hasMasterRecord = Boolean(pricing && (pricing.partNumber || pricing.normalizedPartNumber || pricing.description || pricing.partDescription || pricing.partName || pricing.productGroup || pricing.productCategory || pricing.category));
       const hasValidPrice = Boolean(Number(pricing && pricing.mrp || 0) > 0 && Number(pricing && (pricing.dlc ?? pricing.dlp) || 0) > 0);
       const mrp = hasValidPrice ? Number(pricing.mrp || 0) : 0;
@@ -895,7 +1003,7 @@ async function buildReconciliationReport(query = {}) {
       if (physical) usedPhysicalKeys.add(key);
       const pricing = resolvePartPricing({
         partNumber: key,
-        partMasterPrice: priceByPart.get(key) || null,
+        partMasterPrice: savedAuditPrice(stock, priceByPart.get(key) || null),
         actualQty: physical ? Number(physical.actualStock || 0) : 0,
         dmsQty: Number(stock.dmsStock || stock.systemQty || 0)
       });
@@ -907,7 +1015,7 @@ async function buildReconciliationReport(query = {}) {
       if (usedPhysicalKeys.has(key)) return null;
       const pricing = resolvePartPricing({
         partNumber: key,
-        partMasterPrice: priceByPart.get(key) || null,
+        partMasterPrice: savedAuditPrice(physical.priceSnapshot, priceByPart.get(key) || null),
         actualQty: Number(physical.actualStock || 0),
         dmsQty: 0
       });
@@ -1415,6 +1523,87 @@ async function sendMovementAnalysisExport(res, analysis, format) {
   return null;
 }
 
+function reconciliationReportType(query = {}) {
+  if (clean(query.full) === '1' || clean(query.full).toLowerCase() === 'true') return 'full';
+  return clean(query.report || query.reportType || 'dealer').toLowerCase() || 'dealer';
+}
+
+async function scopedReconciliationQuery(req, res) {
+  const scope = await resolveScope(req);
+  if (!requireScope(scope, res)) return null;
+  return {
+    ...req.query,
+    ...req.params,
+    dealerCode: scope.dealerCode,
+    auditId: scope.auditId
+  };
+}
+
+function exportHandler(format) {
+  return async (req, res) => {
+    try {
+      const query = await scopedReconciliationQuery(req, res);
+      if (!query) return null;
+      const report = await buildReconciliationReport(query);
+      return sendReportExport(res, report, format, reconciliationReportType(query));
+    } catch (error) {
+      return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
+    }
+  };
+}
+
+async function summaryHandler(req, res) {
+  try {
+    const query = await scopedReconciliationQuery(req, res);
+    if (!query) return null;
+    const report = await buildReconciliationReport(query);
+    return res.json({
+      success: true,
+      dealerCode: query.dealerCode,
+      auditId: query.auditId,
+      summary: report.summary || {},
+      ...report.summary,
+      message: report.message || ''
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
+  }
+}
+
+async function movementAnalysisHandler(req, res) {
+  try {
+    const query = await scopedReconciliationQuery(req, res);
+    if (!query) return null;
+    const analysis = await buildMovementAnalysisReport(query);
+    const format = clean(query.format).toLowerCase();
+    if (format === 'excel' || format === 'xlsx' || format === 'pdf') {
+      return sendMovementAnalysisExport(res, analysis, format);
+    }
+    return res.json({ success: true, ...analysis });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
+  }
+}
+
+async function reportHandler(req, res) {
+  try {
+    const query = await scopedReconciliationQuery(req, res);
+    if (!query) return null;
+    const report = await buildReconciliationReport(query);
+    const format = clean(query.format).toLowerCase();
+    if (format === 'excel' || format === 'xlsx' || format === 'pdf') {
+      return sendReportExport(res, report, format, reconciliationReportType(query));
+    }
+    return res.json({
+      success: true,
+      ...report,
+      totalRows: Array.isArray(report.rows) ? report.rows.length : 0
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
+  }
+}
+
 async function uploadDealerStockHandler(req, res) {
   try {
     if (!req.file) return res.status(400).json({ success: false, message: 'Upload DMS stock Excel/CSV file' });
@@ -1445,6 +1634,9 @@ async function uploadDealerStockHandler(req, res) {
     }));
     const writeResult = await saveDealerStockRecords(records);
     const previewPrices = await getPricesFromPartMaster(records.map((record) => record.partNumber), scope.dealerCode);
+    const pricedStock = pricedDealerStockRows(records, previewPrices);
+    const preview = pricedStock.slice(0, 100);
+    const summary = dealerStockSummaryFromPublicRows(pricedStock, records.length, preview.length);
     await emitReconciliationChanged(req, 'dealer-stock-uploaded', {
       dealerCode: scope.dealerCode,
       auditId: scope.auditId,
@@ -1463,17 +1655,12 @@ async function uploadDealerStockHandler(req, res) {
       updatedCount: writeResult.modifiedCount || 0,
       errorRows: parsed.errorRows,
       errorRowsTruncated: Boolean(parsed.errorRowsTruncated),
-      preview: records.slice(0, 100).map((record) => {
-        const price = previewPrices.get(record.partNumber) || null;
-        return publicStock(record, resolvePartPricing({
-          partNumber: record.partNumber,
-          partMasterPrice: price,
-          actualQty: 0,
-          dmsQty: record.dmsStock
-        }));
-      }),
+      summary,
+      previewRange: summary.previewRange,
+      lineRange: summary.lineRange,
+      preview,
       columns: parsed.columns,
-      message: `Saved ${records.length} row(s) for ${scope.dealerCode} / ${scope.auditId}. Skipped ${parsed.skippedCount || parsed.errorRows.length} row(s).`
+      message: `Saved ${records.length} row(s) for ${scope.dealerCode} / ${scope.auditId}. Line range ${summary.lineRange.text}. Skipped ${parsed.skippedCount || parsed.errorRows.length} row(s).`
     });
   } catch (error) {
     return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
@@ -1486,30 +1673,23 @@ async function previewDealerStockHandler(req, res) {
     if (!requireScope(scope, res)) return null;
     const limit = Math.min(Math.max(Number(req.query.limit || PREVIEW_LIMIT), 1), 2000);
     const query = { dealerCode: scope.dealerCode, auditId: scope.auditId };
-    const [rows, total] = await Promise.all([
+    const [rows, allRows, total] = await Promise.all([
       DealerStock.find(query).sort({ partNumber: 1 }).limit(limit).lean(),
+      DealerStock.find(query).lean(),
       DealerStock.countDocuments(query)
     ]);
-    const priceByPart = await getPricesFromPartMaster(rows.map((row) => row.partNumber), scope.dealerCode);
-    const stock = rows.map((row) => {
-      const partNumber = normalizePart(row.normalizedPartNumber || row.partNumber);
-      return publicStock(row, resolvePartPricing({
-        partNumber,
-        partMasterPrice: priceByPart.get(partNumber) || null,
-        actualQty: 0,
-        dmsQty: Number(row.dmsStock || row.systemQty || 0)
-      }));
-    });
+    const priceByPart = await getPricesFromPartMaster(allRows.map((row) => row.normalizedPartNumber || row.partNumber), scope.dealerCode);
+    const stock = pricedDealerStockRows(rows, priceByPart);
+    const summaryRows = rows.length === allRows.length ? stock : pricedDealerStockRows(allRows, priceByPart);
+    const summary = dealerStockSummaryFromPublicRows(summaryRows, total, stock.length);
     return res.json({
       success: true,
       dealerCode: scope.dealerCode,
       auditId: scope.auditId,
       total,
-      summary: {
-        rows: total,
-        dmsStock: stock.reduce((sum, row) => sum + Number(row.dmsStock || 0), 0),
-        stockValue: money(stock.reduce((sum, row) => sum + Number(row.stockValue || 0), 0))
-      },
+      summary,
+      previewRange: summary.previewRange,
+      lineRange: summary.lineRange,
       stock
     });
   } catch (error) {
@@ -1535,54 +1715,7 @@ async function deleteDealerStockHandler(req, res) {
   }
 }
 
-async function reportHandler(req, res) {
-  try {
-    const scope = await resolveScope(req);
-    const report = await buildReconciliationReport({ ...req.query, dealerCode: scope.dealerCode, auditId: scope.auditId });
-    const reconciliation = await require('./report').validateValuationReports(scope);
-    if (req.query.format) return sendReportExport(res, report, req.query.format, req.query.report || (req.query.full ? 'full' : 'dealer'));
-    return res.json({ success: true, ...report, reconciliation, dealerCode: scope.dealerCode, auditId: scope.auditId });
-  } catch (error) {
-    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
-  }
-}
-
-async function summaryHandler(req, res) {
-  try {
-    const scope = await resolveScope(req);
-    const report = await buildReconciliationReport({ ...req.query, dealerCode: scope.dealerCode, auditId: scope.auditId });
-    const reconciliation = await require('./report').validateValuationReports(scope);
-    return res.json({ success: true, dealerCode: scope.dealerCode, auditId: scope.auditId, summary: report.summary, reconciliation });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-}
-
-async function movementAnalysisHandler(req, res) {
-  try {
-    const scope = await resolveScope(req);
-    const analysis = await buildMovementAnalysisReport({ ...req.query, dealerCode: scope.dealerCode, auditId: scope.auditId });
-    const reconciliation = await require('./report').validateValuationReports(scope);
-    if (req.query.format) return sendMovementAnalysisExport(res, analysis, req.query.format);
-    return res.json({ success: true, ...analysis, reconciliation, dealerCode: scope.dealerCode, auditId: scope.auditId });
-  } catch (error) {
-    return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
-  }
-}
-
-function exportHandler(format) {
-  return async (req, res) => {
-    try {
-      const scope = await resolveScope(req);
-      const report = await buildReconciliationReport({ ...req.query, dealerCode: scope.dealerCode, auditId: scope.auditId });
-      await require('./report').validateValuationReports(scope);
-      return sendReportExport(res, report, format, req.query.report || (req.query.full ? 'full' : 'dealer'));
-    } catch (error) {
-      return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
-    }
-  };
-}
-
+router.get('/dealer-stock-template', auth.requireAuth, auth.requireAdmin, sendDealerStockTemplate);
 router.post(['/upload-stock', '/upload'], auth.requireAuth, auth.requireAdmin, upload.single('file'), uploadDealerStockHandler);
 router.get(['/stock-preview', '/preview/:dealerCode/:auditId'], auth.requireAuth, previewDealerStockHandler);
 router.delete(['/stock', '/delete/:dealerCode/:auditId'], auth.requireAuth, auth.requireAdmin, deleteDealerStockHandler);

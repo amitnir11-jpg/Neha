@@ -1,16 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart';
 
 import '../models/dealer.dart';
 import '../models/scan_record.dart';
 import '../models/session.dart';
 import 'settings_store.dart';
 
-const mobileAppVersionName = 'Daksh Scan v1.1.0';
+const mobileAppVersionName = 'Daksh Scan Lite v1.2.11';
 
 class ApiException implements Exception {
   ApiException(this.message,
@@ -25,36 +23,53 @@ class ApiException implements Exception {
 }
 
 class ApiClient {
-  ApiClient(this.settings);
+  ApiClient(this.settings, {http.Client? client})
+      : _client = client ?? _defaultClient;
 
   static final http.Client _defaultClient = http.Client();
-  static final http.Client _railwayDnsFallbackClient = IOClient(
-    HttpClient()
-      ..connectionFactory = (uri, proxyHost, proxyPort) {
-        final isDirectRailwayRequest = proxyHost == null &&
-            uri.host.toLowerCase() == SettingsStore.productionHost;
-        final host = isDirectRailwayRequest
-            ? SettingsStore.productionPinnedIp
-            : (proxyHost ?? uri.host);
-        final port = proxyPort ?? uri.port;
-        return Socket.startConnect(host, port);
-      },
-  );
 
   final SettingsStore settings;
+  final http.Client _client;
+
+  static List<String> candidateBaseUrls({
+    required String savedBaseUrl,
+    String localServerUrl = SettingsStore.localServerUrl,
+    String productionServerUrl = SettingsStore.productionServerUrl,
+  }) {
+    final normalizedSaved = SettingsStore.normalizeServerUrl(savedBaseUrl);
+    final candidates = <String>[];
+    void addCandidate(String value) {
+      final normalized = SettingsStore.normalizeServerUrl(value);
+      if (normalized.isEmpty ||
+          SettingsStore.isPhoneLocalhostUrl(normalized) ||
+          candidates.contains(normalized)) {
+        return;
+      }
+      candidates.add(normalized);
+    }
+
+    addCandidate(normalizedSaved);
+    if (normalizedSaved.isEmpty) {
+      addCandidate(localServerUrl);
+      addCandidate(productionServerUrl);
+    } else if (SettingsStore.isLocalNetworkServerUrl(normalizedSaved)) {
+      addCandidate(localServerUrl);
+    }
+    return candidates;
+  }
 
   Future<Map<String, dynamic>> _request(
     String path, {
     String method = 'GET',
     Map<String, dynamic>? body,
     bool auth = true,
+    Duration timeout = const Duration(seconds: 8),
   }) async {
     final savedBaseUrl =
-        SettingsStore.normalizeServerUrl(await settings.serverUrl);
-    final candidates = {
-      if (savedBaseUrl.isNotEmpty) savedBaseUrl,
-      SettingsStore.productionServerUrl,
-    }.toList();
+        SettingsStore.normalizeServerUrl(await settings.savedServerUrl);
+    // Saved server identity -> daksh.local for LAN. Cloud is used only before a
+    // server is saved, or when cloud is the saved server.
+    final candidates = candidateBaseUrls(savedBaseUrl: savedBaseUrl);
     ApiException? lastApiError;
     Object? lastError;
 
@@ -62,12 +77,13 @@ class ApiClient {
       for (var attempt = 0; attempt < 2; attempt++) {
         try {
           final data = await _requestOnce(baseUrl, path,
-              method: method, body: body, auth: auth);
+              method: method, body: body, auth: auth, timeout: timeout);
           if (baseUrl != savedBaseUrl) await settings.saveServerUrl(baseUrl);
           return data;
         } on ApiException catch (error) {
           lastApiError = error;
-          if (!error.retryable || attempt == 1) break;
+          if (!error.retryable) rethrow;
+          if (attempt == 1) break;
           await Future.delayed(Duration(milliseconds: 400 * (attempt + 1)));
         } catch (error) {
           lastError = error;
@@ -78,8 +94,17 @@ class ApiClient {
     }
 
     if (lastApiError != null) throw lastApiError;
-    throw ApiException(lastError?.toString() ?? 'Server connection failed',
+    throw ApiException(_transportFailureMessage(candidates, lastError),
         retryable: true);
+  }
+
+  static String _transportFailureMessage(
+      List<String> candidates, Object? error) {
+    final target = candidates.isEmpty
+        ? 'the configured Daksh server'
+        : candidates.join(', ');
+    final detail = error == null ? '' : ' Last error: ${error.toString()}';
+    return 'Cannot reach Daksh server at $target. Make sure the Daksh PC app is running, the phone and PC are on the same WiFi/hotspot, and Windows Firewall allows port ${SettingsStore.localServerPort}.$detail';
   }
 
   Future<Map<String, dynamic>> _requestOnce(
@@ -88,6 +113,7 @@ class ApiClient {
     required String method,
     Map<String, dynamic>? body,
     required bool auth,
+    required Duration timeout,
   }) async {
     final uri = Uri.parse('$baseUrl$path');
     final headers = <String, String>{'Content-Type': 'application/json'};
@@ -95,8 +121,8 @@ class ApiClient {
       final token = await settings.token;
       if (token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
     }
-    final response =
-        await _send(uri, method: method, headers: headers, body: body);
+    final response = await _send(uri,
+        method: method, headers: headers, body: body, timeout: timeout);
     final text = response.body.trim();
     dynamic decoded;
     try {
@@ -125,23 +151,14 @@ class ApiClient {
     required String method,
     required Map<String, String> headers,
     Map<String, dynamic>? body,
+    required Duration timeout,
   }) async {
     try {
-      return await _sendWithClient(_defaultClient, uri,
+      return await _sendWithClient(_client, uri,
               method: method, headers: headers, body: body)
-          .timeout(const Duration(seconds: 8));
+          .timeout(timeout);
     } catch (error) {
-      if (!_shouldRetryWithRailwayDnsFallback(error, uri)) rethrow;
-      try {
-        return await _sendWithClient(_railwayDnsFallbackClient, uri,
-                method: method, headers: headers, body: body)
-            .timeout(const Duration(seconds: 8));
-      } on TimeoutException {
-        throw ApiException(
-          'Cloud server is reachable from web, but this phone network timed out. Turn mobile data/Wi-Fi off and on, then press Test before login.',
-          retryable: true,
-        );
-      }
+      rethrow;
     }
   }
 
@@ -156,21 +173,6 @@ class ApiClient {
       return client.post(uri, headers: headers, body: jsonEncode(body ?? {}));
     }
     return client.get(uri, headers: headers);
-  }
-
-  bool _shouldRetryWithRailwayDnsFallback(Object error, Uri uri) {
-    if (uri.scheme != 'https' ||
-        uri.host.toLowerCase() != SettingsStore.productionHost) {
-      return false;
-    }
-    final message = error.toString().toLowerCase();
-    return message.contains('failed host lookup') ||
-        message.contains('nodename nor servname') ||
-        message.contains('name or service not known') ||
-        message.contains('no address associated with hostname') ||
-        error is TimeoutException ||
-        message.contains('connection timed out') ||
-        message.contains('timed out');
   }
 
   Future<Map<String, dynamic>> health() => _request('/api/health', auth: false);
@@ -204,6 +206,32 @@ class ApiClient {
         'qty': qty,
       },
     );
+  }
+
+  Future<List<Map<String, dynamic>>> masterSearchParts({
+    required String query,
+    required String dealerCode,
+    int limit = 10,
+  }) async {
+    final q = query.trim().toUpperCase();
+    if (q.length < 2) return [];
+    final params = <String, String>{
+      'q': q,
+      'dealerCode': dealerCode.trim().toUpperCase(),
+      'limit': limit.toString(),
+    };
+    final data = await _request(
+      '/api/mobile/master-search?${Uri(queryParameters: params).query}',
+    );
+    final rows = (data['parts'] ?? data['suggestions'] ?? []) as List<dynamic>;
+    return rows
+        .whereType<Map>()
+        .map((row) => row.map((key, value) => MapEntry(key.toString(), value)))
+        .where((row) => (row['partNumber'] ?? row['partNo'] ?? '')
+            .toString()
+            .trim()
+            .isNotEmpty)
+        .toList();
   }
 
   Future<UserSession> login({
@@ -240,7 +268,8 @@ class ApiClient {
 
   Future<Map<String, dynamic>> config({String dealerCode = ''}) async {
     final code = dealerCode.trim().toUpperCase();
-    final query = code.isEmpty ? '' : '?dealerCode=${Uri.encodeComponent(code)}';
+    final query =
+        code.isEmpty ? '' : '?dealerCode=${Uri.encodeComponent(code)}';
     return _request('/api/mobile/config$query', auth: false);
   }
 
@@ -277,6 +306,7 @@ class ApiClient {
     return _request(
       '/api/mobile/sync-bulk',
       method: 'POST',
+      timeout: const Duration(seconds: 30),
       body: {
         'deviceId': deviceId,
         'dealerCode': dealerCode,

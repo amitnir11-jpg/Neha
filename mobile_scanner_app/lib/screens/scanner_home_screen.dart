@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import '../models/scan_record.dart';
 import '../services/socket_service.dart';
 import '../services/api_client.dart';
 import '../services/local_database.dart';
+import '../services/server_discovery.dart';
 import '../services/settings_store.dart';
 import '../services/sync_service.dart';
 import '../widgets/status_chip.dart';
@@ -26,19 +28,27 @@ class ScannerHomeScreen extends StatefulWidget {
   State<ScannerHomeScreen> createState() => _ScannerHomeScreenState();
 }
 
+class _SmartBinChoice {
+  const _SmartBinChoice(this.action, {this.selectedBin = ''});
+
+  final String action;
+  final String selectedBin;
+}
+
 class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     with WidgetsBindingObserver {
   static const _backgroundSyncInterval = Duration(minutes: 2);
-  static const _noQrClearTimeout = Duration(milliseconds: 450);
+  static const _noQrClearTimeout = Duration(milliseconds: 1000);
   static const _healthCheckInterval = Duration(seconds: 60);
 
   final _settings = SettingsStore();
   final _database = LocalDatabase.instance;
   final _syncService = SyncService();
   final _defaultBinController = TextEditingController();
+  final _scanAudioPlayer = AudioPlayer();
   final _cameraController = MobileScannerController(
     cameraResolution: const Size(1280, 720),
-    detectionSpeed: DetectionSpeed.noDuplicates,
+    detectionSpeed: DetectionSpeed.normal,
     detectionTimeoutMs: 120,
     facing: CameraFacing.back,
     useNewCameraSelector: true,
@@ -74,11 +84,14 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   String _lastScannedCode = '';
   String _currentlyVisibleCode = '';
   DateTime _lastHealthCheckAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastDiscoveryAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastSyncAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _online = false;
   bool _serverConnected = false;
   bool _savingScan = false;
   bool _syncInFlight = false;
+  bool _syncRequested = false;
+  bool _duplicateDialogOpen = false;
   int _pendingCount = 0;
   int _failedCount = 0;
   String _clockSkewWarning = '';
@@ -90,6 +103,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_scanAudioPlayer.setReleaseMode(ReleaseMode.stop));
     _loadState().then((_) async {
       try {
         await _socket.connect(_settings);
@@ -145,7 +159,12 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     _connectivitySub = Connectivity().onConnectivityChanged.listen((result) {
       final hasNetwork = result != ConnectivityResult.none;
       if (mounted) setState(() => _online = hasNetwork);
-      if (hasNetwork) _setStatus('Online - background sync ready', Colors.blue);
+      if (hasNetwork) {
+        _setStatus('Online - finding Daksh server...', Colors.blue);
+        unawaited(_autoDiscoverServer(force: true).then((_) {
+          unawaited(_testServer(silent: true, force: true));
+        }));
+      }
     });
     _foregroundSyncTimer = Timer.periodic(_backgroundSyncInterval, (_) {
       if (!_online || _syncInFlight) return;
@@ -165,6 +184,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     _connectivitySub?.cancel();
     _defaultBinController.dispose();
     _cameraController.dispose();
+    unawaited(_scanAudioPlayer.dispose());
     try {
       _socket.off('sync:clockSkew');
       _socket.off('sync:clockSkewNotify');
@@ -181,7 +201,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       unawaited(_cameraController.stop());
     } else if (state == AppLifecycleState.resumed) {
       unawaited(_cameraController.start());
-      _testServer(silent: true);
+      unawaited(_autoDiscoverServer(force: true).then((_) {
+        unawaited(_testServer(silent: true, force: true));
+      }));
     }
   }
 
@@ -204,6 +226,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _statusColor = _online ? Colors.blue : Colors.orange;
     });
     await _refreshLocalState();
+    if (_online) {
+      await _autoDiscoverServer(force: true);
+    }
     await _refreshRecentScans(forceServer: _online);
     if (_online) {
       await _refreshAuditContext();
@@ -239,6 +264,24 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       setState(() {
         _activeAuditId = auditId.toString().trim();
       });
+    } catch (_) {}
+  }
+
+  Future<void> _autoDiscoverServer({bool force = false}) async {
+    if (!_online && !force) return;
+    final now = DateTime.now();
+    if (!force &&
+        now.difference(_lastDiscoveryAt) < const Duration(minutes: 1)) {
+      return;
+    }
+    _lastDiscoveryAt = now;
+    try {
+      final server = await ServerDiscovery().discoverAndSave(_settings);
+      if (server == null) return;
+      _socket.dispose();
+      await _socket.connect(_settings);
+      if (!mounted) return;
+      _setStatus('Connected to ${server.serverUrl}', Colors.green);
     } catch (_) {}
   }
 
@@ -310,7 +353,13 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   }
 
   Future<void> _syncPending({bool silent = false}) async {
-    if (_syncInFlight) return;
+    // Scans can be saved while the previous batch is uploading.  Remember the
+    // request so that the newly saved rows are uploaded as soon as that batch
+    // completes instead of waiting for the two-minute background timer.
+    if (_syncInFlight) {
+      _syncRequested = true;
+      return;
+    }
     setState(() {
       _syncInFlight = true;
       if (!silent) {
@@ -332,11 +381,16 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
           _clockSkewWarning =
               result.hasClockSkew ? result.message : _clockSkewWarning;
         }
-        if (silent) return;
-        _statusText = result.success
-            ? result.message
-            : (result.message.trim().isEmpty ? 'Sync failed' : result.message);
-        _statusColor = result.success ? Colors.green : Colors.red;
+        // Background sync stays quiet on success, but failures must be visible
+        // so "Saved locally" is never mistaken for a server-confirmed scan.
+        if (!silent || !result.success) {
+          _statusText = result.success
+              ? result.message
+              : (result.message.trim().isEmpty
+                  ? 'Sync failed - scan remains pending'
+                  : 'Sync pending: ${result.message}');
+          _statusColor = result.success ? Colors.green : Colors.red;
+        }
       });
     } catch (error) {
       if (!mounted) return;
@@ -350,7 +404,152 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       } else {
         _syncInFlight = false;
       }
+      final syncAgain = _syncRequested;
+      _syncRequested = false;
+      if (syncAgain && mounted) {
+        unawaited(_syncPending(silent: true));
+      }
     }
+  }
+
+  Future<void> _playScanBeep({bool duplicate = false}) async {
+    try {
+      await _scanAudioPlayer.stop();
+      await _scanAudioPlayer.play(
+        AssetSource('sounds/scan_beep.wav'),
+        volume: duplicate ? 1.0 : 0.95,
+      );
+    } catch (_) {
+      try {
+        await SystemSound.play(
+            duplicate ? SystemSoundType.alert : SystemSoundType.click);
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _showDuplicateScanAlert(
+    _ScanDraft draft, {
+    ScanRecord? existingRecord,
+    String reason = 'This code was already scanned.',
+  }) async {
+    if (_duplicateDialogOpen || !mounted) return;
+    _duplicateDialogOpen = true;
+    try {
+      unawaited(_playScanBeep(duplicate: true));
+      unawaited(HapticFeedback.heavyImpact());
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          final record = existingRecord;
+          final partNumber = record != null && record.partNumber.isNotEmpty
+              ? record.partNumber
+              : draft.partNumber;
+          final binLocation = record != null
+              ? [
+                  record.binLocation,
+                  record.metadata['smartBinSelectedBin'],
+                  record.metadata['smartBinCurrentBin'],
+                  record.metadata['smartBinSuggestedBin'],
+                  draft.binLocation,
+                ]
+                  .map((value) => value == null
+                      ? ''
+                      : value.toString().trim().toUpperCase())
+                  .firstWhere((value) => value.isNotEmpty, orElse: () => '')
+              : draft.binLocation;
+          final quantity = record?.quantity ?? draft.quantity;
+          final status = record?.status ?? 'Duplicate';
+          final createdAt = record?.createdAt.toLocal();
+          final rawValue = record != null && record.rawValue.isNotEmpty
+              ? record.rawValue
+              : draft.rawValue;
+          final locationBanner = binLocation.isNotEmpty
+              ? 'Already available in bin $binLocation'
+              : 'This item has already been scanned';
+          final details = <Widget>[
+            Text(
+              reason,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: Text(
+                locationBanner,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (partNumber.isNotEmpty) _duplicateInfoRow('Part', partNumber),
+            if (binLocation.isNotEmpty)
+              _duplicateInfoRow('Location', binLocation),
+            _duplicateInfoRow('Qty', quantity.toString()),
+            _duplicateInfoRow('Status', status),
+            if (createdAt != null)
+              _duplicateInfoRow('Scanned',
+                  TimeOfDay.fromDateTime(createdAt).format(dialogContext)),
+            if (rawValue.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                rawValue,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
+          ];
+          return AlertDialog(
+            title: const Text('Duplicate scan'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: details,
+              ),
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        },
+      );
+    } finally {
+      _duplicateDialogOpen = false;
+    }
+  }
+
+  Widget _duplicateInfoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 76,
+            child: Text(
+              '$label:',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _onDetect(BarcodeCapture capture) async {
@@ -375,15 +574,17 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _currentlyVisibleCode = raw;
     }
 
+    final draft =
+        _ScanDraft.fromRaw(raw, fallbackBin: _defaultBinController.text);
     if (raw == _lastScannedCode) {
-      _setStatus('Duplicate skipped', Colors.orange);
+      // mobile_scanner reports the same QR on consecutive camera frames.  This
+      // is not a duplicate inventory scan, so ignore it without displaying a
+      // duplicate warning.  The lock is cleared after the QR leaves the frame.
       return;
     }
 
     _lastScannedCode = raw;
-    unawaited(_handleDraft(
-        _ScanDraft.fromRaw(raw, fallbackBin: _defaultBinController.text),
-        source: 'mobile'));
+    unawaited(_handleDraft(draft, source: 'mobile'));
   }
 
   Future<void> _handleDraft(_ScanDraft draft, {required String source}) async {
@@ -409,10 +610,27 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     }
 
     try {
+      final duplicateRecord = await _database.latestMatchingScan(
+        rawValue: draft.rawValue,
+        scanType: _scanType,
+        dealerCode: _dealerCode,
+        userId: _userId,
+      );
+      if (duplicateRecord != null) {
+        await _showDuplicateScanAlert(
+          draft,
+          existingRecord: duplicateRecord,
+          reason: 'This part was already scanned.',
+        );
+        _setStatus('Already scanned', Colors.orange);
+        return;
+      }
+
       if (_isSmartBinEligible(_scanType) && _online && _activeAuditId.isEmpty) {
         await _refreshAuditContext();
       }
 
+      final localId = 'MOB-${const Uuid().v4()}';
       final currentBin = _upper(draft.binLocation);
       final api = ApiClient(_settings);
       Map<String, dynamic>? smartBinSuggestion;
@@ -424,7 +642,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
             dealerCode: _dealerCode,
             auditId: _activeAuditId,
             partNumber: draft.partNumber,
-            partDescription: '',
+            partDescription: draft.partDescription,
             binLocation: currentBin,
             scanType: _scanType,
             qty: draft.quantity,
@@ -436,22 +654,42 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
 
       var resolvedBin = currentBin;
       var metadata = <String, dynamic>{};
+      if (draft.partDescription.isNotEmpty) {
+        metadata['partDescription'] = draft.partDescription;
+        metadata['partName'] = draft.partDescription;
+      }
       if (smartBinSuggestion != null &&
-          smartBinSuggestion['shouldPrompt'] == true) {
-        final decision =
+          _smartBinExistingBins(smartBinSuggestion).isNotEmpty &&
+          source == 'manual' &&
+          _smartBinExistingBins(smartBinSuggestion)
+              .any((bin) => _upper(bin['binLocation']) == currentBin)) {
+        final confirmed = await _showSameBinQuantityPrompt(
+            smartBinSuggestion, currentBin, draft.quantity);
+        if (confirmed != true) {
+          _setStatus('Manual quantity confirmation cancelled', Colors.orange);
+          return;
+        }
+        metadata.addAll(_sameBinQuantityMetadata(
+          smartBinSuggestion,
+          currentBin: currentBin,
+          localId: localId,
+          qty: draft.quantity,
+        ));
+      } else if (smartBinSuggestion != null &&
+          (smartBinSuggestion['shouldPrompt'] == true ||
+              _smartBinExistingBins(smartBinSuggestion).isNotEmpty)) {
+        final choice =
             await _showSmartBinPrompt(smartBinSuggestion, currentBin);
-        if (decision == null) {
+        if (choice == null) {
           _setStatus('Smart bin confirmation cancelled', Colors.orange);
           return;
         }
-        final existingBins = _smartBinExistingBins(smartBinSuggestion);
-        final selectedExistingBin = _upper(smartBinSuggestion['existingBin'] ??
-            (existingBins.isNotEmpty ? existingBins.first['binLocation'] : '') ??
-            currentBin);
-        resolvedBin = decision == 'USE_EXISTING_BIN' &&
-                selectedExistingBin.isNotEmpty
-            ? selectedExistingBin
-            : currentBin;
+        final decision = choice.action;
+        final selectedExistingBin = _upper(choice.selectedBin);
+        resolvedBin =
+            decision == 'USE_EXISTING_BIN' && selectedExistingBin.isNotEmpty
+                ? selectedExistingBin
+                : currentBin;
         metadata = _smartBinMetadata(
           smartBinSuggestion,
           decision: decision,
@@ -462,7 +700,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
 
       final now = DateTime.now();
       final record = ScanRecord(
-        localId: 'MOB-${const Uuid().v4()}',
+        localId: localId,
         rawValue: draft.rawValue,
         partNumber: draft.partNumber,
         quantity: draft.quantity,
@@ -479,7 +717,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       );
 
       _showInstantScan(record);
-      unawaited(SystemSound.play(SystemSoundType.click));
+      unawaited(_playScanBeep());
       unawaited(HapticFeedback.mediumImpact());
       unawaited(_saveScanLocally(record));
     } catch (error) {
@@ -528,7 +766,14 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     try {
       await _database.insertScan(record);
       await _refreshLocalState();
-      if (!_online && mounted) _setStatus('Offline saved', Colors.orange);
+      if (!_online && mounted) {
+        _setStatus('Offline saved', Colors.orange);
+      } else {
+        // If online, try to sync immediately so the scan is sent to the server
+        try {
+          unawaited(_syncPending(silent: true));
+        } catch (_) {}
+      }
     } catch (error) {
       if (mounted) _setStatus('Local save failed', Colors.red);
     }
@@ -549,8 +794,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
             return Map<String, dynamic>.from(entry);
           }
           if (entry is Map) {
-            return entry.map((key, value) =>
-                MapEntry(key.toString(), value));
+            return entry.map((key, value) => MapEntry(key.toString(), value));
           }
           return <String, dynamic>{'binLocation': entry.toString()};
         })
@@ -575,8 +819,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       'smartBinReason': decision == 'SAVE_NEW_BIN'
           ? 'User confirmed different bin'
           : 'User selected existing bin',
-      'smartBinSuggestedBin':
-          _upper(suggestion['suggestedBin'] ?? currentBin),
+      'smartBinSuggestedBin': _upper(suggestion['suggestedBin'] ?? currentBin),
       'smartBinSelectedBin': _upper(selectedBin),
       'smartBinCurrentBin': _upper(currentBin),
       'smartBinExistingBins': _smartBinExistingBins(suggestion),
@@ -594,80 +837,182 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     };
   }
 
-  Future<String?> _showSmartBinPrompt(
+  Map<String, dynamic> _sameBinQuantityMetadata(
+    Map<String, dynamic> suggestion, {
+    required String currentBin,
+    required String localId,
+    required int qty,
+  }) {
+    final now = DateTime.now().toUtc().toIso8601String();
+    return {
+      'confirmAddQuantity': true,
+      'addManualQuantity': true,
+      'manualAddRequestId': localId,
+      'smartBinDecision': 'ADD_MANUAL_QUANTITY',
+      'smartBinReason': 'User confirmed same-bin manual quantity add',
+      'smartBinSuggestedBin': currentBin,
+      'smartBinSelectedBin': currentBin,
+      'smartBinCurrentBin': currentBin,
+      'smartBinExistingBins': _smartBinExistingBins(suggestion),
+      'smartBinAllowMultipleLocations':
+          suggestion['allowMultipleLocations'] ?? true,
+      'smartBinMaxAllowedLocationsPerPart':
+          suggestion['maxAllowedLocationsPerPart'] ?? 3,
+      'smartBinReasonRequired': false,
+      'smartBinCheckedAt': (suggestion['checkedAt'] ?? now).toString(),
+      'smartBinDecisionAt': now,
+      'smartBinDecisionBy': _userName.isNotEmpty ? _userName : _userId,
+      'smartBinLocationType': 'PRIMARY',
+      'smartBinIsSecondaryLocation': false,
+      'requestedQty': qty,
+    };
+  }
+
+  Future<bool?> _showSameBinQuantityPrompt(
+      Map<String, dynamic> suggestion, String currentBin, int addQty) {
+    final existingBins = _smartBinExistingBins(suggestion);
+    final sameBin = existingBins.firstWhere(
+      (bin) => _upper(bin['binLocation']) == currentBin,
+      orElse: () => <String, dynamic>{'binLocation': currentBin},
+    );
+    final partNumber = _upper(suggestion['partNumber']);
+    final qty = sameBin['qty'] ?? sameBin['quantity'] ?? 0;
+    final description =
+        (suggestion['partDescription'] ?? suggestion['partName'] ?? '')
+            .toString()
+            .trim();
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Part Already Available'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Part $partNumber is already available in bin $currentBin.'),
+              const SizedBox(height: 8),
+              Text('Current qty: ${qty.toString()}'),
+              Text('Add qty: $addQty'),
+              if (description.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(description),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Add Qty'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<_SmartBinChoice?> _showSmartBinPrompt(
       Map<String, dynamic> suggestion, String currentBin) async {
     final existingBins = _smartBinExistingBins(suggestion);
     final existingBin = _upper(suggestion['existingBin'] ??
         (existingBins.isNotEmpty ? existingBins.first['binLocation'] : '') ??
         currentBin);
     final partNumber = _upper(suggestion['partNumber']);
-    final partDescription = (suggestion['partDescription'] ?? suggestion['partName'] ?? '')
-        .toString()
-        .trim();
-    final title = (suggestion['promptTitle'] ?? 'PART ALREADY AVAILABLE IN OTHER BIN')
-        .toString()
-        .trim();
-    final message = (suggestion['message'] ?? '')
-        .toString()
-        .trim();
-    return showDialog<String>(
+    final partDescription =
+        (suggestion['partDescription'] ?? suggestion['partName'] ?? '')
+            .toString()
+            .trim();
+    final title =
+        (suggestion['promptTitle'] ?? 'PART ALREADY AVAILABLE IN OTHER BIN')
+            .toString()
+            .trim();
+    final message = (suggestion['message'] ?? '').toString().trim();
+    var selectedExistingBin = existingBin;
+    return showDialog<_SmartBinChoice>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
-        return AlertDialog(
-          title: Text(title),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(message.isNotEmpty
-                    ? message
-                    : 'Part $partNumber is already available in another bin.'),
-                const SizedBox(height: 12),
-                if (partDescription.isNotEmpty)
-                  Text('Description: $partDescription'),
-                if (existingBins.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Existing bins:',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 6),
-                  ...existingBins.map((bin) {
-                    final binLocation = _upper(bin['binLocation']);
-                    final qty = bin['qty'] ?? bin['quantity'] ?? 0;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Text('• $binLocation  Qty ${qty.toString()}'),
-                    );
-                  }),
-                ],
-                const SizedBox(height: 8),
-                Text('Current bin: $currentBin'),
-                if (existingBin.isNotEmpty) Text('Existing bin: $existingBin'),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, 'SAVE_NEW_BIN'),
-              child: const Text('Save New Bin'),
-            ),
-            FilledButton(
-              onPressed: () =>
-                  Navigator.pop(dialogContext, 'USE_EXISTING_BIN'),
-              child: Text(
-                existingBin.isNotEmpty
-                    ? 'Use Existing Bin $existingBin'
-                    : 'Use Existing Bin',
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: Text(title),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(message.isNotEmpty
+                        ? message
+                        : 'Part $partNumber is already available in another bin.'),
+                    const SizedBox(height: 12),
+                    if (partDescription.isNotEmpty)
+                      Text('Description: $partDescription'),
+                    if (existingBins.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Scan in existing bin:',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      ...existingBins.map((bin) {
+                        final binLocation = _upper(bin['binLocation']);
+                        final qty = bin['qty'] ?? bin['quantity'] ?? 0;
+                        return RadioListTile<String>(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          value: binLocation,
+                          groupValue: selectedExistingBin,
+                          title: Text(binLocation),
+                          subtitle: Text('Qty ${qty.toString()}'),
+                          onChanged: binLocation.isEmpty
+                              ? null
+                              : (value) => setDialogState(() {
+                                    selectedExistingBin = _upper(value);
+                                  }),
+                        );
+                      }),
+                    ],
+                    const SizedBox(height: 8),
+                    Text('Current bin: $currentBin'),
+                  ],
+                ),
               ),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(
+                    dialogContext,
+                    _SmartBinChoice('SAVE_NEW_BIN', selectedBin: currentBin),
+                  ),
+                  child: const Text('Save New Bin'),
+                ),
+                FilledButton(
+                  onPressed: selectedExistingBin.isEmpty
+                      ? null
+                      : () => Navigator.pop(
+                            dialogContext,
+                            _SmartBinChoice(
+                              'USE_EXISTING_BIN',
+                              selectedBin: selectedExistingBin,
+                            ),
+                          ),
+                  child: Text(
+                    selectedExistingBin.isNotEmpty
+                        ? 'Scan in $selectedExistingBin'
+                        : 'Scan in Existing Bin',
+                  ),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -697,7 +1042,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     final draft = await showDialog<_ScanDraft>(
       context: context,
       builder: (_) => _ManualEntryDialog(
-          scanType: _scanType, fallbackBin: _defaultBinController.text),
+        scanType: _scanType,
+        fallbackBin: _defaultBinController.text,
+        settings: _settings,
+        dealerCode: _dealerCode,
+      ),
     );
     if (draft != null) await _handleDraft(draft, source: 'manual');
   }
@@ -720,6 +1069,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _setStatus('Offline mode, retrying when network returns', Colors.orange);
       return;
     }
+    await _autoDiscoverServer(force: true);
     await _testServer(silent: false, force: true);
     if (_serverConnected) {
       await _refreshLocalState();
@@ -804,7 +1154,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   @override
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.of(context).size.height;
-    final cameraHeight = (screenHeight * 0.34).clamp(250.0, 340.0).toDouble();
+    final cameraHeight = (screenHeight * 0.48).clamp(340.0, 520.0).toDouble();
 
     return Scaffold(
       appBar: AppBar(
@@ -936,14 +1286,18 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                       duration: const Duration(milliseconds: 120),
                       child: Container(color: Colors.green.withOpacity(0.22)),
                     ),
-                    Center(
-                      child: Container(
-                        width: 220,
-                        height: 150,
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                              color: Colors.white.withOpacity(0.85), width: 2),
-                          borderRadius: BorderRadius.circular(8),
+                    Positioned.fill(
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: IgnorePointer(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                  color: Colors.white.withOpacity(0.88),
+                                  width: 2),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -1232,10 +1586,17 @@ class _ModeButton extends StatelessWidget {
 }
 
 class _ManualEntryDialog extends StatefulWidget {
-  const _ManualEntryDialog({required this.scanType, required this.fallbackBin});
+  const _ManualEntryDialog({
+    required this.scanType,
+    required this.fallbackBin,
+    required this.settings,
+    required this.dealerCode,
+  });
 
   final String scanType;
   final String fallbackBin;
+  final SettingsStore settings;
+  final String dealerCode;
 
   @override
   State<_ManualEntryDialog> createState() => _ManualEntryDialogState();
@@ -1245,6 +1606,11 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
   late final TextEditingController _partController;
   late final TextEditingController _qtyController;
   late final TextEditingController _binController;
+  Timer? _suggestTimer;
+  List<Map<String, dynamic>> _suggestions = [];
+  bool _loadingSuggestions = false;
+  String _suggestionError = '';
+  String _selectedDescription = '';
 
   @override
   void initState() {
@@ -1256,6 +1622,7 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
 
   @override
   void dispose() {
+    _suggestTimer?.cancel();
     _partController.dispose();
     _qtyController.dispose();
     _binController.dispose();
@@ -1267,6 +1634,73 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     if (value == upper) return;
     controller.value = TextEditingValue(
         text: upper, selection: TextSelection.collapsed(offset: upper.length));
+  }
+
+  void _onPartChanged(String value) {
+    _uppercase(_partController, value);
+    final query = _upper(value);
+    _selectedDescription = '';
+    _suggestTimer?.cancel();
+    if (query.length < 2) {
+      setState(() {
+        _suggestions = [];
+        _loadingSuggestions = false;
+        _suggestionError = '';
+      });
+      return;
+    }
+    setState(() {
+      _loadingSuggestions = true;
+      _suggestionError = '';
+    });
+    _suggestTimer = Timer(const Duration(milliseconds: 280), () {
+      _loadSuggestions(query);
+    });
+  }
+
+  Future<void> _loadSuggestions(String query) async {
+    try {
+      final rows = await ApiClient(widget.settings).masterSearchParts(
+        query: query,
+        dealerCode: widget.dealerCode,
+        limit: 8,
+      );
+      if (!mounted || _upper(_partController.text) != query) return;
+      setState(() {
+        _suggestions = rows;
+        _loadingSuggestions = false;
+        _suggestionError = '';
+      });
+    } catch (error) {
+      if (!mounted || _upper(_partController.text) != query) return;
+      setState(() {
+        _suggestions = [];
+        _loadingSuggestions = false;
+        _suggestionError = 'Part suggestions unavailable';
+      });
+    }
+  }
+
+  void _pickSuggestion(Map<String, dynamic> part) {
+    final partNumber = _upper(part['partNumber'] ?? part['partNo']);
+    final description =
+        (part['partDescription'] ?? part['partName'] ?? '').toString().trim();
+    final suggestedBin = _upper(part['binLocation'] ?? part['bin']);
+    if (partNumber.isEmpty) return;
+    _suggestTimer?.cancel();
+    _partController.value = TextEditingValue(
+      text: partNumber,
+      selection: TextSelection.collapsed(offset: partNumber.length),
+    );
+    if (_upper(_binController.text).isEmpty && suggestedBin.isNotEmpty) {
+      _binController.text = suggestedBin;
+    }
+    setState(() {
+      _selectedDescription = description;
+      _suggestions = [];
+      _loadingSuggestions = false;
+      _suggestionError = '';
+    });
   }
 
   void _submit() {
@@ -1282,6 +1716,7 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
         partNumber: part,
         quantity: qty,
         binLocation: bin,
+        partDescription: _selectedDescription,
       ),
     );
   }
@@ -1297,8 +1732,84 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
             controller: _partController,
             textCapitalization: TextCapitalization.characters,
             decoration: const InputDecoration(labelText: 'Part Number'),
-            onChanged: (value) => _uppercase(_partController, value),
+            onChanged: _onPartChanged,
           ),
+          if (_loadingSuggestions) ...[
+            const SizedBox(height: 6),
+            const LinearProgressIndicator(minHeight: 2),
+          ],
+          if (_selectedDescription.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _selectedDescription,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ],
+          if (_suggestionError.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _suggestionError,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+          if (_suggestions.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 230),
+              child: Material(
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceVariant
+                    .withOpacity(0.45),
+                borderRadius: BorderRadius.circular(10),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: _suggestions.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final part = _suggestions[index];
+                    final partNumber =
+                        _upper(part['partNumber'] ?? part['partNo']);
+                    final description =
+                        (part['partDescription'] ?? part['partName'] ?? '')
+                            .toString()
+                            .trim();
+                    final model = (part['model'] ?? '').toString().trim();
+                    final mrp = (part['mrp'] ?? '').toString().trim();
+                    final subtitle = [
+                      if (description.isNotEmpty) description,
+                      if (model.isNotEmpty) model,
+                      if (mrp.isNotEmpty && mrp != '0') 'MRP $mrp',
+                    ].join(' | ');
+                    return ListTile(
+                      dense: true,
+                      title: Text(
+                        partNumber,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: subtitle.isEmpty
+                          ? null
+                          : Text(
+                              subtitle,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                      onTap: () => _pickSuggestion(part),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           TextField(
             controller: _qtyController,
@@ -1330,12 +1841,14 @@ class _ScanDraft {
     required this.partNumber,
     required this.quantity,
     required this.binLocation,
+    this.partDescription = '',
   });
 
   final String rawValue;
   final String partNumber;
   final int quantity;
   final String binLocation;
+  final String partDescription;
 
   factory _ScanDraft.fromRaw(String raw, {String fallbackBin = ''}) {
     final text = raw.trim();
@@ -1392,6 +1905,7 @@ class _ScanDraft {
       partNumber: _upper(part),
       quantity: qty <= 0 ? 1 : qty,
       binLocation: _upper(bin),
+      partDescription: '',
     );
   }
 }

@@ -1,5 +1,6 @@
 const express = require('express');
 const ExcelJS = require('exceljs');
+const XLSX = require('xlsx');
 const { performance } = require('perf_hooks');
 const fs = require('fs');
 const path = require('path');
@@ -25,6 +26,7 @@ const { getActiveAudit } = require('../utils/audit');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
 const { applyCacheHeaders, getCachedReport, getCachedResponse } = require('../utils/reportCache');
+const { Prisma, prisma } = require('../services/prisma');
 const stockValuationModule = require('../utils/stockValuation');
 const { assertDlcReconciliation, calculateStockValuation } = stockValuationModule;
 const stockValuationTotals = typeof stockValuationModule.stockValuationTotals === 'function'
@@ -75,7 +77,9 @@ const categoryCountMap = typeof categoryResolver.categoryCountMap === 'function'
     };
 const {
   getPricesFromPartMaster,
-  scanWithPartMasterPrice
+  auditPartPrice,
+  savedAuditPrice,
+  scanWithSavedAuditPrice
 } = require('../utils/partMasterPrice');
 
 const router = express.Router();
@@ -109,6 +113,15 @@ const REPORT_SCAN_SELECT = [
   'deviceId deviceName userId loginId staffName userName role timestamp scanTime createdAt serverReceivedAt',
   'syncStatus synced isSynced scanStatus source scanMode warnings remarks masterFound masterMatch isMasterMatched',
   'priceHistoryId pricePeriodFrom pricePeriodTo pricePeriodMatched pricePeriodStatus'
+].join(' ');
+const CATEGORY_ALLOCATION_SCAN_SELECT = [
+  'uniqueScanId scanId syncKey clientScanId clientSyncKey qrFingerprint rawUpiHash',
+  'normalizedPartNumber partNumber part partDescription partName description',
+  'productCategory category productGroup partGroup partSubGroup productSubGroup',
+  'model year manufacturingYear',
+  'mrp scanMRP manualMRP valuationMRP currentCatalogueMRP defaultMRP dlc currentCatalogueDLC',
+  'qty quantity binLocation bin scanType type syncStatus synced isSynced scanStatus status isDuplicate',
+  'timestamp scanTime createdAt dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi'
 ].join(' ');
 
 async function cachedReport(namespace, query, builder) {
@@ -153,6 +166,7 @@ async function cachedBuildPartwiseInventoryAuditReport(query = {}) {
 async function cachedBuildCategoryWiseVarianceSummary(query = {}) {
   return cachedReport('category-wise-variance-summary', await resolveReportAuditQuery(query), buildCategoryWiseVarianceSummary);
 }
+
 
 async function cachedBuildStockSummaryReport(query = {}) {
   return cachedReport('stock-summary', await resolveReportAuditQuery(query), buildStockSummaryReport);
@@ -560,6 +574,8 @@ function reportFilter(query = {}) {
   applyReportMetadataFilters(filter, query);
   if (!query.syncStatus) filter.syncStatus = 'synced';
   filter.isDuplicate = { $ne: true };
+  filter.isDeleted = { $ne: true };
+  filter.deletedAt = null;
   return filter;
 }
 
@@ -857,9 +873,7 @@ async function buildLegacyReportData(query = {}) {
       scan.bin = scan.bin || scan.binLocation || master.bin || master.binLocation;
       scan.binLocation = scan.binLocation || scan.bin || master.bin || master.binLocation;
       scan = Object.assign(scan, decorateScanValue(scan));
-      scan.currentCatalogueMRP = Number(master.mrp || 0);
-      scan.currentCatalogueDLC = firstPositiveNumber(master.dlc, master.dlp);
-      scan.dlc = scan.currentCatalogueDLC;
+      scan = Object.assign(scan, scanWithSavedAuditPrice(scan, master));
       scan.dealerCode = scan.dealerCode || master.dealerCode;
     }
 
@@ -1097,6 +1111,8 @@ async function buildLegacyReportData(query = {}) {
     rawLogRows: finalRows.map((row) => ({
       partNumber: row.partNumber || row.partNo,
       countedQuantity: row.physicalQty,
+      dlc: row.dlc || 0,
+      finalInventoryValue: money(Number(row.physicalQty || 0) * Number(row.dlc || 0)),
       variance: row.differenceQty,
       action: actionForDifference(Number(row.differenceQty || 0)),
       status: row.status
@@ -1651,7 +1667,7 @@ function masterQty(master = {}) {
 function enrichScan(scan = {}, master = {}, system = {}) {
   master = master || {};
   system = system || {};
-  scan = scanWithPartMasterPrice(decorateScanValue(scan), master && master.partNumber ? master : null);
+  scan = scanWithSavedAuditPrice(decorateScanValue(scan), master && master.partNumber ? master : null);
   const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
   const hasMaster = Boolean(master && (master.partNo || master.partNumber || master.normalizedPartNumber));
   const hasSystem = Boolean(system && (system.partNo || system.partNumber || system.normalizedPartNumber || system.dmsStock !== undefined || system.systemQty !== undefined));
@@ -1684,8 +1700,9 @@ function enrichScan(scan = {}, master = {}, system = {}) {
     valuationMRP: Number(scan.currentCatalogueMRP || scan.valuationMRP || 0),
     valuationSource: scan.valuationSource || '',
     finalInventoryValue: Number(scan.finalInventoryValue || 0),
-    currentCatalogueMRP: Number(master.mrp || 0),
-    dlc: firstPositiveNumber(master.dlc, master.dlp),
+    currentCatalogueMRP: Number(scan.currentCatalogueMRP || scan.valuationMRP || 0),
+    currentCatalogueDLC: Number(scan.currentCatalogueDLC || scan.dlc || 0),
+    dlc: Number(scan.currentCatalogueDLC || scan.dlc || 0),
     productGroup: hasMaster ? master.productGroup || master.partGroup || '' : 'UNKNOWN',
     partSubGroup: hasMaster ? master.partSubGroup || master.productSubGroup || '' : 'UNKNOWN',
     qty,
@@ -1738,6 +1755,8 @@ function scanBasedFilter(query = {}) {
   applyReportMetadataFilters(filter, query);
   if (!query.syncStatus) filter.syncStatus = 'synced';
   filter.isDuplicate = { $ne: true };
+  filter.isDeleted = { $ne: true };
+  filter.deletedAt = null;
   return filter;
 }
 
@@ -1796,7 +1815,9 @@ async function buildPartsInventoryRefreshRows(query = {}) {
   const filter = scanBasedFilter(query);
   filter.$and = (filter.$and || []).concat([
     { syncStatus: 'synced' },
-    { isDuplicate: { $ne: true } }
+    { isDuplicate: { $ne: true } },
+    { isDeleted: { $ne: true } },
+    { deletedAt: null }
   ]);
 
   const scans = applyMovementCountRules(uniqueReportScans((await Inventory.find(filter).select(REPORT_SCAN_SELECT).sort({ timestamp: 1, createdAt: 1 }).lean()).map(inventoryRoute.publicScan)));
@@ -1923,9 +1944,10 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
   const auditedQty = physicalQty;
   const diffQty = auditedQty - dmsQty;
   const valueSummary = rowValueSummary(group.scans, hasCatalogue ? master : {});
+  const auditPrice = auditPartPrice(group.scans, system, hasCatalogue ? master : null);
   const pricing = resolvePartPricing({
     partNumber: group.partNo,
-    partMasterPrice: hasCatalogue ? master : null,
+    partMasterPrice: auditPrice,
     actualQty: auditedQty,
     dmsQty
   });
@@ -2067,6 +2089,10 @@ function binWiseRowsFromScans(scans = [], finalRows = []) {
   return Array.from(groups.values()).map((group) => {
     const finalRow = finalByPartDealer.get(`${group.partNumber}::${group.dealerCode}`) || {};
     const first = group.scans[0] || {};
+    const mrp = Number(finalRow.mrp ?? first.currentCatalogueMRP ?? first.valuationMRP ?? 0);
+    const dlc = Number(finalRow.dlc ?? first.currentCatalogueDLC ?? first.dlc ?? 0);
+    const finalInventoryValue = money(group.physicalQty * dlc);
+    const mrpValueReference = money(group.physicalQty * mrp);
     return {
       bin: group.bin,
       binLocation: group.bin,
@@ -2077,8 +2103,12 @@ function binWiseRowsFromScans(scans = [], finalRows = []) {
       year: finalRow.manufacturingYear || finalRow.year || first.manufacturingYear || first.year || '',
       productCategory: displayCategory(finalRow.productCategory || finalRow.category || ''),
       category: displayCategory(finalRow.productCategory || finalRow.category || ''),
-      mrp: finalRow.mrp ?? 0,
-      dlc: finalRow.dlc ?? 0,
+      mrp,
+      mrpValueReference,
+      totalMrpValue: mrpValueReference,
+      dlc,
+      finalInventoryValue,
+      totalDlcValue: finalInventoryValue,
       productGroup: finalRow.productGroup || first.productGroup || '',
       partSubGroup: finalRow.partSubGroup || first.partSubGroup || '',
       systemQty: finalRow.systemQty ?? finalRow.dmsQty ?? 0,
@@ -2264,7 +2294,75 @@ async function buildReportData(query = {}) {
     valuationBasis: 'DLC'
   });
 
-  return { filters: query, summary, selectedDealer, selectedAudit, allFinalRows, finalRows, categoryRows: Array.from(categoryMap.values()).sort((a, b) => sortText(a.category, b.category)), scans, damageRows: scans.filter((scan) => scan.type === 'DAMAGE' || scan.scanType === 'DAMAGE'), openingRows: finalRows, oilRows: finalRows.filter((row) => /oil|lube|lubricant/i.test(row.category || row.partDescription || row.partName)), accessoryRows: finalRows.filter((row) => /accessor/i.test(row.category || row.partDescription || row.partName)), nonMovingRows: [], highValueNonMovingRows: [], binRows: binWiseRowsFromScans(scans, finalRows), rawLogRows: scans.map((scan) => ({ time: scan.timestamp, rawScan: scan.rawScan || scan.rawScanString || scan.rawUpi || '', partNumber: scan.partNumber || scan.part, partDescription: scan.partDescription || scan.partName, qty: scan.qty, type: scan.scanType || scan.type, bin: fittedScanQty(scan) ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin), dealerCode: scan.dealerCode, auditId: scan.auditId, userId: scan.userId || scan.loginId || '', userName: scan.userName || scan.staffName || scan.loginId || '', role: scan.role || '', deviceId: scan.deviceId, entryMode: scan.entryMode, entryChannel: scan.entryChannel, scanSourceLabel: scan.scanSourceLabel, staffName: scan.staffName, regdNo: scan.regdNo || '', jobCardNo: scan.jobCardNo || '', fittedQty: scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty : 0), fittedStatus: (scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'Fitted' : 'Not Fitted', autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No', stockDeductedFromBin: scan.stockDeductedFromBin || '', warnings: (scan.warnings || []).join(', ') })), dealerBackupRows: dealers.map((dealer) => ({ dealerName: dealer.dealerName, dealerCode: dealer.dealerCode, brand: dealer.brand, location: dealer.location, currentAuditId: dealer.currentAuditId, auditName: dealer.auditName, auditorName: dealer.auditorName, generalManager: dealer.generalManager, spmName: dealer.spmName })), dealers, audits };
+  const rawLogRows = scans.map((scan) => {
+    const valueRow = scanValueRow(scan);
+    const dlc = Number(scan.currentCatalogueDLC || scan.dlc || 0);
+    return {
+      time: scan.timestamp,
+      rawScan: scan.rawScan || scan.rawScanString || scan.rawUpi || '',
+      partNumber: scan.partNumber || scan.part,
+      partDescription: scan.partDescription || scan.partName,
+      model: scan.model || '',
+      manufacturingYear: scan.manufacturingYear || scan.year || '',
+      productCategory: displayCategory(scan.productCategory || scan.category || ''),
+      mrp: Number(scan.currentCatalogueMRP || valueRow.valuationMRP || 0),
+      mrpValueReference: Number(valueRow.finalInventoryValue || 0),
+      dlc,
+      finalInventoryValue: money(physicalScanQty(scan) * dlc),
+      qty: scan.qty,
+      type: scan.scanType || scan.type,
+      bin: fittedScanQty(scan) ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin),
+      dealerCode: scan.dealerCode,
+      auditId: scan.auditId,
+      userId: scan.userId || scan.loginId || '',
+      userName: scan.userName || scan.staffName || scan.loginId || '',
+      role: scan.role || '',
+      deviceId: scan.deviceId,
+      entryMode: scan.entryMode,
+      entryChannel: scan.entryChannel,
+      scanSourceLabel: scan.scanSourceLabel,
+      staffName: scan.staffName,
+      regdNo: scan.regdNo || '',
+      jobCardNo: scan.jobCardNo || '',
+      fittedQty: scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty : 0),
+      fittedStatus: (scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'Fitted' : 'Not Fitted',
+      autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No',
+      stockDeductedFromBin: scan.stockDeductedFromBin || '',
+      warnings: (scan.warnings || []).join(', ')
+    };
+  });
+
+  return {
+    filters: query,
+    summary,
+    selectedDealer,
+    selectedAudit,
+    allFinalRows,
+    finalRows,
+    categoryRows: Array.from(categoryMap.values()).sort((a, b) => sortText(a.category, b.category)),
+    scans,
+    damageRows: scans.filter((scan) => scan.type === 'DAMAGE' || scan.scanType === 'DAMAGE'),
+    openingRows: finalRows,
+    oilRows: finalRows.filter((row) => /oil|lube|lubricant/i.test(row.category || row.partDescription || row.partName)),
+    accessoryRows: finalRows.filter((row) => /accessor/i.test(row.category || row.partDescription || row.partName)),
+    nonMovingRows: [],
+    highValueNonMovingRows: [],
+    binRows: binWiseRowsFromScans(scans, finalRows),
+    rawLogRows,
+    dealerBackupRows: dealers.map((dealer) => ({
+      dealerName: dealer.dealerName,
+      dealerCode: dealer.dealerCode,
+      brand: dealer.brand,
+      location: dealer.location,
+      currentAuditId: dealer.currentAuditId,
+      auditName: dealer.auditName,
+      auditorName: dealer.auditorName,
+      generalManager: dealer.generalManager,
+      spmName: dealer.spmName
+    })),
+    dealers,
+    audits
+  };
 }
 
 function partwiseInventoryAuditColumns() {
@@ -2714,7 +2812,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   log('Prices resolved', { parts: allParts.length, prices: priceByPart.size });
   groups.forEach((group) => {
     const price = priceByPart.get(group.partNo) || null;
-    group.scans = group.scans.map((scan) => scanWithPartMasterPrice(scan, price));
+    group.scans = group.scans.map((scan) => scanWithSavedAuditPrice(scan, price));
   });
   const systemByPart = new Map();
   systemParts.forEach((part) => {
@@ -2853,6 +2951,7 @@ function buildPartwiseInventoryAuditPdfBuffer(data) {
   });
   return Buffer.from(doc.output('arraybuffer'));
 }
+
 
 function categoryVarianceColumns() {
   return [
@@ -3032,8 +3131,9 @@ async function buildCategoryWiseVarianceSummary(query = {}) {
     if (hasProductCategoryFilter && category !== productCategoryFilter) return;
 
     const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
-    const mrp = master ? numberValue(master.mrp || master.currentCatalogueMRP || 0, 0) : 0;
-    const dlc = master ? firstPositiveNumber(master.dlc, master.dlp) : 0;
+    const priceSnapshot = savedAuditPrice(scan, master);
+    const mrp = numberValue(priceSnapshot && priceSnapshot.mrp, 0);
+    const dlc = numberValue(priceSnapshot && priceSnapshot.dlc, 0);
     if (actionFilter === 'Inventory Matched') {
       addCategoryVarianceGroup(groupMap, category, 'Inventory Matched', 0, mrp, dlc);
       return;
@@ -3964,7 +4064,13 @@ router.get('/stock-summary', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
     const data = await cachedBuildStockSummaryReport(reportQuery);
-    const reconciliation = await validateValuationReports(reportQuery, { stockSummary: data });
+    const detailRows = Array.isArray(data.detailRows) ? data.detailRows : [];
+    const categoryPhysicalValue = detailRows.reduce((sum, row) => sum + Number(row.physicalValueOnDlc || 0), 0);
+    const reconciliation = await validateValuationReports(reportQuery, {
+      stockSummary: data,
+      partwise: { rows: detailRows },
+      category: { grandTotal: { sumPhysicalValueOnDLC: money(categoryPhysicalValue) } }
+    });
     if (req.query.format === 'excel') {
       return sendCachedDownload(res, 'report-download', {
         reportType: 'stock-summary',

@@ -87,6 +87,8 @@ async function recomputeUpiInventoryState(Inventory, input = {}) {
   const legacyTerms = [{ upiCode }, { upiNo: upiCode }, { upiId: upiCode }];
   const filter = {
     ...scope,
+    isDeleted: { $ne: true },
+    deletedAt: null,
     $or: scope.$or ? scope.$or.concat(legacyTerms) : legacyTerms
   };
   const rows = await Inventory.find(filter).sort({ timestamp: 1, createdAt: 1 }).lean();

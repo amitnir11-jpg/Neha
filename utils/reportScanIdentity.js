@@ -31,18 +31,37 @@ function scanScope(scan = {}) {
   ].join('|');
 }
 
+function isManualScan(scan = {}) {
+  const source = [
+    scan.source,
+    scan.scanMode,
+    scan.entryMode,
+    scan.scanSourceLabel
+  ].map(upper).join(' ');
+  return source.includes('MANUAL');
+}
+
 function reportScanIdentity(scan = {}) {
-  const raw = rawScanIdentity(scan);
-  if (raw) return `${scanScope(scan)}|RAW|${raw}`;
+  const scope = scanScope(scan);
+  const uniqueScanId = clean(scan.uniqueScanId || scan.scanId);
+  if (uniqueScanId) return `${scope}|ID|${uniqueScanId}`;
+
+  const clientScanId = clean(scan.clientScanId || scan.localId);
+  if (clientScanId) return `${scope}|CLIENT|${clientScanId}`;
+
+  const syncKey = clean(scan.syncKey || scan.clientSyncKey);
+  if (syncKey && !isManualScan(scan)) return `${scope}|SYNC|${syncKey}`;
+
+  const rowId = clean(scan._id || scan.timestamp || scan.createdAt);
+  if (rowId) return `${scope}|ROW|${rowId}`;
 
   const qrFingerprint = clean(scan.qrFingerprint);
-  if (qrFingerprint) return `${scanScope(scan)}|QR|${qrFingerprint}`;
+  if (qrFingerprint) return `${scope}|QR|${qrFingerprint}`;
 
-  const syncKey = clean(scan.syncKey);
-  const source = upper(scan.source || scan.scanMode || scan.entryMode);
-  if (syncKey && !source.includes('MANUAL')) return `${scanScope(scan)}|SYNC|${syncKey}`;
+  const raw = rawScanIdentity(scan);
+  if (raw) return `${scope}|RAW|${raw}`;
 
-  return `${scanScope(scan)}|ROW|${clean(scan._id || scan.scanId || scan.uniqueScanId || scan.clientScanId || scan.localId || scan.timestamp || scan.createdAt || 'missing-id')}`;
+  return `${scope}|ROW|missing-id`;
 }
 
 function scanTimeValue(scan = {}) {

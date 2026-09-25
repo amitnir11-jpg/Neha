@@ -837,7 +837,7 @@ router.get('/filters', auth.requireAuth, async (req, res) => {
 router.get('/dealers', auth.requireAuth, async (req, res) => {
   try {
     const userAccess = await auth.userDealerAccessCodes(req.user);
-    const canSeeAll = req.user.role === 'admin' || userAccess.includes('ALL');
+    const canSeeAll = req.user.role === 'admin';
     const allowedDealerSet = new Set(userAccess);
     if (dealerListCache.expiresAt > Date.now()) {
       const dealers = canSeeAll

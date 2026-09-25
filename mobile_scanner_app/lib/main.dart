@@ -6,6 +6,7 @@ import 'screens/login_screen.dart';
 import 'screens/scanner_home_screen.dart';
 import 'services/background_sync.dart';
 import 'services/local_database.dart';
+import 'services/server_discovery.dart';
 import 'services/settings_store.dart';
 
 Future<void> main() async {
@@ -111,6 +112,12 @@ class _AppGateState extends State<AppGate> {
     final settings = SettingsStore();
     String token = '';
     String dealer = '';
+    try {
+      await ServerDiscovery()
+          .discoverAndSave(settings, timeout: const Duration(seconds: 4));
+    } catch (_) {
+      // Discovery is a convenience only. Saved settings still decide login state.
+    }
     try {
       token = await settings.token.timeout(const Duration(seconds: 6));
       dealer = await settings.dealerCode.timeout(const Duration(seconds: 6));

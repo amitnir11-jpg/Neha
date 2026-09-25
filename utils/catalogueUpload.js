@@ -16,8 +16,8 @@ function envNumber(name, fallback, minimum) {
 const MAX_UPLOAD_BYTES = envNumber('CATALOGUE_UPLOAD_MAX_MB', 100, 10) * 1024 * 1024;
 const BULK_CHUNK_SIZE = envNumber('CATALOGUE_UPLOAD_CHUNK_SIZE', 500, 100);
 const FAILURE_RETENTION_MS = envNumber('CATALOGUE_FAILURE_RETENTION_HOURS', 24, 1) * 60 * 60 * 1000;
-const FAILURE_DIR = path.resolve(__dirname, '..', 'logs', 'catalogue-upload-failures');
-const UPLOAD_LOG = path.resolve(__dirname, '..', 'logs', 'catalogue-upload.log');
+const FAILURE_DIR = require('./writablePaths').writablePath('Logs', 'catalogue-upload-failures');
+const UPLOAD_LOG = require('./writablePaths').writablePath('Logs', 'catalogue-upload.log');
 
 const CATALOGUE_COLUMNS = [
   {
@@ -145,6 +145,19 @@ function normalizeHeader(value) {
   return cleanText(value).replace(/\s+/g, ' ').toUpperCase();
 }
 
+function normalizeCatalogueImportMode(value = '') {
+  const mode = cleanText(value).toLowerCase().replace(/_/g, '-');
+  if (['add-missing', 'missing', 'missing-only', 'insert-missing', 'new-only'].includes(mode)) return 'add-missing';
+  if (['price-only', 'prices-only', 'price', 'prices', 'mrp-dlc', 'mrp-dlc-only', 'update-prices'].includes(mode)) return 'price-only';
+  if (['replace', 'delete-reupload', 'delete-and-reupload'].includes(mode)) return 'replace';
+  return 'upsert';
+}
+
+function requiredCatalogueKeysForMode(mode) {
+  if (normalizeCatalogueImportMode(mode) === 'price-only') return new Set(['partNumber', 'mrp', 'dlc']);
+  return new Set(CATALOGUE_FIELD_DEFINITIONS.filter((column) => column.mandatory).map((column) => column.key));
+}
+
 function cellValue(cell) {
   if (!cell) return '';
   const value = cell.value;
@@ -187,7 +200,8 @@ function splitCsvLine(line) {
   return cells;
 }
 
-function buildParsedRows(headers, rawRows, sourceSheetName = '') {
+function buildParsedRows(headers, rawRows, sourceSheetName = '', options = {}) {
+  const requiredKeys = requiredCatalogueKeysForMode(options.mode);
   const columns = headers.map((header, index) => {
     const originalHeader = cleanText(header) || `Column ${index + 1}`;
     const expected = COLUMN_BY_HEADER.get(normalizeHeader(originalHeader));
@@ -214,7 +228,7 @@ function buildParsedRows(headers, rawRows, sourceSheetName = '') {
     throw error;
   }
   const missingColumns = CATALOGUE_FIELD_DEFINITIONS
-    .filter((column) => column.mandatory && !columnsByKey.has(column.key))
+    .filter((column) => requiredKeys.has(column.key) && !columnsByKey.has(column.key))
     .map((column) => column.header);
   if (missingColumns.length) {
     const error = new Error(`Missing catalogue columns: ${missingColumns.join(', ')}`);
@@ -233,16 +247,16 @@ function buildParsedRows(headers, rawRows, sourceSheetName = '') {
   };
 }
 
-function parseCsv(buffer) {
+function parseCsv(buffer, options = {}) {
   const lines = String(buffer || '').replace(/^\uFEFF/, '').split(/\r?\n/);
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-  if (!lines.length) return buildParsedRows([], []);
+  if (!lines.length) return buildParsedRows([], [], '', options);
   const headers = splitCsvLine(lines[0]);
   const rows = lines.slice(1).map((line, index) => ({ rowNumber: index + 2, values: splitCsvLine(line) }));
-  return buildParsedRows(headers, rows, 'CSV');
+  return buildParsedRows(headers, rows, 'CSV', options);
 }
 
-async function parseXlsx(buffer) {
+async function parseXlsx(buffer, options = {}) {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
   const sheet = workbook.worksheets[0];
@@ -269,10 +283,10 @@ async function parseXlsx(buffer) {
       values: headers.map((_, index) => cellValue(row.getCell(index + 1)))
     });
   }
-  return buildParsedRows(headers, rows, sheet.name || 'Sheet1');
+  return buildParsedRows(headers, rows, sheet.name || 'Sheet1', options);
 }
 
-function parseLegacyExcel(buffer) {
+function parseLegacyExcel(buffer, options = {}) {
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true, raw: true });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) {
@@ -285,10 +299,10 @@ function parseLegacyExcel(buffer) {
   let lastIndex = matrix.length - 1;
   while (lastIndex > 0 && !(matrix[lastIndex] || []).some((value) => cleanText(value) !== '')) lastIndex -= 1;
   const rows = matrix.slice(1, lastIndex + 1).map((values, index) => ({ rowNumber: index + 2, values }));
-  return buildParsedRows(headers, rows, sheetName);
+  return buildParsedRows(headers, rows, sheetName, options);
 }
 
-async function parseCatalogueUpload(file) {
+async function parseCatalogueUpload(file, options = {}) {
   if (!file || !file.buffer || !file.buffer.length) {
     const error = new Error('Select a catalogue file to upload');
     error.statusCode = 400;
@@ -300,14 +314,14 @@ async function parseCatalogueUpload(file) {
     throw error;
   }
   const lowerName = cleanText(file.originalname).toLowerCase();
-  if (lowerName.endsWith('.csv') || file.mimetype === 'text/csv') return parseCsv(file.buffer);
-  if (lowerName.endsWith('.xls')) return parseLegacyExcel(file.buffer);
+  if (lowerName.endsWith('.csv') || file.mimetype === 'text/csv') return parseCsv(file.buffer, options);
+  if (lowerName.endsWith('.xls')) return parseLegacyExcel(file.buffer, options);
   if (!lowerName.endsWith('.xlsx')) {
     const error = new Error('Only .xlsx, .xls, and .csv catalogue files are supported');
     error.statusCode = 400;
     throw error;
   }
-  return parseXlsx(file.buffer);
+  return parseXlsx(file.buffer, options);
 }
 
 function parseNumeric(value, fieldName, { required = false, blankError = `${fieldName} is mandatory`, invalidError = `${fieldName} must be numeric` } = {}) {
@@ -341,6 +355,8 @@ function canonicalCatalogueFailureReason(reason) {
   if (normalized.startsWith('BLANK MANDATORY FIELDS') || normalized.startsWith('BLANK ROW')) return 'Blank mandatory fields';
   if (normalized.startsWith('INVALID MRP/DLC')) return 'Invalid MRP/DLC';
   if (normalized.startsWith('DUPLICATE CONFLICT') || normalized.startsWith('DUPLICATE PART NUMBER')) return 'Duplicate conflict';
+  if (normalized.startsWith('PART ALREADY EXISTS')) return 'Already exists in part master';
+  if (normalized.startsWith('PART NOT FOUND')) return 'Part not found in master catalogue';
   return text;
 }
 
@@ -383,6 +399,8 @@ function betterCatalogueRow(existing = null, candidate = null) {
 function validateCatalogueRows(parsed, sourceFileName = '', options = {}) {
   const onProgress = typeof options === 'function' ? options : options.onProgress;
   const emit = createUploadProgressReporter(onProgress);
+  const importMode = normalizeCatalogueImportMode(options.mode);
+  const requireDescription = importMode !== 'price-only';
   const acceptedRows = [];
   const failedRows = [];
   const duplicateRows = [];
@@ -427,7 +445,7 @@ function validateCatalogueRows(parsed, sourceFileName = '', options = {}) {
       let failureReason = '';
       if (!partNumber) {
         failureReason = 'Missing Part Number';
-      } else if (!partDescription || mrp.error === 'Blank mandatory fields' || dlc.error === 'Blank mandatory fields') {
+      } else if ((requireDescription && !partDescription) || mrp.error === 'Blank mandatory fields' || dlc.error === 'Blank mandatory fields') {
         failureReason = 'Blank mandatory fields';
       } else if (mrp.error || dlc.error) {
         failureReason = 'Invalid MRP/DLC';
@@ -790,7 +808,7 @@ async function createFailedRowsWorkbook(validation, nonImportedRows) {
   return id;
 }
 
-function summaryFrom(validation, successfulRows, persistenceFailures, existingSet, priceHistoryRowsCount, priceHistoryFailedRowsCount, currentMasterRecordCount) {
+function summaryFrom(validation, successfulRows, persistenceFailures, existingSet, priceHistoryRowsCount, priceHistoryFailedRowsCount, currentMasterRecordCount, modeSkippedRows = []) {
   const databaseFailedRows = persistenceFailures.map(({ row, reason }) => ({
     ...row,
     status: 'FAILED',
@@ -802,10 +820,11 @@ function summaryFrom(validation, successfulRows, persistenceFailures, existingSe
   const updatedRowsCount = importedRowsCount - insertedRowsCount;
   const fileRowsCount = validation.rows.length;
   const duplicateRowsCount = validation.duplicateRows.length;
-  const skippedRowsCount = validation.skippedRows.length;
+  const modeSkippedRowsCount = modeSkippedRows.length;
+  const skippedRowsCount = validation.skippedRows.length + modeSkippedRowsCount;
   const validationFailedRows = validation.failedRows.concat(validation.skippedRows);
   const failedRows = validationFailedRows.concat(databaseFailedRows);
-  const nonImportedRows = failedRows.concat(validation.duplicateRows);
+  const nonImportedRows = failedRows.concat(modeSkippedRows).concat(validation.duplicateRows);
   const failureReasons = failureReasonCounts(nonImportedRows);
   const missingPartNumberCount = Number(failureReasons['Missing Part Number'] || 0);
   const blankMandatoryFieldsCount = Number(failureReasons['Blank mandatory fields'] || 0);
@@ -813,7 +832,7 @@ function summaryFrom(validation, successfulRows, persistenceFailures, existingSe
   const duplicateConflictCount = Number(failureReasons['Duplicate conflict'] || 0);
   const databaseInsertErrorCount = Number(failureReasons['Database insert error'] || 0);
   const missingMandatoryFieldsCount = missingPartNumberCount + blankMandatoryFieldsCount;
-  const accountedRowsCount = importedRowsCount + duplicateRowsCount + failedRows.length;
+  const accountedRowsCount = importedRowsCount + duplicateRowsCount + failedRows.length + modeSkippedRowsCount;
   const accountingGapCount = fileRowsCount - accountedRowsCount;
   return {
     fileRowsCount,
@@ -824,7 +843,8 @@ function summaryFrom(validation, successfulRows, persistenceFailures, existingSe
     duplicateRowsCount,
     duplicateMergedRowsCount: duplicateRowsCount,
     skippedRowsCount,
-    blankRowsCount: skippedRowsCount,
+    modeSkippedRowsCount,
+    blankRowsCount: validation.skippedRows.length,
     insertedRowsCount,
     updatedRowsCount,
     missingMandatoryFieldsCount,
@@ -864,6 +884,7 @@ function failureReasonCounts(rows = []) {
 
 async function importCatalogue(file, options = {}) {
   const sourceFileName = cleanText(file && file.originalname);
+  const importMode = options.replaceExisting ? 'replace' : normalizeCatalogueImportMode(options.mode || options.importMode);
   const emit = createUploadProgressReporter(options.onProgress);
 
   if (emit) {
@@ -878,7 +899,7 @@ async function importCatalogue(file, options = {}) {
     }, { force: true });
   }
 
-  const parsed = await parseCatalogueUpload(file);
+  const parsed = await parseCatalogueUpload(file, { mode: importMode });
 
   if (emit) {
     emit({
@@ -892,11 +913,12 @@ async function importCatalogue(file, options = {}) {
     });
   }
 
-  const validation = validateCatalogueRows(parsed, sourceFileName, { onProgress: options.onProgress });
+  const validation = validateCatalogueRows(parsed, sourceFileName, { onProgress: options.onProgress, mode: importMode });
   const validationIssueCount = validation.failedRows.length + validation.duplicateRows.length + validation.skippedRows.length;
   if (options.rejectOnValidationIssues && validationIssueCount) {
     const currentMasterRecordCount = await MasterCatalogue.countDocuments({});
     const summary = summaryFrom(validation, [], [], new Set(), 0, 0, currentMasterRecordCount);
+    summary.importMode = importMode;
     summary.failureDownloadId = await createFailedRowsWorkbook(validation, summary.nonImportedRows);
     delete summary.nonImportedRows;
     summary.blocked = true;
@@ -922,6 +944,23 @@ async function importCatalogue(file, options = {}) {
 
   const partNumbers = validation.acceptedRows.map((row) => row.mapped.normalizedPartNumber);
   const existingSet = options.replaceExisting ? new Set() : await loadExistingPartNumbers(partNumbers);
+  let masterRows = validation.acceptedRows;
+  let modeSkippedRows = [];
+  let skippedExistingRowsCount = 0;
+  let skippedMissingRowsCount = 0;
+  if (importMode === 'add-missing') {
+    masterRows = validation.acceptedRows.filter((row) => !existingSet.has(row.mapped.normalizedPartNumber));
+    modeSkippedRows = validation.acceptedRows
+      .filter((row) => existingSet.has(row.mapped.normalizedPartNumber))
+      .map((row) => ({ ...row, status: 'SKIPPED', reason: 'Part already exists in part master' }));
+    skippedExistingRowsCount = modeSkippedRows.length;
+  } else if (importMode === 'price-only') {
+    masterRows = validation.acceptedRows.filter((row) => existingSet.has(row.mapped.normalizedPartNumber));
+    modeSkippedRows = validation.acceptedRows
+      .filter((row) => !existingSet.has(row.mapped.normalizedPartNumber))
+      .map((row) => ({ ...row, status: 'SKIPPED', reason: 'Part not found in master catalogue' }));
+    skippedMissingRowsCount = modeSkippedRows.length;
+  }
   let deletedOldRowsCount = 0;
   let deletedPriceHistoryRowsCount = 0;
   if (options.replaceExisting) {
@@ -957,32 +996,55 @@ async function importCatalogue(file, options = {}) {
     }
   }
 
+  const masterRowLabel = importMode === 'price-only' ? 'MRP/DLC rows' : (importMode === 'add-missing' ? 'missing master rows' : 'master rows');
   if (emit) {
     emit({
       stage: 'writing-master',
       percent: 52,
       processedRows: 0,
-      totalRows: validation.acceptedRows.length,
+      totalRows: masterRows.length,
       savedRowsCount: 0,
       failedRowsCount: 0,
-      message: `Saving ${validation.acceptedRows.length.toLocaleString('en-IN')} master rows...`
+      skippedExistingRowsCount,
+      skippedMissingRowsCount,
+      modeSkippedRowsCount: modeSkippedRows.length,
+      importMode,
+      message: `Saving ${masterRows.length.toLocaleString('en-IN')} ${masterRowLabel}...`
     }, { force: true });
   }
 
-  const masterResult = await writeRowsInChunks(MasterCatalogue, validation.acceptedRows, (row) => ({
-    updateOne: {
-      filter: { normalizedPartNumber: row.mapped.normalizedPartNumber },
-      update: { $set: row.mapped },
-      upsert: true
+  const masterResult = await writeRowsInChunks(MasterCatalogue, masterRows, (row) => {
+    if (importMode === 'price-only') {
+      return {
+        updateOne: {
+          filter: { normalizedPartNumber: row.mapped.normalizedPartNumber },
+          update: {
+            $set: {
+              mrp: row.mapped.mrp,
+              dlc: row.mapped.dlc,
+              sourceFileName: row.mapped.sourceFileName,
+              uploadedAt: row.mapped.uploadedAt
+            }
+          },
+          upsert: false
+        }
+      };
     }
-  }), {
+    return {
+      updateOne: {
+        filter: { normalizedPartNumber: row.mapped.normalizedPartNumber },
+        update: { $set: row.mapped },
+        upsert: true
+      }
+    };
+  }, {
     onProgress: options.onProgress,
     stage: 'writing-master',
-    label: 'master rows',
+    label: masterRowLabel,
     progressStart: 52,
     progressSpan: 28,
-    startMessage: `Saving ${validation.acceptedRows.length.toLocaleString('en-IN')} master rows...`,
-    completeMessage: 'Master rows saved'
+    startMessage: `Saving ${masterRows.length.toLocaleString('en-IN')} ${masterRowLabel}...`,
+    completeMessage: importMode === 'price-only' ? 'MRP/DLC rows saved' : 'Master rows saved'
   });
   const successfulPartSet = new Set(masterResult.successfulRows.map((row) => row.mapped.normalizedPartNumber));
   const priceRows = masterResult.successfulRows.map((row) => ({
@@ -1045,11 +1107,16 @@ async function importCatalogue(file, options = {}) {
     existingSet,
     priceResult.successfulRows.filter((row) => successfulPartSet.has(row.mapped.normalizedPartNumber)).length,
     priceResult.failedRows.length,
-    currentMasterRecordCount
+    currentMasterRecordCount,
+    modeSkippedRows
   );
   const nonImportedRows = summary.nonImportedRows;
   summary.failureDownloadId = await createFailedRowsWorkbook(validation, summary.nonImportedRows);
   delete summary.nonImportedRows;
+  summary.importMode = importMode;
+  summary.modeSkippedRowsCount = modeSkippedRows.length;
+  summary.skippedExistingRowsCount = skippedExistingRowsCount;
+  summary.skippedMissingRowsCount = skippedMissingRowsCount;
   summary.deletedOldRowsCount = deletedOldRowsCount;
   summary.deletedPriceHistoryRowsCount = deletedPriceHistoryRowsCount;
   if (emit) {
@@ -1060,8 +1127,12 @@ async function importCatalogue(file, options = {}) {
       totalRows: validation.rows.length,
       savedRowsCount: summary.savedRowsCount,
       failedRowsCount: summary.failedRowsCount,
+      modeSkippedRowsCount: summary.modeSkippedRowsCount,
+      skippedExistingRowsCount,
+      skippedMissingRowsCount,
       deletedOldRowsCount,
       deletedPriceHistoryRowsCount,
+      importMode,
       message: 'Upload completed'
     }, { force: true });
   }

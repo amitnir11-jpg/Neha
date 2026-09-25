@@ -1,9 +1,11 @@
 (function () {
   function storageGet(key) {
     try {
+      const sessionValue = window.sessionStorage ? sessionStorage.getItem(key) : null;
+      if (sessionValue !== null) return sessionValue;
       return window.localStorage ? localStorage.getItem(key) : null;
     } catch (error) {
-      console.warn('Local browser storage read failed:', key, error);
+      console.warn('Browser storage read failed:', key, error);
       return null;
     }
   }
@@ -16,11 +18,20 @@
     }
   }
 
+  function sessionStorageSet(key, value) {
+    try {
+      if (window.sessionStorage) sessionStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('Session storage write failed:', key, error);
+    }
+  }
+
   function storageRemove(key) {
     try {
       if (window.localStorage) localStorage.removeItem(key);
+      if (window.sessionStorage) sessionStorage.removeItem(key);
     } catch (error) {
-      console.warn('Local browser storage remove failed:', key, error);
+      console.warn('Browser storage remove failed:', key, error);
     }
   }
 
@@ -71,7 +82,8 @@
     deleteAction: null,
     lastReportRows: [],
     reportFilterSettings: {},
-    reportAutoLoadTimer: null
+    reportAutoLoadTimer: null,
+    license: null
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -352,6 +364,67 @@
     return data;
   }
 
+  function setLicenseLocked(locked) {
+    $('#licenseActivationPanel')?.classList.toggle('hidden', !locked);
+    $('.login-tabs')?.classList.toggle('hidden', locked);
+    $('.login-panel-body')?.classList.toggle('hidden', locked);
+  }
+
+  function renderLicenseStatus(license, message = '') {
+    const statusText = $('#licenseStatusText');
+    const deviceInput = $('#licenseDeviceId');
+    if (deviceInput) deviceInput.value = license?.deviceId || '';
+    if (!statusText) return;
+
+    if (message) {
+      statusText.className = license?.runAllowed ? 'form-message success' : 'form-message error';
+      statusText.textContent = message;
+      return;
+    }
+
+    statusText.className = license?.runAllowed ? 'form-message success' : 'form-message error';
+    statusText.textContent = license?.message || (license?.required ? 'Activation required for this PC.' : '');
+  }
+
+  async function refreshLicenseStatus() {
+    const data = await api('/api/license/status');
+    state.license = data.license || {};
+    const locked = Boolean(state.license.required && !state.license.runAllowed);
+    setLicenseLocked(locked);
+    if (locked) renderLicenseStatus(state.license);
+    return state.license;
+  }
+
+  function initLicenseActivation() {
+    const form = $('#licenseActivationForm');
+    if (!form || form.dataset.bound === 'true') return;
+    form.dataset.bound = 'true';
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = form.querySelector('button[type="submit"]');
+      const originalText = button?.querySelector('span')?.textContent || 'Activate';
+      try {
+        if (button) {
+          button.disabled = true;
+          const label = button.querySelector('span');
+          if (label) label.textContent = 'Activating';
+        }
+        const data = await api('/api/license/activate', { method: 'POST', body: formValues(form) });
+        state.license = data.license || {};
+        renderLicenseStatus(state.license, data.message || 'Activation successful.');
+        setTimeout(() => window.location.reload(), 700);
+      } catch (error) {
+        renderLicenseStatus(state.license || {}, error.message);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          const label = button.querySelector('span');
+          if (label) label.textContent = originalText;
+        }
+      }
+    });
+  }
+
   async function fetchBlob(path, fileName) {
     const response = await fetch(apiUrl(path), {
       cache: 'no-store',
@@ -404,12 +477,18 @@
     }
   }
 
-  function saveSession(payload, dealerCode = '') {
+  function saveSession(payload, dealerCode = '', rememberMe = false) {
     state.token = payload.token;
     state.user = payload.user;
     state.assignedDealers = payload.assignedDealers || payload.activeDealers || state.assignedDealers || [];
-    storageSet('dakshToken', payload.token);
-    storageSet('dakshUser', JSON.stringify(payload.user));
+    storageRemove('dakshToken');
+    storageRemove('dakshUser');
+    storageRemove('dakshSessionPersistence');
+    const persist = rememberMe ? storageSet : sessionStorageSet;
+    persist('dakshToken', payload.token);
+    persist('dakshUser', JSON.stringify(payload.user));
+    if (rememberMe) storageSet('dakshSessionPersistence', 'remember');
+    else sessionStorageSet('dakshSessionPersistence', 'session');
     storageSet('dakshAssignedDealers', JSON.stringify(state.assignedDealers));
     const selectedDealer = cleanDealerCode(dealerCode || payload.activeDealerId || payload.dealerCode || '');
     if (selectedDealer) {
@@ -419,6 +498,7 @@
   }
 
   function logout() {
+    fetch(apiUrl('/api/auth/logout'), { method: 'POST', credentials: 'include' }).catch(() => {});
     clearSession();
     navigateTo('/', { replace: true });
   }
@@ -460,7 +540,42 @@
     const text = String(value || '').trim();
     if (text.toLowerCase() === 'all') return 'ALL';
     const match = text.match(/\(([^()]+)\)\s*$/);
-    return (match ? match[1] : text).trim().toUpperCase();
+    if (match) return match[1].trim().toUpperCase();
+    const dashMatch = text.match(/^([A-Za-z0-9_]{3,})\s+-\s+.+$/);
+    return (dashMatch ? dashMatch[1] : text).trim().toUpperCase();
+  }
+
+  function selectedOptionText(select) {
+    if (!select) return '';
+    const option = select.options && select.options[select.selectedIndex];
+    return option ? String(option.textContent || option.label || option.value || '').trim() : '';
+  }
+
+  function activeDealerCode() {
+    return cleanDealerCode(storageGet(userScopedStorageKey(ACTIVE_DEALER_KEY)) || storageGet(ACTIVE_DEALER_KEY) || '');
+  }
+
+  function resolveReportDealerCode() {
+    const select = $('#reportDealerFilter');
+    const candidates = [
+      select?.value || '',
+      selectedOptionText(select),
+      $('#dashboardDealerFilter')?.value || '',
+      activeDealerCode()
+    ];
+    const resolved = candidates.map(cleanDealerCode).find((code) => code && code !== 'ALL');
+    const dealer = state.dealers.find((item) => cleanDealerCode(item.dealerCode || item.code || item.id || '') === resolved);
+    return cleanDealerCode(dealer?.dealerCode || resolved || '');
+  }
+
+  function syncReportDealerFilter() {
+    const dealerCode = resolveReportDealerCode();
+    const select = $('#reportDealerFilter');
+    if (select && dealerCode && cleanDealerCode(select.value || '') !== dealerCode) {
+      const match = Array.from(select.options || []).find((option) => cleanDealerCode(option.value) === dealerCode);
+      if (match) select.value = match.value;
+    }
+    return dealerCode;
   }
 
   function dealerLabel(dealer = {}) {
@@ -488,23 +603,23 @@
     return true;
   }
 
-  function finishLogin(payload, dealerCode = '') {
-    saveSession(payload, dealerCode);
+  function finishLogin(payload, dealerCode = '', rememberMe = false) {
+    saveSession(payload, dealerCode, rememberMe);
     navigateTo('/dashboard');
   }
 
-  function handleLoginSuccess(data, message) {
+  function handleLoginSuccess(data, message, rememberMe = false) {
     const dealers = data.assignedDealers || data.activeDealers || [];
     if (data.activeDealerId || data.dealerCode || dealers.length <= 1 || data.user?.role === 'admin') {
-      finishLogin(data, data.activeDealerId || data.dealerCode || (dealers[0] && (dealers[0].dealerCode || dealers[0].id)) || '');
+      finishLogin(data, data.activeDealerId || data.dealerCode || (dealers[0] && (dealers[0].dealerCode || dealers[0].id)) || '', rememberMe);
       return;
     }
-    if (showDealerSelection(data)) {
+    if (showDealerSelection({ ...data, rememberMe })) {
       message.className = 'form-message success';
       message.textContent = 'Select dealer';
       return;
     }
-    finishLogin(data);
+    finishLogin(data, '', rememberMe);
   }
 
   function queryFromForm(form) {
@@ -555,11 +670,33 @@
   }
 
   async function initLogin() {
+    const persistence = storageGet('dakshSessionPersistence');
+    if (!['remember', 'session'].includes(persistence)) {
+      storageRemove('dakshToken');
+      storageRemove('dakshUser');
+      storageRemove('dakshAssignedDealers');
+      state.token = '';
+      state.user = null;
+    }
+    initLicenseActivation();
     const params = new URLSearchParams(window.location.search);
     if (params.get('logout') === '1' || params.get('forceLogin') === '1') {
       clearSession();
       window.history.replaceState({}, document.title, '/');
     }
+
+    const license = await refreshLicenseStatus().catch((error) => {
+      const fallback = {
+        required: Boolean(window.DAKSH_CONFIG && window.DAKSH_CONFIG.licenseRequired),
+        runAllowed: false,
+        message: error.message
+      };
+      state.license = fallback;
+      setLicenseLocked(fallback.required);
+      if (fallback.required) renderLicenseStatus(fallback);
+      return fallback;
+    });
+    if (license.required && !license.runAllowed) return;
 
     if (await validateStoredLogin()) {
       navigateTo('/dashboard');
@@ -634,7 +771,7 @@
       try {
         const payload = formValues(event.currentTarget);
         const data = await api('/api/auth/login', { method: 'POST', body: payload });
-        handleLoginSuccess(data, message);
+        handleLoginSuccess(data, message, payload.rememberMe === 'on');
       } catch (error) {
         message.className = 'form-message error';
         message.textContent = error.message;
@@ -647,7 +784,7 @@
       try {
         const payload = formValues(event.currentTarget);
         const data = await api('/api/auth/login', { method: 'POST', body: payload });
-        handleLoginSuccess(data, message);
+        handleLoginSuccess(data, message, payload.rememberMe === 'on');
       } catch (error) {
         message.className = 'form-message error';
         message.textContent = error.message;
@@ -663,7 +800,7 @@
         message.textContent = 'Select dealer';
         return;
       }
-      finishLogin(state.pendingDealerLogin || {}, dealerCode);
+      finishLogin(state.pendingDealerLogin || {}, dealerCode, Boolean(state.pendingDealerLogin?.rememberMe));
     });
 
     $('#registerLoginForm').addEventListener('submit', async (event) => {
@@ -821,7 +958,9 @@
 
     $$('.single-delete-button').forEach((button) => {
       button.addEventListener('click', () => openDeleteModal('Delete Record', 'Type DELETE to delete this scan.', async (confirmText) => {
-        await api('/api/inventory/delete-selected', { method: 'POST', body: { ids: [button.dataset.id], confirmText } });
+        const details = deleteReasonDetails();
+        if (!details) return;
+        await api('/api/inventory/delete-selected', { method: 'POST', body: { ids: [button.dataset.id], confirmText, ...details } });
         toast('Record deleted');
         await loadInventory();
       }));
@@ -834,7 +973,9 @@
       return;
     }
     openDeleteModal('Delete Part', 'Type DELETE to remove this scan record.', async (confirmText) => {
-      await api('/api/inventory/delete-selected', { method: 'POST', body: { ids: [scanId], confirmText } });
+      const details = deleteReasonDetails();
+      if (!details) return;
+      await api('/api/inventory/delete-selected', { method: 'POST', body: { ids: [scanId], confirmText, ...details } });
       toast('Scan deleted');
       await loadInventory();
     });
@@ -855,6 +996,8 @@
       return;
     }
     openDeleteModal('Delete Part', `Type DELETE to remove all scan records for part ${part}.`, async (confirmText) => {
+      const details = deleteReasonDetails();
+      if (!details) return;
       await api('/api/admin/scans/delete-by-parts', {
         method: 'POST',
         body: {
@@ -862,7 +1005,8 @@
           parts: part,
           deleteType: 'single-part',
           ...(options.auditId ? { auditId: String(options.auditId).trim() } : {}),
-          confirmText
+          confirmText,
+          ...details
         }
       });
       toast('Part deleted');
@@ -905,8 +1049,24 @@
     $('#deleteModalTitle').textContent = title;
     $('#deleteModalText').textContent = text;
     $('#deleteConfirmInput').value = '';
+    if ($('#deleteReasonInput')) $('#deleteReasonInput').value = '';
+    if ($('#deleteRemarksInput')) $('#deleteRemarksInput').value = '';
     $('#deleteModal').classList.add('active');
     $('#deleteConfirmInput').focus();
+  }
+
+  function deleteReasonDetails() {
+    const reason = String($('#deleteReasonInput')?.value || '').trim();
+    const remarks = String($('#deleteRemarksInput')?.value || '').trim();
+    if (!reason) {
+      toast('Select a deletion reason', 'error');
+      return null;
+    }
+    if (reason.toLowerCase() === 'other' && !remarks) {
+      toast('Remarks are required when the reason is Other', 'error');
+      return null;
+    }
+    return { reason, remarks };
   }
 
   function closeDeleteModal() {
@@ -1402,7 +1562,9 @@
       const ids = $$('.scan-checkbox:checked').map((box) => box.value);
       if (!ids.length) return toast('Select records first', 'error');
       openDeleteModal('Delete Selected Records', 'Type DELETE to delete selected scans.', async (confirmText) => {
-        await api('/api/inventory/delete-selected', { method: 'POST', body: { ids, confirmText } });
+        const details = deleteReasonDetails();
+        if (!details) return;
+        await api('/api/inventory/delete-selected', { method: 'POST', body: { ids, confirmText, ...details } });
         toast('Selected records deleted');
         await loadInventory();
       });
@@ -1412,7 +1574,9 @@
       const dealerCode = $('#dashboardDealerFilter').value;
       if (!dealerCode) return toast('Choose a dealer filter first', 'error');
       openDeleteModal('Delete Dealer Records', 'Type DELETE to delete all records for the selected dealer.', async (confirmText) => {
-        await api('/api/inventory/delete-all', { method: 'POST', body: { scope: 'dealer', dealerCode, confirmText } });
+        const details = deleteReasonDetails();
+        if (!details) return;
+        await api('/api/inventory/delete-all', { method: 'POST', body: { scope: 'dealer', dealerCode, confirmText, ...details } });
         toast('Dealer records deleted');
         await loadInventory();
       });
@@ -1420,7 +1584,9 @@
 
     $('#deleteSystemButton').addEventListener('click', () => {
       openDeleteModal('Delete All System Records', 'Type DELETE to delete all scan records in the system.', async (confirmText) => {
-        await api('/api/inventory/delete-all', { method: 'POST', body: { scope: 'system', confirmText } });
+        const details = deleteReasonDetails();
+        if (!details) return;
+        await api('/api/inventory/delete-all', { method: 'POST', body: { scope: 'system', confirmText, ...details } });
         toast('All scan records deleted');
         await loadInventory();
       });
@@ -1434,7 +1600,9 @@
         const dateBefore = new Date(dateStr);
         if (Number.isNaN(dateBefore.getTime())) return toast('Invalid date format', 'error');
         openDeleteModal('Delete Old Records', `Type DELETE to delete all scans before ${dateBefore.toLocaleDateString()}.`, async (confirmText) => {
-          await api('/api/inventory/delete-all', { method: 'POST', body: { scope: 'date', dateBefore: dateBefore.toISOString(), confirmText } });
+          const details = deleteReasonDetails();
+          if (!details) return;
+          await api('/api/inventory/delete-all', { method: 'POST', body: { scope: 'date', dateBefore: dateBefore.toISOString(), confirmText, ...details } });
           toast('Old scan records deleted');
           await loadInventory();
         });
@@ -1447,7 +1615,9 @@
         const category = window.prompt('Enter exact category name to delete:');
         if (!category) return;
         openDeleteModal('Delete Category Records', `Type DELETE to delete all scans in category "${category}".`, async (confirmText) => {
-          await api('/api/inventory/delete-all', { method: 'POST', body: { scope: 'category', category, confirmText } });
+          const details = deleteReasonDetails();
+          if (!details) return;
+          await api('/api/inventory/delete-all', { method: 'POST', body: { scope: 'category', category, confirmText, ...details } });
           toast(`Category "${category}" records deleted`);
           await loadInventory();
         });
@@ -1460,7 +1630,9 @@
         const bin = window.prompt('Enter exact bin location to delete:');
         if (!bin) return;
         openDeleteModal('Delete Bin Records', `Type DELETE to delete all scans in bin "${bin}".`, async (confirmText) => {
-          await api('/api/inventory/delete-all', { method: 'POST', body: { scope: 'bin', bin, confirmText } });
+          const details = deleteReasonDetails();
+          if (!details) return;
+          await api('/api/inventory/delete-all', { method: 'POST', body: { scope: 'bin', bin, confirmText, ...details } });
           toast(`Bin "${bin}" records deleted`);
           await loadInventory();
         });
@@ -1549,18 +1721,19 @@
     if (mobileUrlNode) mobileUrlNode.textContent = 'Mobile scanner: checking...';
     api('/api/health')
       .then((health) => {
-        const mobileScannerUrl = health.scanUrl || health.mobileScannerUrl || (health.serverUrl ? `${String(health.serverUrl).replace(/\/+$/, '')}/mobile-scanner` : `${window.location.origin.replace(/\/+$/, '')}/mobile-scanner`);
+        const mobileScannerUrl = health.mobileWebUrl || health.mobileScannerUrl || health.scanUrl || (health.serverUrl ? `${String(health.serverUrl).replace(/\/+$/, '')}/mobile-web` : `${window.location.origin.replace(/\/+$/, '')}/mobile-web`);
         if (mobileUrlNode) mobileUrlNode.textContent = `Mobile scanner: ${mobileScannerUrl}`;
       })
       .catch(() => {
-        if (mobileUrlNode) mobileUrlNode.textContent = `Mobile scanner: ${window.location.origin.replace(/\/+$/, '')}/mobile-scanner`;
+        if (mobileUrlNode) mobileUrlNode.textContent = `Mobile scanner: ${window.location.origin.replace(/\/+$/, '')}/mobile-web`;
       });
     initDashboardEvents();
     await connectThisDevice();
     await Promise.all([loadDealers(), loadInventory(), loadDevices(), loadMasterSearch()]);
 
     if (window.io) {
-      const socket = apiBaseUrl() ? window.io(apiBaseUrl()) : window.io();
+      const socketOptions = { auth: { token: state.token } };
+      const socket = apiBaseUrl() ? window.io(apiBaseUrl(), socketOptions) : window.io(socketOptions);
       socket.on('connect', () => socket.emit('device:hello', { deviceId: clientDeviceId(), deviceName: 'Dashboard Browser' }));
       socket.on('scan:new', () => loadInventory().catch(console.warn));
       socket.on('scan:deleted', () => loadInventory().catch(console.warn));
@@ -1692,9 +1865,7 @@
   function scheduleReportPreview(delay = 350, pendingMessage = 'Applying filters...') {
     cancelReportPreviewTimer();
     const params = Object.fromEntries(new URLSearchParams(queryFromForm($('#reportFilterForm'))).entries());
-    const dealerCode = cleanDealerCode($('#reportDealerFilter')?.value || '');
-    const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === dealerCode);
-    const resolvedDealerCode = selectedDealer?.dealerCode || dealerCode || '';
+    const resolvedDealerCode = syncReportDealerFilter();
     if (!resolvedDealerCode) {
       renderReport({ summary: {}, finalRows: [] });
       setLegacyReportMessage('Select dealer code first to load report automatically.', 'form-message error');
@@ -1716,9 +1887,7 @@
 
   async function loadReportPreview() {
     cancelReportPreviewTimer();
-    const selectedDealerCode = cleanDealerCode($('#reportDealerFilter')?.value || '');
-    const selectedDealer = state.dealers.find((dealer) => cleanDealerCode(dealer.dealerCode) === selectedDealerCode);
-    const dealerCode = selectedDealer?.dealerCode || selectedDealerCode || '';
+    const dealerCode = syncReportDealerFilter();
     if (!dealerCode) {
       renderReport({ summary: {}, finalRows: [] });
       const message = $('#legacyReportMessage');
@@ -1761,6 +1930,7 @@
     const data = await api('/api/dealers');
     state.dealers = data.dealers || [];
     $('#reportDealerFilter').innerHTML = selectOptions(state.dealers);
+    syncReportDealerFilter();
   }
 
   function initReportEvents() {
@@ -1851,7 +2021,7 @@
         toast(error.message, 'error');
       }
     });
-    if (cleanDealerCode($('#reportDealerFilter')?.value || '')) {
+    if (syncReportDealerFilter()) {
       scheduleReportPreview(150, 'Loading report...');
     }
   }
@@ -1863,7 +2033,8 @@
     await loadReportDealers();
     await loadLegacyReportFilterSettings();
     if (window.io) {
-      const socket = apiBaseUrl() ? window.io(apiBaseUrl()) : window.io();
+      const socketOptions = { auth: { token: state.token } };
+      const socket = apiBaseUrl() ? window.io(apiBaseUrl(), socketOptions) : window.io(socketOptions);
       socket.on('scan:new', () => {});
       socket.on('scan:deleted', () => {});
       socket.on('stats:update', () => {});

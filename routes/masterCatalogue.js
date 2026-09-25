@@ -7,6 +7,8 @@ const Inventory = require('../models/Inventory');
 const auth = require('./auth');
 const { cleanText, normalizePartNumber } = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
+const { downloadCompletePartMaster } = require('../utils/partMasterExport');
+const { refreshOngoingAuditPrices } = require('../utils/ongoingAuditPricing');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
 const {
   MAX_UPLOAD_BYTES,
@@ -96,15 +98,18 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, uploadCatalogueFile,
       percent: 0,
       message: 'File received. Preparing upload...'
     });
-    const result = await importCatalogue(req.file, { onProgress: emitProgress });
+    const result = await importCatalogue(req.file, {
+      onProgress: emitProgress,
+      mode: req.body && (req.body.mode || req.body.importMode || req.body.catalogueUploadMode)
+    });
     emitProgress({
       stage: 'completed',
       percent: 100,
       message: 'Upload completed',
       ...result
     });
-    req.io?.emit('master:update');
     invalidateCatalogueCaches();
+    req.io?.emit('master:update');
     return res.json({ success: true, uploadId, ...result });
   } catch (error) {
     emitProgress({
@@ -116,11 +121,30 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, uploadCatalogueFile,
   }
 });
 
+router.post('/refresh-audit-prices', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const result = await refreshOngoingAuditPrices(req.body, req.user);
+    invalidateCache({
+      tags: ['inventory', 'reconciliation', 'stock', 'report', 'dashboard', 'audit', 'bin'],
+      scope: { dealerCode: result.dealerCode, auditId: result.auditId }
+    });
+    const event = { reason: 'audit-price-refresh', ...result };
+    ['inventory:update', 'reports:update', 'dealer-stock:update', 'audit:prices-refreshed']
+      .forEach((name) => req.io?.emit(name, event));
+    return res.json({
+      success: true, ...result,
+      message: `Audit prices refreshed: ${result.updatedScanCount} scans and ${result.updatedStockCount} stock rows updated.${result.missingPartCount ? ` ${result.missingPartCount} parts were not found in Master; their saved prices were retained.` : ''}`
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/required-columns', auth.requireAuth, (_req, res) => {
   return res.json({
     success: true,
     columns: catalogueFieldReference(),
-    message: 'Download the template first, then keep the first row as headers. The template uses the latest accepted master format.'
+    message: 'Download the template first, then keep the first row as headers. MRP/DLC update files need Part Number, MRP and DLP only.'
   });
 });
 
@@ -136,6 +160,8 @@ router.get('/template', auth.requireAuth, auth.requireAdmin, async (_req, res) =
     return res.status(500).json({ success: false, message: error.message });
   }
 });
+
+router.get('/export', auth.requireAuth, auth.requireAdmin, downloadCompletePartMaster);
 
 router.get('/upload-failures/:downloadId', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   const file = failureFilePath(req.params.downloadId);
@@ -192,7 +218,7 @@ router.post('/delete-and-reupload', auth.requireAuth, auth.requireAdmin, uploadC
       deletedPriceHistoryRowsCount,
       message: `Old catalogue deleted: ${deletedOldRowsCount} rows`
     });
-    const result = await importCatalogue(req.file, { onProgress: emitProgress });
+    const result = await importCatalogue(req.file, { onProgress: emitProgress, mode: 'replace' });
     emitProgress({
       stage: 'completed',
       percent: 100,

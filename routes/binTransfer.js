@@ -625,7 +625,7 @@ router.get('/labels/logs', auth.requireAuth, async (req, res) => {
   }
 });
 
-router.post('/transfer', auth.requireAuth, async (req, res) => {
+router.post('/transfer', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const dealerCode = upper(req.body.dealerCode);
     const fromBin = clean(req.body.sourceBin || req.body.fromBin);
@@ -724,7 +724,7 @@ router.get('/history', auth.requireAuth, async (req, res) => {
   }
 });
 
-router.post('/single', auth.requireAuth, async (req, res) => {
+router.post('/single', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const history = await transferPart({
       dealerCode: upper(req.body.dealerCode),
@@ -742,7 +742,7 @@ router.post('/single', auth.requireAuth, async (req, res) => {
   }
 });
 
-router.post('/multiple', auth.requireAuth, async (req, res) => {
+router.post('/multiple', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const dealerCode = upper(req.body.dealerCode);
     const fromBin = clean(req.body.sourceBin || req.body.fromBin);
@@ -768,7 +768,7 @@ router.post('/multiple', auth.requireAuth, async (req, res) => {
   }
 });
 
-router.post('/bulk', auth.requireAuth, async (req, res) => {
+router.post('/bulk', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const dealerCode = upper(req.body.dealerCode);
     const fromBin = clean(req.body.sourceBin || req.body.fromBin);

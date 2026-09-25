@@ -6,7 +6,9 @@
   <title>Daksh Inventory v2 Dashboard</title>
   <link rel="icon" href="/brand/favicon.ico" type="image/x-icon">
   <link rel="apple-touch-icon" sizes="512x512" href="/brand/app-icon.png">
-  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/style.css?v=20260902-bin-label-select-v1">
+  <link rel="stylesheet" href="/professional-theme.css?v=20260908-enterprise-theme-v3">
+  <link rel="stylesheet" href="/css/select-system.css?v=20260908-enterprise-select-v3">
 </head>
 <body data-page="dashboard">
   <div class="app-shell">
@@ -17,13 +19,13 @@
       <nav class="sidebar-nav">
         <button class="nav-link active" data-view="dashboardView">Dashboard</button>
         <button class="nav-link" data-view="scanView">Scan</button>
-        <button class="nav-link" data-view="auditView">Audit Setup</button>
+        <a class="nav-link nav-anchor" href="/dashboard?view=reports" target="_blank" rel="noopener noreferrer">Reports</a>
+        <button class="nav-link" data-view="auditView">Audit Checking</button>
         <button class="nav-link" data-view="dealerView">Dealers</button>
-        <button class="nav-link" data-view="masterView">Master Catalog</button>
-        <button class="nav-link" data-view="verifyView">Cross Verification</button>
+        <button class="nav-link" data-view="masterView">Master Data</button>
+        <button class="nav-link" data-view="verifyView">Validator</button>
         <button class="nav-link" data-view="intelligenceView">Part Intelligence</button>
-        <a class="nav-link nav-anchor" href="/report" target="_blank" rel="noopener noreferrer">Reports</a>
-        <button class="nav-link" data-view="backupView">Backup</button>
+        <button class="nav-link" data-view="backupView">Archive & Restore</button>
       </nav>
     </aside>
 
@@ -373,6 +375,8 @@
       <h2 id="deleteModalTitle">Confirm Delete</h2>
       <p id="deleteModalText">Type DELETE to confirm.</p>
       <input id="deleteConfirmInput" placeholder="DELETE">
+      <label>Deletion Reason<select id="deleteReasonInput" required><option value="">Select reason</option><option>Duplicate scan</option><option>Wrong part number</option><option>Wrong quantity</option><option>Wrong bin</option><option>Wrong scan type</option><option>Test data cleanup</option><option>Other</option></select></label>
+      <label>Remarks<textarea id="deleteRemarksInput" rows="2" placeholder="Required when the reason is Other"></textarea></label>
       <div class="modal-actions">
         <button id="cancelDeleteButton" class="ghost-button" type="button">Cancel</button>
         <button id="confirmDeleteButton" class="danger-button" type="button">Confirm</button>
@@ -383,6 +387,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app.js?v=20260626-delete-clean-fix"></script>
 </body>
 </html>

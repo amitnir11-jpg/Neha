@@ -19,11 +19,18 @@ const FILTER_KEYS = [
   'entryChannel',
   'entrySource',
   'binLocation',
+  'movementStatus',
   'audit',
   'auditDate',
   'partNumber',
   'productCategory',
-  'model'
+  'productGroup',
+  'productSubGroup',
+  'model',
+  'year',
+  'action',
+  'varianceType',
+  'scanModeOptions'
 ];
 
 const DEFAULT_FILTERS = ['dealer', 'dateRange', 'scanType', 'scanStatus', 'userName', 'syncStatus'];

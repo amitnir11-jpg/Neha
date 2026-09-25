@@ -1,4 +1,5 @@
 const os = require('os');
+const { connectionMode } = require('../services/ConnectionConfig');
 
 function cleanIpv4(ip) {
   const text = String(ip || '').trim().replace(/^::ffff:/, '');
@@ -20,6 +21,10 @@ function isPreferredLanIp(ip) {
   if (/^10\./.test(ip)) return true;
   const match = ip.match(/^172\.(\d+)\./);
   return Boolean(match && Number(match[1]) >= 16 && Number(match[1]) <= 31);
+}
+
+function isPrivateLanIp(ip) {
+  return Boolean(cleanIpv4(ip) && isPreferredLanIp(ip));
 }
 
 function interfaceNameScore(name = '') {
@@ -74,6 +79,10 @@ function detectLanIp() {
   return best ? best.address : '127.0.0.1';
 }
 
+function lanAddresses() {
+  return Array.from(new Set(lanCandidates().map((candidate) => candidate.address)));
+}
+
 function detectLanIpForRemote(remoteIp) {
   const remote = ipv4ToNumber(remoteIp);
   if (remote === null || Number.isNaN(remote)) return detectLanIp();
@@ -88,6 +97,12 @@ function detectLanIpForRemote(remoteIp) {
 
   const bestMatch = bestLanCandidate(matches);
   return bestMatch ? bestMatch.address : detectLanIp();
+}
+
+function isAssignedLanIp(ip) {
+  const address = cleanIpv4(ip);
+  if (!address) return false;
+  return lanCandidates().some((candidate) => candidate.address === address);
 }
 
 function isLocalhostUrl(value) {
@@ -138,8 +153,22 @@ function inferRequestProtocol(requestProtocol = '', requestHost = '') {
 }
 
 function publicBaseUrl(port, remoteIp = '', requestProtocol = '', requestHost = '') {
+  const activePort = Number(port || process.env.PORT || 3000);
+  if (connectionMode() === 'LOCAL') {
+    const configuredLocalUrl = String(process.env.DAKSH_LOCAL_BASE_URL || '').trim().replace(/\/+$/, '');
+    if (configuredLocalUrl && !isLocalhostUrl(configuredLocalUrl)) {
+      return /^https?:\/\//i.test(configuredLocalUrl) ? configuredLocalUrl : `http://${configuredLocalUrl}`;
+    }
+    const hostname = String(process.env.DAKSH_MDNS_HOSTNAME || 'daksh.local').trim().toLowerCase() || 'daksh.local';
+    return `http://${hostname}:${activePort}`;
+  }
+
   const explicit = String(process.env.PUBLIC_BASE_URL || process.env.SERVER_URL || '').trim().replace(/\/+$/, '');
-  if (explicit && !isPlaceholderPublicUrl(explicit)) return /^https?:\/\//i.test(explicit) ? explicit : `https://${explicit}`;
+  if (explicit && !isPlaceholderPublicUrl(explicit) && !isLocalhostUrl(explicit)) {
+    const explicitUrl = /^https?:\/\//i.test(explicit) ? explicit : `https://${explicit}`;
+    const explicitHost = parseRequestHost(explicitUrl).hostname;
+    if (!isPrivateLanIp(explicitHost) || isAssignedLanIp(explicitHost)) return explicitUrl;
+  }
 
   const renderUrl = String(process.env.RENDER_EXTERNAL_URL || process.env.RENDER_EXTERNAL_HOSTNAME || '').trim().replace(/\/+$/, '');
   if (renderUrl) return /^https?:\/\//i.test(renderUrl) ? renderUrl : `https://${renderUrl}`;
@@ -156,27 +185,36 @@ function publicBaseUrl(port, remoteIp = '', requestProtocol = '', requestHost = 
     return `${protocol}://${requestHostInfo.host}`;
   }
 
-  const activePort = Number(port || process.env.PORT || 3001);
   return `http://${detectLanIpForRemote(remoteIp)}:${activePort}`;
 }
 
 function serverInfo(port, remoteIp = '', requestProtocol = '', requestHost = '') {
-  const activePort = Number(port || process.env.PORT || 3001);
+  const activePort = Number(port || process.env.PORT || 3000);
   const serverUrl = publicBaseUrl(activePort, remoteIp, requestProtocol, requestHost);
   const parsed = new URL(serverUrl);
-  const ip = parsed.hostname;
+  const lanIp = detectLanIpForRemote(remoteIp);
+  const ip = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(parsed.hostname) ? parsed.hostname : lanIp;
   const hostPort = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
-  const scanUrl = `${serverUrl.replace(/\/+$/, '')}/mobile-scanner`;
-  const mobileScannerUrl = scanUrl;
+  const baseUrl = serverUrl.replace(/\/+$/, '');
+  const lanBaseUrl = `http://${lanIp}:${activePort}`;
+  const scanUrl = `${baseUrl}/mobile-scanner`;
+  const mobileWebUrl = `${baseUrl}/mobile-web`;
+  const mobileScannerUrl = mobileWebUrl;
   const connectUrl = `${serverUrl}/api/mobile/connect`;
   const syncUrl = `${serverUrl}/api/mobile/sync`;
   return {
     ip,
+    lanIp,
+    hostname: parsed.hostname,
     port: activePort,
     hostPort,
     serverUrl,
+    mdnsUrl: connectionMode() === 'LOCAL' ? serverUrl : '',
+    lanUrl: lanBaseUrl,
     scanUrl,
+    mobileWebUrl,
     mobileScannerUrl,
+    legacyMobileScannerUrl: scanUrl,
     healthUrl: `${serverUrl}/api/health`,
     connectUrl,
     syncUrl
@@ -186,6 +224,7 @@ function serverInfo(port, remoteIp = '', requestProtocol = '', requestHost = '')
 module.exports = {
   cleanIpv4,
   detectLanIp,
+  lanAddresses,
   detectLanIpForRemote,
   isLocalhostUrl,
   isPlaceholderPublicUrl,

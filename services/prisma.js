@@ -1,4 +1,5 @@
 const { PrismaClient, Prisma } = require('@prisma/client');
+const { AsyncLocalStorage } = require('async_hooks');
 const {
   acceptedDatabaseEnvVars,
   applyResolvedDatabaseUrl,
@@ -10,6 +11,36 @@ let resolvedDatabaseUrl = applyResolvedDatabaseUrl();
 const prisma = new PrismaClient({
   log: process.env.PRISMA_LOG_QUERIES === 'true' ? ['query', 'warn', 'error'] : ['warn', 'error']
 });
+
+// A transaction client follows adapter calls across awaits without changing the
+// public Prisma client used by existing direct-query services.
+const transactionContext = new AsyncLocalStorage();
+
+function getPrismaClient() {
+  return transactionContext.getStore() || prisma;
+}
+
+function inDatabaseTransaction() {
+  return Boolean(transactionContext.getStore());
+}
+
+async function withDatabaseTransaction(work, options = {}) {
+  if (inDatabaseTransaction()) return work(getPrismaClient());
+  const attempts = options.attempts || 5;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await prisma.$transaction(
+        (client) => transactionContext.run(client, () => work(client)),
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10000, timeout: options.timeout || 30000 }
+      );
+    } catch (error) {
+      // Retry the entire read/modify/write against a fresh serializable snapshot.
+      // The callback must contain database work only, never external side effects.
+      if (error.code !== 'P2034' || attempt === attempts - 1) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+    }
+  }
+}
 
 let ready = false;
 let lastError = '';
@@ -63,8 +94,9 @@ function isDatabaseReady() {
 }
 
 function databaseHealthDetails() {
+  const mode = String(process.env.CONNECTION_MODE || process.env.DAKSH_CONNECTION_MODE || '').trim().toUpperCase();
   return {
-    activeDatabase: 'railway-postgresql',
+    activeDatabase: mode === 'LOCAL' ? 'local-postgresql' : 'railway-postgresql',
     activeDatabaseUrl: maskDatabaseUrl(resolvedDatabaseUrl.url),
     configuredDatabaseEnvVar: databaseUrlSource(),
     databaseProvider: 'postgresql',
@@ -76,6 +108,9 @@ function databaseHealthDetails() {
 module.exports = {
   Prisma,
   prisma,
+  getPrismaClient,
+  inDatabaseTransaction,
+  withDatabaseTransaction,
   connectDatabase,
   disconnectDatabase,
   isDatabaseReady,

@@ -1,7 +1,12 @@
 const { firstNonZeroNumber, firstPositiveNumber } = require('./normalize');
 
 function numberValue(value, fallback = 0) {
-  const parsed = Number(String(value === undefined || value === null || value === '' ? fallback : value).replace(/,/g, '').trim());
+  const parsed = Number(String(value === undefined || value === null || value === '' ? fallback : value)
+    .replace(/\bRS\.?\b/gi, '')
+    .replace(/\bINR\b/gi, '')
+    .replace(/[₹$,\s]/g, '')
+    .replace(/^\((.*)\)$/, '-$1')
+    .trim());
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
@@ -28,6 +33,50 @@ function calculateStockValuation({ actualQuantity = 0, dmsQuantity = 0, dlc = 0,
     actualMrpValue: money(actualQty * mrpRate),
     dmsMrpValue: money(dmsQty * mrpRate),
     varianceMrpValue: money(varianceQuantity * mrpRate)
+  };
+}
+
+function firstPositiveStockNumber(...values) {
+  for (const value of values) {
+    const parsed = numberValue(value, 0);
+    if (parsed > 0) return parsed;
+  }
+  return 0;
+}
+
+function dealerStockSystemMrp(row = {}, masterPrice = null) {
+  return firstPositiveStockNumber(
+    row.dlc,
+    row.systemDlc,
+    row.currentCatalogueDLC,
+    row.valuationDLC,
+    row.finalDLC,
+    masterPrice && masterPrice.dlc,
+    masterPrice && masterPrice.currentCatalogueDLC,
+    masterPrice && masterPrice.valuationDLC,
+    masterPrice && masterPrice.finalDLC,
+    row.mrp,
+    row.systemMrp,
+    row.currentCatalogueMRP,
+    row.valuationMRP,
+    row.finalMRP,
+    masterPrice && masterPrice.mrp,
+    masterPrice && masterPrice.currentCatalogueMRP,
+    masterPrice && masterPrice.valuationMRP,
+    masterPrice && masterPrice.finalMRP,
+    masterPrice && masterPrice.rate,
+    masterPrice && masterPrice.price
+  );
+}
+
+function calculateDealerStockSystemValue(row = {}, masterPrice = null) {
+  const quantity = numberValue(row.dmsStock ?? row.systemQty ?? row.qty ?? row.quantity, 0);
+  const mrp = dealerStockSystemMrp(row, masterPrice);
+  return {
+    quantity,
+    mrp,
+    stockValue: money(quantity * mrp),
+    missingMrp: !(mrp > 0)
   };
 }
 
@@ -83,7 +132,9 @@ function assertDlcReconciliation(totals = {}, tolerance = 0.01) {
 
 module.exports = {
   assertDlcReconciliation,
+  calculateDealerStockSystemValue,
   calculateStockValuation,
+  dealerStockSystemMrp,
   money,
   reconcileDlcTotals,
   stockValuationTotals

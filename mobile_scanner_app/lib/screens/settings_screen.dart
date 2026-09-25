@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/dealer.dart';
 import '../services/api_client.dart';
+import '../services/server_discovery.dart';
 import '../services/settings_store.dart';
 import '../widgets/status_chip.dart';
 import 'server_qr_screen.dart';
@@ -63,6 +64,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _message = 'Server URL loaded from QR');
   }
 
+  Future<void> _autoDetectServer() async {
+    setState(() {
+      _busy = true;
+      _message = 'Searching for Daksh PC server on this WiFi...';
+    });
+    try {
+      final server = await ServerDiscovery().discoverAndSave(_settings);
+      if (!mounted) return;
+      if (server == null) {
+        setState(() => _message = 'Daksh PC server not found on this network.');
+        return;
+      }
+      _serverController.text = server.serverUrl;
+      setState(() => _message =
+          'Connected to ${server.serverUrl}${server.displayStatus.isNotEmpty ? ' - ${server.displayStatus}' : ''}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _loadDealers() async {
     setState(() {
       _busy = true;
@@ -113,8 +134,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
           TextField(
             controller: _serverController,
+            enabled: !_busy,
             decoration: const InputDecoration(
-                labelText: 'Railway/Web Portal Server URL',
+                labelText: 'Daksh Server URL (automatic discovery)',
                 prefixIcon: Icon(Icons.cloud)),
           ),
           const SizedBox(height: 10),
@@ -128,11 +150,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(width: 10),
               Expanded(
                   child: OutlinedButton.icon(
-                      onPressed: _busy ? null : _test,
+                      onPressed: _busy ? null : _autoDetectServer,
                       icon: const Icon(Icons.wifi_tethering),
-                      label: const Text('Test'))),
+                      label: const Text('Auto Detect'))),
             ],
           ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+              onPressed: _busy ? null : _test,
+              icon: const Icon(Icons.network_check),
+              label: const Text('Test Server')),
           const SizedBox(height: 16),
           OutlinedButton.icon(
               onPressed: _busy ? null : _loadDealers,
@@ -163,35 +190,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onPressed: _save,
               icon: const Icon(Icons.save),
               label: const Text('Save Settings')),
-            const SizedBox(height: 12),
-            FilledButton.icon(
+          const SizedBox(height: 12),
+          FilledButton.icon(
               onPressed: () async {
-              final ok = await showDialog<bool>(
-                context: context,
-                builder: (_) => AlertDialog(
-                    title: const Text('Clear storage?'),
-                    content: const Text(
-                      'This will clear local session and require re-login. Continue?'),
-                    actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(false),
-                      child: const Text('Cancel')),
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(true),
-                      child: const Text('Clear'))
-                    ],
-                  ));
-              if (ok != true) return;
-              await _settings.clearAllData();
-              // Navigate to fresh login screen
-              if (!mounted) return;
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(
-                  builder: (_) => LoginScreen(onLoggedIn: () {
-                      Navigator.of(context).pushReplacement(MaterialPageRoute(
-                        builder: (_) => ScannerHomeScreen(onLogout: () {})));
-                    })),
-                (route) => false);
+                final ok = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                          title: const Text('Clear storage?'),
+                          content: const Text(
+                              'This will clear local session and require re-login. Continue?'),
+                          actions: [
+                            TextButton(
+                                onPressed: () =>
+                                    Navigator.of(context).pop(false),
+                                child: const Text('Cancel')),
+                            TextButton(
+                                onPressed: () =>
+                                    Navigator.of(context).pop(true),
+                                child: const Text('Clear'))
+                          ],
+                        ));
+                if (ok != true) return;
+                await _settings.clearAllData();
+                // Navigate to fresh login screen
+                if (!context.mounted) return;
+                Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(
+                        builder: (loginContext) => LoginScreen(onLoggedIn: () {
+                              Navigator.of(loginContext).pushReplacement(
+                                  MaterialPageRoute(
+                                      builder: (_) =>
+                                          ScannerHomeScreen(onLogout: () {})));
+                            })),
+                    (route) => false);
               },
               icon: const Icon(Icons.exit_to_app),
               label: const Text('Clear Storage / Re-login')),

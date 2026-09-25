@@ -18,7 +18,7 @@ const {
 } = require('../utils/audit');
 
 const router = express.Router();
-const AUDIT_DATA_DIR = path.resolve(__dirname, '..', 'Audit Data');
+const AUDIT_DATA_DIR = require('../utils/writablePaths').writablePath('Audit Data');
 
 function buildAuditId(dealerCode, auditName) {
   const namePart = clean(auditName || 'AUDIT').replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 12);
@@ -80,7 +80,7 @@ async function createClosedAuditBackup(audit, completedBy = '') {
   return { archiveId, archivePath, scanCount: scans.length };
 }
 
-router.get('/active', auth.optionalAuth, async (req, res) => {
+router.get('/active', auth.requireAuth, async (req, res) => {
   try {
     const activeAudit = await getActiveAudit({ dealerCode: req.query.dealerCode });
     if (!activeAudit) {

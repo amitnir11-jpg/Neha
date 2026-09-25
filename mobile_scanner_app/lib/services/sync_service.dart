@@ -10,7 +10,7 @@ class SyncService {
       : settings = settings ?? SettingsStore(),
         database = database ?? LocalDatabase.instance;
 
-  static bool _globalSyncInFlight = false;
+  static Future<SyncResult>? _globalSyncFuture;
 
   final SettingsStore settings;
   final LocalDatabase database;
@@ -87,17 +87,16 @@ class SyncService {
     }
   }
 
-  Future<SyncResult> syncPending() async {
-    if (_globalSyncInFlight) {
-      return SyncResult(false, 'Sync already running',
-          synced: 0, serverReached: false);
-    }
-    _globalSyncInFlight = true;
-    try {
-      return await _syncPendingBatch();
-    } finally {
-      _globalSyncInFlight = false;
-    }
+  Future<SyncResult> syncPending() {
+    final running = _globalSyncFuture;
+    if (running != null) return running;
+    final future = _syncPendingBatch();
+    _globalSyncFuture = future;
+    return future.whenComplete(() {
+      if (identical(_globalSyncFuture, future)) {
+        _globalSyncFuture = null;
+      }
+    });
   }
 
   Future<SyncResult> _syncPendingBatch() async {
@@ -249,8 +248,17 @@ class SyncService {
           synced: synced, serverReached: true, hasClockSkew: hasClockSkew);
     } on ApiException catch (error) {
       final statusCode = error.statusCode ?? 0;
-      final shouldMarkFailed =
-          statusCode >= 400 && statusCode < 500 && statusCode != 408;
+      final hasRowFailureDetails = (error.data['logs'] is List &&
+              (error.data['logs'] as List).isNotEmpty) ||
+          (error.data['failedRows'] is List &&
+              (error.data['failedRows'] as List).isNotEmpty);
+      final shouldMarkFailed = statusCode == 422 ||
+          (hasRowFailureDetails &&
+              statusCode >= 400 &&
+              statusCode < 500 &&
+              statusCode != 401 &&
+              statusCode != 403 &&
+              statusCode != 408);
       if (shouldMarkFailed) {
         await _markFailuresFromResponse(pending, error.data, error.message);
       }

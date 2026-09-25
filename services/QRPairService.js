@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const QRCode = require('qrcode');
 const ScannerSession = require('../models/ScannerSession');
 const { serverInfo } = require('../utils/network');
+const { getConnectionConfig } = require('./ConnectionConfig');
 
 function clean(value) {
   return String(value || '').trim();
@@ -16,24 +17,42 @@ function encodePayload(payload) {
 }
 
 class QRPairService {
-  constructor({ portProvider } = {}) {
+  constructor({ portProvider, identityService } = {}) {
     this.portProvider = portProvider || (() => process.env.PORT || 3001);
+    this.identityService = identityService;
   }
 
   async createPairing({ user = {}, activeAudit = null, req = null, ttlMinutes = 30, deviceId = '' } = {}) {
     const port = this.portProvider();
-    const info = serverInfo(port);
+    const info = serverInfo(
+      port,
+      req && req.socket ? req.socket.remoteAddress : '',
+      req && req.protocol ? req.protocol : '',
+      req && typeof req.get === 'function' ? req.get('x-forwarded-host') || req.get('host') || '' : ''
+    );
+    const config = getConnectionConfig(port);
+    const identity = this.identityService ? this.identityService.get(port) : {};
     const sessionId = crypto.randomUUID();
     const token = crypto.randomBytes(32).toString('base64url');
-    const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+    const configuredTtl = Number(process.env.DAKSH_PAIRING_TTL_MINUTES || ttlMinutes || 15);
+    const safeTtl = Number.isFinite(configuredTtl) ? Math.min(60, Math.max(1, configuredTtl)) : 15;
+    const expiresAt = new Date(Date.now() + safeTtl * 60 * 1000);
     const audit = activeAudit || {};
     const pairing = {
+      type: 'daksh-pairing',
       app: 'daksh-inventory-v2',
       mode: 'scanner-pairing',
+      serverId: identity.serverId || '',
+      hostname: identity.hostname || config.hostname,
       serverIp: info.ip,
+      lanIp: info.lanIp,
       port: info.port,
       serverUrl: info.serverUrl,
+      mdnsUrl: info.mdnsUrl,
+      lanUrl: info.lanUrl,
+      mobileWebUrl: info.mobileWebUrl,
       mobileScannerUrl: info.mobileScannerUrl,
+      legacyMobileScannerUrl: info.legacyMobileScannerUrl,
       healthUrl: info.healthUrl,
       connectUrl: info.connectUrl,
       syncUrl: info.syncUrl,

@@ -1,10 +1,14 @@
-require('dotenv').config();
-
 const dgram = require('dgram');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { spawn } = require('child_process');
+const configuredEnvPath = process.env.DAKSH_CONFIG_PATH || (process.platform === 'win32'
+  ? path.join(process.env.ProgramData || 'C:\\ProgramData', 'DAKSH', 'config', 'daksh.env')
+  : '');
+require('dotenv').config({ path: configuredEnvPath || undefined });
+// A dedicated environment must not inherit missing values from the source .env.
+if (!process.env.DAKSH_CONFIG_PATH) require('dotenv').config();
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const express = require('express');
@@ -58,6 +62,18 @@ function patchExpressAsyncErrors() {
 
 patchExpressAsyncErrors();
 
+function corsOriginAllowed(origin) {
+  if (!origin) return true;
+  const configured = [
+    process.env.DAKSH_ALLOWED_ORIGINS,
+    process.env.PUBLIC_API_BASE_URL,
+    process.env.PUBLIC_BASE_URL
+  ].filter(Boolean).join(',').split(',').map((value) => parseRequestHost(value).hostname).filter(Boolean);
+  const hostname = parseRequestHost(origin).hostname;
+  if (configured.includes(hostname)) return true;
+  return ['localhost', '127.0.0.1', '::1', 'daksh.local'].includes(hostname) || hostname.endsWith('.localhost');
+}
+
 const User = require('./models/User');
 const Device = require('./models/Device');
 const Inventory = require('./models/Inventory');
@@ -65,7 +81,10 @@ const SyncLog = require('./models/SyncLog');
 const { isPlaceholderPublicUrl, parseRequestHost, serverInfo } = require('./utils/network');
 const { getActiveAudit, publicAudit } = require('./utils/audit');
 const authRoutes = require('./routes/auth');
+const licenseService = require('./services/LicenseService');
+const licenseRoutes = require('./routes/license');
 const reportsRouter = require('./routes/reports');
+const localPartsRouter = require('./routes/localParts');
 const syncRoutes = require('./routes/sync');
 const settingsRoutes = require('./routes/settings');
 const ScannerManager = require('./services/ScannerManager');
@@ -73,9 +92,14 @@ const DeviceDiscoveryService = require('./services/DeviceDiscoveryService');
 const SocketRealtimeService = require('./services/SocketRealtimeService');
 const QRPairService = require('./services/QRPairService');
 const OfflineSyncService = require('./services/OfflineSyncService');
+const { getConnectionConfig } = require('./services/ConnectionConfig');
+const ServerIdentityService = require('./services/ServerIdentityService');
+const LoggerService = require('./services/LoggerService');
+const MdnsDiscoveryService = require('./services/MdnsDiscoveryService');
 const {
   connectDatabase,
   isDatabaseReady,
+  prisma,
   databaseHealthDetails,
   databaseUrlSource,
   acceptedDatabaseEnvVars
@@ -91,7 +115,7 @@ app.locals.deployConfigVersion = 'railway-postgresql-ready-20260618';
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: (origin, callback) => callback(null, corsOriginAllowed(origin) ? origin || true : false),
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
   },
   connectionStateRecovery: {
@@ -104,13 +128,16 @@ const io = new Server(server, {
   maxHttpBufferSize: 10 * 1024 * 1024
 });
 
-const PORT = process.env.PORT || 3000;
-const HOST = '0.0.0.0';
-const APP_VERSION = '20260629-smart-bin-popup-v1';
-const WEB_SCANNER_BUILD = APP_VERSION;
-const MOBILE_APP_VERSION = 'Daksh Mobile Scanner v1.2.2';
+const PORT = Number(process.env.PORT || process.env.APP_PORT || 3000);
+const HOST = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
+const RELEASE_BUILD = require('./utils/buildInfo').readBuildInfo();
+const APP_VERSION = RELEASE_BUILD.appVersion || RELEASE_BUILD.version;
+const WEB_SCANNER_BUILD = '20260704-lite-apk-v1';
+const MOBILE_APP_VERSION = 'Daksh Scan Lite v1.2.11';
 const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();
 const DEFAULT_ADMIN_PASSWORD = String(process.env.DEFAULT_ADMIN_PASSWORD || 'admin');
+const DEFAULT_ADMIN_PIN = String(process.env.DEFAULT_ADMIN_PIN ?? '1234').trim();
+const ENSURE_DEFAULT_ADMIN_LOGIN = String(process.env.DAKSH_ENSURE_DEFAULT_ADMIN_LOGIN || 'false').trim().toLowerCase() === 'true';
 const IS_PRODUCTION = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 const DEPLOY_TARGET = String(process.env.DAKSH_DEPLOY_TARGET || process.env.DEPLOY_TARGET || '').trim().toLowerCase();
 const IS_RENDER = DEPLOY_TARGET === 'render' ||
@@ -118,21 +145,62 @@ const IS_RENDER = DEPLOY_TARGET === 'render' ||
   Boolean(process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL || process.env.RENDER_EXTERNAL_HOSTNAME);
 const IS_RAILWAY = DEPLOY_TARGET === 'railway' ||
   Boolean(process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.RAILWAY_ENVIRONMENT_NAME);
-const DEPLOYMENT_NAME = IS_RENDER ? 'Render' : (IS_RAILWAY ? 'Railway' : (IS_PRODUCTION ? 'hosting provider' : 'local PC'));
-const ALLOW_LOCAL_DB_FALLBACK = !IS_RENDER && !IS_RAILWAY && !IS_PRODUCTION;
+const EXPLICIT_CONNECTION_MODE = String(process.env.CONNECTION_MODE || process.env.DAKSH_CONNECTION_MODE || '').trim().toUpperCase();
+const IS_OFFLINE = EXPLICIT_CONNECTION_MODE === 'LOCAL'
+  ? true
+  : EXPLICIT_CONNECTION_MODE === 'CLOUD'
+    ? false
+    : !IS_RENDER && !IS_RAILWAY && !IS_PRODUCTION;
+const DEPLOYMENT_NAME = IS_RENDER
+  ? 'Render'
+  : IS_RAILWAY
+    ? 'Railway'
+    : IS_OFFLINE ? 'Offline' : 'local PC';
+if (IS_PRODUCTION) {
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'daksh_inventory_secret') throw new Error('JWT_SECRET must be configured with a unique production secret.');
+  if (!process.env.DEFAULT_ADMIN_PASSWORD || process.env.DEFAULT_ADMIN_PASSWORD === 'admin') throw new Error('DEFAULT_ADMIN_PASSWORD must be configured with a unique production secret.');
+}
+const ALLOW_LOCAL_DB_FALLBACK = IS_OFFLINE;
 const SKIP_MIGRATIONS = String(process.env.DAKSH_SKIP_MIGRATIONS || '').trim().toLowerCase() === 'true';
 const DATABASE_INIT_RETRY_MS = Math.max(5000, Number(process.env.DAKSH_DATABASE_INIT_RETRY_MS || 15000));
 const DATABASE_URL_SOURCE = databaseUrlSource();
-const MOBILE_DISCOVERY_PORT = Number(process.env.MOBILE_DISCOVERY_PORT || PORT);
+const connectionConfig = getConnectionConfig(PORT);
+const serverIdentity = new ServerIdentityService({
+  dataRoot: connectionConfig.dataRoot,
+  hostname: connectionConfig.hostname,
+  serviceName: connectionConfig.serviceName
+});
+const logger = new LoggerService({ dataRoot: connectionConfig.dataRoot });
+logger.installConsoleBridge();
+const MOBILE_DISCOVERY_PORT = Number(process.env.MOBILE_DISCOVERY_PORT || connectionConfig.discoveryPort || PORT);
 const MOBILE_DISCOVERY_REQUEST = 'DAKSH_DISCOVER_V1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const PROTECTED_BROWSER_PAGES = new Set([
+  '/dashboard',
+  '/dashboard/',
+  '/daksh.html',
+  '/report',
+  '/report/',
+  '/report.html',
+  '/audit-dashboard',
+  '/audit-dashboard/',
+  '/audit-dashboard.html',
+  '/admin-network.html',
+  '/admin-logs.html'
+]);
 const STATIC_CACHEABLE_EXTENSIONS = new Set(['.css', '.js', '.mjs', '.map', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.eot']);
 const activePort = () => app.locals.activePort || PORT;
 const scannerManager = new ScannerManager({ io, activeAuditProvider: getActiveAudit });
-const deviceDiscoveryService = new DeviceDiscoveryService({ portProvider: activePort });
+const deviceDiscoveryService = new DeviceDiscoveryService({ portProvider: activePort, identityService: serverIdentity, versionProvider: () => APP_VERSION });
 const socketRealtimeService = new SocketRealtimeService(io);
-const qrPairService = new QRPairService({ portProvider: activePort });
+const qrPairService = new QRPairService({ portProvider: activePort, identityService: serverIdentity });
 const offlineSyncService = new OfflineSyncService();
+const mdnsDiscoveryService = new MdnsDiscoveryService({
+  portProvider: activePort,
+  identityService: serverIdentity,
+  versionProvider: () => APP_VERSION,
+  logger
+});
 
 const ADMIN_PERMISSIONS = {
   canScanInward: true,
@@ -157,23 +225,30 @@ app.set('deviceDiscoveryService', deviceDiscoveryService);
 app.set('socketRealtimeService', socketRealtimeService);
 app.set('qrPairService', qrPairService);
 app.set('offlineSyncService', offlineSyncService);
+app.set('serverIdentity', serverIdentity);
+app.set('logger', logger);
+app.set('mdnsDiscoveryService', mdnsDiscoveryService);
+app.set('licenseService', licenseService);
 app.locals.appVersion = APP_VERSION;
 app.locals.webScannerBuild = WEB_SCANNER_BUILD;
 app.locals.mobileAppVersion = MOBILE_APP_VERSION;
+app.locals.connectionConfig = connectionConfig;
+app.locals.serverIdentity = serverIdentity;
 app.set('trust proxy', 1);
 
-app.use(cors({ origin: '*' }));
+app.use(cors({ origin: (origin, callback) => callback(null, corsOriginAllowed(origin) ? origin || true : false) }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 function databaseEnvLocation() {
   if (IS_RAILWAY) return 'Railway Variables';
   if (IS_RENDER) return 'Render Environment Variables';
-  if (IS_PRODUCTION) return 'your hosting environment variables';
+  if (!IS_OFFLINE) return 'your hosting environment variables';
   return 'your .env file or environment variables';
 }
 
 function databaseUnavailableMessage() {
+  if (connectionConfig.isLocal) return 'PostgreSQL is unavailable. Start the configured PostgreSQL Windows service and retry; Daksh will continue automatic readiness retries.';
   return `PostgreSQL is unavailable. Set Railway PostgreSQL connection variables in ${databaseEnvLocation()} (${acceptedDatabaseEnvVars().join(', ')}) and redeploy.`;
 }
 
@@ -195,9 +270,44 @@ function currentDatabasePayload() {
     databaseStartupLastAttemptAt: databaseStartupState.lastAttemptAt,
     databaseStartupLastSuccessAt: databaseStartupState.lastSuccessAt,
     databaseStartupLastError: databaseStartupState.lastError,
+    applicationInitializationStatus: applicationInitializationState.status,
+    applicationSchemaVerified: applicationInitializationState.schemaVerified,
+    applicationInitializedAt: applicationInitializationState.initializedAt,
+    applicationInitializationError: applicationInitializationState.lastError,
     ...databaseHealthDetails()
   };
 }
+
+function currentStoragePayload() {
+  const storagePath = connectionConfig.dataRoot || process.cwd();
+  try {
+    if (typeof fs.statfsSync !== 'function') throw new Error('Filesystem capacity API unavailable');
+    const stats = fs.statfsSync(storagePath, { bigint: true });
+    const blockSize = BigInt(stats.bsize || 0);
+    const totalBytes = Number(BigInt(stats.blocks || 0) * blockSize);
+    const freeBytes = Number(BigInt(stats.bavail || stats.bfree || 0) * blockSize);
+    const freePercent = totalBytes > 0 ? Number(((freeBytes / totalBytes) * 100).toFixed(1)) : 0;
+    const status = freeBytes < 1024 ** 3 || freePercent < 5
+      ? 'low'
+      : (freeBytes < 5 * 1024 ** 3 || freePercent < 10 ? 'warning' : 'normal');
+    return {
+      storageStatus: status,
+      storage: { status, totalBytes, freeBytes, freePercent }
+    };
+  } catch (error) {
+    return {
+      storageStatus: 'unavailable',
+      storage: { status: 'unavailable', message: error.message }
+    };
+  }
+}
+
+app.locals.getHealthSnapshot = async () => ({
+  database: {
+    provider: connectionConfig.databaseProvider,
+    ...currentDatabasePayload()
+  }
+});
 
 let mobileDiscoverySocket = null;
 let databaseInitTimer = null;
@@ -210,19 +320,61 @@ const databaseStartupState = {
   lastSuccessAt: '',
   lastError: ''
 };
+const applicationInitializationState = {
+  status: 'pending',
+  schemaVerified: false,
+  initializedAt: '',
+  lastError: ''
+};
+
+function applicationReady() {
+  return isDatabaseReady() && databaseStartupState.status === 'connected' && applicationInitializationState.status === 'ready' && applicationInitializationState.schemaVerified;
+}
+
+function runtimePayload(port, info = serverInfo(port)) {
+  const config = getConnectionConfig(port);
+  const identity = serverIdentity.get(port);
+  return {
+    mode: config.mode.toLowerCase(),
+    connectionMode: config.mode,
+    serverId: identity.serverId,
+    hostname: identity.hostname,
+    machineHostname: config.hostnameOs,
+    configuredHost: config.host,
+    version: APP_VERSION,
+    appVersion: APP_VERSION,
+    uptimeSeconds: Math.round(process.uptime()),
+    port: Number(port),
+    mdnsEnabled: config.mdnsEnabled,
+    mdnsStatus: mdnsDiscoveryService ? mdnsDiscoveryService.status() : null,
+    serverUrl: info.serverUrl,
+    lanUrl: info.lanUrl,
+    mdnsUrl: info.mdnsUrl
+  };
+}
 
 function mobileDiscoveryPayload(activePort, remoteAddress = '') {
   const info = serverInfo(activePort, remoteAddress);
+  const config = getConnectionConfig(activePort);
+  const identity = serverIdentity.get(activePort);
   return {
     success: true,
+    type: 'daksh-server',
     app: 'daksh-inventory-v2',
     name: 'Daksh Inventory PC Server',
     status: 'online',
     serverStatus: 'online',
     ...currentDatabasePayload(),
-    discovery: 'udp',
+    discovery: 'udp+mdns',
+    mode: config.mode,
+    version: APP_VERSION,
+    serverId: identity.serverId,
+    hostname: identity.hostname,
+    mdnsUrl: info.mdnsUrl,
+    lanUrl: info.lanUrl,
+    fallbackOrder: ['saved_server_identity', 'daksh.local', 'mdns', 'qr_pairing', 'subnet_probe'],
     ip: info.ip,
-    lanIp: info.ip,
+    lanIp: info.lanIp,
     port: info.port,
     serverUrl: info.serverUrl,
     mobileScannerUrl: info.mobileScannerUrl,
@@ -264,9 +416,13 @@ function startMobileDiscoveryServer(activePort) {
 }
 
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  const origin = req.get('origin');
+  if (corsOriginAllowed(origin)) {
+    if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Device-Token');
+    res.setHeader('Vary', 'Origin');
+  }
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   return next();
 });
@@ -284,6 +440,7 @@ app.use((req, res, next) => {
     normalizedPath === '/scan' ||
     normalizedPath === '/mobile' ||
     normalizedPath === '/mobile-scanner' ||
+    normalizedPath === '/mobile-web' ||
     normalizedPath === '/config.js' ||
     normalizedPath.startsWith('/api/')
   ) {
@@ -302,6 +459,7 @@ app.use((req, res, next) => {
     process.env.RAILWAY_PUBLIC_DOMAIN ||
     ''
   ).trim().replace(/\/+$/, '');
+  if (IS_OFFLINE) return next();
   if (!explicitPublicBaseUrl || isPlaceholderPublicUrl(explicitPublicBaseUrl) || !/^(GET|HEAD)$/i.test(req.method)) return next();
   if (req.path === '/health' || req.path.startsWith('/api/') || req.path.startsWith('/socket.io/')) return next();
   if (/\.(?:css|js|mjs|map|png|jpe?g|gif|svg|webp|ico|txt|json|woff2?|ttf|eot)$/i.test(req.path)) return next();
@@ -324,7 +482,11 @@ app.get('/config.js', (req, res) => {
     appVersion: APP_VERSION,
     version: APP_VERSION,
     webScannerBuild: WEB_SCANNER_BUILD,
-    mobileAppVersion: MOBILE_APP_VERSION
+    mobileAppVersion: MOBILE_APP_VERSION,
+    connectionMode: connectionConfig.mode,
+    serverId: serverIdentity.get(activePort()).serverId,
+    hostname: connectionConfig.hostname,
+    licenseRequired: licenseService.isRequired()
   })};`);
 });
 
@@ -333,6 +495,20 @@ app.use('/vendor/zxing', express.static(path.join(__dirname, 'node_modules', '@z
   lastModified: true,
   setHeaders: setStaticAssetHeaders
 }));
+
+app.use(async (req, res, next) => {
+  if (!PROTECTED_BROWSER_PAGES.has(String(req.path || '').toLowerCase())) return next();
+  try {
+    const licenseStatus = await licenseService.currentStatus();
+    if (licenseStatus.required && !licenseStatus.runAllowed) {
+      return res.redirect(302, '/?licenseRequired=1');
+    }
+  } catch (error) {
+    return res.status(503).send('License validation is temporarily unavailable.');
+  }
+  return authRoutes.requirePageAuth(req, res, next);
+});
+
 app.use(express.static(PUBLIC_DIR, {
   etag: true,
   lastModified: true,
@@ -344,6 +520,13 @@ app.get(['/apk', '/download-apk', '/api/apk/download'], (req, res) => {
   res.download(apkPath, 'daksh-mobile-scanner.apk');
 });
 
+app.get(['/lite-apk', '/download-lite-apk', '/api/apk/lite'], (req, res) => {
+  // Both APK names previously pointed to byte-for-byte identical packages.
+  // Keep the legacy Lite download URL while storing a single APK on disk.
+  const apkPath = path.join(PUBLIC_DIR, 'downloads', 'daksh-mobile-scanner.apk');
+  res.download(apkPath, 'daksh-lite-scanner.apk');
+});
+
 app.get(['/scan', '/scan/'], (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -351,7 +534,7 @@ app.get(['/scan', '/scan/'], (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'scan.html'));
 });
 
-app.get(['/mobile', '/mobile-scanner', '/mobile-scanner/'], (req, res) => {
+app.get(['/mobile', '/mobile-scanner', '/mobile-scanner/', '/mobile-web', '/mobile-web/'], (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
@@ -359,6 +542,7 @@ app.get(['/mobile', '/mobile-scanner', '/mobile-scanner/'], (req, res) => {
 });
 
 app.get('/force-login', (req, res) => {
+  authRoutes.clearAuthCookie(res, req);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Daksh Logout</title></head>
@@ -377,19 +561,29 @@ app.get('/health', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
-  res.status(200).json({ status: 'ok' });
+  const ready = applicationReady();
+  res.status(ready ? 200 : 503).json({
+    status: ready ? 'ok' : 'starting',
+    mode: IS_OFFLINE ? 'offline' : 'online',
+    ready,
+    ...runtimePayload(req.app.locals.activePort || PORT),
+    ...currentDatabasePayload(),
+    ...currentStoragePayload()
+  });
 });
 
 app.get('/api/version', (req, res) => {
   const info = serverInfo(req.app.locals.activePort || PORT, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
   res.json({
     success: true,
+    buildInfo: RELEASE_BUILD,
     appVersion: APP_VERSION,
     version: APP_VERSION,
     webScannerBuild: WEB_SCANNER_BUILD,
     mobileAppVersion: MOBILE_APP_VERSION,
     deployConfigVersion: req.app.locals.deployConfigVersion || '',
     reportRoutesVersion: req.app.locals.reportRoutesVersion || '',
+    ...runtimePayload(req.app.locals.activePort || PORT, info),
     serverUrl: info.serverUrl
   });
 });
@@ -398,6 +592,7 @@ app.get('/api/health', async (req, res) => {
   const activePort = req.app.locals.activePort || PORT;
   const info = serverInfo(activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
   const dbReady = isDatabaseReady();
+  const ready = applicationReady();
   const dbStatus = currentDatabaseStatus();
   const databaseDetails = currentDatabasePayload();
   const [connectedDevices, pending, failed, lastSyncDoc, lastSyncLog, lastSyncDevice] = await Promise.all([
@@ -415,8 +610,10 @@ app.get('/api/health', async (req, res) => {
   ].map((value) => (value ? new Date(value) : null)).filter((date) => date && !Number.isNaN(date.getTime()));
   const lastSyncAt = lastSyncTimes.sort((a, b) => b.getTime() - a.getTime())[0] || null;
   const lastSync = lastSyncAt ? lastSyncAt.toISOString() : '';
-  res.json({
-    status: 'OK',
+  res.status(ready ? 200 : 503).json({
+    databaseType: 'postgresql',
+    buildInfo: RELEASE_BUILD,
+    status: ready ? 'OK' : 'STARTING',
     message: 'Daksh Inventory Backend Running',
     success: true,
     server: 'online',
@@ -426,7 +623,10 @@ app.get('/api/health', async (req, res) => {
     render: IS_RENDER,
     railway: IS_RAILWAY,
     serverStatus: 'online',
+    ready,
+    ...runtimePayload(activePort, info),
     ...databaseDetails,
+    ...currentStoragePayload(),
     connectedDevices,
     mobileConnectedDevices: connectedDevices,
     lastSync,
@@ -437,12 +637,14 @@ app.get('/api/health', async (req, res) => {
     failed,
     db: dbStatus,
     ip: info.ip,
-    lanIp: info.ip,
-    currentLanIp: info.ip,
+    lanIp: info.lanIp,
+    currentLanIp: info.lanIp,
     port: info.port,
     serverUrl: info.serverUrl,
     scanUrl: info.scanUrl,
+    mobileWebUrl: info.mobileWebUrl,
     mobileScannerUrl: info.mobileScannerUrl,
+    legacyMobileScannerUrl: info.legacyMobileScannerUrl,
     healthUrl: info.healthUrl,
     connectUrl: info.connectUrl,
     syncUrl: info.syncUrl
@@ -462,47 +664,62 @@ app.get('/api/ping', (req, res) => {
     render: IS_RENDER,
     railway: IS_RAILWAY,
     ...currentDatabasePayload(),
+    ...runtimePayload(req.app.locals.activePort || PORT, info),
     serverUrl: info.serverUrl,
     mobileScannerUrl: info.mobileScannerUrl
   });
 });
 
 app.get('/api/ready', (req, res) => {
-  const dbReady = isDatabaseReady();
-  res.status(dbReady ? 200 : 503).json({
-    success: dbReady,
-    status: dbReady ? 'ready' : 'not_ready',
+  const port = req.app.locals.activePort || PORT;
+  const info = serverInfo(port, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
+  const ready = applicationReady();
+  res.status(ready ? 200 : 503).json({
+    success: ready,
+    ready,
+    status: ready ? 'ready' : 'not_ready',
     serverStatus: 'online',
     ...currentDatabasePayload(),
+    ...runtimePayload(port, info),
     deploymentTarget: DEPLOYMENT_NAME,
     render: IS_RENDER,
     railway: IS_RAILWAY,
-    message: dbReady
+    message: ready
       ? 'Daksh is ready.'
       : databaseUnavailableMessage()
   });
 });
 
 app.get('/api/discovery', (req, res) => {
-  const info = serverInfo(req.app.locals.activePort || PORT, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
+  const port = req.app.locals.activePort || PORT;
+  const info = serverInfo(port, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
   res.json({
     success: true,
+    type: 'daksh-server',
     app: 'daksh-inventory-v2',
     name: 'Daksh Inventory PC Server',
     status: 'online',
     serverStatus: 'online',
+    fallbackOrder: ['saved_server_identity', 'daksh.local', 'mdns', 'qr_pairing', 'subnet_probe'],
+    ...runtimePayload(port, info),
     ...currentDatabasePayload(),
     ip: info.ip,
-    lanIp: info.ip,
-    currentLanIp: info.ip,
+    lanIp: info.lanIp,
+    currentLanIp: info.lanIp,
     port: info.port,
     serverUrl: info.serverUrl,
+    scanUrl: info.scanUrl,
+    mobileWebUrl: info.mobileWebUrl,
     mobileScannerUrl: info.mobileScannerUrl,
+    legacyMobileScannerUrl: info.legacyMobileScannerUrl,
     healthUrl: info.healthUrl,
     connectUrl: info.connectUrl,
     syncUrl: info.syncUrl
   });
 });
+
+app.use('/api/license', licenseRoutes);
+app.use('/api/auth', licenseService.middleware());
 
 app.use('/api/auth', (req, res, next) => {
   if (isDatabaseReady()) return next();
@@ -518,6 +735,11 @@ app.use('/api/auth', (req, res, next) => {
 });
 
 app.use('/api/auth', authRoutes);
+
+app.use('/api', (req, res, next) => {
+  if (req.path === '/mobile/version') return next();
+  return licenseService.middleware()(req, res, next);
+});
 
 app.use('/api', (req, res, next) => {
   if (req.path === '/mobile/version') return next();
@@ -542,6 +764,9 @@ app.use('/api/bin-transfer', require('./routes/binTransfer'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/scans', require('./routes/inventory'));
 app.use('/api/scan', require('./routes/inventory'));
+app.use('/api/scan-audit', require('./routes/scanAudit'));
+app.use('/api/audit-dashboard', require('./routes/audit-dashboard'));
+app.use('/api/local-parts', localPartsRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/report-filter-settings', require('./routes/reportFilterSettings'));
 app.use('/api/settings', settingsRoutes);
@@ -560,6 +785,7 @@ app.use('/api/audit', require('./routes/audit'));
 app.use('/api/scanner-network', require('./routes/scannerNetwork'));
 app.use('/api/sync', syncRoutes);
 app.use('/api/mobile', require('./routes/mobile'));
+app.use('/api/system', require('./routes/system'));
 
 app.get(['/', '/login'], (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
@@ -569,8 +795,17 @@ app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'Daksh.html'));
 });
 
+app.get('/audit-dashboard', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'audit-dashboard.html'));
+});
+
 app.get('/report', (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'report.html'));
+  // The legacy standalone report page only exposes the Final Compile Report.
+  // Keep existing /report bookmarks working, but open the complete report
+  // workspace so every report type is available from one place.
+  const query = new URLSearchParams(req.query);
+  query.set('view', 'reports');
+  res.redirect(`/dashboard?${query.toString()}`);
 });
 
 app.use('/api', (req, res) => {
@@ -608,7 +843,10 @@ app.use((req, res) => {
   return res.status(404).sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
-io.on('connection', (socket) => {
+io.use(authRoutes.authenticateSocket);
+
+io.on('connection', async (socket) => {
+  if (!(await licenseService.assertSocketAllowed(socket))) return;
   socket.emit('server:ready', { app: 'Daksh Inventory v2', socketId: socket.id, recovered: socket.recovered });
 
   socket.on('device:hello', async (payload = {}) => {
@@ -799,18 +1037,27 @@ io.on('connection', (socket) => {
 
 async function createDefaultAdmin() {
   const existingAdmin = await User.findOne({ username: DEFAULT_ADMIN_USERNAME });
+  const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
+  const defaultPinEnabled = /^\d{4}$/.test(DEFAULT_ADMIN_PIN);
+  const pinHash = defaultPinEnabled ? await bcrypt.hash(DEFAULT_ADMIN_PIN, 10) : '';
   if (existingAdmin) {
     const update = {};
     const defaultEmail = process.env.REPORT_EMAIL || 'amitsvision4u@gmail.com';
     if (existingAdmin.approved === false || existingAdmin.approved === undefined) update.approved = true;
     if (existingAdmin.active === false || existingAdmin.active === undefined) update.active = true;
     if (existingAdmin.isActive === false || existingAdmin.isActive === undefined) update.isActive = true;
-    if (!Array.isArray(existingAdmin.dealerAccess) || !existingAdmin.dealerAccess.length) update.dealerAccess = ['ALL'];
+    if (existingAdmin.role !== 'admin') update.role = 'admin';
+    if (!existingAdmin.name) update.name = 'Administrator';
+    if (!Array.isArray(existingAdmin.dealerAccess) || !existingAdmin.dealerAccess.includes('ALL')) update.dealerAccess = ['ALL'];
     update.permissions = { ...(existingAdmin.permissions || {}), ...ADMIN_PERMISSIONS };
-    if (!existingAdmin.passwordHash && !existingAdmin.password) {
-      const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
+    if (ENSURE_DEFAULT_ADMIN_LOGIN || (!existingAdmin.passwordHash && !existingAdmin.password)) {
       update.passwordHash = passwordHash;
       update.password = passwordHash;
+      update.forcePasswordChange = false;
+    }
+    if (defaultPinEnabled && (ENSURE_DEFAULT_ADMIN_LOGIN || (!existingAdmin.pinHash && !existingAdmin.pin))) {
+      update.pinHash = pinHash;
+      update.pin = pinHash;
     }
     if (!existingAdmin.email) {
       const emailOwner = await User.findOne({ email: defaultEmail, _id: { $ne: existingAdmin._id } }).lean();
@@ -824,12 +1071,12 @@ async function createDefaultAdmin() {
     return;
   }
 
-  const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
   await User.create({
     username: DEFAULT_ADMIN_USERNAME,
     email: process.env.REPORT_EMAIL || 'amitsvision4u@gmail.com',
     passwordHash,
     password: passwordHash,
+    ...(defaultPinEnabled ? { pinHash, pin: pinHash } : {}),
     role: 'admin',
     name: 'Administrator',
     dealerAccess: ['ALL'],
@@ -845,6 +1092,23 @@ async function createDefaultAdmin() {
 
 async function runPostgresStartupTasks() {
   await createDefaultAdmin();
+  const roleMigration = await authRoutes.migrateLegacyUserRoles();
+  if (roleMigration.migrated) console.log(`Canonicalized ${roleMigration.migrated} legacy user role(s).`);
+}
+
+async function verifyApplicationSchema() {
+  const rows = await prisma.$queryRaw`
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name IN ('users', 'inventories', 'license_records')
+  `;
+  const names = new Set(rows.map((row) => row.table_name));
+  const required = ['users', 'inventories'];
+  if (licenseService.isRequired()) required.push('license_records');
+  const missing = required.filter((name) => !names.has(name));
+  if (missing.length) throw new Error(`Required PostgreSQL tables are missing: ${missing.join(', ')}.`);
+  applicationInitializationState.schemaVerified = true;
 }
 
 async function runPrismaMigrations() {
@@ -934,30 +1198,40 @@ async function initializeDatabaseInBackground() {
   if (databaseStartupPromise) return databaseStartupPromise;
 
   databaseStartupState.initializing = true;
+  applicationInitializationState.status = 'starting';
+  applicationInitializationState.lastError = '';
   databaseStartupState.attempts += 1;
   databaseStartupState.status = databaseStartupState.attempts === 1 ? 'starting' : 'retrying';
   databaseStartupState.lastAttemptAt = new Date().toISOString();
 
+  let retryDelayMs = 0;
   databaseStartupPromise = (async () => {
     try {
       await runPrismaMigrations();
       await connectDatabase();
       console.log('PostgreSQL connected successfully');
+      await verifyApplicationSchema();
       await runPostgresStartupTasks();
       console.log('Database seed completed');
       databaseStartupState.status = 'connected';
       databaseStartupState.lastSuccessAt = new Date().toISOString();
       databaseStartupState.lastError = '';
+      applicationInitializationState.status = 'ready';
+      applicationInitializationState.initializedAt = new Date().toISOString();
+      applicationInitializationState.lastError = '';
       return true;
     } catch (error) {
       databaseStartupState.status = 'retrying';
       databaseStartupState.lastError = error.message || String(error);
+      applicationInitializationState.status = 'failed';
+      applicationInitializationState.lastError = error.message || String(error);
       console.error(`PostgreSQL startup attempt ${databaseStartupState.attempts} failed: ${databaseStartupState.lastError}`);
-      scheduleDatabaseInitialization(DATABASE_INIT_RETRY_MS);
+      retryDelayMs = DATABASE_INIT_RETRY_MS;
       return false;
     } finally {
       databaseStartupState.initializing = false;
       databaseStartupPromise = null;
+      if (retryDelayMs) scheduleDatabaseInitialization(retryDelayMs);
     }
   })();
 
@@ -967,8 +1241,16 @@ async function initializeDatabaseInBackground() {
 async function start() {
   const activePort = await listenOnConfiguredPort(PORT);
   app.locals.activePort = activePort;
-  fs.writeFileSync(path.join(__dirname, 'server_port.txt'), String(activePort));
+  const portMarkerRoot = process.env.DAKSH_DATA_ROOT || __dirname;
+  try {
+    fs.mkdirSync(portMarkerRoot, { recursive: true });
+    fs.writeFileSync(path.join(portMarkerRoot, 'server_port.txt'), String(activePort));
+  } catch (error) {
+    console.warn(`Could not write the server port marker: ${error.message}`);
+  }
   startMobileDiscoveryServer(activePort);
+  mdnsDiscoveryService.start();
+  licenseService.startPeriodicRevalidation();
 
   let healthBroadcastTimer = null;
   const startHealthBroadcast = () => {
@@ -996,6 +1278,10 @@ async function start() {
     console.warn('Server started before PostgreSQL was ready. /health is live, while API routes may return 503 until database startup completes.');
   }
   console.log(`Server started successfully on port ${activePort}`);
+  const info = serverInfo(activePort);
+  console.log(`PC app URL: ${info.serverUrl}`);
+  console.log(`Mobile web URL for same WiFi/hotspot: ${info.mobileWebUrl || info.mobileScannerUrl}`);
+  console.log(`Server identity: ${serverIdentity.get(activePort).serverId}`);
   scheduleDatabaseInitialization(0);
 }
 
@@ -1004,3 +1290,17 @@ start().catch((error) => {
   console.error(error.stack || error.message);
   process.exit(1);
 });
+
+async function shutdown(signal) {
+  logger.info('DAKSH server shutting down', { signal });
+  mdnsDiscoveryService.stop();
+  if (mobileDiscoverySocket) {
+    try { mobileDiscoverySocket.close(); } catch (_) {}
+    mobileDiscoverySocket = null;
+  }
+  try { await prisma.$disconnect(); } catch (_) {}
+  process.exit(0);
+}
+
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));

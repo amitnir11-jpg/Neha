@@ -3,13 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f5f8fc">
+  <meta name="theme-color" content="#f2f3f5">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>Daksh Scan</title>
   <link rel="icon" href="/brand/favicon.ico" type="image/x-icon">
   <link rel="apple-touch-icon" sizes="512x512" href="/brand/app-icon.png">
-  <link rel="stylesheet" href="/scan.css?v=20260629-smart-bin-popup-v1">
+  <link rel="stylesheet" href="/scan.css?v=20260704-lite-apk-v1">
+  <link rel="stylesheet" href="/css/select-system.css?v=20260908-enterprise-select-v3">
 </head>
 <body class="scan-page">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -27,7 +28,7 @@
 
       <div class="hero-actions hidden">
         <button id="copyUrlBtn" class="btn btn-secondary" type="button" data-testid="copy-url">Copy Scan URL</button>
-        <a id="openScanUrl" class="btn btn-ghost" href="/mobile-scanner" target="_blank" rel="noopener noreferrer">Open URL</a>
+        <a id="openScanUrl" class="btn btn-ghost" href="/mobile-web" target="_blank" rel="noopener noreferrer">Open URL</a>
       </div>
 
       <div id="contextNotice" class="notice" role="status" hidden></div>
@@ -83,7 +84,7 @@
       <div class="url-strip">
         <div>
           <span class="mini-label">Scanner URL</span>
-          <strong id="scannerUrlText">/mobile-scanner</strong>
+          <strong id="scannerUrlText">/mobile-web</strong>
         </div>
         <button id="copyScannerUrlBtn" class="btn btn-secondary btn-small" type="button">Copy</button>
       </div>
@@ -129,7 +130,9 @@
             <button id="startScanBtn" class="btn btn-primary" type="button">Camera On</button>
             <button id="manualBtn" class="btn btn-secondary" type="button">Manual Entry</button>
             <button id="syncNowBtn" class="btn btn-primary" type="button">Sync Now</button>
+            <a id="liteApkBtn" class="btn btn-secondary" href="/api/apk/lite">Lite APK</a>
           </div>
+          <input id="cameraCaptureInput" type="file" accept="image/*" capture="environment" hidden>
         </article>
 
         <aside class="side-stack">
@@ -292,7 +295,8 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="/config.js"></script>
-  <script src="/js/runtime.js?v=20260629-smart-bin-popup-v1"></script>
-  <script src="/scan.js?v=20260629-smart-bin-popup-v1"></script>
+  <script src="/js/runtime.js?v=20260923-recon-upload-dashboard-v1"></script>
+  <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
+  <script src="/scan.js?v=20260704-lite-apk-v1"></script>
 </body>
 </html>

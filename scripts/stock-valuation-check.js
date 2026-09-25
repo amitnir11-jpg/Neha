@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const {
   assertDlcReconciliation,
+  calculateDealerStockSystemValue,
   calculateStockValuation,
   stockValuationTotals
 } = require('../utils/stockValuation');
@@ -28,6 +29,27 @@ assert.deepEqual(stockValuationTotals([first, second]), {
   actualMrpTotal: 1090,
   dmsMrpTotal: 950,
   varianceMrpTotal: 140
+});
+
+assert.deepEqual(calculateDealerStockSystemValue({ dmsStock: 5, mrp: '₹1,250.00' }), {
+  quantity: 5,
+  mrp: 1250,
+  stockValue: 6250,
+  missingMrp: false
+});
+
+assert.deepEqual(calculateDealerStockSystemValue({ systemQty: '3', mrp: 0 }, { mrp: '200' }), {
+  quantity: 3,
+  mrp: 200,
+  stockValue: 600,
+  missingMrp: false
+});
+
+assert.deepEqual(calculateDealerStockSystemValue({ dmsStock: 2, mrp: '' }, { mrp: null }), {
+  quantity: 2,
+  mrp: 0,
+  stockValue: 0,
+  missingMrp: true
 });
 
 assert.equal(assertDlcReconciliation({ partwise: 815, stockSummary: 815, category: 815, dashboard: 815 }).passed, true);
