@@ -1,6 +1,6 @@
 {
   "name": "daksh-inventory-v2",
-  "version": "2.0.36",
+  "version": "2.0.37",
   "description": "Advanced part inventory audit software with Railway PostgreSQL, Prisma, Socket.IO, Excel, PDF, email, backup, and device sync.",
   "main": "server.js",
   "scripts": {

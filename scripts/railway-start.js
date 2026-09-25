@@ -17,9 +17,9 @@ const IS_RENDER = Boolean(process.env.RENDER_SERVICE_ID || process.env.RENDER_EX
 const ALLOW_LOCAL_FALLBACK = !IS_PRODUCTION && !IS_RAILWAY && !IS_RENDER;
 const SKIP_MIGRATIONS = String(process.env.DAKSH_SKIP_MIGRATIONS || '').trim().toLowerCase() === 'true';
 const PRESTART_MIGRATIONS_SETTING = String(process.env.DAKSH_PRESTART_MIGRATIONS || '').trim().toLowerCase();
-const PRESTART_MIGRATIONS = PRESTART_MIGRATIONS_SETTING
+const PRESTART_MIGRATIONS = !IS_RAILWAY && (PRESTART_MIGRATIONS_SETTING
   ? ['1', 'true', 'yes', 'on'].includes(PRESTART_MIGRATIONS_SETTING)
-  : role === 'api' && !ALLOW_LOCAL_FALLBACK;
+  : role === 'api' && !ALLOW_LOCAL_FALLBACK);
 
 function runApiMigrations() {
   if (role !== 'api') return;
@@ -58,7 +58,9 @@ function runApiMigrations() {
 if (PRESTART_MIGRATIONS) {
   runApiMigrations();
 } else if (role === 'api') {
-  console.log('Skipping pre-start Prisma migrations; server.js will initialize PostgreSQL in background.');
+  console.log(IS_RAILWAY
+    ? 'Starting the HTTP server before Railway database initialization; server.js will apply migrations in the background.'
+    : 'Skipping pre-start Prisma migrations; server.js will initialize PostgreSQL in background.');
 }
 
 require(entryPath);

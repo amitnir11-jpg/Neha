@@ -12,7 +12,7 @@ Create one Railway project with three services:
 - `daksh-api`: backend API service from this repo
 - `daksh-web`: static web app service from this repo
 
-Use the same GitHub repo for `daksh-api` and `daksh-web`. Set Railway's Healthcheck Path to `/live` for both services. This endpoint confirms that the HTTP process is listening without depending on database initialization; `/api/ready` remains the database and schema readiness check for the API service.
+Use the same GitHub repo for `daksh-api` and `daksh-web`. The root `railway.json` configures RAILPACK, `npm run build`, and `npm start`; the default start role is the API. For a separate web service, set `DAKSH_SERVICE_ROLE=web`. Railway's healthcheck path is `/live`, which confirms that the HTTP process is listening without depending on database initialization; `/api/ready` remains the database and schema readiness check for the API service.
 
 ## Railway Variables
 
@@ -64,7 +64,7 @@ npm run build
 npm start
 ```
 
-`npm start` uses `DAKSH_SERVICE_ROLE` to boot either the API or web service. For deployed API services it runs `prisma migrate deploy` before opening the server. If PostgreSQL is missing or migrations fail, startup exits and Railway will not mark the service ready.
+`npm start` uses `DAKSH_SERVICE_ROLE` to boot either the API or web service. On Railway, the API binds to the assigned port first, then connects to PostgreSQL, applies pending Prisma migrations, and verifies the schema in the background. `/live` reports whether the HTTP process is listening; `/api/ready` remains unavailable until database initialization succeeds. If the database is missing or migrations fail, `/api/ready` stays unsuccessful and the error is logged while the service keeps retrying database initialization.
 
 ## Database
 
