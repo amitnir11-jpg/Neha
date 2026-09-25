@@ -12,7 +12,7 @@ Create one Railway project with three services:
 - `daksh-api`: backend API service from this repo
 - `daksh-web`: static web app service from this repo
 
-Use the same GitHub repo for `daksh-api` and `daksh-web`.
+Use the same GitHub repo for `daksh-api` and `daksh-web`. Set Railway's Healthcheck Path to `/live` for both services. This endpoint confirms that the HTTP process is listening without depending on database initialization; `/api/ready` remains the database and schema readiness check for the API service.
 
 ## Railway Variables
 
@@ -75,7 +75,7 @@ npm run prisma:generate
 npm run prisma:migrate
 ```
 
-Prisma schema and indexes live in `prisma/schema.prisma` and `prisma/migrations/`. Railway health checks use `/api/ready`, so the API service will not be marked ready while PostgreSQL is disconnected.
+Prisma schema and indexes live in `prisma/schema.prisma` and `prisma/migrations/`. `/api/ready` returns success only after PostgreSQL connects, migrations finish, and the required schema is verified. Railway's process healthcheck should use `/live`; check `/api/ready` separately to confirm database readiness.
 
 ## Local Development
 

@@ -31,6 +31,11 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
+app.get('/live', (req, res) => {
+  noStore(res);
+  res.status(200).json({ status: 'ok', serverStatus: 'online' });
+});
+
 app.get(['/api/ready', '/api/health'], (req, res) => {
   noStore(res);
   res.json({
