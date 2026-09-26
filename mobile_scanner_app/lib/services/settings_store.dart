@@ -82,6 +82,8 @@ class SettingsStore {
     final prefs = await SharedPreferences.getInstance();
     final saved = normalizeServerUrl(prefs.getString(_serverUrlKey) ?? '');
     if (saved.isNotEmpty && !isPhoneLocalhostUrl(saved)) return saved;
+    final production = normalizeServerUrl(productionServerUrl);
+    if (production.isNotEmpty) return production;
     return localServerUrl;
   }
 

@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20260926-all-barcode-formats-v1';
+  const APP_VERSION = '20260926-fast-mobile-decoder-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -1856,7 +1856,7 @@
     return clean(code.rawValue || code.rawText || code.displayValue || code.text || '');
   }
 
-  function scheduleNativeDetection(video, runId, delay = 45) {
+  function scheduleNativeDetection(video, runId, delay = 20) {
     if (!state.nativeDetectorRunning || runId !== state.nativeDetectorRunId) return;
     state.nativeDetectorTimer = setTimeout(() => {
       if (!state.nativeDetectorRunning || runId !== state.nativeDetectorRunId) return;
@@ -1884,7 +1884,7 @@
     } catch (_) {
       // Native detector support varies by browser; ZXing remains the main fallback.
     }
-    scheduleNativeDetection(video, runId, 45);
+    scheduleNativeDetection(video, runId, 20);
   }
 
   async function startNativeDetector(video) {
@@ -2225,7 +2225,6 @@
     const hints = new Map();
     // Let ZXing try every supported format. A hand-picked format list silently
     // misses valid inventory labels such as RSS, Micro QR, and extensions.
-    hints.set(DecodeHintType.TRY_HARDER, true);
     state.scanReader = new BrowserMultiFormatReader(hints, 45);
     state.scanReader.timeBetweenDecodingAttempts = 45;
     return state.scanReader;
@@ -3323,38 +3322,36 @@
         }
         return false;
       };
-      try {
-        const reader = await ensureReader();
-        if (!state.scanning || runId !== state.cameraRunId) return;
-        state.scanReader = reader;
-        cameraState('Ready to scan');
-        zxingStarted = startZxingFromVideo(reader);
-        if (!zxingStarted && !nativeDetector && reader && typeof reader.decodeFromConstraints === 'function') {
-          state.cameraStream = null;
-          try {
-            stream.getTracks().forEach((track) => track.stop());
-          } catch (_) {}
-          const startDecode = () => reader.decodeFromConstraints(cameraConstraints(), video, onDecode);
-          const promise = Promise.resolve(startDecode()).catch((error) => {
-            if (state.scanning && runId === state.cameraRunId) {
-              state.scanning = false;
-              setCameraStarting(false);
-              setCameraLive(false);
-              const message = error?.message || 'Camera failed to start';
-              cameraState(message);
-              toast(message, 'error');
-            }
-          });
-          promise.catch(() => undefined);
-          zxingStarted = true;
-        } else if (!zxingStarted && !nativeDetector) {
-          throw new Error('Scanner library failed to initialize');
-        }
-      } catch (error) {
-        if (!nativeDetector) {
+      if (!nativeDetector) {
+        try {
+          const reader = await ensureReader();
+          if (!state.scanning || runId !== state.cameraRunId) return;
+          state.scanReader = reader;
+          cameraState('Ready to scan');
+          zxingStarted = startZxingFromVideo(reader);
+          if (!zxingStarted && reader && typeof reader.decodeFromConstraints === 'function') {
+            state.cameraStream = null;
+            try {
+              stream.getTracks().forEach((track) => track.stop());
+            } catch (_) {}
+            const startDecode = () => reader.decodeFromConstraints(cameraConstraints(), video, onDecode);
+            const promise = Promise.resolve(startDecode()).catch((error) => {
+              if (state.scanning && runId === state.cameraRunId) {
+                state.scanning = false;
+                setCameraStarting(false);
+                setCameraLive(false);
+                const message = error?.message || 'Camera failed to start';
+                cameraState(message);
+                toast(message, 'error');
+              }
+            });
+            promise.catch(() => undefined);
+            zxingStarted = true;
+          } else if (!zxingStarted) {
+            throw new Error('Scanner library failed to initialize');
+          }
+        } catch (error) {
           throw error;
-        } else {
-          console.warn('ZXing scanner fallback failed:', error.message || error);
         }
       }
       await enableCameraFocus(video);

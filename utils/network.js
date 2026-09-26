@@ -193,8 +193,11 @@ function serverInfo(port, remoteIp = '', requestProtocol = '', requestHost = '')
   const serverUrl = publicBaseUrl(activePort, remoteIp, requestProtocol, requestHost);
   const parsed = new URL(serverUrl);
   const lanIp = detectLanIpForRemote(remoteIp);
-  const ip = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(parsed.hostname) ? parsed.hostname : lanIp;
+  const isIpv4Host = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(parsed.hostname);
+  const isCloud = connectionMode() === 'CLOUD';
+  const ip = isIpv4Host ? parsed.hostname : isCloud ? parsed.hostname : lanIp;
   const hostPort = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+  const publicPort = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80;
   const baseUrl = serverUrl.replace(/\/+$/, '');
   const lanBaseUrl = `http://${lanIp}:${activePort}`;
   const scanUrl = `${baseUrl}/mobile-scanner`;
@@ -206,7 +209,7 @@ function serverInfo(port, remoteIp = '', requestProtocol = '', requestHost = '')
     ip,
     lanIp,
     hostname: parsed.hostname,
-    port: activePort,
+    port: isCloud ? publicPort : activePort,
     hostPort,
     serverUrl,
     mdnsUrl: connectionMode() === 'LOCAL' ? serverUrl : '',

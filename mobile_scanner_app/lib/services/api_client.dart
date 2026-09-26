@@ -8,7 +8,7 @@ import '../models/scan_record.dart';
 import '../models/session.dart';
 import 'settings_store.dart';
 
-const mobileAppVersionName = 'Daksh Scan Lite v1.2.12';
+const mobileAppVersionName = 'Daksh Scan Lite v1.2.13';
 
 class ApiException implements Exception {
   ApiException(this.message,
@@ -50,9 +50,10 @@ class ApiClient {
 
     addCandidate(normalizedSaved);
     if (normalizedSaved.isEmpty) {
-      addCandidate(localServerUrl);
       addCandidate(productionServerUrl);
+      addCandidate(localServerUrl);
     } else if (SettingsStore.isLocalNetworkServerUrl(normalizedSaved)) {
+      addCandidate(productionServerUrl);
       addCandidate(localServerUrl);
     }
     return candidates;
