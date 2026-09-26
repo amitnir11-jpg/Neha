@@ -1,0 +1,214 @@
+/*
+  Daksh Inventory - Global Layout & Design System
+  This file establishes the core visual identity, layout, and base component styles.
+*/
+:root {
+  /* Color Palette */
+  --primary-color: #2563EB; /* A modern, professional blue */
+  --primary-color-dark: #1D4ED8;
+  --primary-color-light: #60A5FA;
+  --primary-color-soft: #EFF6FF;
+
+  --text-color: #111827;
+  --text-color-light: #6B7280;
+  --text-color-inverted: #FFFFFF;
+
+  --background-color: #F3F4F6; /* Light gray background */
+  --card-background: #FFFFFF;
+  --border-color: #E5E7EB;
+  --border-color-light: #F3F4F6;
+
+  --success-color: #10B981;
+  --warning-color: #F59E0B;
+  --danger-color: #EF4444;
+
+  /* Typography */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-size-base: 14px;
+  --font-size-sm: 12px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-title: 24px;
+
+  /* Spacing */
+  --spacing-unit: 8px;
+  --spacing-unit-2: 16px;
+  --spacing-unit-3: 24px;
+  --spacing-unit-4: 32px;
+
+  /* Borders & Shadows */
+  --card-border-radius: 8px;
+  --control-border-radius: 6px;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+
+  /* Layout */
+  --sidebar-width: 240px;
+  --sidebar-width-collapsed: 72px;
+  --header-height: 64px;
+}
+
+/* --- Base & Typography --- */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  color: var(--text-color);
+  background-color: var(--background-color);
+}
+
+/* --- Main App Layout --- */
+.app-shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  min-height: 100vh;
+  transition: grid-template-columns 0.2s ease-in-out;
+}
+
+body.sidebar-collapsed .app-shell {
+  grid-template-columns: var(--sidebar-width-collapsed) 1fr;
+}
+
+.app-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-width);
+  background-color: #0F172A; /* Dark sidebar */
+  color: var(--text-color-inverted);
+  display: flex;
+  flex-direction: column;
+  transition: width 0.2s ease-in-out;
+  border-right: 1px solid #1F2937;
+}
+
+body.sidebar-collapsed .app-sidebar {
+  width: var(--sidebar-width-collapsed);
+}
+
+.app-main {
+  grid-column: 2 / 3;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--header-height);
+  padding: 0 var(--spacing-unit-3);
+  background-color: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.app-content {
+  flex-grow: 1;
+  padding: var(--spacing-unit-3);
+}
+
+/* --- Sidebar Content & Toggle --- */
+.app-sidebar .sidebar-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--header-height);
+  padding: 0 var(--spacing-unit-2);
+  flex-shrink: 0;
+}
+
+.app-sidebar .brand-logo {
+  max-width: 150px;
+  transition: opacity 0.2s;
+}
+
+body.sidebar-collapsed .app-sidebar .brand-logo {
+  opacity: 0;
+}
+
+.app-sidebar .side-nav {
+  padding: var(--spacing-unit) 8px;
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-sidebar .side-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  height: 40px;
+  border-radius: var(--control-border-radius);
+  color: #94A3B8;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.app-sidebar .side-link:hover {
+  background-color: #1E293B;
+  color: #F1F5F9;
+}
+
+.app-sidebar .side-link.active {
+  background-color: var(--primary-color);
+  color: white;
+}
+
+.app-sidebar .side-link .nav-text {
+  opacity: 1;
+  transition: opacity 0.1s ease-out;
+}
+
+body.sidebar-collapsed .app-sidebar .side-link {
+  justify-content: center;
+}
+
+body.sidebar-collapsed .app-sidebar .side-link .nav-text {
+  opacity: 0;
+  width: 0;
+  visibility: hidden;
+}
+
+.sidebar-footer {
+  padding: var(--spacing-unit);
+  margin-top: auto;
+  border-top: 1px solid #1F2937;
+}
+
+#sidebar-toggle {
+  width: 100%;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: #94A3B8;
+  height: 44px;
+  cursor: pointer;
+}
+
+#sidebar-toggle:hover {
+  background-color: #1E293B;
+  color: #F1F5F9;
+}
+
+body.sidebar-collapsed #sidebar-toggle .toggle-text {
+  display: none;
+}

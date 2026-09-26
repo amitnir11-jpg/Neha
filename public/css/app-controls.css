@@ -1,0 +1,91 @@
+/* Shared, opt-in form controls. Classes are applied by app-layout.js.
+   The small compatibility layer wins legacy unlayered !important rules without
+   adding page-specific selectors or changing specialized controls. */
+:root {
+  --control-height: 42px;
+  --header-control-height: 38px;
+  --control-border: #d7dce3;
+  --control-radius: 4px;
+  --control-chevron-size: 14px;
+  --control-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+@layer app-controls {
+  .app-control {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    flex-shrink: 0;
+    height: var(--control-height) !important;
+    min-height: var(--control-height) !important;
+    margin: 0 !important;
+    padding: 0 12px !important;
+    border: 1px solid var(--control-border) !important;
+    border-radius: var(--control-radius) !important;
+    background-color: #fff !important;
+    color: var(--ds-text, #1f2933) !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    line-height: 1.2 !important;
+  }
+
+  .app-header-control {
+    --control-height: var(--header-control-height);
+  }
+
+  .app-select,
+  .app-multiselect {
+    padding-right: 38px !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    cursor: pointer;
+  }
+
+  /* Native selects use the same chevron as the existing custom triggers. */
+  .app-select:not(.ds-select-control) {
+    background-image: var(--control-chevron) !important;
+    background-size: var(--control-chevron-size) var(--control-chevron-size) !important;
+    background-position: right 12px center !important;
+    background-repeat: no-repeat !important;
+  }
+
+  .app-select.ds-select-control,
+  .app-multiselect {
+    background-image: none !important;
+  }
+
+  .ds-select-host:has(> .app-select) > .ds-select-chevron,
+  .app-multiselect > .ds-select-chevron {
+    width: var(--control-chevron-size) !important;
+    height: var(--control-chevron-size) !important;
+    right: 12px !important;
+  }
+
+  .app-field {
+    gap: 6px !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    line-height: 1.2 !important;
+  }
+
+  /* Let form rows wrap before dealer names or dropdown text lose arrow space. */
+  @media (min-width: 1101px) {
+    .app-filter-bar {
+      grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)) !important;
+    }
+  }
+
+  .app-control:focus {
+    outline: none !important;
+    border-color: var(--ds-primary, #ed1c24) !important;
+    box-shadow: 0 0 0 3px var(--ds-focus-ring, rgba(237, 28, 36, .14)) !important;
+  }
+
+  .app-control:disabled {
+    background-color: var(--ds-background, #f8fafc) !important;
+    color: var(--ds-disabled, #94a3b8) !important;
+    cursor: not-allowed;
+  }
+}

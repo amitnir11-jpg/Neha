@@ -1,0 +1,495 @@
+/*
+ * Global compact density pass.
+ * This file is loaded last and only changes spacing, sizing, and alignment.
+ * It intentionally avoids workflow, visibility, and data-state rules.
+ */
+:root {
+  --daksh-compact-page-x: 10px;
+  --daksh-compact-page-y: 8px;
+  --daksh-compact-gap: 8px;
+  --daksh-compact-gap-sm: 5px;
+  --daksh-compact-card-pad: 8px;
+  --daksh-compact-control-h: 32px;
+  --daksh-compact-row-h: 28px;
+  --daksh-compact-radius: 5px;
+  --control-height: var(--daksh-compact-control-h);
+  --header-control-height: 32px;
+  --ds-control-height: var(--daksh-compact-control-h);
+  --pro-control-h: var(--daksh-compact-control-h);
+  --app-control-height: var(--daksh-compact-control-h);
+  --app-gap: var(--daksh-compact-gap);
+}
+
+@media (min-width: 1101px) {
+  body:has(#dashboard.view.active) .app.app-layout,
+  body[class*="view-active-"] .app.app-layout,
+  body:has(#dashboard.view.active) .app,
+  body[class*="view-active-"] .app {
+    grid-template-rows: 52px 32px minmax(0, 1fr) !important;
+  }
+
+  body:has(#dashboard.view.active) .side-brand,
+  body[class*="view-active-"] .side-brand {
+    width: 214px !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    padding: 0 14px !important;
+  }
+
+  body:has(#dashboard.view.active) .side-brand .brand-logo,
+  body[class*="view-active-"] .side-brand .brand-logo,
+  body:has(#dashboard.view.active) .side .brand-logo,
+  body[class*="view-active-"] .side .brand-logo {
+    width: 150px !important;
+    max-width: 150px !important;
+  }
+
+  body:has(#dashboard.view.active) .main > .topbar,
+  body[class*="view-active-"] .main > .topbar,
+  body:has(#dashboard.view.active) .main > .top-header,
+  body[class*="view-active-"] .main > .top-header,
+  body:has(#dashboard.view.active) .topbar,
+  body[class*="view-active-"] .topbar,
+  body:has(#dashboard.view.active) .top-header,
+  body[class*="view-active-"] .top-header,
+  body:has(#dashboard.view.active) .enterprise-dashboard-nav,
+  body[class*="view-active-"] .enterprise-dashboard-nav {
+    height: 52px !important;
+    min-height: 52px !important;
+    padding-left: 228px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    gap: 8px !important;
+  }
+
+  body:has(#dashboard.view.active) .side-nav,
+  body[class*="view-active-"] .side-nav {
+    height: 32px !important;
+    min-height: 32px !important;
+    padding-right: 5px !important;
+    padding-left: 5px !important;
+  }
+
+  body:has(#dashboard.view.active) .side-link,
+  body[class*="view-active-"] .side-link,
+  body:has(#dashboard.view.active) .side button.side-link,
+  body[class*="view-active-"] .side button.side-link {
+    height: 32px !important;
+    min-height: 32px !important;
+    padding-right: 8px !important;
+    padding-left: 8px !important;
+    gap: 4px !important;
+    font-size: 11.5px !important;
+  }
+
+  body:has(#dashboard.view.active) .side-link .nav-icon,
+  body[class*="view-active-"] .side-link .nav-icon,
+  body:has(#dashboard.view.active) .side-link svg,
+  body[class*="view-active-"] .side-link svg {
+    width: 13px !important;
+    min-width: 13px !important;
+    height: 13px !important;
+  }
+
+  body:has(#dashboard.view.active) #viewTitle,
+  body[class*="view-active-"] #viewTitle {
+    font-size: 15px !important;
+  }
+
+  body:has(#dashboard.view.active) #systemSubline,
+  body[class*="view-active-"] #systemSubline,
+  body:has(#dashboard.view.active) .enterprise-nav-logo,
+  body[class*="view-active-"] .enterprise-nav-logo {
+    font-size: 11px !important;
+  }
+
+  body:has(#dashboard.view.active) .topbar-dealer,
+  body[class*="view-active-"] .topbar-dealer {
+    width: 252px !important;
+  }
+}
+
+body[class*="view-active-"]:not(.view-active-dashboard) .main > .view.active,
+body[class*="view-active-"]:not(.view-active-dashboard) .view.active {
+  padding: var(--daksh-compact-page-y) var(--daksh-compact-page-x) 14px !important;
+  gap: var(--daksh-compact-gap) !important;
+}
+
+body[class*="view-active-"] .app-page-title {
+  margin: 0 0 4px !important;
+  padding-left: 8px !important;
+  gap: 2px !important;
+}
+
+body[class*="view-active-"] .app-page-title h1,
+body[class*="view-active-"] .view.active > h1 {
+  font-size: 17px !important;
+  line-height: 1.12 !important;
+}
+
+body[class*="view-active-"] .app-page-title span,
+body[class*="view-active-"] .app-page-title p,
+body[class*="view-active-"] .view.active > p,
+body[class*="view-active-"] .helper-text,
+body[class*="view-active-"] .muted {
+  font-size: 11.5px !important;
+  line-height: 1.25 !important;
+}
+
+body[class*="view-active-"] .card,
+body[class*="view-active-"] .panel,
+body[class*="view-active-"] .container-section,
+body[class*="view-active-"] .report-preview-card,
+body[class*="view-active-"] .modal-card {
+  border-radius: var(--daksh-compact-radius) !important;
+  padding: var(--daksh-compact-card-pad) !important;
+}
+
+body[class*="view-active-"] .card + .card,
+body[class*="view-active-"] .panel + .panel,
+body[class*="view-active-"] .container-section + .container-section {
+  margin-top: 0 !important;
+}
+
+body[class*="view-active-"] .card-head,
+body[class*="view-active-"] .panel-heading,
+body[class*="view-active-"] .report-preview-head {
+  min-height: 28px !important;
+  margin: calc(var(--daksh-compact-card-pad) * -1) calc(var(--daksh-compact-card-pad) * -1) 8px !important;
+  padding: 5px 8px !important;
+  gap: var(--daksh-compact-gap-sm) !important;
+  border-radius: var(--daksh-compact-radius) var(--daksh-compact-radius) 0 0 !important;
+}
+
+body[class*="view-active-"] .card-head h2,
+body[class*="view-active-"] .card-head h3,
+body[class*="view-active-"] .panel-heading h2,
+body[class*="view-active-"] .report-preview-head h2,
+body[class*="view-active-"] #reportTitle {
+  font-size: 13.5px !important;
+  line-height: 1.15 !important;
+}
+
+body[class*="view-active-"] .local-part-history > .card-head,
+body[class*="view-active-"] .transfer-table-head,
+body[class*="view-active-"] .product-group-detail-head {
+  margin-top: 10px !important;
+  margin-bottom: 8px !important;
+}
+
+body[class*="view-active-"] .actions,
+body[class*="view-active-"] .toolbar,
+body[class*="view-active-"] .inline-form,
+body[class*="view-active-"] .row-actions,
+body[class*="view-active-"] .form-actions,
+body[class*="view-active-"] .app-toolbar,
+body[class*="view-active-"] .top-actions,
+body[class*="view-active-"] .topbar-user {
+  gap: var(--daksh-compact-gap-sm) !important;
+}
+
+body[class*="view-active-"] .grid-form,
+body[class*="view-active-"] .filter-grid,
+body[class*="view-active-"] .app-filter-bar {
+  grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr)) !important;
+  gap: 6px 9px !important;
+  align-items: end !important;
+}
+
+body[class*="view-active-"] .compact-filter,
+body[class*="view-active-"] .small-filter,
+body[class*="view-active-"] .advanced-part-search {
+  grid-template-columns: repeat(auto-fit, minmax(min(165px, 100%), 1fr)) !important;
+}
+
+body[class*="view-active-"] label,
+body[class*="view-active-"] .app-field {
+  gap: 3px !important;
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+}
+
+body[class*="view-active-"] input:not([type="checkbox"]):not([type="radio"]),
+body[class*="view-active-"] select,
+body[class*="view-active-"] textarea,
+body[class*="view-active-"] .app-control,
+body[class*="view-active-"] .ds-select-control,
+body[class*="view-active-"] .dashboard-dealer-select,
+body[class*="view-active-"] .bin-label-multi-button,
+body[class*="view-active-"] .plain-bin-multi-button {
+  min-height: var(--daksh-compact-control-h) !important;
+  height: var(--daksh-compact-control-h) !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  font-size: 12px !important;
+  line-height: 1.2 !important;
+}
+
+body[class*="view-active-"] input:not([type="checkbox"]):not([type="radio"]),
+body[class*="view-active-"] select,
+body[class*="view-active-"] .app-control,
+body[class*="view-active-"] .ds-select-control,
+body[class*="view-active-"] .bin-label-multi-button,
+body[class*="view-active-"] .plain-bin-multi-button {
+  padding-right: 32px !important;
+  padding-left: 10px !important;
+}
+
+body[class*="view-active-"] input[type="file"] {
+  padding-top: 5px !important;
+}
+
+body[class*="view-active-"] textarea {
+  height: auto !important;
+  min-height: 48px !important;
+  padding: 6px 9px !important;
+}
+
+body[class*="view-active-"] input[type="checkbox"],
+body[class*="view-active-"] input[type="radio"] {
+  width: 15px !important;
+  height: 15px !important;
+  margin: 0 !important;
+}
+
+body[class*="view-active-"] .toggle {
+  gap: 6px !important;
+  min-height: var(--daksh-compact-control-h) !important;
+  align-items: center !important;
+}
+
+body[class*="view-active-"] .ds-select-chevron {
+  right: 10px !important;
+  width: 13px !important;
+  height: 13px !important;
+}
+
+body[class*="view-active-"] .btn,
+body[class*="view-active-"] button:not(.bin-label-multi-button):not(.plain-bin-multi-button),
+body[class*="view-active-"] .primary-button,
+body[class*="view-active-"] .secondary-button,
+body[class*="view-active-"] .ghost-button,
+body[class*="view-active-"] .danger-button,
+body[class*="view-active-"] .danger-light-button {
+  min-height: var(--daksh-compact-control-h) !important;
+  height: var(--daksh-compact-control-h) !important;
+  padding-right: 11px !important;
+  padding-left: 11px !important;
+  gap: 5px !important;
+  border-radius: var(--daksh-compact-radius) !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+}
+
+body[class*="view-active-"] .icon-btn,
+body[class*="view-active-"] .icon-button,
+body[class*="view-active-"] .header-icon-btn {
+  width: var(--daksh-compact-control-h) !important;
+  min-width: var(--daksh-compact-control-h) !important;
+  padding: 0 !important;
+}
+
+body[class*="view-active-"] .master-tabs,
+body[class*="view-active-"] .subtabs,
+body[class*="view-active-"] .bin-transfer-tabs,
+body[class*="view-active-"] .recon-tabs,
+body[class*="view-active-"] .qr-tool-tabs,
+body[class*="view-active-"] .admin-delete-tabs {
+  margin-bottom: 8px !important;
+  border-radius: var(--daksh-compact-radius) !important;
+}
+
+body[class*="view-active-"] .master-tab,
+body[class*="view-active-"] .subtab,
+body[class*="view-active-"] .bin-transfer-tab,
+body[class*="view-active-"] .recon-tab,
+body[class*="view-active-"] .qr-tool-tab,
+body[class*="view-active-"] .admin-delete-tab,
+body[class*="view-active-"] [role="tab"] {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding-right: 10px !important;
+  padding-left: 10px !important;
+  font-size: 11.5px !important;
+}
+
+body[class*="view-active-"] .master-tab-panels,
+body[class*="view-active-"] .master-tab-panel.active,
+body[class*="view-active-"] .bin-transfer-panel.active,
+body[class*="view-active-"] .recon-panel.active,
+body[class*="view-active-"] .qr-tool-panel.active {
+  display: grid !important;
+  gap: var(--daksh-compact-gap) !important;
+  min-width: 0 !important;
+}
+
+body[class*="view-active-"] .metric-grid,
+body[class*="view-active-"] .sync-status-grid,
+body[class*="view-active-"] .scanner-network-grid {
+  gap: 8px !important;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)) !important;
+}
+
+body[class*="view-active-"] .metric,
+body[class*="view-active-"] .status-tile {
+  min-height: 52px !important;
+  padding: 7px 9px !important;
+  gap: 3px !important;
+  border-radius: var(--daksh-compact-radius) !important;
+}
+
+body[class*="view-active-"] .metric span,
+body[class*="view-active-"] .status-tile span {
+  font-size: 10px !important;
+  line-height: 1.15 !important;
+}
+
+body[class*="view-active-"] .metric strong,
+body[class*="view-active-"] .status-tile strong:not(.live-pill) {
+  margin-top: 3px !important;
+  font-size: 18px !important;
+  line-height: 1 !important;
+}
+
+body.view-active-scan #manualScanForm label:has(.partSuggestInput) {
+  grid-column: auto !important;
+}
+
+@media (min-width: 1101px) {
+  body.view-active-scan #manualScanForm {
+    grid-template-columns: 1.05fr 1.2fr repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  body.view-active-scan #scanHistoryFilters.filter-grid {
+    grid-template-columns: minmax(130px, .75fr) minmax(130px, .75fr) minmax(220px, 1.25fr) minmax(140px, .8fr) minmax(170px, .95fr) !important;
+  }
+}
+
+body.view-active-scan .scan-history-summary {
+  margin: 6px 0 !important;
+  gap: 7px !important;
+}
+
+body.view-active-scan .scan-history-summary .metric {
+  min-height: 48px !important;
+}
+
+body[class*="view-active-"] .table-wrap,
+body[class*="view-active-"] .table-wrapper,
+body[class*="view-active-"] .table-container,
+body[class*="view-active-"] .dashboard-table-wrap,
+body[class*="view-active-"] .report-table-wrap,
+body[class*="view-active-"] .scan-history-wrap,
+body[class*="view-active-"] .master-table-wrap,
+body[class*="view-active-"] .validator-table-wrap,
+body[class*="view-active-"] .admin-delete-table-wrap,
+body[class*="view-active-"] .archive-table-wrap {
+  border-radius: var(--daksh-compact-radius) !important;
+}
+
+body[class*="view-active-"] th,
+body[class*="view-active-"] .report-table-wrap th,
+body[class*="view-active-"] .dashboard-data-table th,
+body[class*="view-active-"] .scan-history-table th,
+body[class*="view-active-"] .validator-summary-table th,
+body[class*="view-active-"] .admin-delete-table th {
+  height: var(--daksh-compact-row-h) !important;
+  padding: 4px 7px !important;
+  font-size: 11px !important;
+  line-height: 1.15 !important;
+}
+
+body[class*="view-active-"] td,
+body[class*="view-active-"] .report-table-wrap td,
+body[class*="view-active-"] .dashboard-data-table td,
+body[class*="view-active-"] .scan-history-table td,
+body[class*="view-active-"] .validator-summary-table td,
+body[class*="view-active-"] .admin-delete-table td {
+  height: var(--daksh-compact-row-h) !important;
+  padding: 4px 7px !important;
+  font-size: 11.5px !important;
+  line-height: 1.2 !important;
+}
+
+body[class*="view-active-"] .report-sort-button,
+body[class*="view-active-"] .scan-history-sort-button {
+  width: 100% !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  padding: 0 !important;
+  gap: 4px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  box-shadow: none !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  text-align: left !important;
+}
+
+body[class*="view-active-"] .report-sort-indicator,
+body[class*="view-active-"] .scan-history-sort-indicator {
+  flex-basis: 12px !important;
+  width: 12px !important;
+  height: 14px !important;
+}
+
+body[class*="view-active-"] .form-message {
+  min-height: 18px !important;
+  margin: 4px 0 !important;
+  font-size: 11.5px !important;
+  line-height: 1.25 !important;
+}
+
+body[class*="view-active-"] details,
+body[class*="view-active-"] .catalogue-upload-progress,
+body[class*="view-active-"] .dealer-access-selected-box,
+body[class*="view-active-"] .scanner-log-list,
+body[class*="view-active-"] .connection-log,
+body[class*="view-active-"] .sync-debug-grid {
+  font-size: 12px !important;
+}
+
+body[class*="view-active-"] .catalogue-upload-progress {
+  margin-top: 8px !important;
+  padding: 8px 10px !important;
+  border-radius: var(--daksh-compact-radius) !important;
+}
+
+body[class*="view-active-"] .bin-label-multi-panel,
+body[class*="view-active-"] .plain-bin-multi-panel,
+body[class*="view-active-"] .suggest-menu {
+  max-height: 220px !important;
+  border-radius: var(--daksh-compact-radius) !important;
+}
+
+body[class*="view-active-"] .bin-label-multi-option,
+body[class*="view-active-"] .plain-bin-multi-option {
+  min-height: 30px !important;
+  padding-right: 8px !important;
+  padding-left: 10px !important;
+  font-size: 12px !important;
+}
+
+body[class*="view-active-"] .app-action-dropdown,
+body[class*="view-active-"] td select,
+body[class*="view-active-"] td input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: 28px !important;
+  height: 28px !important;
+  font-size: 11.5px !important;
+}
+
+@media (max-width: 1100px) {
+  body[class*="view-active-"] .main > .view.active,
+  body[class*="view-active-"] .view.active {
+    padding: 10px !important;
+    gap: 10px !important;
+  }
+
+  body[class*="view-active-"] .grid-form,
+  body[class*="view-active-"] .filter-grid,
+  body[class*="view-active-"] .app-filter-bar {
+    grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr)) !important;
+  }
+}

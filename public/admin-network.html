@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DAKSH Network Status</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { margin: 0; background: #f4f7fb; color: #0e1b2a; font-family: Arial, sans-serif; }
+    main { max-width: 1180px; margin: 0 auto; padding: 28px; }
+    .head, .card { background: #fff; border: 1px solid #d9e2ec; border-radius: 16px; box-shadow: 0 8px 24px #0e1b2a0d; }
+    .head { padding: 24px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .head h1 { margin: 0 0 6px; font-size: 25px; }
+    .head p { margin: 0; color: #5d7188; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    a, button { border: 1px solid #c7d2df; border-radius: 9px; padding: 10px 14px; background: #fff; color: #0e1b2a; font-weight: 700; cursor: pointer; text-decoration: none; }
+    button.primary { background: #ed1c24; border-color: #ed1c24; color: #fff; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 18px; }
+    .card { padding: 20px; }
+    .card h2 { font-size: 17px; margin: 0 0 16px; }
+    dl { display: grid; grid-template-columns: minmax(120px, .7fr) 1fr; gap: 11px 18px; margin: 0; }
+    dt { color: #687d92; font-weight: 700; } dd { margin: 0; overflow-wrap: anywhere; font-weight: 700; }
+    .status { display: inline-flex; align-items: center; gap: 7px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #16a34a; }
+    .dot.off { background: #dc2626; }
+    .interfaces { margin-top: 18px; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; } th, td { padding: 10px; border-bottom: 1px solid #e5ebf2; text-align: left; }
+    code { color: #0f4c81; }
+    @media (max-width: 640px) { main { padding: 14px; } .head { display: block; } .head .actions { margin-top: 16px; } dl { grid-template-columns: 1fr; gap: 4px; } dd { margin-bottom: 8px; } }
+  </style>
+</head>
+<body>
+<main>
+  <section class="head"><div><h1>Network Status</h1><p>Admin-only local server, discovery, and database diagnostics.</p></div><div class="actions"><a href="/daksh.html?view=devices">Device Control</a><a href="/admin-logs.html">System Logs</a><button class="primary" id="refresh" type="button">Refresh</button></div></section>
+  <div id="message" class="card">Loading network status…</div>
+  <section class="grid" id="cards" hidden>
+    <article class="card"><h2>Server</h2><dl id="server"></dl></article>
+    <article class="card"><h2>Discovery</h2><dl id="discovery"></dl></article>
+    <article class="card"><h2>Database</h2><dl id="database"></dl></article>
+  </section>
+  <section class="card interfaces" id="interfacesCard" hidden><h2>Detected interfaces</h2><table><thead><tr><th>Name</th><th>Address</th><th>Scope</th><th>CIDR</th></tr></thead><tbody id="interfaces"></tbody></table></section>
+</main>
+<script>
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const row = (name, value) => `<dt>${esc(name)}</dt><dd>${value}</dd>`;
+  const status = (value, ok) => `<span class="status"><i class="dot${ok ? '' : ' off'}"></i>${esc(value)}</span>`;
+  async function load() {
+    const message = document.getElementById('message');
+    try {
+      const response = await fetch('/api/system/network-status', { credentials: 'same-origin', cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Network status could not be loaded');
+      const server = data.server || {}, discovery = data.discovery || {}, database = data.database || {};
+      document.getElementById('server').innerHTML = [row('Mode', esc(data.mode)), row('Server ID', `<code>${esc(server.serverId)}</code>`), row('mDNS host', `<code>${esc(server.hostname)}</code>`), row('Machine', esc(server.machineHostname || server.hostname)), row('Listen', `<code>${esc(server.configuredHost)}:${esc(server.port)}</code>`), row('Version', esc(server.version)), row('Uptime', `${esc(server.uptimeSeconds)} seconds`)].join('');
+      const mdns = discovery.mdns || {};
+      document.getElementById('discovery').innerHTML = [row('mDNS', status(mdns.status || 'unknown', mdns.status === 'advertising')), row('Service', `<code>${esc(mdns.service)}</code>`), row('UDP', status(`${discovery.udp?.port || '-'} enabled`, discovery.udp?.enabled)), row('Fallback', esc((discovery.fallbackOrder || []).join(' → ')))].join('');
+      document.getElementById('database').innerHTML = [row('Provider', esc(database.provider || 'PostgreSQL')), row('Status', status(database.databaseStatus || database.db || 'unknown', /online|connected/i.test(database.databaseStatus || database.db || ''))), row('Startup', esc(database.applicationInitializationStatus || 'unknown')), row('Schema verified', esc(String(database.applicationSchemaVerified ?? 'unknown')))].join('');
+      document.getElementById('interfaces').innerHTML = (data.interfaces || []).map(item => `<tr><td>${esc(item.name)}</td><td><code>${esc(item.address)}</code></td><td>${item.internal ? 'Loopback' : 'LAN'}</td><td>${esc(item.cidr)}</td></tr>`).join('') || '<tr><td colspan="4">No interfaces detected.</td></tr>';
+      document.getElementById('cards').hidden = false; document.getElementById('interfacesCard').hidden = false; message.hidden = true;
+    } catch (error) { message.hidden = false; message.textContent = error.message; }
+  }
+  document.getElementById('refresh').addEventListener('click', load); load();
+</script>
+</body>
+</html>

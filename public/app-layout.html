@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daksh Inventory Solution</title>
+    <link rel="stylesheet" href="/css/variables.css">
+    <link rel="stylesheet" href="/css/layout.css">
+    <link rel="stylesheet" href="/css/components.css">
+    <link rel="stylesheet" href="/css/style.css?v=20260902-bin-label-select-v1">
+    <link rel="stylesheet" href="/professional-theme.css?v=20260902-bin-label-select-v1">
+    <link rel="stylesheet" href="/css/select-system.css?v=20260907-bin-label-select-v2">
+</head>
+<body>
+    <div class="app-layout">
+        <!-- Reusable Sidebar -->
+        <aside class="app-sidebar">
+            <!-- Sidebar content will be injected here -->
+            <div id="sidebar-content"></div>
+        </aside>
+
+        <!-- Main Content Wrapper -->
+        <main class="app-main">
+            <!-- Reusable Header -->
+            <header class="app-header">
+                <!-- Header content will be injected here -->
+                <div id="header-content"></div>
+            </header>
+
+            <!-- Page Content -->
+            <div class="app-content">
+                <div class="page-title-section">
+                    <h1 class="page-title" id="viewTitle">Dashboard</h1>
+                    <p class="page-subtitle" id="systemSubline">Welcome back</p>
+                </div>
+                <!-- The content of the active view (Dashboard, Scan, etc.) will be injected here -->
+                <div id="view-container">
+                    <!-- Dashboard View -->
+                    <div id="dashboard" class="view">
+                        <!-- KPI Cards -->
+                        <div class="dashboard-grid">
+                            <div class="card kpi-card">
+                                <h4>DMS Stock Value</h4>
+                                <h3 id="dmsStockValue">₹ 0</h3>
+                            </div>
+                            <div class="card kpi-card">
+                                <h4>Actual Scanned Value</h4>
+                                <h3 id="actualScannedValue">₹ 0</h3>
+                            </div>
+                            <div class="card kpi-card">
+                                <h4>Difference Value</h4>
+                                <h3 id="differenceValue">₹ 0</h3>
+                            </div>
+                            <div class="card kpi-card">
+                                <h4>Audit Completion %</h4>
+                                <h3 id="auditCompletion">0%</h3>
+                            </div>
+                            <!-- Other KPI cards will be added here -->
+                        </div>
+
+                        <!-- Data Table -->
+                        <div class="card" style="margin-top: var(--gap);">
+                            <h4>Last 20 Scans</h4>
+                            <div class="table-wrapper">
+                                <table class="app-table" id="streamRows"></table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="/ui.js?v=20260923-recon-upload-dashboard-v1"></script>
+    <script src="/js/select-system.js?v=20260907-bin-label-select-v2"></script>
+</body>
+</html>

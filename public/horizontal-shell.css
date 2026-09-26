@@ -1,0 +1,442 @@
+/*
+ * Restored desktop application shell.
+ *
+ * The dashboard had accumulated a later sidebar-only layout override while
+ * the rest of the application still used the original horizontal console.
+ * Keep this pass last so the shell is consistent for every Daksh view.
+ */
+
+@media (min-width: 1101px) {
+  html,
+  body,
+  body:has(#dashboard.view.active),
+  body[class*="view-active-"] {
+    width: 100% !important;
+    height: 100% !important;
+    overflow: hidden !important;
+    background: var(--pro-canvas) !important;
+  }
+
+  body:has(#dashboard.view.active) .app.app-layout,
+  body[class*="view-active-"] .app.app-layout,
+  body:has(#dashboard.view.active) .app,
+  body[class*="view-active-"] .app {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: 64px 42px minmax(0, 1fr) !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+    background: var(--pro-canvas) !important;
+  }
+
+  body:has(#dashboard.view.active) .side.sidebar,
+  body[class*="view-active-"] .side.sidebar,
+  body:has(#dashboard.view.active) .side,
+  body[class*="view-active-"] .side,
+  body:has(#dashboard.view.active) .main.app-main,
+  body[class*="view-active-"] .main.app-main,
+  body:has(#dashboard.view.active) .main,
+  body[class*="view-active-"] .main {
+    display: contents !important;
+  }
+
+  body:has(#dashboard.view.active) .side-brand,
+  body[class*="view-active-"] .side-brand {
+    position: relative !important;
+    z-index: 5 !important;
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 230px !important;
+    height: 64px !important;
+    min-height: 64px !important;
+    margin: 0 !important;
+    padding: 0 18px !important;
+    overflow: hidden !important;
+    border: 0 !important;
+    border-right: 1px solid var(--pro-border) !important;
+    border-bottom: 1px solid var(--pro-border) !important;
+    border-radius: 0 !important;
+    background: var(--pro-surface) !important;
+    box-shadow: none !important;
+  }
+
+  body:has(#dashboard.view.active) .side-brand .brand-logo,
+  body[class*="view-active-"] .side-brand .brand-logo,
+  body:has(#dashboard.view.active) .side .brand-logo,
+  body[class*="view-active-"] .side .brand-logo {
+    width: 170px !important;
+    max-width: 170px !important;
+    height: auto !important;
+    filter: none !important;
+  }
+
+  body:has(#dashboard.view.active) .main > .topbar,
+  body[class*="view-active-"] .main > .topbar,
+  body:has(#dashboard.view.active) .main > .top-header,
+  body[class*="view-active-"] .main > .top-header,
+  body:has(#dashboard.view.active) .main > header.topbar,
+  body[class*="view-active-"] .main > header.topbar,
+  body:has(#dashboard.view.active) .topbar,
+  body[class*="view-active-"] .topbar,
+  body:has(#dashboard.view.active) .top-header,
+  body[class*="view-active-"] .top-header,
+  body:has(#dashboard.view.active) .enterprise-dashboard-nav,
+  body[class*="view-active-"] .enterprise-dashboard-nav {
+    position: relative !important;
+    z-index: 4 !important;
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: 64px !important;
+    min-height: 64px !important;
+    margin: 0 !important;
+    padding: 0 18px 0 248px !important;
+    gap: 12px !important;
+    overflow: hidden !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--pro-border) !important;
+    border-radius: 0 !important;
+    background: var(--pro-surface) !important;
+    color: var(--pro-text) !important;
+    box-shadow: none !important;
+  }
+
+  body:has(#dashboard.view.active) .enterprise-nav-title,
+  body[class*="view-active-"] .enterprise-nav-title {
+    display: flex !important;
+    align-items: center !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    gap: 10px !important;
+    overflow: hidden !important;
+  }
+
+  body:has(#dashboard.view.active) .enterprise-nav-logo,
+  body[class*="view-active-"] .enterprise-nav-logo {
+    display: block !important;
+    flex: 0 0 auto !important;
+    margin: 0 !important;
+    color: var(--pro-text) !important;
+    font-size: 13px !important;
+    font-weight: 800 !important;
+    line-height: 1.2 !important;
+    white-space: nowrap !important;
+  }
+
+  body:has(#dashboard.view.active) .enterprise-nav-divider,
+  body[class*="view-active-"] .enterprise-nav-divider {
+    display: block !important;
+    flex: 0 0 1px !important;
+    width: 1px !important;
+    height: 22px !important;
+    background: var(--pro-border) !important;
+  }
+
+  body:has(#dashboard.view.active) #viewTitle,
+  body[class*="view-active-"] #viewTitle {
+    flex: 0 0 auto !important;
+    margin: 0 !important;
+    color: var(--pro-text) !important;
+    font-size: 18px !important;
+    font-weight: 800 !important;
+    line-height: 1.2 !important;
+    white-space: nowrap !important;
+  }
+
+  body:has(#dashboard.view.active) #systemSubline,
+  body[class*="view-active-"] #systemSubline {
+    min-width: 0 !important;
+    overflow: hidden !important;
+    color: var(--pro-muted) !important;
+    font-size: 12px !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  body:has(#dashboard.view.active) .top-actions,
+  body[class*="view-active-"] .top-actions,
+  body:has(#dashboard.view.active) .topbar-user,
+  body[class*="view-active-"] .topbar-user {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    flex: 0 0 auto !important;
+    gap: 8px !important;
+    white-space: nowrap !important;
+  }
+
+  body:has(#dashboard.view.active) .topbar-dealer,
+  body[class*="view-active-"] .topbar-dealer {
+    width: 300px !important;
+    min-width: 0 !important;
+  }
+
+  body:has(#dashboard.view.active) .dashboard-dealer-select,
+  body[class*="view-active-"] .dashboard-dealer-select {
+    width: 100% !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    border: 1px solid var(--pro-border-strong) !important;
+    border-radius: 4px !important;
+    background: var(--pro-surface) !important;
+    color: var(--pro-text) !important;
+    font-size: 13px !important;
+    font-weight: 700 !important;
+  }
+
+  body:has(#dashboard.view.active) .header-icon-btn,
+  body[class*="view-active-"] .header-icon-btn {
+    width: 38px !important;
+    min-width: 38px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    padding: 0 !important;
+    border: 1px solid var(--pro-border-strong) !important;
+    border-radius: 4px !important;
+    background: var(--pro-surface) !important;
+    color: var(--pro-text-2) !important;
+  }
+
+  body:has(#dashboard.view.active) .topbar-user-meta,
+  body[class*="view-active-"] .topbar-user-meta {
+    display: grid !important;
+    align-items: center !important;
+    gap: 0 !important;
+    min-width: 74px !important;
+    color: var(--pro-text) !important;
+    line-height: 1.15 !important;
+  }
+
+  body:has(#dashboard.view.active) .topbar-user-role,
+  body[class*="view-active-"] .topbar-user-role {
+    color: var(--pro-muted) !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+  }
+
+  body:has(#dashboard.view.active) .topbar-user-meta strong,
+  body[class*="view-active-"] .topbar-user-meta strong {
+    color: var(--pro-text) !important;
+    font-size: 13px !important;
+    font-weight: 800 !important;
+  }
+
+  body:has(#dashboard.view.active) .topbar-logout-btn,
+  body[class*="view-active-"] .topbar-logout-btn {
+    height: 38px !important;
+    min-height: 38px !important;
+    padding: 0 12px !important;
+    border: 1px solid var(--pro-border-strong) !important;
+    border-radius: 4px !important;
+    background: var(--pro-surface) !important;
+    color: var(--pro-text) !important;
+    font-size: 13px !important;
+    font-weight: 700 !important;
+  }
+
+  body:has(#dashboard.view.active) #logoutBtn,
+  body[class*="view-active-"] #logoutBtn {
+    border-color: var(--pro-red) !important;
+    background: var(--pro-red) !important;
+    color: #ffffff !important;
+  }
+
+  body:has(#dashboard.view.active) .side-nav,
+  body[class*="view-active-"] .side-nav {
+    position: relative !important;
+    z-index: 6 !important;
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: stretch !important;
+    width: 100% !important;
+    height: 42px !important;
+    min-height: 42px !important;
+    margin: 0 !important;
+    padding: 0 8px !important;
+    gap: 0 !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--pro-red-dark) !important;
+    background: var(--pro-red) !important;
+    box-shadow: none !important;
+    scrollbar-width: none !important;
+  }
+
+  body:has(#dashboard.view.active) .side-nav::-webkit-scrollbar,
+  body[class*="view-active-"] .side-nav::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  body:has(#dashboard.view.active) .side-link,
+  body[class*="view-active-"] .side-link,
+  body:has(#dashboard.view.active) .side button.side-link,
+  body[class*="view-active-"] .side button.side-link {
+    display: inline-flex !important;
+    flex: 0 0 auto !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    width: auto !important;
+    height: 42px !important;
+    min-height: 42px !important;
+    margin: 0 !important;
+    padding: 0 12px !important;
+    gap: 6px !important;
+    border: 0 !important;
+    border-right: 1px solid rgba(255, 255, 255, .28) !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: #ffffff !important;
+    box-shadow: none !important;
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    line-height: 1 !important;
+    text-align: left !important;
+    text-decoration: none !important;
+    white-space: nowrap !important;
+  }
+
+  body:has(#dashboard.view.active) .side-link .nav-icon,
+  body[class*="view-active-"] .side-link .nav-icon,
+  body:has(#dashboard.view.active) .side-link svg,
+  body[class*="view-active-"] .side-link svg {
+    display: block !important;
+    width: 15px !important;
+    min-width: 15px !important;
+    height: 15px !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: #ffffff !important;
+  }
+
+  body:has(#dashboard.view.active) .side-link:hover,
+  body[class*="view-active-"] .side-link:hover,
+  body:has(#dashboard.view.active) .side-link.active,
+  body[class*="view-active-"] .side-link.active {
+    background: var(--pro-red-dark) !important;
+    color: #ffffff !important;
+    transform: none !important;
+  }
+
+  body:has(#dashboard.view.active) .side-footer,
+  body[class*="view-active-"] .side-footer,
+  body:has(#dashboard.view.active) .side-resize-handle,
+  body[class*="view-active-"] .side-resize-handle {
+    display: none !important;
+  }
+
+  body:has(#dashboard.view.active) .main > .view,
+  body[class*="view-active-"] .main > .view,
+  body:has(#dashboard.view.active) .view.active,
+  body[class*="view-active-"] .view.active {
+    grid-column: 1 !important;
+    grid-row: 3 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 16px 20px 22px !important;
+    gap: 14px !important;
+    overflow: auto !important;
+    background: var(--pro-canvas) !important;
+  }
+
+  body:has(#dashboard.view.active) #dashboard.view.active,
+  body[class*="view-active-dashboard"] #dashboard.view.active {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-content: start !important;
+    /* This grid cell owns scrolling; the header and navigation stay in place. */
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  body:has(#dashboard.view.active) .dashboard-page-heading,
+  body[class*="view-active-dashboard"] .dashboard-page-heading {
+    margin: 0 0 8px !important;
+    padding: 0 0 0 10px !important;
+    border-left: 4px solid var(--pro-red) !important;
+    display: grid !important;
+    gap: 3px !important;
+  }
+
+  body:has(#dashboard.view.active) .dashboard-page-heading h2,
+  body[class*="view-active-dashboard"] .dashboard-page-heading h2 {
+    margin: 0 !important;
+    color: #000000 !important;
+    font-size: 22px !important;
+    font-weight: 800 !important;
+    line-height: 1.15 !important;
+  }
+
+  body:has(#dashboard.view.active) #dashboard .enterprise-kpi-grid,
+  body[class*="view-active-dashboard"] #dashboard .enterprise-kpi-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+    gap: 12px !important;
+  }
+
+  body:has(#dashboard.view.active) #dashboard .dashboard-kpi,
+  body[class*="view-active-dashboard"] #dashboard .dashboard-kpi {
+    min-height: 96px !important;
+    height: 96px !important;
+    padding: 14px !important;
+    border-radius: var(--pro-radius) !important;
+  }
+}
+
+@media (min-width: 1101px) and (max-width: 1380px) {
+  body:has(#dashboard.view.active) .side-brand,
+  body[class*="view-active-"] .side-brand {
+    width: 230px !important;
+  }
+
+  body:has(#dashboard.view.active) .main > .topbar,
+  body[class*="view-active-"] .main > .topbar,
+  body:has(#dashboard.view.active) .main > .top-header,
+  body[class*="view-active-"] .main > .top-header {
+    padding-left: 248px !important;
+  }
+
+  body:has(#dashboard.view.active) .side-link,
+  body[class*="view-active-"] .side-link,
+  body:has(#dashboard.view.active) .side button.side-link,
+  body[class*="view-active-"] .side button.side-link {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+    font-size: 12px !important;
+  }
+}
+
+/* Preserve the existing role-based visibility set by setUserChrome(). */
+body:has(#dashboard.view.active) .side button.side-link.hidden,
+body[class*="view-active-"] .side button.side-link.hidden {
+  display: none !important;
+}
+
+@media (max-width: 1100px) {
+  body:has(#dashboard.view.active) .app.app-layout,
+  body[class*="view-active-"] .app.app-layout,
+  body:has(#dashboard.view.active) .app,
+  body[class*="view-active-"] .app {
+    height: auto !important;
+    min-height: 100vh !important;
+    overflow: visible !important;
+  }
+}

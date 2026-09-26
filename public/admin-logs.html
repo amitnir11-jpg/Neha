@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DAKSH System Logs</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { margin: 0; background: #f4f7fb; color: #0e1b2a; font-family: Arial, sans-serif; }
+    main { max-width: 1240px; margin: 0 auto; padding: 28px; }
+    .head, .card { background: #fff; border: 1px solid #d9e2ec; border-radius: 16px; box-shadow: 0 8px 24px #0e1b2a0d; }
+    .head { padding: 24px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    h1 { margin: 0 0 6px; font-size: 25px; } p { margin: 0; color: #5d7188; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; } a, button { border: 1px solid #c7d2df; border-radius: 9px; padding: 10px 14px; background: #fff; color: #0e1b2a; font-weight: 700; cursor: pointer; text-decoration: none; } button.primary { background: #ed1c24; color: #fff; border-color: #ed1c24; }
+    .card { padding: 20px; } .meta { color: #687d92; margin-bottom: 12px; }
+    pre { margin: 0; max-height: 70vh; overflow: auto; background: #0e1b2a; color: #dce9f5; border-radius: 10px; padding: 16px; font: 12px/1.55 Consolas, monospace; white-space: pre-wrap; }
+    @media (max-width: 640px) { main { padding: 14px; } .head { display: block; } .head .actions { margin-top: 16px; } }
+  </style>
+</head>
+<body>
+<main>
+  <section class="head"><div><h1>System Logs</h1><p>Structured application, discovery, startup, and connection diagnostics.</p></div><div class="actions"><a href="/daksh.html?view=devices">Device Control</a><a href="/admin-network.html">Network Status</a><a href="/api/system/logs/download">Download</a><button class="primary" id="refresh" type="button">Refresh</button></div></section>
+  <section class="card"><div class="meta" id="meta">Loading logs…</div><pre id="logs"></pre></section>
+</main>
+<script>
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  async function load() {
+    const meta = document.getElementById('meta'), target = document.getElementById('logs');
+    try { const response = await fetch('/api/system/logs?limit=500', { credentials: 'same-origin', cache: 'no-store' }); const data = await response.json(); if (!response.ok) throw new Error(data.message || 'Logs could not be loaded'); meta.textContent = `${data.logs?.length || 0} entries · ${data.file?.file || 'file logging unavailable'}`; target.innerHTML = (data.logs || []).map(item => esc(JSON.stringify(item))).join('\n'); } catch (error) { meta.textContent = error.message; target.textContent = ''; }
+  }
+  document.getElementById('refresh').addEventListener('click', load); load();
+</script>
+</body>
+</html>

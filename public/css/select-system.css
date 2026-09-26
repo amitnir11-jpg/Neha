@@ -1,0 +1,267 @@
+/* Shared select treatment. It enhances the specialised bin controls without
+   changing their values, events, or native select behaviour. */
+:root {
+  --ds-primary: #ed1c24;
+  --ds-primary-hover: #c9141b;
+  --ds-text: #1f2933;
+  --ds-text-muted: #667085;
+  --ds-border: #d8d8d8;
+  --ds-border-hover: #b9b9b9;
+  --ds-surface: #ffffff;
+  --ds-background: #f7f7f8;
+  --ds-disabled: #8a8f98;
+  --ds-disabled-border: #dedede;
+  --ds-radius: 4px;
+  --ds-control-height: 42px;
+  --ds-focus-ring: rgba(237, 28, 36, 0.14);
+  --ds-menu-shadow: 0 6px 16px rgba(16, 24, 40, 0.12), 0 1px 3px rgba(16, 24, 40, 0.06);
+}
+
+/* The wrapper is positioned around the control itself, never around its label. */
+#binLabelPrintTab .ds-select-host {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  isolation: isolate;
+}
+
+#binLabelPrintTab .ds-select-control {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: var(--ds-control-height);
+  min-height: var(--ds-control-height);
+  box-sizing: border-box;
+  padding: 0 44px 0 14px;
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius);
+  background: var(--ds-surface);
+  /* The browser caret is replaced by the single overlay chevron below. */
+  background-image: none !important;
+  background-repeat: no-repeat !important;
+  color: var(--ds-text);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  outline: none;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  cursor: pointer;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+}
+
+#binLabelPrintTab .ds-select-control::-ms-expand {
+  display: none;
+}
+
+#binLabelPrintTab .ds-select-control:hover:not(:disabled) {
+  border-color: var(--ds-border-hover);
+}
+
+#binLabelPrintTab .ds-select-control:focus,
+#binLabelPrintTab .ds-select-host:focus-within .ds-select-control {
+  border-color: var(--ds-primary);
+  box-shadow: 0 0 0 3px var(--ds-focus-ring);
+}
+
+#binLabelPrintTab .ds-select-control:disabled {
+  border-color: var(--ds-disabled-border);
+  background: var(--ds-background);
+  color: var(--ds-disabled);
+  cursor: not-allowed;
+}
+
+#binLabelPrintTab .ds-select-chevron,
+#plainBinSelectControl .ds-select-chevron {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  z-index: 2;
+  display: block;
+  width: 16px;
+  height: 16px;
+  color: var(--ds-text-muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: color 180ms ease, transform 180ms ease;
+}
+
+/* Keep the overlay visible and consistent even inside hidden-then-activated tabs. */
+#binLabelPrintTab .ds-select-host > .ds-select-control {
+  position: relative;
+  z-index: 1;
+}
+
+#binLabelPrintTab .ds-select-host > .ds-select-chevron {
+  flex: 0 0 16px;
+}
+
+#binLabelPrintTab .ds-select-chevron path,
+#plainBinSelectControl .ds-select-chevron path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#binLabelPrintTab .ds-select-host:focus-within > .ds-select-chevron {
+  color: var(--ds-primary);
+}
+
+#binLabelPrintTab .ds-select-control:disabled ~ .ds-select-chevron {
+  color: var(--ds-disabled);
+}
+
+/* Existing custom multi-selects keep their behavior and use the same trigger. */
+.bin-label-multi-select,
+.plain-bin-multi-select {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.bin-label-multi-button,
+.plain-bin-multi-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: var(--ds-control-height);
+  min-height: var(--ds-control-height);
+  gap: 10px;
+  box-sizing: border-box;
+  padding: 0 44px 0 14px;
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius);
+  background: var(--ds-surface);
+  background-image: none;
+  color: var(--ds-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-align: left;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+}
+
+.bin-label-multi-button:hover,
+.plain-bin-multi-button:hover {
+  border-color: var(--ds-border-hover);
+}
+
+.bin-label-multi-button:focus-visible,
+.plain-bin-multi-button:focus-visible,
+.bin-label-multi-select.open .bin-label-multi-button,
+.plain-bin-multi-select.open .plain-bin-multi-button {
+  border-color: var(--ds-primary);
+  box-shadow: 0 0 0 3px var(--ds-focus-ring);
+  outline: none;
+}
+
+.bin-label-multi-select.open .ds-select-chevron,
+.plain-bin-multi-select.open .ds-select-chevron {
+  color: var(--ds-primary);
+  transform: translateY(-50%) rotate(180deg);
+}
+
+#binLabelPrintTab .ds-select-label,
+#plainBinSelectControl .ds-select-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bin-label-multi-panel,
+.plain-bin-multi-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  z-index: 30;
+  max-height: 300px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius);
+  background: var(--ds-surface);
+  box-shadow: var(--ds-menu-shadow);
+}
+
+.bin-label-multi-option,
+.plain-bin-multi-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 38px;
+  gap: 10px;
+  padding: 0 10px 0 12px;
+  border-radius: 6px;
+  color: var(--ds-text);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.bin-label-multi-option:hover,
+.plain-bin-multi-option:hover {
+  background: #fff5f5;
+}
+
+.bin-label-multi-option:has(input:checked),
+.plain-bin-multi-option:has(input:checked) {
+  background: #fff1f2;
+  color: var(--ds-primary-hover);
+}
+
+.bin-label-multi-option:has(input:checked)::after,
+.plain-bin-multi-option:has(input:checked)::after {
+  content: "✓";
+  color: var(--ds-primary);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.bin-label-multi-option input,
+.plain-bin-multi-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.bin-label-multi-option span,
+.plain-bin-multi-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bin-label-multi-empty,
+.plain-bin-multi-empty {
+  padding: 10px 12px;
+  color: var(--ds-text-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  #binLabelPrintTab .ds-select-control,
+  .bin-label-multi-button,
+  .plain-bin-multi-button {
+    height: var(--ds-control-height);
+    min-height: var(--ds-control-height);
+  }
+}
