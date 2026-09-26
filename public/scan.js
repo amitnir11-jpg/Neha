@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20260704-lite-apk-v1';
+  const APP_VERSION = '20260926-all-barcode-formats-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -2218,27 +2218,13 @@
     const ZX = await loadZxingLibrary();
     const BrowserMultiFormatReader = ZX?.BrowserMultiFormatReader;
     const DecodeHintType = ZX?.DecodeHintType;
-    const BarcodeFormat = ZX?.BarcodeFormat;
-    if (!BrowserMultiFormatReader || !DecodeHintType || !BarcodeFormat) {
+    if (!BrowserMultiFormatReader || !DecodeHintType) {
       throw new Error('ZXing scanner library failed to load');
     }
     if (state.scanReader) return state.scanReader;
     const hints = new Map();
-    const formats = [
-      BarcodeFormat.QR_CODE,
-      BarcodeFormat.DATA_MATRIX,
-      BarcodeFormat.CODE_128,
-      BarcodeFormat.CODE_39,
-      BarcodeFormat.EAN_13,
-      BarcodeFormat.EAN_8,
-      BarcodeFormat.UPC_A,
-      BarcodeFormat.UPC_E,
-      BarcodeFormat.ITF,
-      BarcodeFormat.CODABAR,
-      BarcodeFormat.PDF_417,
-      BarcodeFormat.AZTEC
-    ].filter(Boolean);
-    hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
+    // Let ZXing try every supported format. A hand-picked format list silently
+    // misses valid inventory labels such as RSS, Micro QR, and extensions.
     hints.set(DecodeHintType.TRY_HARDER, true);
     state.scanReader = new BrowserMultiFormatReader(hints, 45);
     state.scanReader.timeBetweenDecodingAttempts = 45;
@@ -3444,10 +3430,16 @@
       cameraState('Ready to scan');
       return;
     }
+    const partNumber = parsePartCandidate(raw);
+    if (!partNumber) {
+      cameraState('Part number not found');
+      toast('The code was read, but it does not contain a recognized part number. Use manual entry or check the QR data.', 'error');
+      return;
+    }
     let record = createScanRecord({
       rawText: raw,
       manual: false,
-      partNumber: parsePartCandidate(raw),
+      partNumber,
       binLocation: requiresBin() ? loadActiveBin() : ''
     });
     try {

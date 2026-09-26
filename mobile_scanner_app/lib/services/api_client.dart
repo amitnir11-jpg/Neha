@@ -8,7 +8,7 @@ import '../models/scan_record.dart';
 import '../models/session.dart';
 import 'settings_store.dart';
 
-const mobileAppVersionName = 'Daksh Scan Lite v1.2.11';
+const mobileAppVersionName = 'Daksh Scan Lite v1.2.12';
 
 class ApiException implements Exception {
   ApiException(this.message,

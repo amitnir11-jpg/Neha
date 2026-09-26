@@ -52,21 +52,6 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     detectionTimeoutMs: 120,
     facing: CameraFacing.back,
     useNewCameraSelector: true,
-    formats: const [
-      BarcodeFormat.qrCode,
-      BarcodeFormat.code128,
-      BarcodeFormat.code39,
-      BarcodeFormat.code93,
-      BarcodeFormat.ean13,
-      BarcodeFormat.ean8,
-      BarcodeFormat.upcA,
-      BarcodeFormat.upcE,
-      BarcodeFormat.itf,
-      BarcodeFormat.codabar,
-      BarcodeFormat.dataMatrix,
-      BarcodeFormat.pdf417,
-      BarcodeFormat.aztec,
-    ],
   );
 
   Timer? _foregroundSyncTimer;
@@ -558,7 +543,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       return;
     }
     final raw = capture.barcodes
-        .map((barcode) => barcode.rawValue)
+        .map((barcode) => barcode.rawValue ?? barcode.displayValue)
         .whereType<String>()
         .map((value) => value.trim())
         .firstWhere((value) => value.isNotEmpty, orElse: () => '');
@@ -1871,18 +1856,54 @@ class _ScanDraft {
         qty = int.tryParse('${parsed['qty'] ?? parsed['quantity'] ?? 1}') ?? 1;
       }
     } catch (_) {
-      final upperText = _upper(text);
-      part = _matchValue(upperText,
-          r'(?:PART\s*NO|PART|PN|SKU|ITEM)[:=#\-\s]+([A-Z0-9._/-]{3,40})');
-      bin = _matchValue(upperText,
-                  r'(?:BIN|LOCATION|LOC)[:=#\-\s]+([A-Z0-9._/-]{1,30})')
+      final uri = Uri.tryParse(text);
+      final query = uri != null && uri.hasQuery
+          ? uri.queryParameters
+          : text.contains('=') && !text.startsWith('{')
+              ? Uri.tryParse(
+                          'https://scan.local/?${text.replaceAll('|', '&').replaceAll(';', '&')}')
+                      ?.queryParameters ??
+                  const <String, String>{}
+              : const <String, String>{};
+      String queryValue(Iterable<String> names) {
+        for (final name in names) {
+          for (final entry in query.entries) {
+            final key =
+                entry.key.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+            if (key == name && entry.value.trim().isNotEmpty)
+              return entry.value.trim();
+          }
+        }
+        return '';
+      }
+
+      part = _upper(queryValue(const [
+        'partnumber',
+        'partno',
+        'part',
+        'pn',
+        'sku',
+        'itemcode',
+        'item',
+        'p'
+      ]));
+      bin = _upper(queryValue(const ['binlocation', 'bin', 'location', 'loc']))
               .isEmpty
           ? bin
-          : _matchValue(
-              upperText, r'(?:BIN|LOCATION|LOC)[:=#\-\s]+([A-Z0-9._/-]{1,30})');
+          : _upper(queryValue(const ['binlocation', 'bin', 'location', 'loc']));
+      qty = int.tryParse(queryValue(const ['qty', 'quantity'])) ?? qty;
+
+      final upperText = _upper(text);
+      if (part.isEmpty) {
+        part = _matchValue(upperText,
+            r'(?:PART\s*NO|PART\s*NUMBER|PARTNO|PART|PN|SKU|ITEM\s*CODE|ITEM)[:=#\-\s]+([A-Z0-9._/-]{3,40})');
+      }
+      final parsedBin = _matchValue(upperText,
+          r'(?:BIN\s*LOCATION|BIN|LOCATION|LOC)[:=#\-\s]+([A-Z0-9._/-]{1,30})');
+      if (parsedBin.isNotEmpty) bin = parsedBin;
       qty = int.tryParse(_matchValue(
               upperText, r'(?:QTY|QUANTITY)[:=#\-\s]+([0-9]{1,5})')) ??
-          1;
+          qty;
       if (part.isEmpty) {
         final slashParts = upperText
             .split('/')

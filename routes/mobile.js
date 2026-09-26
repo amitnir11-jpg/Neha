@@ -28,8 +28,8 @@ const { applyCacheHeaders, getCachedResponse } = require('../utils/safeCache');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
-const MOBILE_APP_VERSION = 'Daksh Scan Lite v1.2.11';
-const WEB_SCANNER_BUILD = '20260704-lite-apk-v1';
+const MOBILE_APP_VERSION = 'Daksh Scan Lite v1.2.12';
+const WEB_SCANNER_BUILD = '20260926-all-barcode-formats-v1';
 const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 const MOBILE_SCAN_SELECT = [
   'uniqueScanId scanId syncKey qrFingerprint rawUpiHash',
