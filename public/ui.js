@@ -11775,6 +11775,10 @@
     $$('.master-tab').forEach((button) => {
       button.addEventListener('click', () => {
         const target = button.dataset.masterTab;
+        if (button.classList.contains('admin-only') && (!state.user || state.user.role !== 'admin')) {
+          toast('Administrator access is required to open this section.', 'error');
+          return;
+        }
         $$('.master-tab').forEach((item) => {
           const active = item === button;
           item.classList.toggle('active', active);

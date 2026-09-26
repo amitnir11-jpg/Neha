@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '2.0.26';
+  const APP_VERSION = '2.0.40';
   const SERVICE_WORKER_VERSION = APP_VERSION;
   const VERSION_RELOAD_KEY = 'dakshVersionReloadAttempt';
   const PRESERVED_LOCAL_KEYS = new Set([
