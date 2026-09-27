@@ -1608,14 +1608,13 @@ function manualDuplicatePayload(existing = {}, requestedQty = 1) {
 }
 
 async function addManualQuantity(existing = {}, input = {}, req) {
-  if (!req || !req.user || auth.normalizeRole(req.user.role) !== 'admin') return { error: 'Admin permission required.' };
+  if (!req || !req.user) return { error: 'Authentication required.' };
   const addQty = Math.abs(numberValue(firstValue(input, ['qty', 'quantity', 'count']), 0));
   if (!(addQty > 0)) return { error: 'Quantity to add must be greater than zero.' };
   const requestId = clean(input.manualAddRequestId || input.uniqueScanId || input.scanId || input.clientScanId || input.syncKey || '');
   if (!requestId) return { error: 'Manual quantity update request ID is required.' };
   const partNumber = normalizePartNumber(existing.normalizedPartNumber || existing.partNumber || existing.part || input.partNumber || input.part || '');
   const masterPrice = await getPriceFromPartMaster(partNumber, existing.dealerCode || input.dealerCode).catch(() => null);
-  if (masterPriceMissing(masterPrice)) return { error: MISSING_PART_MASTER_PRICE_MESSAGE };
 
   const now = new Date();
   const currentQtyExpression = {
@@ -1627,11 +1626,13 @@ async function addManualQuantity(existing = {}, input = {}, req) {
     }
   };
   const nextQtyExpression = { $add: [currentQtyExpression, addQty] };
-  const priceFields = masterPriceScanFields(masterPrice, 0);
-  const masterMrp = numberValue(priceFields.valuationMRP, 0);
   let before = await Inventory.findById(existing._id).lean();
   if (!before) return { error: 'Existing manual scan record was not found.' };
   if (before.isDeleted === true) return { error: 'Deleted scans must be restored before quantity can be changed.' };
+  const priceFields = masterPriceMissing(masterPrice)
+    ? {}
+    : masterPriceScanFields(masterPrice, 0);
+  const masterMrp = numberValue(priceFields.valuationMRP ?? before.valuationMRP ?? before.currentCatalogueMRP ?? before.mrp, 0);
   let updated = null;
   let alreadyApplied = before.lastManualAddRequestId === requestId;
   if (!alreadyApplied) {
