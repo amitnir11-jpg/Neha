@@ -67,6 +67,7 @@ body #dashboard.daksh-dashboard-v2.view.active .dashboard-page-heading p {
 #dashboard.daksh-dashboard-v2 .dashboard-page-heading h2 { margin: 0 !important; color: var(--dash-text) !important; font-size: clamp(25px, 2vw, 31px) !important; font-weight: 800 !important; line-height: 1.05 !important; letter-spacing: -.4px !important; }
 #dashboard.daksh-dashboard-v2 .dashboard-page-heading p { margin: 5px 0 0 !important; color: #7586a4 !important; font-size: 13px !important; line-height: 1.25 !important; }
 #dashboard.daksh-dashboard-v2 .dashboard-heading-controls { display: flex !important; align-items: center !important; justify-content: flex-end !important; gap: 10px !important; min-width: 0 !important; }
+#dashboard.daksh-dashboard-v2 #dashboardScopeSummary { display: none !important; }
 #dashboard.daksh-dashboard-v2 .dashboard-scope-summary, #dashboard.daksh-dashboard-v2 .dashboard-date-filter,
 #dashboard.daksh-dashboard-v2 .dashboard-audit-dealer-picker,
 #dashboard.daksh-dashboard-v2 .dashboard-refresh-button, #dashboard.daksh-dashboard-v2 .dashboard-page-status {
