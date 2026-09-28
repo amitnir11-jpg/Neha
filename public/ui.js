@@ -4748,7 +4748,6 @@
     if (!form) return;
     const scanType = String($('[name="type"]', form)?.value || 'INWARD').trim().toUpperCase();
     const isFitted = scanType === 'FITTED';
-    const needsManualBin = ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType);
     $$('.fitted-only', form).forEach((label) => {
       label.classList.toggle('hidden', !isFitted);
       $$('input, select, textarea', label).forEach((field) => {
@@ -4775,7 +4774,7 @@
     const partInput = $('[name="part"]', form);
     const rawInput = $('[name="rawScan"]', form);
     if (partInput) partInput.disabled = waitingForBin;
-    if (rawInput) rawInput.disabled = manualMode && waitingForBin;
+    if (rawInput) rawInput.disabled = waitingForBin;
     if (form.id === 'barcodeScanForm') {
       setLivePill('barcodeReadyStatus', needsSourceBinFirst ? (binInput?.value ? 'Ready for Scan' : 'Enter Bin Location') : 'Ready for Scan', needsSourceBinFirst ? Boolean(binInput?.value) : true);
     }
