@@ -13,6 +13,11 @@ assert.strictEqual(activeInventoryValue({ activeInventory: 'false', scanType: 'I
 assert.strictEqual(valueForMirror({ activeInventory: 'true' }, 'activeInventory', field('activeInventory')), true);
 assert.strictEqual(valueForMirror({ activeInventory: 'false' }, 'activeInventory', field('activeInventory')), false);
 assert.strictEqual(valueForMirror({ remainingQty: '1.25' }, 'remainingQty', field('remainingQty')), 1.25);
+assert.strictEqual(valueForMirror({ isDeleted: 'true' }, 'isDeleted', field('isDeleted')), true);
+assert.strictEqual(valueForMirror({ isDeleted: 'false' }, 'isDeleted', field('isDeleted')), false);
+assert.ok(valueForMirror({ deletedAt: '2026-06-22T04:39:46.184Z' }, 'deletedAt', field('deletedAt')) instanceof Date);
+assert.ok(modelMirrorFields('Inventory').includes('isDeleted'), 'Inventory.isDeleted must be mirrored into its indexed PostgreSQL column');
+assert.ok(modelMirrorFields('Inventory').includes('deletedAt'), 'Inventory.deletedAt must be mirrored into its indexed PostgreSQL column');
 assert.ok(valueForMirror({ timestamp: '2026-06-22T04:39:46.184Z' }, 'timestamp', field('timestamp')) instanceof Date);
 assert.strictEqual(valueForMirror({ dealerCode: 24780 }, 'dealerCode', field('dealerCode')), '24780');
 assert.ok(modelMirrorFields('ScanAuditLog').includes('action'), 'ScanAuditLog.action must be mirrored as a required Prisma column');
