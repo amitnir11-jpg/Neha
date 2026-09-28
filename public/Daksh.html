@@ -1023,58 +1023,55 @@
           </section>
 
           <section id="dealerAuditTab" class="master-tab-panel" role="tabpanel" hidden>
-            <section class="card">
-              <div class="card-head"><h2>Dealer Master</h2></div>
-              <div class="master-subtabs" role="tablist" aria-label="Dealer master actions">
-                <button class="btn light active" type="button" data-dealer-form-tab="add" role="tab" aria-selected="true">Add Dealer</button>
-                <button class="btn light" type="button" data-dealer-form-tab="edit" role="tab" aria-selected="false">Edit Dealer</button>
-              </div>
-              <form id="dealerMasterForm" class="grid-form master-form">
-                <label>Dealer Name<input name="dealerName" placeholder="Dealer Name" required></label>
-                <label>Dealer Code<input name="dealerCode" placeholder="Dealer Code" required></label>
-                <label>Brand<input name="brand" placeholder="Brand"></label>
-                <label>Location<input name="location" placeholder="Location"></label>
-                <label>Audit User<select name="auditUserId" id="dealerMasterAuditUser"><option value="">No audit user</option></select></label>
-                <button class="btn primary admin-only form-action" type="submit">Save Dealer</button>
-              </form>
-              <form id="dealerEditForm" class="grid-form master-form" hidden>
-                <label>Select Dealer<select name="dealerCode" id="dealerEditSelect" required><option value="">Select Dealer</option></select></label>
-                <label>Dealer Name<input name="dealerName" placeholder="Dealer Name" required></label>
-                <label>Brand<input name="brand" placeholder="Brand"></label>
-                <label>Location<input name="location" placeholder="Location"></label>
-                <label>Audit User<select name="auditUserId" id="dealerEditAuditUser"><option value="">No audit user</option></select></label>
-                <button class="btn primary admin-only form-action" type="submit">Update Dealer</button>
-              </form>
-            </section>
-
-            <section class="card">
-              <div class="card-head"><h2>Search & Manage Dealer Audit</h2></div>
-              <form id="dealerSearchForm" class="grid-form master-form">
-                <label>Dealer Code<input id="dealerSearchCode" name="dealerCode" placeholder="Enter dealer code" type="text"></label>
-                <button class="btn primary admin-only form-action" type="button" id="dealerSearchButton">Search</button>
-              </form>
-              <div id="dealerSearchResults" style="margin-top: 20px; display: none;">
-                <div class="table-wrap master-table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Dealer</th>
-                        <th>Code</th>
-                        <th>Start Date</th>
-                        <th>Audit Status</th>
-                        <th>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody id="dealerSearchResultsTable"></tbody>
-                  </table>
+            <section class="card dealer-master-page">
+              <header class="dealer-master-header">
+                <div><h2>Dealer Master</h2><p>Create and manage dealer details and audit setup</p></div>
+                <div class="dealer-master-header-actions">
+                  <button id="addDealerBtn" class="btn primary" type="button">＋ Add Dealer</button>
+                  <button id="editSelectedDealerBtn" class="btn light" type="button">Edit Dealer</button>
                 </div>
-              </div>
+              </header>
+              <form id="dealerFilterForm" class="dealer-filter-bar">
+                <label>Search Dealer<input id="dealerFilterSearch" placeholder="Dealer code, dealer name or location..."></label>
+                <label>Brand<select id="dealerFilterBrand"><option value="">All</option></select></label>
+                <label>Location<select id="dealerFilterLocation"><option value="">All</option></select></label>
+                <label>Audit User<select id="dealerFilterAuditUser"><option value="">All</option></select></label>
+                <label>Status<select id="dealerFilterStatus"><option value="">All</option><option value="ACTIVE">Active</option><option value="IN_PROGRESS">In Progress</option><option value="COMPLETED">Completed</option><option value="NOT_STARTED">Not Started</option><option value="PAUSED">Paused</option><option value="LOCKED">Locked</option><option value="INACTIVE">Inactive</option></select></label>
+                <button class="btn primary" type="submit">Search</button>
+                <button id="clearDealerFiltersBtn" class="btn light" type="button">Clear</button>
+              </form>
             </section>
 
-            <section class="card">
-              <div class="card-head"><h2>Dealer List</h2></div>
-              <div class="table-wrap master-table-wrap"><table><thead><tr><th>Dealer</th><th>Code</th><th>Location</th><th>Audit User</th><th>Audit Status</th><th>Action</th></tr></thead><tbody id="dealerMasterRows"></tbody></table></div>
+            <section class="card dealer-list-card">
+              <div class="dealer-list-heading"><h3>Dealer List</h3><span id="dealerListCount" class="dealer-count"></span><span id="dealerListRange"></span></div>
+              <div class="table-wrap dealer-list-table-wrap"><table><thead><tr>
+                <th><input id="dealerSelectVisible" type="checkbox" aria-label="Select all visible dealers"></th><th>SN</th>
+                <th><button class="dealer-sort" data-sort="dealerCode">Dealer Code ↕</button></th>
+                <th><button class="dealer-sort" data-sort="dealerName">Dealer Name ↕</button></th>
+                <th><button class="dealer-sort" data-sort="brand">Brand ↕</button></th>
+                <th><button class="dealer-sort" data-sort="location">Location ↕</button></th>
+                <th><button class="dealer-sort" data-sort="auditorName">Audit User ↕</button></th>
+                <th><button class="dealer-sort" data-sort="auditStatus">Audit Status ↕</button></th>
+                <th><button class="dealer-sort" data-sort="createdAt">Created On ↕</button></th><th>Actions</th>
+              </tr></thead><tbody id="dealerMasterRows"></tbody></table></div>
+              <div class="dealer-pagination"><span id="dealerPaginationCount"></span><div><button id="dealerPrevPage" class="btn light" type="button">‹ Previous</button><span id="dealerPageButtons"></span><button id="dealerNextPage" class="btn light" type="button">Next ›</button></div></div>
             </section>
+
+            <div id="dealerModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="dealerModalTitle">
+              <div class="modal-card dealer-modal-card">
+                <div class="modal-head"><h2 id="dealerModalTitle">Add New Dealer</h2><button id="closeDealerModalBtn" class="btn light" type="button" aria-label="Close">×</button></div>
+                <form id="dealerModalForm" class="grid-form dealer-modal-form">
+                  <input name="mode" type="hidden" value="add">
+                  <label>Dealer Code *<input name="dealerCode" required></label>
+                  <label>Dealer Name *<input name="dealerName" required></label>
+                  <label>Brand<input name="brand"></label>
+                  <label>Location<input name="location"></label>
+                  <label>Audit User<select name="auditUserId" id="dealerModalAuditUser"><option value="">No audit user</option></select></label>
+                  <label>Dealer Status<select name="active"><option value="true">Active</option><option value="false">Inactive</option></select></label>
+                  <div class="dealer-modal-actions"><button id="cancelDealerModalBtn" class="btn light" type="button">Cancel</button><button class="btn primary" type="submit">Save Dealer</button></div>
+                </form>
+              </div>
+            </div>
           </section>
 
           <section id="userApprovalTab" class="master-tab-panel admin-only" role="tabpanel" hidden>

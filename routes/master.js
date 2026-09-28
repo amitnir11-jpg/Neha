@@ -932,11 +932,14 @@ router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) =>
     if (!dealerCode || !dealerName) {
       return res.status(400).json({ success: false, message: 'Dealer name and dealer code are required' });
     }
+    if (await Dealer.findOne({ dealerCode }).select('_id').lean()) {
+      return res.status(409).json({ success: false, message: 'Dealer Code already exists.' });
+    }
     const auditUserId = String(req.body.auditUserId || '').trim();
     let auditUser = null;
     if (auditUserId) {
       auditUser = await User.findById(auditUserId);
-      if (!auditUser || !['audit_user', 'auditor'].includes(String(auditUser.role || '').toLowerCase())) {
+      if (!auditUser || auditUser.active === false || auditUser.approved === false) {
         return res.status(400).json({ success: false, message: 'Select a valid audit user.' });
       }
     }
@@ -975,7 +978,7 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
     let auditUser = null;
     if (auditUserId) {
       auditUser = await User.findById(auditUserId);
-      if (!auditUser || !['audit_user', 'auditor'].includes(String(auditUser.role || '').toLowerCase())) {
+      if (!auditUser || auditUser.active === false || auditUser.approved === false) {
         return res.status(400).json({ success: false, message: 'Select a valid audit user.' });
       }
     }
@@ -983,10 +986,15 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
     dealer.dealerName = dealerName;
     dealer.brand = String(req.body.brand || '').trim();
     dealer.location = String(req.body.location || '').trim();
+    dealer.active = req.body.active !== false;
     if (auditUser) {
       dealer.auditUserId = String(auditUser._id);
       dealer.auditorUsername = auditUser.username || '';
       dealer.auditorName = auditUser.name || auditUser.username || '';
+    } else {
+      dealer.auditUserId = '';
+      dealer.auditorUsername = '';
+      dealer.auditorName = '';
     }
     await dealer.save();
     if (auditUser) {
@@ -1005,6 +1013,10 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
         auditUpdate.auditUserId = String(auditUser._id);
         auditUpdate.auditorUsername = auditUser.username || '';
         auditUpdate.auditorName = auditUser.name || auditUser.username || '';
+      } else {
+        auditUpdate.auditUserId = '';
+        auditUpdate.auditorUsername = '';
+        auditUpdate.auditorName = '';
       }
       await Audit.updateOne({ _id: activeAudit._id }, { $set: auditUpdate });
     }
