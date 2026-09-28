@@ -20,6 +20,7 @@ const auth = require('./auth');
 const { applyCacheHeaders, getCachedResponse } = require('../utils/reportCache');
 const { movementTypeValue } = require('../utils/inventoryMovementState');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
+const { fittedWorkshopQuantity } = require('../utils/fittedStock');
 const stockValuationModule = require('../utils/stockValuation');
 const stockValuationTotals = typeof stockValuationModule.stockValuationTotals === 'function'
   ? stockValuationModule.stockValuationTotals
@@ -949,22 +950,17 @@ function scanTypeQtyBucket(scan) {
   if (type === 'INWARD') return 'inwardQty';
   if (type === 'OUTWARD') return 'outwardQty';
   if (type === 'FITTED') return 'fittedQty';
+  if (type === 'FITTED_RETURN') return 'returnQty';
   if (type === 'DAMAGE') return 'damageQty';
   return '';
 }
 
 function isMovementScan(scan = {}) {
-  return ['INWARD', 'OUTWARD', 'DAMAGE', 'FITTED'].includes(movementTypeValue(scan));
+  return ['INWARD', 'OUTWARD', 'DAMAGE', 'FITTED', 'FITTED_RETURN'].includes(movementTypeValue(scan));
 }
 
 function scanQuantity(scan) {
-  if (scan._reportSignedQty !== undefined) return signedScanQuantity(scan, 0);
-  const qty = Math.abs(Number(scan.qty !== undefined ? scan.qty : scan.quantity || 0));
-  const type = movementTypeValue(scan);
-  if (type === 'INWARD') return qty;
-  if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -qty;
-  if (type === 'VERIFICATION') return 0;
-  return 0;
+  return signedScanQuantity(scan, 0);
 }
 
 function scanDlc(scan = {}) {
@@ -996,6 +992,7 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
       inwardQty: 0,
       outwardQty: 0,
       fittedQty: 0,
+      returnQty: 0,
       damageQty: 0,
       totalMrpValue: 0,
       totalDlcValue: 0,
@@ -1012,7 +1009,7 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
       const bucket = scanTypeQtyBucket(scan);
       // Type columns are movement amounts, so display positive component totals.
       // Net quantity remains signed through totalQty and the shared report engine.
-      if (bucket) target[bucket] += Math.abs(Number(scan.qty !== undefined ? scan.qty : scan.quantity || 0));
+      if (bucket) target[bucket] += bucket === 'fittedQty' ? fittedWorkshopQuantity(scan) : Math.abs(Number(scan.qty !== undefined ? scan.qty : scan.quantity || 0));
       const part = scan.partNumber || scan.part || '';
       if (part) target.uniquePartSet.add(part);
       memberKeys.forEach((key) => {
@@ -1026,7 +1023,7 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
     const members = Object.fromEntries(Object.entries(row.memberSets).map(([key, set]) => [key, Array.from(set).sort().join(', ')]));
     delete row.uniquePartSet;
     delete row.memberSets;
-    return { ...row, uniqueParts, ...members };
+    return { ...row, uniqueParts, totalDealerStockQty: Math.max(0, row.totalQty + row.fittedQty), ...members };
   }).sort((a, b) => Number(b.scanCount || 0) - Number(a.scanCount || 0) || String(a.userName || a.dealerName || a.deviceName || '').localeCompare(String(b.userName || b.dealerName || b.deviceName || '')));
 }
 
@@ -1076,7 +1073,7 @@ function selectRows(data, type) {
         if (!target.partDescription) target.partDescription = scan.partDescription || scan.partName || '';
         if (!target.productCategory) target.productCategory = canonicalizePartCategory(scan.productCategory || '');
         if (!target.deviceId) target.deviceId = scan.deviceId || '';
-        if ((scan.scanType || scan.type) === 'FITTED') target.fittedQty += Number(scan.fittedQty || scan.qty || scan.quantity || 0);
+        if ((scan.scanType || scan.type) === 'FITTED') target.fittedQty += fittedWorkshopQuantity(scan);
         target.fittedStatus = target.fittedQty > 0 ? 'Fitted' : 'Not Fitted';
         if (!target.regdNo) target.regdNo = scan.regdNo || '';
         if (!target.jobCardNo) target.jobCardNo = scan.jobCardNo || '';

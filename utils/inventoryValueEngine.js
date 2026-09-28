@@ -77,6 +77,7 @@
 const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
 const { MASTER_PRICE_SOURCE } = require('./partMasterPrice');
 const { movementTypeValue } = require('./inventoryMovementState');
+const { fittedPhysicalMovement, fittedWorkshopQuantity } = require('./fittedStock');
 
 const MASTER_VALUATION_SOURCES = new Set([
   MASTER_PRICE_SOURCE,
@@ -292,7 +293,7 @@ function calculateInventoryValue(input = [], options = {}) {
 
 function auditStockStatus({ mrp = 0, physicalQty = 0, fittedQty = 0, systemQty = 0 } = {}) {
   if (Number(mrp || 0) <= 0) return 'MRP Pending';
-  const auditedQty = Number(physicalQty || 0);
+  const auditedQty = Number(physicalQty || 0) + Number(fittedQty || 0);
   const system = Number(systemQty || 0);
   if (auditedQty === system) return 'Inventory Matched';
   return auditedQty > system ? 'Excess' : 'Short';
@@ -322,12 +323,19 @@ function summarizeMovementBucket(scans = [], options = {}) {
   const lastScanDate = dates[dates.length - 1] || null;
   const inwardQty = rows.filter((row) => movementType(row.scan) === 'INWARD').reduce((sum, row) => sum + row.qty, 0);
   const outwardQty = rows.filter((row) => movementType(row.scan) === 'OUTWARD').reduce((sum, row) => sum + row.qty, 0);
-  const fittedQty = rows.filter((row) => movementType(row.scan) === 'FITTED').reduce((sum, row) => sum + row.qty, 0);
+  const fittedQty = rows.reduce((sum, row) => sum + fittedWorkshopQuantity(row.scan), 0);
   const damageQty = rows.filter((row) => movementType(row.scan) === 'DAMAGE').reduce((sum, row) => sum + row.qty, 0);
-  // Approved Daksh stock formula: inward minus outward, fitted and damage;
-  // actual available stock cannot fall below zero.
-  const netQty = inwardQty - outwardQty - fittedQty - damageQty;
+  // FITTED is a transfer: it reduces physical stock but remains dealer stock.
+  const netQty = rows.reduce((sum, row) => {
+    const type = movementType(row.scan);
+    if (type === 'INWARD') return sum + row.qty;
+    if (type === 'OUTWARD' || type === 'DAMAGE') return sum - row.qty;
+    if (type === 'FITTED') return sum + (fittedPhysicalMovement(row.scan) || 0);
+    if (type === 'FITTED_RETURN') return sum + row.qty;
+    return sum;
+  }, 0);
   const remainingQty = Math.max(netQty, 0);
+  const totalDealerStockQty = Math.max(netQty + fittedQty, 0);
   const ageingDays = firstScanDate ? Math.max(0, Math.floor((referenceDate - firstScanDate) / 86400000)) : 0;
   return {
     ...value,
@@ -337,6 +345,9 @@ function summarizeMovementBucket(scans = [], options = {}) {
     damageQty,
     netQty,
     remainingQty,
+    physicalBinQty: remainingQty,
+    fittedWorkshopQty: fittedQty,
+    totalDealerStockQty,
     movementCount: 0,
     firstScanDate,
     lastScanDate,

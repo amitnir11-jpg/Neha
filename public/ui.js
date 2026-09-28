@@ -3428,6 +3428,9 @@
     setDashboardKpiValue('dashToday', wholeNumber(stats.totalScannedToday || 0));
     setDashboardKpiValue('dashTotalScanQty', wholeNumber(stats.totalScannedQuantity || stats.totalQuantity || stats.partsScanned || stats.totalScanQty || 0));
     setDashboardKpiValue('dashStockValueDlc', `₹ ${money2(stats.actualStockValueDLC || stats.totalScannedValue || 0)}`);
+    setDashboardKpiValue('dashboardPhysicalStockQty', wholeNumber(stats.physicalBinStockQty || 0));
+    setDashboardKpiValue('dashboardFittedStockQty', wholeNumber(stats.fittedWorkshopQty || 0));
+    setDashboardKpiValue('dashboardTotalDealerStockQty', wholeNumber(stats.totalDealerStockQty || 0));
     setDashboardKpiValue('dashDamage', wholeNumber(stats.damageCount || 0));
     setDashboardKpiValue('dashDuplicates', wholeNumber(stats.duplicateCount || 0));
     setDashboardKpiValue('dashMultiBinParts', wholeNumber(stats.multipleBinPartCount || 0));
@@ -4487,9 +4490,14 @@
     const totalQty = scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1);
     const canEditDetails = canEditScanDetails(scan);
     const editOption = canEditDetails ? '<option value="edit-qty">Edit Quantity</option><option value="edit">Edit Part Details</option>' : '';
+    const fittedPending = String(scan.scanType || scan.type || '').toUpperCase() === 'FITTED'
+      && !['BILLED', 'RETURNED_TO_BIN', 'CANCELLED'].includes(String(scan.fittedStatus || scan.status || '').toUpperCase().replace(/[\s-]+/g, '_'));
+    const fittedOptions = isAdminUser() && fittedPending
+      ? '<option value="fitted-billed">Mark Fitted as Billed</option><option value="fitted-return">Return Fitted Part to Bin</option>'
+      : '';
     const deleteOption = isAdminUser() ? '<option value="delete">Delete Row</option>' : '';
-    const actionDropdown = editOption || deleteOption
-      ? `<select class="app-action-dropdown scan-row-action" data-id="${escapeHtml(id)}" data-details-edit="${canEditDetails ? 'true' : 'false'}" aria-label="Scan row action"><option value="">Edit / Delete</option>${editOption}${deleteOption}</select>`
+    const actionDropdown = editOption || fittedOptions || deleteOption
+      ? `<select class="app-action-dropdown scan-row-action" data-id="${escapeHtml(id)}" data-details-edit="${canEditDetails ? 'true' : 'false'}" data-return-bin="${escapeHtml(scan.stockDeductedFromBin || scan.binLocation || scan.bin || '')}" aria-label="Scan row action"><option value="">Edit / Delete</option>${editOption}${fittedOptions}${deleteOption}</select>`
       : '<span class="muted">No action</span>';
     return `
       <tr>
@@ -4545,8 +4553,27 @@
         if (action === 'delete') {
           deleteSingleScan(select.dataset.id).catch((error) => toast(error.message, 'error'));
         }
+        if (action === 'fitted-billed') {
+          updateFittedStatus(select.dataset.id, 'BILLED').catch((error) => toast(error.message, 'error'));
+        }
+        if (action === 'fitted-return') {
+          const bin = window.prompt('Return to which bin?', select.dataset.returnBin || '');
+          if (bin === null) return;
+          updateFittedStatus(select.dataset.id, 'RETURNED_TO_BIN', bin).catch((error) => toast(error.message, 'error'));
+        }
       });
     });
+  }
+
+  async function updateFittedStatus(scanId, status, returnedToBin = '') {
+    const reason = window.prompt('Enter the billing/return reference or reason:', '');
+    if (reason === null) return;
+    const result = await api(`/api/scans/${encodeURIComponent(scanId)}/fitted-status`, {
+      method: 'POST',
+      body: JSON.stringify({ status, returnedToBin, reason })
+    });
+    toast(result.message || 'Fitted status updated', 'success');
+    await loadScanHistory();
   }
 
   function prependScanHistory(scan = {}) {

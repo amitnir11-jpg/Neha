@@ -35,7 +35,7 @@ const MOBILE_SCAN_SELECT = [
   'uniqueScanId scanId syncKey qrFingerprint rawUpiHash',
   'part partNumber normalizedPartNumber partName partDescription category productCategory productGroup partSubGroup model year manufacturingYear',
   'qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue finalMRP currentCatalogueMRP currentCatalogueDLC dlc',
-  'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin regdNo jobCardNo isFitted fittedQty fittedLocation status type scanType movementType activeInventory remainingQty',
+  'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin returnedToBin sourceBin sourceFittedScanId regdNo jobCardNo isFitted fittedQty fittedLocation fittedStatus billedAt returnedAt status type scanType movementType activeInventory remainingQty',
   'upiId upiNo upiCode dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi',
   'deviceId deviceName userId loginId staffName userName role timestamp scanTime createdAt',
   'syncStatus synced isSynced scanStatus source scanMode warnings remarks masterFound masterMatch isMasterMatched'

@@ -23,6 +23,7 @@ const { dateDebugPayload, formatIstDateTime, validDate: validTimestamp } = requi
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
+const fittedStock = require('../utils/fittedStock');
 const smartBinSettingsRoute = require('./settings');
 const {
   getSmartBinSuggestion,
@@ -245,7 +246,7 @@ function scanQtyExpression() {
   return {
     $switch: {
       branches: [
-        { case: { $eq: [type, 'INWARD'] }, then: { $abs: qty } },
+        { case: { $in: [type, ['INWARD', 'FITTED_RETURN']] }, then: { $abs: qty } },
         { case: { $in: [type, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: qty }, -1] } },
         { case: { $eq: [type, 'VERIFICATION'] }, then: 0 }
       ],
@@ -266,7 +267,7 @@ function inwardQtyExpression() {
   const type = { $toUpper: { $toString: { $ifNull: ['$scanType', { $ifNull: ['$type', ''] }] } } };
   return {
     $cond: [
-      { $eq: [type, 'INWARD'] },
+      { $in: [type, ['INWARD', 'FITTED_RETURN']] },
       { $abs: qty },
       0
     ]
@@ -622,13 +623,14 @@ function manualDuplicatePayload(existing = {}, requestedQty = 1) {
 async function addFittedQuantity(existing = {}, scan = {}, req = {}) {
   if (!req.user || auth.normalizeRole(req.user.role) !== 'admin') return { error: 'Admin permission required.' };
   if (existing.isDeleted === true) return { error: 'Deleted scans must be restored before quantity can be changed.' };
+  if (fittedStock.fittedStatus(existing) !== 'FITTED_PENDING') return { error: `Cannot add quantity to a fitted part marked ${fittedStock.fittedStatus(existing)}.` };
   const addQty = requestedQuantity(scan, 1);
   if (!(addQty > 0)) return { error: 'Quantity to add must be greater than zero.' };
   const updated = await scanModification.updateScan(existing, {
     $inc: { qty: addQty, quantity: addQty, fittedQty: addQty },
     $set: {
       fittedLocation: 'VEHICLE',
-      status: 'FITTED_ON_VEHICLE',
+      status: 'FITTED_PENDING',
       syncStatus: 'synced',
       synced: true,
       isSynced: true
@@ -1743,7 +1745,7 @@ async function saveNormalizedScan(scan, req) {
     isFitted: scan.scanType === 'FITTED',
     fittedQty: scan.scanType === 'FITTED' ? finalQty : 0,
     fittedLocation: scan.scanType === 'FITTED' ? 'VEHICLE' : '',
-    status: scan.scanType === 'FITTED' ? 'FITTED_ON_VEHICLE' : '',
+    status: scan.scanType === 'FITTED' ? 'FITTED_PENDING' : '',
     stockDeductedFromBin: scan.stockDeductedFromBin || (['OUTWARD', 'FITTED'].includes(scan.scanType) ? finalBin : ''),
     type: scan.scanType,
     scanType: scan.scanType,
@@ -2482,7 +2484,7 @@ async function pushHandler(req, res) {
         isFitted: scan.scanType === 'FITTED',
         fittedQty: scan.scanType === 'FITTED' ? finalQty : 0,
         fittedLocation: scan.scanType === 'FITTED' ? 'VEHICLE' : '',
-        status: scan.scanType === 'FITTED' ? 'FITTED_ON_VEHICLE' : scan.scanType === 'DAMAGE' ? 'DAMAGE_STOCK' : '',
+        status: scan.scanType === 'FITTED' ? 'FITTED_PENDING' : scan.scanType === 'DAMAGE' ? 'DAMAGE_STOCK' : '',
         stockDeductedFromBin: scan.stockDeductedFromBin || (['OUTWARD', 'FITTED'].includes(scan.scanType) ? finalBin : ''),
         type: scan.scanType,
         scanType: scan.scanType,

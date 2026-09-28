@@ -1,4 +1,5 @@
 const duplicatePolicy = require('./scanDuplicatePolicy');
+const { fittedPhysicalMovement } = require('./fittedStock');
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -83,7 +84,9 @@ function movementQty(row = {}) {
   const qty = Math.abs(numberValue(row.qty !== undefined ? row.qty : row.quantity, 0));
   const movementType = movementTypeValue(row);
   if (movementType === 'INWARD') return qty;
-  if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(movementType)) return -qty;
+  if (movementType === 'FITTED') return fittedPhysicalMovement(row);
+  if (movementType === 'FITTED_RETURN') return qty;
+  if (['OUTWARD', 'DAMAGE'].includes(movementType)) return -qty;
   return 0;
 }
 

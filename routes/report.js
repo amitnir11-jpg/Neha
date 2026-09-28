@@ -25,6 +25,7 @@ const { auditStockStatus, calculateInventoryValue, decorateScanValue, scanValueR
 const { getActiveAudit } = require('../utils/audit');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
+const { fittedPhysicalMovement, fittedStatus, fittedWorkshopQuantity } = require('../utils/fittedStock');
 const { applyCacheHeaders, getCachedReport, getCachedResponse } = require('../utils/reportCache');
 const { Prisma, prisma } = require('../services/prisma');
 const stockValuationModule = require('../utils/stockValuation');
@@ -108,7 +109,7 @@ const REPORT_SCAN_SELECT = [
   'uniqueScanId scanId syncKey clientScanId clientSyncKey qrFingerprint rawUpiHash',
   'part partNumber normalizedPartNumber partName partDescription model year manufacturingYear category productCategory productGroup productType partGroup partSubGroup gstCategory superceededBy',
   'qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue finalMRP defaultMRP currentCatalogueMRP currentCatalogueDLC dlc',
-  'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin regdNo jobCardNo isFitted fittedQty fittedLocation status type scanType',
+  'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin returnedToBin sourceBin sourceFittedScanId regdNo jobCardNo isFitted fittedQty fittedLocation fittedStatus billedAt returnedAt status type scanType',
   'upiId upiNo dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi',
   'deviceId deviceName userId loginId staffName userName role timestamp scanTime createdAt serverReceivedAt',
   'syncStatus synced isSynced scanStatus source scanMode warnings remarks masterFound masterMatch isMasterMatched',
@@ -652,6 +653,8 @@ function actionForScan(scan = {}) {
 }
 
 function physicalScanQty(scan = {}) {
+  const fittedMovement = fittedPhysicalMovement(scan);
+  if (fittedMovement !== null) return fittedMovement;
   if (scan._reportSignedQty !== undefined) return signedScanQuantity(scan, 0);
   const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
   const type = cleanText(scan.scanType || scan.type).toUpperCase();
@@ -666,12 +669,15 @@ function binPhysicalScanQty(scan = {}) {
 }
 
 function fittedScanQty(scan = {}) {
-  const type = cleanText(scan.scanType || scan.type).toUpperCase();
-  return type === 'FITTED' || scan.isFitted ? Math.abs(numberValue(scan.fittedQty !== undefined ? scan.fittedQty : scan.qty !== undefined ? scan.qty : scan.quantity, 0)) : 0;
+  return fittedWorkshopQuantity(scan);
 }
 
 function binDisplayWithFitted(entries = []) {
-  const nonFitted = entries.filter((scan) => !fittedScanQty(scan));
+  const nonFitted = entries.filter((scan) => !fittedScanQty(scan)).map((scan) => (
+    cleanText(scan.scanType || scan.type).toUpperCase() === 'FITTED' && ['RETURNED_TO_BIN', 'CANCELLED'].includes(fittedStatus(scan))
+      ? { ...scan, binLocation: scan.returnedToBin || scan.stockDeductedFromBin || scan.binLocation || scan.bin }
+      : scan
+  ));
   return binDisplay(nonFitted);
 }
 
@@ -894,11 +900,13 @@ async function buildLegacyReportData(query = {}) {
     const displayMrp = valuationRateForDisplay(valueSummary);
     const systemQty = Number(part.openingStockQty || 0);
     const physicalQty = Number(scanTotals.get(part.partNo) || 0);
+    const fittedQty = relatedScans.reduce((sum, scan) => sum + fittedScanQty(scan), 0);
+    const totalDealerStockQty = Math.max(0, physicalQty + fittedQty);
     const countedQty = Number(countedTotals.get(part.partNo) || 0);
     const damageQty = Number(damageTotals.get(part.partNo) || 0);
-    const diffQty = physicalQty - systemQty;
-    const shortQty = systemQty > physicalQty ? systemQty - physicalQty : 0;
-    const excessQty = physicalQty > systemQty ? physicalQty - systemQty : 0;
+    const diffQty = totalDealerStockQty - systemQty;
+    const shortQty = systemQty > totalDealerStockQty ? systemQty - totalDealerStockQty : 0;
+    const excessQty = totalDealerStockQty > systemQty ? totalDealerStockQty - systemQty : 0;
     const binLocation = part.binLocation || part.bin || '';
     const physicalBins = binDisplay(scanByPart.get(part.partNo) || []);
     const systemBins = splitBins(binLocation);
@@ -927,6 +935,10 @@ async function buildLegacyReportData(query = {}) {
       systemQty,
       dmsQty: systemQty,
       physicalQty,
+      physicalBinQty: physicalQty,
+      fittedQty,
+      fittedWorkshopQty: fittedQty,
+      totalDealerStockQty,
       shortQty,
       excessQty,
       netDifference: diffQty,
@@ -962,6 +974,8 @@ async function buildLegacyReportData(query = {}) {
     const related = scanByPart.get(partNo) || [];
     const first = related[0] || {};
     const countedQty = Number(countedTotals.get(partNo) || 0);
+    const fittedQty = related.reduce((sum, scan) => sum + fittedScanQty(scan), 0);
+    const totalDealerStockQty = Math.max(0, physicalQty + fittedQty);
     const damageQty = Number(damageTotals.get(partNo) || 0);
     const physicalBins = binDisplay(related);
     const master = masterByPart.get(partNo);
@@ -994,9 +1008,13 @@ async function buildLegacyReportData(query = {}) {
       systemQty: 0,
       dmsQty: 0,
       physicalQty,
+      physicalBinQty: physicalQty,
+      fittedQty,
+      fittedWorkshopQty: fittedQty,
+      totalDealerStockQty,
       shortQty: 0,
-      excessQty: physicalQty,
-      netDifference: physicalQty,
+      excessQty: totalDealerStockQty,
+      netDifference: totalDealerStockQty,
       countedQty,
       manualQty: valueSummary.manualQty,
       damageQty,
@@ -1013,8 +1031,8 @@ async function buildLegacyReportData(query = {}) {
       physicalMrpValue: valueSummary.finalInventoryValue,
       systemDlcValue: 0,
       physicalDlcValue: 0,
-      differenceQty: physicalQty,
-      varianceQty: physicalQty,
+      differenceQty: totalDealerStockQty,
+      varianceQty: totalDealerStockQty,
       varianceValue: valueSummary.finalInventoryValue,
       differenceMrpValue: valueSummary.finalInventoryValue,
       differenceDlcValue: 0,
@@ -1075,6 +1093,9 @@ async function buildLegacyReportData(query = {}) {
     totalScans: scans.length,
     totalSystemQty: finalRows.reduce((sum, row) => sum + row.systemQty, 0),
     totalPhysicalQty: finalRows.reduce((sum, row) => sum + row.physicalQty, 0),
+    totalFittedWorkshopQty: finalRows.reduce((sum, row) => sum + row.fittedWorkshopQty, 0),
+    totalDealerStockQty: finalRows.reduce((sum, row) => sum + row.totalDealerStockQty, 0),
+    totalDealerStockValueDLC: money(finalRows.reduce((sum, row) => sum + Number(row.totalDealerStockQty || 0) * Number(row.dlc || 0), 0)),
     totalSystemMrpValue: money(finalRows.reduce((sum, row) => sum + row.systemMrpValue, 0)),
     totalPhysicalMrpValue: money(finalRows.reduce((sum, row) => sum + row.physicalMrpValue, 0)),
     matched: finalRows.filter((row) => ['Matched', 'Inventory Matched'].includes(row.status)).length,
@@ -1145,6 +1166,7 @@ function finalColumns() {
     { header: 'Latest MRP Effective Date', key: 'latestMrpEffectiveDate', width: 24 },
     { header: 'Physical Qty', key: 'physicalQty', width: 14 },
     { header: 'Fitted Qty', key: 'fittedQty', width: 12 },
+    { header: 'Total Dealer Stock Qty', key: 'totalDealerStockQty', width: 22 },
     { header: 'Damage Qty', key: 'damageQty', width: 12 },
     { header: 'Inward Qty', key: 'inwardQty', width: 12 },
     { header: 'Outward Qty', key: 'outwardQty', width: 12 },
@@ -1226,6 +1248,8 @@ async function createWorkbook(query) {
     { header: 'Scans', key: 'totalScans', width: 10 },
     { header: 'System Qty', key: 'totalSystemQty', width: 14 },
     { header: 'Physical Qty', key: 'totalPhysicalQty', width: 14 },
+    { header: 'Workshop / Fitted Qty', key: 'totalFittedWorkshopQty', width: 22 },
+    { header: 'Total Dealer Stock Qty', key: 'totalDealerStockQty', width: 22 },
     { header: 'DMS Stock Value (DLC)', key: 'totalDmsDlcValue', width: 22 },
     { header: 'Actual Stock Value (DLC)', key: 'totalActualDlcValue', width: 24 },
     { header: 'DMS MRP Value (Reference)', key: 'totalDmsMrpValue', width: 26 },
@@ -1835,7 +1859,12 @@ async function buildPartsInventoryRefreshRows(query = {}) {
     };
     group.physicalBinQty += physicalScanQty(scan);
     group.fittedQty += fittedScanQty(scan);
-    if (!fittedScanQty(scan)) splitAllBins(scan.binLocation || scan.bin).forEach((bin) => group.bins.add(bin));
+    if (!fittedScanQty(scan)) {
+      const scanBin = ['RETURNED_TO_BIN', 'CANCELLED'].includes(fittedStatus(scan))
+        ? scan.returnedToBin || scan.stockDeductedFromBin || scan.binLocation || scan.bin
+        : scan.binLocation || scan.bin;
+      splitAllBins(scanBin).forEach((bin) => group.bins.add(bin));
+    }
     const regdNo = cleanText(scan.regdNo);
     const jobCardNo = cleanText(scan.jobCardNo);
     if (fittedScanQty(scan) && regdNo) group.fittedRegdNos.add(regdNo);
@@ -1847,10 +1876,11 @@ async function buildPartsInventoryRefreshRows(query = {}) {
     .sort((a, b) => sortText(a.partNumber, b.partNumber))
     .map((row) => ({
       partNumber: row.partNumber,
-      quantity: Number(row.physicalBinQty || 0),
-      qty: Number(row.physicalBinQty || 0),
+      quantity: Number(row.physicalBinQty || 0) + Number(row.fittedQty || 0),
+      qty: Number(row.physicalBinQty || 0) + Number(row.fittedQty || 0),
       physicalBinQty: Number(row.physicalBinQty || 0),
       fittedQty: Number(row.fittedQty || 0),
+      totalDealerStockQty: Number(row.physicalBinQty || 0) + Number(row.fittedQty || 0),
       fittedRegdNo: Array.from(row.fittedRegdNos).sort().join(', '),
       fittedJobCardNo: Array.from(row.fittedJobCardNos).sort().join(', '),
       binLocations: Array.from(row.bins).sort()
@@ -1861,12 +1891,12 @@ function partsInventoryRefreshCsv(rows = []) {
   const maxBinCount = Math.max(1, ...rows.map((row) => (row.binLocations || []).length));
   const binHeaders = Array.from({ length: maxBinCount }, (_, index) => `Bin Loc ${index + 1}`);
   const lines = [
-    ['Part Number', 'Qty', 'Physical Bin Qty', 'Fitted Qty', 'Fitted Regd No', 'Fitted Job Card No', ...binHeaders].map(csvCell).join(',')
+    ['Part Number', 'Total Dealer Stock Qty', 'Physical Bin Qty', 'Fitted / Workshop Qty', 'Fitted Regd No', 'Fitted Job Card No', ...binHeaders].map(csvCell).join(',')
   ];
   rows.forEach((row) => {
     const binLocations = row.binLocations || [];
     const binCells = Array.from({ length: maxBinCount }, (_, index) => binLocations[index] || '');
-    lines.push([row.partNumber, row.quantity, row.physicalBinQty, row.fittedQty, row.fittedRegdNo, row.fittedJobCardNo, ...binCells].map(csvCell).join(','));
+    lines.push([row.partNumber, row.totalDealerStockQty, row.physicalBinQty, row.fittedQty, row.fittedRegdNo, row.fittedJobCardNo, ...binCells].map(csvCell).join(','));
   });
   return `${lines.join('\r\n')}\r\n`;
 }
@@ -1881,6 +1911,7 @@ function finalReportCsv(rows = []) {
     ['Latest MRP Effective Date', (row) => row.latestMrpEffectiveDate || ''],
     ['Physical Qty', (row) => row.physicalQty || 0],
     ['Fitted Qty', (row) => row.fittedQty || 0],
+    ['Total Dealer Stock Qty', (row) => row.totalDealerStockQty || 0],
     ['Damage Qty', (row) => row.damageQty || 0],
     ['Inward Qty', (row) => row.inwardQty || 0],
     ['Outward Qty', (row) => row.outwardQty || 0],
@@ -1911,7 +1942,7 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
     const absQty = Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
     if (type === 'INWARD') total.inwardQty += absQty;
     else if (type === 'OUTWARD') total.outwardQty += absQty;
-    else if (type === 'FITTED') total.fittedQty += absQty;
+    else if (type === 'FITTED') total.fittedQty += fittedScanQty(scan);
     else if (type === 'DAMAGE') total.damageQty += absQty;
     const user = firstPresent(scan.userName, scan.staffName, scan.loginId, scan.userId) || '';
     if (user) {
@@ -1921,7 +1952,7 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
       item.totalQty += qty;
       if (type === 'INWARD') item.inwardQty += absQty;
       else if (type === 'OUTWARD') item.outwardQty += absQty;
-      else if (type === 'FITTED') item.fittedQty += absQty;
+      else if (type === 'FITTED') item.fittedQty += fittedScanQty(scan);
       else if (type === 'DAMAGE') item.damageQty += absQty;
       total.users.set(key, item);
     }
@@ -1941,14 +1972,15 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
   const binPhysicalQty = numberValue(group.binPhysicalQty !== undefined ? group.binPhysicalQty : group.qty, 0);
   const fittedQty = numberValue(scanBreakdown.fittedQty, 0);
   const physicalQty = binPhysicalQty;
+  const totalDealerStockQty = Math.max(0, physicalQty + fittedQty);
   const auditedQty = physicalQty;
-  const diffQty = auditedQty - dmsQty;
+  const diffQty = totalDealerStockQty - dmsQty;
   const valueSummary = rowValueSummary(group.scans, hasCatalogue ? master : {});
   const auditPrice = auditPartPrice(group.scans, system, hasCatalogue ? master : null);
   const pricing = resolvePartPricing({
     partNumber: group.partNo,
     partMasterPrice: auditPrice,
-    actualQty: auditedQty,
+    actualQty: totalDealerStockQty,
     dmsQty
   });
   const mrp = pricing.mrp;
@@ -1994,10 +2026,12 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
     physicalQty,
     binPhysicalQty,
     physicalBinQty: binPhysicalQty,
+    fittedWorkshopQty: fittedQty,
+    totalDealerStockQty,
     actualAuditQty: auditedQty,
     finalAuditQty: auditedQty,
-    shortQty: Math.max(dmsQty - auditedQty, 0),
-    excessQty: Math.max(auditedQty - dmsQty, 0),
+    shortQty: Math.max(dmsQty - totalDealerStockQty, 0),
+    excessQty: Math.max(totalDealerStockQty - dmsQty, 0),
     netDifference: diffQty,
     scanCount: group.scans.length,
     countedQty: group.scans.filter((scan) => scan.type !== 'DAMAGE' && scan.scanType !== 'DAMAGE').reduce((sum, scan) => sum + Number(scan.qty || 0), 0),
@@ -2030,6 +2064,8 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
     varianceMrpValue: pricing.varianceMrpValue,
     systemValueOnMrp,
     physicalValueOnMrp,
+    physicalStockValue: money(physicalQty * dlc),
+    totalDealerStockValue: pricing.actualStockValue,
     systemDlcValue: pricing.dmsStockValue,
     physicalDlcValue: pricing.actualStockValue,
     systemValueOnDlc: pricing.dmsStockValue,
@@ -2076,7 +2112,7 @@ function binWiseRowsFromScans(scans = [], finalRows = []) {
     if (fittedScanQty(scan)) return;
     const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
     const dealerCode = cleanText(scan.dealerCode).toUpperCase();
-    const bin = cleanText(scan.binLocation || scan.bin || scan.location).toUpperCase();
+    const bin = cleanText(['RETURNED_TO_BIN', 'CANCELLED'].includes(fittedStatus(scan)) ? scan.returnedToBin || scan.stockDeductedFromBin || scan.binLocation || scan.bin : scan.binLocation || scan.bin || scan.location).toUpperCase();
     if (!partNumber || !bin) return;
     const key = `${bin}::${partNumber}::${dealerCode}`;
     const group = groups.get(key) || { bin, partNumber, dealerCode, scans: [], physicalQty: 0, lastScanTime: scan.timestamp };
@@ -2324,8 +2360,8 @@ async function buildReportData(query = {}) {
       staffName: scan.staffName,
       regdNo: scan.regdNo || '',
       jobCardNo: scan.jobCardNo || '',
-      fittedQty: scan.fittedQty || ((scan.scanType || scan.type) === 'FITTED' ? scan.qty : 0),
-      fittedStatus: (scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'Fitted' : 'Not Fitted',
+      fittedQty: fittedScanQty(scan),
+      fittedStatus: (scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? fittedStatus(scan) : scan.fittedStatus || 'Not Fitted',
       autoDetectedBin: scan.autoDetectedBin ? 'Yes' : 'No',
       stockDeductedFromBin: scan.stockDeductedFromBin || '',
       warnings: (scan.warnings || []).join(', ')
@@ -2377,6 +2413,7 @@ function partwiseInventoryAuditColumns() {
     { header: 'Latest MRP Effective Date', key: 'latestMrpEffectiveDate', width: 24 },
     { header: 'Physical Qty', key: 'physicalQty', width: 16, numFmt: '#,##0.00' },
     { header: 'Fitted Qty', key: 'fittedQty', width: 16, numFmt: '#,##0.00' },
+    { header: 'Total Dealer Stock Qty', key: 'totalDealerStockQty', width: 22, numFmt: '#,##0.00' },
     { header: 'Damage Qty', key: 'damageQty', width: 16, numFmt: '#,##0.00' },
     { header: 'Inward Qty', key: 'inwardQty', width: 16, numFmt: '#,##0.00' },
     { header: 'Outward Qty', key: 'outwardQty', width: 16, numFmt: '#,##0.00' },
@@ -2452,7 +2489,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     }
     else if (type === 'INWARD') total.inwardQty += qty;
     else if (type === 'OUTWARD') total.outwardQty += qty;
-    else if (type === 'FITTED') total.fittedQty += absQty;
+    else if (type === 'FITTED') total.fittedQty += fittedScanQty(scan);
     else if (type === 'DAMAGE') total.damageQty += qty;
     const user = firstPresent(scan.userName, scan.staffName, scan.loginId, scan.userId) || 'UNKNOWN';
     const userKey = cleanText(user).toUpperCase();
@@ -2464,7 +2501,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     }
     else if (action === 'Inward') userItem.inwardQty += qty;
     else if (action === 'Outward') userItem.outwardQty += qty;
-    else if (action === 'Fitted') userItem.fittedQty += absQty;
+    else if (action === 'Fitted' && type === 'FITTED') userItem.fittedQty += fittedScanQty(scan);
     else if (action === 'Damage') userItem.damageQty += qty;
     userSummary.set(userKey, userItem);
     return total;
@@ -2472,20 +2509,21 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const fittedQty = numberValue(breakdown.fittedQty, 0);
   const binPhysicalQty = numberValue(group.binPhysicalQty !== undefined ? group.binPhysicalQty : group.physicalQty, 0);
   const physicalQty = binPhysicalQty;
+  const totalDealerStockQty = Math.max(0, physicalQty + fittedQty);
   const auditedQty = physicalQty;
   const systemQty = hasSystemStock ? systemQtyValue(system) : 0;
   const pricing = resolvePartPricing({
     partNumber: partNo,
     partMasterPrice: catalogue || null,
-    actualQty: auditedQty,
+    actualQty: totalDealerStockQty,
     dmsQty: systemQty
   });
   const mrp = pricing.mrp;
   const dlc = pricing.dlc;
   const finalAvailableQty = systemQty;
-  const varianceQty = auditedQty - finalAvailableQty;
-  const shortQty = Math.max(finalAvailableQty - auditedQty, 0);
-  const excessQty = Math.max(auditedQty - finalAvailableQty, 0);
+  const varianceQty = totalDealerStockQty - finalAvailableQty;
+  const shortQty = Math.max(finalAvailableQty - totalDealerStockQty, 0);
+  const excessQty = Math.max(totalDealerStockQty - finalAvailableQty, 0);
   const physicalValueOnMrp = pricing.actualMrpValue;
   const systemValueOnMrp = pricing.dmsMrpValue;
   const varianceValueOnMrp = pricing.varianceMrpValue;
@@ -2545,6 +2583,8 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     physicalQty,
     binPhysicalQty,
     physicalBinQty: binPhysicalQty,
+    fittedWorkshopQty: fittedQty,
+    totalDealerStockQty,
     actualAuditQty: auditedQty,
     finalAuditQty: auditedQty,
     inwardQty: breakdown.inwardQty,
@@ -2857,7 +2897,10 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     partsMissingMrp: rows.filter((row) => row.missingMrp).length,
     partsMissingDlc: rows.filter((row) => row.missingDlc).length,
     totalDmsQuantity: money(rows.reduce((sum, row) => sum + Number(row.systemQty || 0), 0)),
-    totalActualQuantity: money(rows.reduce((sum, row) => sum + Number(row.physicalQty || 0), 0)),
+    totalActualQuantity: money(rows.reduce((sum, row) => sum + Number(row.totalDealerStockQty || 0), 0)),
+    totalPhysicalBinQuantity: money(rows.reduce((sum, row) => sum + Number(row.physicalBinQty || row.physicalQty || 0), 0)),
+    totalFittedWorkshopQuantity: money(rows.reduce((sum, row) => sum + Number(row.fittedWorkshopQty || row.fittedQty || 0), 0)),
+    totalDealerStockQuantity: money(rows.reduce((sum, row) => sum + Number(row.totalDealerStockQty || 0), 0)),
     totalDmsValue: stockValuationTotals(rows).dmsDlcTotal,
     totalActualValue: stockValuationTotals(rows).actualDlcTotal
   };

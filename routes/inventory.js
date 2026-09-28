@@ -17,6 +17,7 @@ const VerificationLog = require('../models/VerificationLog');
 const AuditLog = require('../models/AuditLog');
 const auth = require('./auth');
 const scanModification = require('../services/ScanModificationService');
+const { withDatabaseTransaction } = require('../services/prisma');
 const { normalizePartNumber } = require('../utils/normalize');
 const { findCataloguePart, cataloguePayload } = require('../utils/catalogue');
 const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentity');
@@ -35,6 +36,7 @@ const {
   recordPartBinLocationFromScan
 } = require('../services/PartBinLocationService');
 const duplicatePolicy = require('../utils/scanDuplicatePolicy');
+const fittedStock = require('../utils/fittedStock');
 const {
   activeInventoryValue,
   movementTypeValue,
@@ -441,7 +443,7 @@ function prepareFittedScan(scan = {}, qty = 0) {
   scan.isFitted = true;
   scan.fittedQty = Number(qty || scan.quantity || scan.qty || 1);
   scan.fittedLocation = 'VEHICLE';
-  scan.status = 'FITTED_ON_VEHICLE';
+  scan.status = 'FITTED_PENDING';
   scan.stockDeductedFromBin = sourceBin;
   return scan;
 }
@@ -1073,6 +1075,7 @@ async function dashboardStats(filter, reportQuery = filter) {
                       { case: { $regexMatch: { input: '$__dashboardSource', regex: /MANUAL/i } }, then: 'MANUAL' },
                       { case: { $eq: ['$__dashboardType', 'DAMAGE'] }, then: 'DAMAGE' },
                       { case: { $eq: ['$__dashboardType', 'FITTED'] }, then: 'FITTED' },
+                      { case: { $eq: ['$__dashboardType', 'FITTED_RETURN'] }, then: 'FITTED' },
                       { case: { $eq: ['$__dashboardType', 'OUTWARD'] }, then: 'OUTWARD' },
                       { case: { $in: ['$__dashboardType', ['INWARD', 'AUDIT']] }, then: 'INWARD' }
                     ],
@@ -1145,6 +1148,9 @@ async function dashboardStats(filter, reportQuery = filter) {
     totalUniqueScannedParts: uniqueParts,
     totalScanRecords: Number(summary.scanRows || summary.totalScans || 0),
     totalScannedQuantity: Number(summary.totalQuantity || summary.partsScanned || 0),
+    physicalBinStockQty: Number(summary.totalPhysicalQty || 0),
+    fittedWorkshopQty: Number(summary.totalFittedWorkshopQty || 0),
+    totalDealerStockQty: Number(summary.totalDealerStockQty || 0),
     categoryWiseScannedCount: {},
     last10Scans: [],
     totalScannedToday: todayCount,
@@ -1172,8 +1178,8 @@ async function dashboardStats(filter, reportQuery = filter) {
       fitted: fittedCount,
       total: distributionTotal
     },
-    totalScannedValue: Number(summary.totalActualStockValue || summary.totalPhysicalDlcValue || 0),
-    actualStockValueDLC: Number(summary.totalActualStockValue || summary.totalPhysicalDlcValue || 0),
+    totalScannedValue: Number(summary.totalDealerStockValueDLC || summary.totalActualStockValue || summary.totalPhysicalDlcValue || 0),
+    actualStockValueDLC: Number(summary.totalDealerStockValueDLC || summary.totalActualStockValue || summary.totalPhysicalDlcValue || 0),
     systemStockValue,
     masterStockValue: systemStockValue,
     totalSystemValue: systemStockValue,
@@ -1397,7 +1403,12 @@ function publicScan(scan = {}) {
     isFitted: Boolean(scan.isFitted || (scan.scanType || scan.type) === 'FITTED'),
     fittedQty: numberValue(scan.fittedQty !== undefined ? scan.fittedQty : ((scan.scanType || scan.type) === 'FITTED' ? qty : 0), 0),
     fittedLocation: scan.fittedLocation || ((scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'VEHICLE' : ''),
-    status: scan.status || ((scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'FITTED_ON_VEHICLE' : ''),
+    status: scan.status || ((scan.scanType || scan.type) === 'FITTED' || scan.isFitted ? 'FITTED_PENDING' : ''),
+    fittedStatus: scan.fittedStatus || ((scan.scanType || scan.type) === 'FITTED' ? fittedStock.fittedStatus(scan) : ''),
+    billedAt: scan.billedAt || null,
+    returnedAt: scan.returnedAt || null,
+    returnedToBin: scan.returnedToBin || '',
+    sourceFittedScanId: scan.sourceFittedScanId || '',
     stockDeductedFromBin: scan.stockDeductedFromBin || '',
     deviceId: scan.deviceId || '',
     deviceName: scan.deviceName || '',
@@ -1584,13 +1595,15 @@ function stockQty(scan = {}) {
   const qty = Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
   const type = upper(scan.scanType || scan.type);
   if (type === 'INWARD') return qty;
-  if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -qty;
+  if (type === 'FITTED') return fittedStock.fittedPhysicalMovement(scan) || 0;
+  if (type === 'FITTED_RETURN') return qty;
+  if (['OUTWARD', 'DAMAGE'].includes(type)) return -qty;
   if (type === 'VERIFICATION') return 0;
   return 0;
 }
 
 function inwardQty(scan = {}) {
-  return upper(scan.scanType || scan.type) === 'INWARD'
+  return ['INWARD', 'FITTED_RETURN'].includes(upper(scan.scanType || scan.type))
     ? Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0))
     : 0;
 }
@@ -1711,6 +1724,11 @@ async function addManualQuantity(existing = {}, input = {}, req) {
 }
 
 async function updateFittedScanQuantity(existing = {}, addQty = 1, req) {
+  if (fittedStock.fittedStatus(existing) !== 'FITTED_PENDING') {
+    const error = new Error(`Cannot add quantity to a fitted part marked ${fittedStock.fittedStatus(existing)}.`);
+    error.status = 409;
+    throw error;
+  }
   const quantity = Math.abs(numberValue(addQty, 1));
   if (!(quantity > 0)) {
     const error = new Error('Quantity to add must be greater than zero.');
@@ -1721,7 +1739,7 @@ async function updateFittedScanQuantity(existing = {}, addQty = 1, req) {
     $inc: { qty: quantity, quantity, fittedQty: quantity },
     $set: {
       fittedLocation: 'VEHICLE',
-      status: 'FITTED_ON_VEHICLE',
+      status: 'FITTED_PENDING',
       syncStatus: 'synced',
       synced: true,
       isSynced: true
@@ -2855,7 +2873,7 @@ async function saveScanRequest(req, res) {
       isFitted: type === 'FITTED',
       fittedQty: type === 'FITTED' ? qty : 0,
       fittedLocation: type === 'FITTED' ? 'VEHICLE' : '',
-      status: type === 'FITTED' ? 'FITTED_ON_VEHICLE' : type === 'DAMAGE' ? 'DAMAGE_STOCK' : '',
+      status: type === 'FITTED' ? 'FITTED_PENDING' : type === 'DAMAGE' ? 'DAMAGE_STOCK' : '',
       stockDeductedFromBin,
       type,
       scanType: type,
@@ -3623,7 +3641,7 @@ async function saveScanRequest(req, res) {
       isFitted: type === 'FITTED',
       fittedQty: type === 'FITTED' ? qty : 0,
       fittedLocation: type === 'FITTED' ? 'VEHICLE' : '',
-      status: type === 'FITTED' ? 'FITTED_ON_VEHICLE' : type === 'DAMAGE' ? 'DAMAGE_STOCK' : '',
+      status: type === 'FITTED' ? 'FITTED_PENDING' : type === 'DAMAGE' ? 'DAMAGE_STOCK' : '',
       stockDeductedFromBin,
       type,
       scanType: type,
@@ -4109,6 +4127,123 @@ router.post('/manual', auth.requireAuth, processScanRequest);
 router.post('/', auth.requireAuth, processScanRequest);
 router.patch('/:scanId/details', auth.requireAuth, auth.requireAdmin, updateScanDetails);
 router.patch('/:scanId/mrp', auth.requireAuth, auth.requireAdmin, updateManualMrp);
+router.post('/:scanId/fitted-status', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const result = await withDatabaseTransaction(async () => {
+      const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+      if (!scan) {
+        const error = new Error('Scan record not found');
+        error.status = 404;
+        throw error;
+      }
+      if (movementTypeValue(scan) !== 'FITTED') {
+        const error = new Error('Only FITTED scans can change fitted status.');
+        error.status = 409;
+        throw error;
+      }
+      if (fittedStock.fittedStatus(scan) !== 'FITTED_PENDING') {
+        const error = new Error(`Fitted scan is already ${fittedStock.fittedStatus(scan)}.`);
+        error.status = 409;
+        throw error;
+      }
+      const requested = String(req.body.status || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+      const statusMap = { BILLED: 'BILLED', RETURNED: 'RETURNED_TO_BIN', RETURNED_TO_BIN: 'RETURNED_TO_BIN', CANCELLED: 'CANCELLED' };
+      const status = statusMap[requested];
+      if (!status) {
+        const error = new Error('Status must be BILLED, RETURNED_TO_BIN, or CANCELLED.');
+        error.status = 400;
+        throw error;
+      }
+      const returnedToBin = upper(req.body.returnedToBin || req.body.binLocation || req.body.bin || scan.stockDeductedFromBin || scan.binLocation || scan.bin || '');
+      if (status !== 'BILLED' && !returnedToBin) {
+        const error = new Error('Select the bin receiving the returned part.');
+        error.status = 400;
+        throw error;
+      }
+      const now = new Date();
+      const update = {
+        status,
+        fittedStatus: status,
+        fittedStatusUpdatedAt: now,
+        fittedStatusUpdatedBy: String(req.user?.username || req.user?.name || req.user?.email || req.user?.id || ''),
+        fittedStatusReason: String(req.body.reason || req.body.remarks || '').trim()
+      };
+      if (status === 'BILLED') update.billedAt = now;
+      if (status !== 'BILLED') {
+        update.returnedAt = now;
+        update.returnedToBin = returnedToBin;
+      }
+      const updated = await scanModification.updateScan(scan, { $set: update }, req, {
+        action: `FITTED_${status}`,
+        reason: req.body.reason || `Fitted part status changed to ${status}`,
+        remarks: req.body.remarks || ''
+      });
+      let returnScan = null;
+      if (status !== 'BILLED') {
+        const quantity = fittedStock.fittedQuantity(scan);
+        returnScan = await Inventory.create({
+          uniqueScanId: randomUUID(),
+          globalUpiKey: `FITTED_RETURN:${randomUUID()}`,
+          sourceFittedScanId: String(scan._id || scan.uniqueScanId || scan.scanId || ''),
+          part: scan.part || scan.partNumber,
+          partNumber: scan.partNumber || scan.part,
+          normalizedPartNumber: scan.normalizedPartNumber || scan.partNumber || scan.part,
+          rawScan: scan.rawScan || scan.rawScanString || '',
+          rawScanString: scan.rawScanString || scan.rawScan || '',
+          rawUpi: scan.rawUpi || scan.rawScan || scan.rawScanString || '',
+          upiCode: scan.upiCode || '',
+          upiNo: scan.upiNo || '',
+          upiId: scan.upiId || '',
+          dealerCode: scan.dealerCode,
+          dealerName: scan.dealerName,
+          auditId: scan.auditId,
+          scanType: 'FITTED_RETURN',
+          type: 'FITTED_RETURN',
+          movementType: 'FITTED_RETURN',
+          action: status === 'CANCELLED' ? 'FITTED CANCELLED / RETURNED' : 'FITTED RETURN',
+          qty: quantity,
+          quantity,
+          binLocation: returnedToBin,
+          bin: returnedToBin,
+          sourceBin: scan.stockDeductedFromBin || scan.binLocation || scan.bin || '',
+          stockDeductedFromBin: scan.stockDeductedFromBin || scan.binLocation || scan.bin || '',
+          regdNo: scan.regdNo || '',
+          jobCardNo: scan.jobCardNo || '',
+          status,
+          fittedStatus: status,
+          isFitted: false,
+          fittedQty: 0,
+          activeInventory: false,
+          remainingQty: 0,
+          scanStatus: 'ACCEPTED',
+          syncStatus: 'synced',
+          synced: true,
+          isSynced: true,
+          userId: String(req.user?.id || req.user?._id || ''),
+          userName: String(req.user?.name || req.user?.username || req.user?.email || ''),
+          deviceId: String(scan.deviceId || ''),
+          timestamp: now,
+          scanTime: now,
+          createdAt: now
+        });
+      }
+      return { updated, returnScan };
+    });
+    const publicRow = publicScan(result.updated);
+    const publicReturn = result.returnScan ? publicScan(result.returnScan) : null;
+    invalidateInventoryCaches(scanDashboardScope(publicRow), ['price']);
+    if (req.io) {
+      const payload = { reason: `fitted-status-${String(result.updated.status).toLowerCase()}`, scan: publicRow, returnScan: publicReturn, dealerCode: publicRow.dealerCode || '', auditId: publicRow.auditId || '', at: new Date() };
+      req.io.emit('scan:modified', { action: `FITTED_${result.updated.status}`, scan: publicRow });
+      req.io.emit('inventory:update', payload);
+      req.io.emit('reports:update', payload);
+      req.io.emit('stats:update');
+    }
+    return res.json({ success: true, scan: publicRow, returnScan: publicReturn, message: `Fitted part marked ${result.updated.status}.` });
+  } catch (error) {
+    return res.status(error.status || 500).json({ success: false, message: error.message });
+  }
+});
 router.post('/:scanId/restore', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const scan = await scanModification.restoreScan(req.params.scanId, req);

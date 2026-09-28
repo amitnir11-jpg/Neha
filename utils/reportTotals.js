@@ -2,6 +2,7 @@ const { normalizePartNumber } = require('./normalize');
 const { uniqueReportScans } = require('./reportScanIdentity');
 const { summarizeMovementBucket } = require('./inventoryValueEngine');
 const { movementTypeValue } = require('./inventoryMovementState');
+const { fittedPhysicalMovement } = require('./fittedStock');
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -36,6 +37,7 @@ function signedScanQuantity(scan = {}, fallback = 0) {
   const qty = scanQuantity(scan, fallback);
   const type = scanType(scan);
   if (type === 'VERIFICATION') return 0;
+  if (type === 'FITTED') return fittedPhysicalMovement(scan) || 0;
   if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -qty;
   return qty;
 }
@@ -104,6 +106,9 @@ function reportTotals(scans = [], options = {}) {
     fittedQty: movementSummary.fittedQty,
     damageQty: movementSummary.damageQty,
     netQty: movementSummary.netQty,
+    physicalStockQty: movementSummary.physicalBinQty,
+    fittedWorkshopQty: movementSummary.fittedWorkshopQty,
+    totalDealerStockQty: movementSummary.totalDealerStockQty,
     netAvailableCount,
     netQuantity: netAvailableCount
   };
@@ -131,7 +136,9 @@ function applyMovementCountRules(scans = [], options = {}) {
       exclusionReason = 'Verification scan is not counted';
     } else if (['INWARD', 'AUDIT'].includes(type)) {
       reportSignedQty = qty;
-    } else if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) {
+    } else if (type === 'FITTED') {
+      reportSignedQty = fittedPhysicalMovement(scan) || 0;
+    } else if (['OUTWARD', 'DAMAGE'].includes(type)) {
       // Reports account for persisted scan transactions as entered. Stock
       // availability is validated by the scan service; report aggregation must
       // not erase or cap an OUTWARD/FITTED/DAMAGE row based on earlier scans.
