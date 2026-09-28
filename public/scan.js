@@ -62,13 +62,13 @@
     },
     OUTWARD: {
       label: 'Outward',
-      requiresBin: false,
-      note: 'Bin auto-detects'
+      requiresBin: true,
+      note: 'Source bin required'
     },
     FITTED: {
       label: 'Fitted',
-      requiresBin: false,
-      note: 'Vehicle + job card'
+      requiresBin: true,
+      note: 'Source bin, vehicle + job card'
     },
     DAMAGE: {
       label: 'Damage',
@@ -1509,6 +1509,8 @@
     jobWrap.classList.toggle('hidden', !fitted);
 
     binInput.required = info.requiresBin;
+    const partInput = byId('manualPartNumber');
+    if (partInput) partInput.disabled = info.requiresBin && !upper(binInput.value);
     qtyInput.required = !verification;
     mrpInput.required = false;
     if (dlcInput) dlcInput.required = false;
@@ -1532,12 +1534,10 @@
       panel.classList.toggle('ready', ready);
       panel.classList.toggle('blocked', !ready);
       message.textContent = ready
-        ? `Scanning will save to bin ${current}.`
-        : 'Camera stays on automatically. Enter a bin before saving inward or damage scans.';
-    } else if (state.mode === 'OUTWARD') {
-      panel.classList.remove('blocked');
-      panel.classList.remove('ready');
-      message.textContent = 'Outward scans will auto-detect the source bin on sync.';
+        ? ['OUTWARD', 'FITTED'].includes(state.mode)
+          ? `Parts will be deducted from source bin ${current}.`
+          : `Scanning will save to bin ${current}.`
+        : `Enter the source bin before ${info.label.toLowerCase()} scans.`;
     } else if (state.mode === 'VERIFICATION') {
       panel.classList.remove('blocked');
       panel.classList.remove('ready');
@@ -1557,7 +1557,7 @@
     if (bin) return true;
     state.cameraRequested = true;
     cameraState('Camera on - enter a bin to save this scan.');
-    toast('Bin location is required before inward or damage scans', 'error');
+    toast('Enter a bin location before scanning parts in this mode.', 'error');
     byId('activeBinLocation').focus();
     return false;
   }
@@ -2101,7 +2101,7 @@
     if (requiresBin() && !loadActiveBin()) {
       state.cameraRequested = true;
       cameraState('Enter bin first, then turn the camera on.');
-      toast('Bin location is required before inward or damage scans', 'error');
+      toast('Enter a bin location before scanning parts in this mode.', 'error');
       byId('activeBinLocation')?.focus();
       renderCameraControlState({ live: false, starting: false });
       return;
@@ -3239,6 +3239,10 @@
 
   async function startCamera({ allowCaptureFallback = false } = {}) {
     if (!ensureScanSession()) return;
+    if (requiresBin() && !ensureActiveBinReady()) {
+      renderCameraControlState({ live: false, starting: false });
+      return;
+    }
     if (shouldUseCaptureScanner()) {
       cameraState(captureReadyMessage());
       renderCameraControlState({ live: false, starting: false });
@@ -3413,6 +3417,10 @@
 
   async function processDecodedText(raw) {
     const mode = currentScanType();
+    if (requiresBin() && !ensureActiveBinReady()) {
+      cameraState('Ready to scan');
+      return;
+    }
     if (mode === 'FITTED') {
       toast('Fitted scans need vehicle and job card details', 'warning');
       vibrate([30, 40, 30]);
@@ -3421,10 +3429,6 @@
         title: 'Complete fitted details',
         autoPartNumber: parsePartCandidate(raw)
       });
-      return;
-    }
-    if (requiresBin() && !ensureActiveBinReady()) {
-      cameraState('Ready to scan');
       return;
     }
     const partNumber = parsePartCandidate(raw);
@@ -3750,7 +3754,8 @@
     }
     renderModeFields();
     dialog.showModal();
-    byId('manualPartNumber').focus();
+    if (requiresBin() && !byId('manualBinLocation').value) byId('manualBinLocation').focus();
+    else byId('manualPartNumber').focus();
   }
 
   function closeManualDialog() {
@@ -3772,15 +3777,20 @@
       return;
     }
     const form = new FormData(event.currentTarget);
+    const mode = currentScanType();
+    const qty = Number(form.get('qty') || 1);
+    const binLocation = upper(form.get('binLocation') || '');
+    if (requiresBin() && !binLocation) {
+      toast('Enter a bin location before entering a part number.', 'error');
+      byId('manualBinLocation').focus();
+      return;
+    }
     const partNumber = upper(form.get('partNumber'));
     if (!partNumber) {
       toast('Part number is required', 'error');
       byId('manualPartNumber').focus();
       return;
     }
-    const mode = currentScanType();
-    const qty = Number(form.get('qty') || 1);
-    const binLocation = upper(form.get('binLocation') || '');
     const regdNo = upper(form.get('regdNo') || '');
     const jobCardNo = upper(form.get('jobCardNo') || '');
 
@@ -3911,6 +3921,11 @@
     });
     byId('activeBinLocation').addEventListener('input', (event) => {
       event.target.value = upper(event.target.value);
+    });
+    byId('manualBinLocation').addEventListener('input', (event) => {
+      event.target.value = upper(event.target.value);
+      const partInput = byId('manualPartNumber');
+      if (partInput) partInput.disabled = requiresBin() && !event.target.value;
     });
     byId('activeBinLocation').addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;
@@ -4134,6 +4149,7 @@
     renderModeButtons();
     renderModeMeta();
     renderModeFields();
+    renderBinPanel();
     const info = currentModeInfo();
     if (state.scanning && !state.paused) {
       stopCamera({ preserveRequest: true });
@@ -4143,6 +4159,8 @@
       const activeBin = loadActiveBin();
       if (activeBin) {
         byId('manualBinLocation').value = activeBin;
+      } else if (['OUTWARD', 'FITTED'].includes(nextMode)) {
+        setTimeout(() => byId('activeBinLocation')?.focus(), 0);
       }
     }
     if (!state.scanning && state.cameraRequested && !state.paused && state.session?.token) {

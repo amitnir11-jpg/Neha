@@ -1012,7 +1012,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   }
 
   bool get _requiresBinBeforeScan =>
-      _scanType == 'INWARD' || _scanType == 'DAMAGE';
+      _scanType == 'INWARD' ||
+      _scanType == 'OUTWARD' ||
+      _scanType == 'DAMAGE';
 
   void _resetScanLock({String message = 'Ready to rescan'}) {
     _qrIdleTimer?.cancel();
@@ -1225,7 +1227,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                   controller: _defaultBinController,
                   textCapitalization: TextCapitalization.characters,
                   decoration: const InputDecoration(
-                    labelText: 'Scan Bin Location *',
+                    labelText: 'Source Bin Location *',
                     prefixIcon: Icon(Icons.inventory_2),
                     isDense: true,
                   ),

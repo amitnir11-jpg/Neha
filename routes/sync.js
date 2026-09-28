@@ -49,7 +49,7 @@ const {
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
-const BIN_REQUIRED_MESSAGE = 'Please enter/select bin location first.';
+const BIN_REQUIRED_MESSAGE = 'Please enter/select the source bin location first.';
 const INVALID_PART_MESSAGE = masterValidation.INVALID_PART_MESSAGE || 'Invalid part number - not found in master catalogue';
 const SYNC_VERBOSE_LOGS = process.env.SYNC_VERBOSE_LOGS === 'true';
 
@@ -81,7 +81,7 @@ const SYNC_VERBOSE_LOGS = process.env.SYNC_VERBOSE_LOGS === 'true';
  *
  * ====================================================================
  */
-const NO_OUTWARD_STOCK_MESSAGE = 'Part not available in inward stock.';
+const NO_OUTWARD_STOCK_MESSAGE = 'Part is not available in the selected source bin.';
 
 function clean(value) {
   return String(value || '').trim();
@@ -278,6 +278,7 @@ function inwardQtyExpression() {
 async function autoDetectOutwardBin(scan = {}) {
   const dealerCode = upper(scan.dealerCode);
   const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
+  const requestedBin = upper(scan.binLocation || scan.bin || '');
   if (!dealerCode || !partNumber) return null;
   const match = {
     dealerCode,
@@ -300,6 +301,9 @@ async function autoDetectOutwardBin(scan = {}) {
       }
     ]
   };
+  if (requestedBin) {
+    match.$and = (match.$and || []).concat([{ $or: [{ binLocation: requestedBin }, { bin: requestedBin }] }]);
+  }
   match.$and = (match.$and || []).concat([nonVerificationScanClause()]);
   if (scan.auditId) match.auditId = clean(scan.auditId);
   const rows = await Inventory.aggregate([
@@ -1534,7 +1538,7 @@ async function saveNormalizedScan(scan, req) {
   if (!scan.partNumber) errors.push('Part number missing');
   if (scan.partNumber && !isValidPartNumber(scan.partNumber)) errors.push('Invalid part number format');
   if (!master) errors.push(INVALID_PART_MESSAGE);
-  if (['INWARD', 'DAMAGE'].includes(scan.scanType) && !scan.binLocation) errors.push(BIN_REQUIRED_MESSAGE);
+  if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scan.scanType) && !scan.binLocation) errors.push(BIN_REQUIRED_MESSAGE);
   if (scan.scanType === 'FITTED') {
     inventory.prepareFittedScan(scan, scan.quantity || 1);
     if (!scan.regdNo || !scan.jobCardNo) errors.push('Regd No and Job Card No are required for fitted parts.');
@@ -1580,15 +1584,15 @@ async function saveNormalizedScan(scan, req) {
     return { status: 'failed', scan, error: errors.join(', ') };
   }
 
-  if (scan.scanType === 'OUTWARD') {
+  if (['OUTWARD', 'FITTED'].includes(scan.scanType)) {
     const detected = await autoDetectOutwardBin(scan);
     if (!detected || !detected.binLocation) {
       logSync('outward auto bin failed', { deviceId: scan.deviceId, scanId: scan.uniqueScanId, partNumber: scan.partNumber });
       return { status: 'failed', scan, error: NO_OUTWARD_STOCK_MESSAGE };
     }
     scan.binLocation = detected.binLocation;
-    scan.autoDetectedBin = true;
-    scan.binSelectionMode = 'AUTO';
+    scan.autoDetectedBin = false;
+    scan.binSelectionMode = 'MANUAL';
     scan.stockDeductedFromBin = detected.binLocation;
   } else if (['INWARD', 'DAMAGE'].includes(scan.scanType)) {
     scan.binSelectionMode = 'MANUAL';
@@ -1713,14 +1717,14 @@ async function saveNormalizedScan(scan, req) {
     bin: finalBin,
     binLocation: finalBin,
     autoDetectedBin: Boolean(scan.autoDetectedBin),
-    binSelectionMode: scan.binSelectionMode || (scan.scanType === 'OUTWARD' ? 'AUTO' : 'MANUAL'),
+    binSelectionMode: scan.binSelectionMode || 'MANUAL',
     regdNo: scan.regdNo || '',
     jobCardNo: scan.jobCardNo || '',
     isFitted: scan.scanType === 'FITTED',
     fittedQty: scan.scanType === 'FITTED' ? finalQty : 0,
     fittedLocation: scan.scanType === 'FITTED' ? 'VEHICLE' : '',
     status: scan.scanType === 'FITTED' ? 'FITTED_ON_VEHICLE' : '',
-    stockDeductedFromBin: scan.stockDeductedFromBin || (scan.scanType === 'OUTWARD' ? finalBin : ''),
+    stockDeductedFromBin: scan.stockDeductedFromBin || (['OUTWARD', 'FITTED'].includes(scan.scanType) ? finalBin : ''),
     type: scan.scanType,
     scanType: scan.scanType,
     upiId: scan.upiId,
@@ -2164,13 +2168,13 @@ async function pushHandler(req, res) {
       if (scan.scanType === 'FITTED') {
         inventory.prepareFittedScan(scan, scan.quantity || 1);
       }
-    if (scan.scanType === 'OUTWARD') {
+    if (['OUTWARD', 'FITTED'].includes(scan.scanType)) {
       const detected = await autoDetectOutwardBin(scan);
       if (detected && detected.binLocation) {
         scan.binLocation = detected.binLocation;
-        scan.autoDetectedBin = true;
-          scan.binSelectionMode = 'AUTO';
-          scan.stockDeductedFromBin = detected.binLocation;
+        scan.autoDetectedBin = false;
+        scan.binSelectionMode = 'MANUAL';
+        scan.stockDeductedFromBin = detected.binLocation;
         } else {
           scan._autoBinError = NO_OUTWARD_STOCK_MESSAGE;
         }
@@ -2196,11 +2200,11 @@ async function pushHandler(req, res) {
       const rowErrors = [];
       if (!scan.partNumber) rowErrors.push('partNumber missing');
       if (scan.partNumber && !isValidPartNumber(scan.partNumber)) rowErrors.push('invalid partNumber format');
-      if (['INWARD', 'DAMAGE'].includes(scan.scanType) && !scan.binLocation) rowErrors.push(BIN_REQUIRED_MESSAGE);
+      if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scan.scanType) && !scan.binLocation) rowErrors.push(BIN_REQUIRED_MESSAGE);
       if (scan.scanType === 'FITTED') {
         if (!scan.regdNo || !scan.jobCardNo) rowErrors.push('Regd No and Job Card No are required for fitted parts.');
       }
-      if (scan.scanType === 'OUTWARD' && scan._autoBinError) rowErrors.push(scan._autoBinError);
+      if (['OUTWARD', 'FITTED'].includes(scan.scanType) && scan._autoBinError) rowErrors.push(scan._autoBinError);
       if (!scan.dealerCode) rowErrors.push('dealerCode missing');
       if (scan.dealerCode && !dealer) rowErrors.push('Valid dealer code is required');
       if (!VALID_TYPES.includes(scan.scanType)) rowErrors.push('invalid scanType');
@@ -2424,14 +2428,14 @@ async function pushHandler(req, res) {
         bin: finalBin,
         binLocation: finalBin,
         autoDetectedBin: Boolean(scan.autoDetectedBin),
-        binSelectionMode: scan.binSelectionMode || (scan.scanType === 'OUTWARD' ? 'AUTO' : 'MANUAL'),
+        binSelectionMode: scan.binSelectionMode || 'MANUAL',
         regdNo: scan.regdNo || '',
         jobCardNo: scan.jobCardNo || '',
         isFitted: scan.scanType === 'FITTED',
         fittedQty: scan.scanType === 'FITTED' ? finalQty : 0,
         fittedLocation: scan.scanType === 'FITTED' ? 'VEHICLE' : '',
         status: scan.scanType === 'FITTED' ? 'FITTED_ON_VEHICLE' : scan.scanType === 'DAMAGE' ? 'DAMAGE_STOCK' : '',
-        stockDeductedFromBin: scan.stockDeductedFromBin || (scan.scanType === 'OUTWARD' ? finalBin : ''),
+        stockDeductedFromBin: scan.stockDeductedFromBin || (['OUTWARD', 'FITTED'].includes(scan.scanType) ? finalBin : ''),
         type: scan.scanType,
         scanType: scan.scanType,
         upiId: scan.upiId,

@@ -57,9 +57,9 @@ const {
 
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
-const BIN_REQUIRED_MESSAGE = 'Please enter/select bin location first.';
+const BIN_REQUIRED_MESSAGE = 'Please enter/select the source bin location first.';
 const INVALID_PART_MESSAGE = masterValidation.INVALID_PART_MESSAGE || 'Invalid part number - not found in master catalogue';
-const NO_OUTWARD_STOCK_MESSAGE = 'Part not available in inward stock.';
+const NO_OUTWARD_STOCK_MESSAGE = 'Part is not available in the selected source bin.';
 const VERIFICATION_FOUND_MESSAGE = 'Part Found';
 const VERIFICATION_NOT_FOUND_MESSAGE = 'Part Not Found';
 const SCAN_VERBOSE_LOGS = process.env.SCAN_VERBOSE_LOGS === 'true';
@@ -432,15 +432,16 @@ function fittedAnyIdentityFilter(fields = {}) {
 }
 
 function prepareFittedScan(scan = {}, qty = 0) {
-  scan.binLocation = '';
-  scan.bin = '';
-  scan.binSelectionMode = '';
+  const sourceBin = upper(scan.binLocation || scan.bin || '');
+  scan.binLocation = sourceBin;
+  scan.bin = sourceBin;
+  scan.binSelectionMode = sourceBin ? 'MANUAL' : '';
   scan.autoDetectedBin = false;
   scan.isFitted = true;
   scan.fittedQty = Number(qty || scan.quantity || scan.qty || 1);
   scan.fittedLocation = 'VEHICLE';
   scan.status = 'FITTED_ON_VEHICLE';
-  scan.stockDeductedFromBin = '';
+  scan.stockDeductedFromBin = sourceBin;
   return scan;
 }
 
@@ -1900,7 +1901,7 @@ async function smartBinSuggestionForScan(input = {}) {
   };
 }
 
-async function autoDetectOutwardBin({ dealerCode, auditId, partNumber }) {
+async function autoDetectOutwardBin({ dealerCode, auditId, partNumber, binLocation }) {
   const dealer = normalizeDealerCode(dealerCode);
   const part = normalizePartNumber(partNumber);
   if (!dealer || !part) return null;
@@ -1919,6 +1920,10 @@ async function autoDetectOutwardBin({ dealerCode, auditId, partNumber }) {
       ]
     }]
   };
+  const requestedBin = upper(binLocation);
+  if (requestedBin) {
+    match.$and = (match.$and || []).concat([{ $or: [{ binLocation: requestedBin }, { bin: requestedBin }] }]);
+  }
   if (auditId) match.auditId = String(auditId).trim();
   const scans = uniqueReportScans(await Inventory.find(match).sort({ timestamp: 1, createdAt: 1 }).lean());
   const byBin = new Map();
@@ -2257,7 +2262,7 @@ async function updateScanDetails(req, res) {
       return res.status(400).json({ success: false, message: 'Valid scan type is required.' });
     }
     if (!(Number(qty) > 0)) return res.status(400).json({ success: false, message: 'Quantity must be greater than zero.' });
-    if (['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType) && !binLocation) {
+    if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType) && !binLocation) {
       return res.status(400).json({ success: false, message: 'Bin location is required for this scan type.' });
     }
 
@@ -2277,12 +2282,12 @@ async function updateScanDetails(req, res) {
       qty,
       quantity: qty,
       ...priceFields,
-      bin: scanType === 'FITTED' ? '' : binLocation,
-      binLocation: scanType === 'FITTED' ? '' : binLocation,
+      bin: binLocation,
+      binLocation,
       mrpPendingUpdatedAt: now
     };
     if (scanType === 'FITTED') update.fittedQty = qty;
-    if (scanType === 'OUTWARD') {
+    if (['OUTWARD', 'FITTED'].includes(scanType)) {
       update.autoDetectedBin = false;
       update.binSelectionMode = 'MANUAL';
       update.stockDeductedFromBin = binLocation;
@@ -2347,7 +2352,7 @@ async function updateScanDetails(req, res) {
         old_dlc: numberValue(scan.dlc, 0),
         new_dlc: priceFields.dlc,
         old_bin_location: upper(scan.binLocation || scan.bin),
-        new_bin_location: scanType === 'FITTED' ? '' : binLocation,
+        new_bin_location: binLocation,
         updated_by: String(actor.username || actor.name || actor.email || actor.id || ''),
         updated_at: now
       }
@@ -2441,20 +2446,17 @@ async function saveScanRequest(req, res) {
     const regdNo = upper(firstValue(req.body, ['regdNo', 'regNo', 'registrationNo', 'vehicleRegNo']));
     const jobCardNo = upper(firstValue(req.body, ['jobCardNo', 'jobcardNo', 'jobCard', 'jobNo']));
     let autoDetectedBin = false;
-    let binSelectionMode = ['INWARD', 'DAMAGE'].includes(type) ? 'MANUAL' : '';
+    let binSelectionMode = ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(type) ? 'MANUAL' : '';
     let stockDeductedFromBin = '';
-    if (type === 'FITTED') {
-      binLocation = '';
-      binSelectionMode = '';
-    }
-    if (type === 'OUTWARD') {
-      const detected = await autoDetectOutwardBin({ dealerCode, auditId, partNumber: part });
+    if (['OUTWARD', 'FITTED'].includes(type)) {
+      if (!binLocation) return res.status(400).json({ success: false, message: BIN_REQUIRED_MESSAGE });
+      const detected = await autoDetectOutwardBin({ dealerCode, auditId, partNumber: part, binLocation });
       if (!detected || !detected.binLocation) {
         return res.status(409).json({ success: false, message: NO_OUTWARD_STOCK_MESSAGE });
       }
       binLocation = detected.binLocation;
-      autoDetectedBin = true;
-      binSelectionMode = 'AUTO';
+      autoDetectedBin = false;
+      binSelectionMode = 'MANUAL';
       stockDeductedFromBin = detected.binLocation;
     }
     const rawPartOnlyManualEntry = sourceLooksManual(req.body)
@@ -2723,7 +2725,7 @@ async function saveScanRequest(req, res) {
       scanDebug('[MANUAL SCAN] validation failed', { reason: 'Invalid part number format', part, rawScanInput });
       return res.status(400).json({ success: false, message: 'Invalid part number format' });
     }
-    if (['INWARD', 'DAMAGE'].includes(type) && !binLocation) {
+    if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(type) && !binLocation) {
       scanDebug('[MANUAL SCAN] validation failed', { reason: BIN_REQUIRED_MESSAGE, part });
       return res.status(400).json({ success: false, message: BIN_REQUIRED_MESSAGE });
     }
@@ -3088,7 +3090,7 @@ async function updateScanDetails(req, res) {
 
     if (!partNumber) return res.status(400).json({ success: false, message: 'Part number is required.' });
     if (!(Number(qty) > 0)) return res.status(400).json({ success: false, message: 'Quantity must be greater than zero.' });
-    if (['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType) && !binLocation) {
+    if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType) && !binLocation) {
       return res.status(400).json({ success: false, message: 'Bin location is required for this scan type.' });
     }
 
@@ -3108,12 +3110,12 @@ async function updateScanDetails(req, res) {
       qty,
       quantity: qty,
       ...priceFields,
-      bin: scanType === 'FITTED' ? '' : binLocation,
-      binLocation: scanType === 'FITTED' ? '' : binLocation,
+      bin: binLocation,
+      binLocation,
       mrpPendingUpdatedAt: now
     };
     if (scanType === 'FITTED') update.fittedQty = qty;
-    if (scanType === 'OUTWARD') {
+    if (['OUTWARD', 'FITTED'].includes(scanType)) {
       update.autoDetectedBin = false;
       update.binSelectionMode = 'MANUAL';
       update.stockDeductedFromBin = binLocation;
@@ -3178,7 +3180,7 @@ async function updateScanDetails(req, res) {
         old_dlc: numberValue(scan.dlc, 0),
         new_dlc: priceFields.dlc,
         old_bin_location: upper(scan.binLocation || scan.bin),
-        new_bin_location: scanType === 'FITTED' ? '' : binLocation,
+        new_bin_location: binLocation,
         updated_by: String(actor.username || actor.name || actor.email || actor.id || ''),
         updated_at: now
       }
@@ -3272,20 +3274,17 @@ async function saveScanRequest(req, res) {
     const regdNo = upper(firstValue(req.body, ['regdNo', 'regNo', 'registrationNo', 'vehicleRegNo']));
     const jobCardNo = upper(firstValue(req.body, ['jobCardNo', 'jobcardNo', 'jobCard', 'jobNo']));
     let autoDetectedBin = false;
-    let binSelectionMode = ['INWARD', 'DAMAGE'].includes(type) ? 'MANUAL' : '';
+    let binSelectionMode = ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(type) ? 'MANUAL' : '';
     let stockDeductedFromBin = '';
-    if (type === 'FITTED') {
-      binLocation = '';
-      binSelectionMode = '';
-    }
-    if (type === 'OUTWARD') {
-      const detected = await autoDetectOutwardBin({ dealerCode, auditId, partNumber: part });
+    if (['OUTWARD', 'FITTED'].includes(type)) {
+      if (!binLocation) return res.status(400).json({ success: false, message: BIN_REQUIRED_MESSAGE });
+      const detected = await autoDetectOutwardBin({ dealerCode, auditId, partNumber: part, binLocation });
       if (!detected || !detected.binLocation) {
         return res.status(409).json({ success: false, message: NO_OUTWARD_STOCK_MESSAGE });
       }
       binLocation = detected.binLocation;
-      autoDetectedBin = true;
-      binSelectionMode = 'AUTO';
+      autoDetectedBin = false;
+      binSelectionMode = 'MANUAL';
       stockDeductedFromBin = detected.binLocation;
     }
     const rawPartOnlyManualEntry = sourceLooksManual(req.body)
@@ -3515,7 +3514,7 @@ async function saveScanRequest(req, res) {
       scanDebug('[MANUAL SCAN] validation failed', { reason: 'Invalid part number format', part, rawScanInput });
       return res.status(400).json({ success: false, message: 'Invalid part number format' });
     }
-    if (['INWARD', 'DAMAGE'].includes(type) && !binLocation) {
+    if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(type) && !binLocation) {
       scanDebug('[MANUAL SCAN] validation failed', { reason: BIN_REQUIRED_MESSAGE, part });
       return res.status(400).json({ success: false, message: BIN_REQUIRED_MESSAGE });
     }
@@ -4207,17 +4206,21 @@ router.post('/sync', auth.requireAuth, async (req, res) => {
         const finalDlc = Number(valueFields.dlc || 0);
         let finalBinLocation = binLocation;
         let autoDetectedBin = false;
-        let binSelectionMode = ['INWARD', 'DAMAGE'].includes(type) ? 'MANUAL' : '';
+        let binSelectionMode = ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(type) ? 'MANUAL' : '';
         let stockDeductedFromBin = '';
-        if (type === 'OUTWARD') {
-          const detected = await autoDetectOutwardBin({ dealerCode, auditId, partNumber: part });
+        if (['OUTWARD', 'FITTED'].includes(type)) {
+          if (!binLocation) {
+            failed.push({ uniqueScanId, message: BIN_REQUIRED_MESSAGE, item });
+            continue;
+          }
+          const detected = await autoDetectOutwardBin({ dealerCode, auditId, partNumber: part, binLocation });
           if (!detected || !detected.binLocation) {
             failed.push({ uniqueScanId, message: NO_OUTWARD_STOCK_MESSAGE, item });
             continue;
           }
           finalBinLocation = detected.binLocation;
-          autoDetectedBin = true;
-          binSelectionMode = 'AUTO';
+          autoDetectedBin = false;
+          binSelectionMode = 'MANUAL';
           stockDeductedFromBin = detected.binLocation;
         }
         const duplicateUserKey = String(item.userId || item.loginId || item.userName || item.staffName || '').trim();
@@ -4269,14 +4272,14 @@ router.post('/sync', auth.requireAuth, async (req, res) => {
 
         if (!part) warnings.push('Part number missing');
         if (part && !isValidPartNumber(part)) warnings.push('Invalid part number format');
-        if (['INWARD', 'DAMAGE'].includes(type) && !finalBinLocation) warnings.push(BIN_REQUIRED_MESSAGE);
+        if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(type) && !finalBinLocation) warnings.push(BIN_REQUIRED_MESSAGE);
         if (!dealerCode) warnings.push('Dealer code missing');
         if (dealerCode && !dealer) warnings.push('Valid dealer code is required');
         if (!VALID_TYPES.includes(type)) warnings.push('Invalid scan type');
         if (!master) warnings.push(INVALID_PART_MESSAGE);
         if (master && !master.activeStatus) warnings.push('Inactive part');
 
-        if (!part || !isValidPartNumber(part) || (['INWARD', 'DAMAGE'].includes(type) && !finalBinLocation) || !dealerCode || !dealer || !VALID_TYPES.includes(type) || !master) {
+        if (!part || !isValidPartNumber(part) || (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(type) && !finalBinLocation) || !dealerCode || !dealer || !VALID_TYPES.includes(type) || !master) {
           failed.push({ uniqueScanId, message: warnings.join(', ') });
           continue;
         }

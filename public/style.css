@@ -1951,6 +1951,30 @@ a:focus-visible,
   grid-column: 1 / -1;
 }
 
+#manualScanForm label.source-bin-required,
+#barcodeScanForm label.source-bin-required {
+  position: relative;
+  color: #991b1b;
+  font-weight: 700;
+}
+
+#manualScanForm label.source-bin-required input,
+#barcodeScanForm label.source-bin-required input {
+  border: 2px solid #dc2626 !important;
+  background: #fff7f7 !important;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.14) !important;
+}
+
+#manualScanForm label.source-bin-required.source-bin-missing::after,
+#barcodeScanForm label.source-bin-required.source-bin-missing::after {
+  content: "Required first";
+  display: block;
+  margin-top: 4px;
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 #manualScanForm label:has(textarea),
 #manualScanForm .actions {
   grid-column: 1 / -1;

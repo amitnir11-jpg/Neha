@@ -99,14 +99,14 @@
 
       <section id="binPanel" class="bin-panel">
         <label class="field">
-          <span>Bin Location</span>
-          <input id="activeBinLocation" autocapitalize="characters" autocomplete="off" placeholder="Enter bin before inward or damage scans">
+          <span>Source Bin Location *</span>
+          <input id="activeBinLocation" autocapitalize="characters" autocomplete="off" placeholder="Enter source bin before scanning">
         </label>
         <div class="bin-actions">
           <button id="saveBinBtn" class="btn btn-primary" type="button">Set Bin</button>
           <button id="clearBinBtn" class="btn btn-secondary" type="button">Clear</button>
         </div>
-        <p id="binPanelMessage" class="field-message">Enter a bin location before starting inward or damage scanning.</p>
+        <p id="binPanelMessage" class="field-message">Enter a source bin before scanning parts.</p>
       </section>
 
       <section class="scanner-grid">
@@ -204,6 +204,11 @@
 
       <p id="manualNote" class="field-message">Manual entry uses the same sync pipeline as camera scans.</p>
 
+      <label id="manualBinWrap" class="field">
+        <span>Source Bin Location *</span>
+        <input id="manualBinLocation" name="binLocation" autocapitalize="characters" placeholder="BIN-01">
+      </label>
+
       <label class="field">
         <span>Part Number</span>
         <input id="manualPartNumber" name="partNumber" autocapitalize="characters" required placeholder="Enter part number">
@@ -226,10 +231,6 @@
       </div>
 
       <div class="field-grid narrow">
-        <label id="manualBinWrap" class="field">
-          <span>Bin Location</span>
-          <input id="manualBinLocation" name="binLocation" autocapitalize="characters" placeholder="BIN-01">
-        </label>
         <label id="manualRegWrap" class="field">
           <span>Registration No</span>
           <input id="manualRegdNo" name="regdNo" autocapitalize="characters" placeholder="Vehicle reg no">
@@ -297,6 +298,6 @@
   <script src="/config.js"></script>
   <script src="/js/runtime.js?v=20260923-recon-upload-dashboard-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
-  <script src="/scan.js?v=20260926-fast-mobile-decoder-v1"></script>
+  <script src="/scan.js?v=20260927-source-bin-required-v1"></script>
 </body>
 </html>
