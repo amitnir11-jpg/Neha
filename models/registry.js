@@ -205,10 +205,16 @@ function prepareInventory(data) {
     'scanType',
     'type'
   ]);
+  const canonicalType = movementTypeValue(data);
+  if (canonicalType) {
+    data.scanType = canonicalType;
+    data.type = canonicalType;
+    data.movementType = canonicalType;
+  }
   data.masterMatch = Boolean(data.masterMatch || data.isMasterMatched);
   data.isMasterMatched = Boolean(data.isMasterMatched || data.masterMatch);
   data.masterFound = Boolean(data.masterFound || data.masterMatch || data.isMasterMatched);
-  data.movementType = movementTypeValue(data);
+  data.movementType = canonicalType;
   data.upiCode = upiCodeValue(data);
   if (data.isDeleted === undefined) data.isDeleted = false;
   data.remainingQty = remainingQtyValue(data);

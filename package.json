@@ -13,7 +13,7 @@
     "offline": "node server.js",
     "start:api": "node server.js",
     "start:web": "node scripts/web-server.js",
-    "test": "node scripts/master-price-logic-check.js && node scripts/stock-valuation-check.js && node scripts/category-alignment-check.js && node scripts/duplicate-upi-check.js && node scripts/part-bin-duplicate-check.js && node scripts/report-scan-quantity-check.js && node scripts/cache-safety-check.js && node scripts/prisma-mirror-types-check.js && node scripts/mobile-scanner-regression-check.js && node scripts/dealer-stock-template-check.js && node scripts/local-parts-isolation-check.js && node --test test/network-discovery.test.js",
+    "test": "node scripts/master-price-logic-check.js && node scripts/stock-valuation-check.js && node scripts/category-alignment-check.js && node scripts/duplicate-upi-check.js && node scripts/part-bin-duplicate-check.js && node scripts/report-scan-quantity-check.js && node scripts/scan-movement-calculation-check.js && node scripts/cache-safety-check.js && node scripts/prisma-mirror-types-check.js && node scripts/mobile-scanner-regression-check.js && node scripts/dealer-stock-template-check.js && node scripts/local-parts-isolation-check.js && node --test test/network-discovery.test.js",
     "test:network": "node --test test/network-discovery.test.js",
     "test:catalogue-upload": "node scripts/catalogue-upload-check.js",
     "test:local-parts-browser": "node scripts/local-parts-browser-smoke.js",

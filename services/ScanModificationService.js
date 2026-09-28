@@ -3,6 +3,7 @@ const ScanAuditLog = require('../models/ScanAuditLog');
 const AuditLog = require('../models/AuditLog');
 const { activeInventoryValue, remainingQtyValue } = require('../utils/inventoryMovementState');
 const { invalidateCache } = require('../utils/safeCache');
+const { inDatabaseTransaction, withDatabaseTransaction } = require('./prisma');
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -190,6 +191,7 @@ async function saveAuditOrRollback(before, after, req, reason, remarks, action, 
 }
 
 async function updateScan(scan, update, req, options = {}) {
+  if (!inDatabaseTransaction()) return withDatabaseTransaction(() => updateScan(scan, update, req, options));
   assertAdmin(req);
   if (scan && (scan.isDeleted === true || clean(scan.status).toUpperCase() === 'DELETED')) {
     const error = new Error('Deleted scans must be restored before they can be modified.');
@@ -218,9 +220,10 @@ async function updateScan(scan, update, req, options = {}) {
 }
 
 async function softDeleteScans(filter, req, options = {}) {
+  if (!inDatabaseTransaction()) return withDatabaseTransaction(() => softDeleteScans(filter, req, options));
   assertAdmin(req);
   const { reason, remarks } = requireReason(modificationBody(req, options));
-  const rows = await Inventory.find({ ...(filter || {}), isDeleted: { $ne: true } }).lean();
+  const rows = await Inventory.find({ ...(filter || {}), isDeleted: { $ne: true }, deletedAt: null }).lean();
   const changed = [];
   const auditIds = [];
   const actor = actorFromRequest(req);
@@ -276,6 +279,7 @@ async function softDeleteScans(filter, req, options = {}) {
 }
 
 async function restoreScan(scanId, req) {
+  if (!inDatabaseTransaction()) return withDatabaseTransaction(() => restoreScan(scanId, req));
   assertAdmin(req);
   const { reason, remarks } = requireReason(req.body || {});
   const before = await Inventory.findOne({ ...scanIdFilter(scanId), isDeleted: true }).lean();
@@ -283,6 +287,23 @@ async function restoreScan(scanId, req) {
     const error = new Error('Deleted scan not found');
     error.status = 404;
     throw error;
+  }
+  const identities = [];
+  if (clean(before.qrFingerprint)) identities.push({ qrFingerprint: clean(before.qrFingerprint) });
+  if (clean(before.globalUpiKey)) identities.push({ globalUpiKey: clean(before.globalUpiKey) });
+  if (identities.length) {
+    const active = await Inventory.findOne({
+      dealerCode: before.dealerCode,
+      auditId: before.auditId,
+      $or: identities,
+      isDeleted: { $ne: true },
+      deletedAt: null
+    }).lean();
+    if (active) {
+      const error = new Error(`Cannot restore this transaction. An active scan with the same barcode already exists. Active Scan ID: ${scanIdentifier(active)}`);
+      error.status = 409;
+      throw error;
+    }
   }
   const restoredAt = new Date();
   const restored = {

@@ -217,9 +217,7 @@ async function resolveScanUserContext(req = {}, scan = {}) {
 }
 
 function normalizeScanType(value) {
-  const type = upper(value || 'INWARD');
-  if (type === 'VERIFY') return 'VERIFICATION';
-  return type;
+  return movementTypeValue({ scanType: value || 'INWARD' });
 }
 
 function rawIdentity(scan = {}) {

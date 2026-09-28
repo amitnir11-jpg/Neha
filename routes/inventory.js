@@ -118,9 +118,7 @@ function upper(value) {
 }
 
 function normalizeScanType(value) {
-  const type = upper(value || 'INWARD');
-  if (type === 'VERIFY') return 'VERIFICATION';
-  return type;
+  return movementTypeValue({ scanType: value || 'INWARD' });
 }
 
 function rawIdentity(input = {}) {

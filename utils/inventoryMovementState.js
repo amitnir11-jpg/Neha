@@ -14,8 +14,15 @@ function numberValue(value, fallback = 0) {
 }
 
 function movementTypeValue(input = {}) {
-  const type = upper(input.movementType || input.scanType || input.type || 'INWARD');
-  return type === 'VERIFY' ? 'VERIFICATION' : type;
+  const type = upper(input.scanType || input.movementType || input.type || 'INWARD').replace(/[\s-]+/g, '_');
+  const aliases = {
+    VERIFY: 'VERIFICATION',
+    OUT: 'OUTWARD',
+    FIT: 'FITTED',
+    FITTED_ON_VEHICLE: 'FITTED',
+    DAMAGED: 'DAMAGE'
+  };
+  return aliases[type] || type;
 }
 
 function upiCodeValue(input = {}) {

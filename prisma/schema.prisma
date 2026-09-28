@@ -721,7 +721,9 @@ model Inventory {
   @@index([syncStatus])
   @@index([scanStatus])
   @@index([globalUpiKey])
-  @@index([qrFingerprint])
+  // Active duplicate protection is enforced by a PostgreSQL partial unique index
+  // scoped to dealer + audit in migration SQL (deleted history remains reusable).
+  @@index([dealerCode, auditId, qrFingerprint])
   @@index([uniqueScanId])
   @@index([scanId])
   @@map("inventories")

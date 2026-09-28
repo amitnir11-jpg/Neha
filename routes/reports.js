@@ -18,6 +18,7 @@ const getDakshReportLogoId = typeof reportModule.getDakshReportLogoId === 'funct
     };
 const auth = require('./auth');
 const { applyCacheHeaders, getCachedResponse } = require('../utils/reportCache');
+const { movementTypeValue } = require('../utils/inventoryMovementState');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
 const stockValuationModule = require('../utils/stockValuation');
 const stockValuationTotals = typeof stockValuationModule.stockValuationTotals === 'function'
@@ -942,7 +943,7 @@ async function scanRegisterRows(query = {}, options = {}) {
 }
 
 function scanTypeQtyBucket(scan) {
-  const type = String(scan.scanType || scan.type || '').toUpperCase();
+  const type = movementTypeValue(scan);
   if (type === 'VERIFICATION') return '';
   if (type === 'AUDIT') return 'auditQty';
   if (type === 'INWARD') return 'inwardQty';
@@ -953,13 +954,13 @@ function scanTypeQtyBucket(scan) {
 }
 
 function isMovementScan(scan = {}) {
-  return ['INWARD', 'OUTWARD', 'DAMAGE', 'FITTED'].includes(String(scan.scanType || scan.type || '').toUpperCase());
+  return ['INWARD', 'OUTWARD', 'DAMAGE', 'FITTED'].includes(movementTypeValue(scan));
 }
 
 function scanQuantity(scan) {
   if (scan._reportSignedQty !== undefined) return signedScanQuantity(scan, 0);
   const qty = Math.abs(Number(scan.qty !== undefined ? scan.qty : scan.quantity || 0));
-  const type = String(scan.scanType || scan.type || '').toUpperCase();
+  const type = movementTypeValue(scan);
   if (type === 'INWARD') return qty;
   if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -qty;
   if (type === 'VERIFICATION') return 0;
@@ -1009,7 +1010,9 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
       target.totalMrpValue = money(target.totalMrpValue + Number(scanValueRow(scan).finalInventoryValue || 0));
       target.totalDlcValue = money(target.totalDlcValue + qty * Number(scan.currentCatalogueDLC || 0));
       const bucket = scanTypeQtyBucket(scan);
-      if (bucket) target[bucket] += qty;
+      // Type columns are movement amounts, so display positive component totals.
+      // Net quantity remains signed through totalQty and the shared report engine.
+      if (bucket) target[bucket] += Math.abs(Number(scan.qty !== undefined ? scan.qty : scan.quantity || 0));
       const part = scan.partNumber || scan.part || '';
       if (part) target.uniquePartSet.add(part);
       memberKeys.forEach((key) => {

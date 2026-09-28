@@ -76,6 +76,7 @@
 
 const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
 const { MASTER_PRICE_SOURCE } = require('./partMasterPrice');
+const { movementTypeValue } = require('./inventoryMovementState');
 
 const MASTER_VALUATION_SOURCES = new Set([
   MASTER_PRICE_SOURCE,
@@ -227,7 +228,7 @@ function scanValuation(scan = {}) {
 }
 
 function movementType(scan = {}) {
-  return cleanText(scan.scanType || scan.type).toUpperCase();
+  return movementTypeValue(scan);
 }
 
 function scanValueRow(scan = {}) {
@@ -312,7 +313,9 @@ function decorateScanValue(scan = {}) {
 
 function summarizeMovementBucket(scans = [], options = {}) {
   const referenceDate = validDate(options.referenceDate) || new Date();
-  const value = calculateInventoryValue(scans);
+  // Archived scans are retained for audit history but never contribute to active stock.
+  const activeScans = (Array.isArray(scans) ? scans : []).filter((scan) => scan && scan.isDeleted !== true && !scan.deletedAt);
+  const value = calculateInventoryValue(activeScans);
   const rows = value.rows;
   const dates = rows.map((row) => row.timestamp).filter(Boolean).sort((a, b) => a - b);
   const firstScanDate = dates[0] || null;
@@ -321,7 +324,10 @@ function summarizeMovementBucket(scans = [], options = {}) {
   const outwardQty = rows.filter((row) => movementType(row.scan) === 'OUTWARD').reduce((sum, row) => sum + row.qty, 0);
   const fittedQty = rows.filter((row) => movementType(row.scan) === 'FITTED').reduce((sum, row) => sum + row.qty, 0);
   const damageQty = rows.filter((row) => movementType(row.scan) === 'DAMAGE').reduce((sum, row) => sum + row.qty, 0);
-  const remainingQty = Math.max(inwardQty - outwardQty - fittedQty - damageQty, 0);
+  // Approved Daksh stock formula: inward minus outward, fitted and damage;
+  // actual available stock cannot fall below zero.
+  const netQty = inwardQty - outwardQty - fittedQty - damageQty;
+  const remainingQty = Math.max(netQty, 0);
   const ageingDays = firstScanDate ? Math.max(0, Math.floor((referenceDate - firstScanDate) / 86400000)) : 0;
   return {
     ...value,
@@ -329,6 +335,7 @@ function summarizeMovementBucket(scans = [], options = {}) {
     outwardQty,
     fittedQty,
     damageQty,
+    netQty,
     remainingQty,
     movementCount: 0,
     firstScanDate,

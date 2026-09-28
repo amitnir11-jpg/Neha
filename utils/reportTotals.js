@@ -1,5 +1,7 @@
 const { normalizePartNumber } = require('./normalize');
 const { uniqueReportScans } = require('./reportScanIdentity');
+const { summarizeMovementBucket } = require('./inventoryValueEngine');
+const { movementTypeValue } = require('./inventoryMovementState');
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -15,7 +17,7 @@ function numberValue(value, fallback = 0) {
 }
 
 function scanType(scan = {}) {
-  return upper(scan.scanType || scan.type || '');
+  return movementTypeValue(scan);
 }
 
 function scanPartNumber(scan = {}) {
@@ -78,6 +80,7 @@ function reportTotals(scans = [], options = {}) {
   const inwardCount = countedRows.reduce((sum, scan) => ['INWARD', 'AUDIT'].includes(scanType(scan)) ? sum + scanQuantity(scan, 0) : sum, 0);
   const outwardCount = countedRows.reduce((sum, scan) => ['OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType(scan)) ? sum + scanQuantity(scan, 0) : sum, 0);
   const netAvailableCount = countedRows.reduce((sum, scan) => sum + signedScanQuantity(scan, 0), 0);
+  const movementSummary = summarizeMovementBucket(countedRows);
   const duplicateCount = Number(options.duplicateCount || 0) + duplicateRows.length;
   const unknownParts = new Set(unknownRows.map(scanPartNumber).filter(Boolean));
   return {
@@ -96,6 +99,11 @@ function reportTotals(scans = [], options = {}) {
     unknownUniqueParts: unknownParts.size,
     inwardCount,
     outwardCount,
+    inwardQty: movementSummary.inwardQty,
+    outwardQty: movementSummary.outwardQty,
+    fittedQty: movementSummary.fittedQty,
+    damageQty: movementSummary.damageQty,
+    netQty: movementSummary.netQty,
     netAvailableCount,
     netQuantity: netAvailableCount
   };
