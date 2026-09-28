@@ -333,7 +333,7 @@ router.post('/login', auth.mobileLoginHandler);
 router.get('/dealers', auth.requireAuth, async (req, res) => {
   try {
     const userAccess = auth.normalizeDealerAccess(req.user.dealerAccess);
-    const canSeeAll = req.user.role === 'admin';
+    const canSeeAll = auth.isAdminRole(req.user.role);
     const filter = canSeeAll ? {} : userAccess.length ? { dealerCode: { $in: userAccess } } : { dealerCode: '__none__' };
     const dealersList = await Dealer.find(filter).sort({ dealerName: 1, dealerCode: 1 }).limit(1000).lean();
     return res.json({ success: true, count: dealersList.length, dealers: dealersList.map(compactDealer) });
@@ -833,7 +833,7 @@ router.get('/reports/deleted', auth.requireAuth, auth.requireAdmin, async (req, 
 router.get('/reports/export-excel', auth.requireAuth, async (req, res) => {
   try {
     const type = clean(req.query.type || 'inward').toLowerCase();
-    if (type === 'deleted' && req.user?.role !== 'admin') {
+    if (type === 'deleted' && !auth.isAdminRole(req.user?.role)) {
       return res.status(403).json({ success: false, message: 'Admin permission required.' });
     }
     const map = { inward: 'INWARD', outward: 'OUTWARD', fitted: 'FITTED', damage: 'DAMAGE' };

@@ -46,7 +46,7 @@ async function allowedDealerCodes(req, requestedDealerCode = '') {
     if (!access.allowed) throw new LocalPartError('Unauthorized dealer access', 403);
     return [access.requestedDealer];
   }
-  if (req.user && req.user.role === 'admin') return null;
+  if (req.user && auth.isAdminRole(req.user.role)) return null;
   const codes = await auth.userDealerAccessCodes(req.user || {});
   return codes.includes('ALL') ? null : codes;
 }

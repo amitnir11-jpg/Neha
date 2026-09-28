@@ -2,7 +2,7 @@ const express = require('express');
 const Dealer = require('../models/Dealer');
 const Audit = require('../models/Audit');
 const auth = require('./auth');
-const { auditWorkflowStatus, closeOtherActiveAudits, multiAuditEnabled, publicAudit, syncDealerWithAudit } = require('../utils/audit');
+const { auditWorkflowStatus, getActiveAudit, publicAudit } = require('../utils/audit');
 
 const router = express.Router();
 
@@ -10,16 +10,10 @@ function cleanCode(value) {
   return String(value || '').trim().toUpperCase();
 }
 
-function buildAuditId(dealerCode, auditName) {
-  const namePart = String(auditName || 'AUDIT').replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 12);
-  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
-  return `AUD-${dealerCode}-${namePart}-${stamp}`;
-}
-
 router.get('/', auth.requireAuth, async (req, res) => {
   try {
     const userAccess = await auth.userDealerAccessCodes(req.user);
-    const canSeeAll = req.user.role === 'admin';
+    const canSeeAll = auth.isAdminRole(req.user.role);
     const dealerFilter = { dealerCode: { $not: /^SYNC/i }, dealerName: { $not: /Sync Test/i } };
     const auditFilter = {};
     if (!canSeeAll) {
@@ -62,19 +56,11 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Dealer name and dealer code are required' });
     }
 
-    const auditId = cleanCode(req.body.auditId) || buildAuditId(dealerCode, req.body.auditName);
     const payload = {
       dealerName,
       dealerCode,
       brand: req.body.brand || '',
       location: req.body.location || '',
-      auditName: req.body.auditName || '',
-      auditStartDate: req.body.auditStartDate || undefined,
-      auditClosedDate: req.body.auditClosedDate || undefined,
-      auditorName: req.body.auditorName || '',
-      generalManager: req.body.generalManager || '',
-      spmName: req.body.spmName || '',
-      currentAuditId: auditId,
       active: req.body.active !== false
     };
 
@@ -84,36 +70,9 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    const isClosed = Boolean(payload.auditClosedDate) || String(req.body.auditStatus || req.body.status || '').toLowerCase() === 'closed';
-    payload.auditStatus = isClosed ? 'COMPLETED' : 'IN_PROGRESS';
-    if (isClosed && !payload.auditClosedDate) payload.auditClosedDate = new Date();
-    if (isClosed) payload.completedAt = payload.auditClosedDate;
-    if (!isClosed) {
-      delete payload.auditClosedDate;
-      delete payload.completedAt;
-    }
-    if (!isClosed && !(await multiAuditEnabled())) {
-      await closeOtherActiveAudits(dealerCode, auditId);
-    }
-
-    const audit = await Audit.findOneAndUpdate(
-      { auditId },
-      isClosed ? { $set: {
-        ...payload,
-        auditId,
-        status: isClosed ? 'closed' : 'active'
-      } } : { $set: {
-        ...payload,
-        auditId,
-        status: 'active'
-      }, $unset: { auditClosedDate: '', completedAt: '', completedBy: '', completedByUserId: '', completionRemark: '' } },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-    const syncedDealer = await syncDealerWithAudit(audit);
-
-    if (req.io && !isClosed) req.io.emit('audit:active', publicAudit(audit));
+    const activeAudit = await getActiveAudit({ dealerCode });
     req.io.emit('dealers:update');
-    res.json({ success: true, dealer: syncedDealer || dealer, audit, activeAudit: isClosed ? null : publicAudit(audit) });
+    res.json({ success: true, dealer, audit: activeAudit, activeAudit: activeAudit ? publicAudit(activeAudit) : null });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

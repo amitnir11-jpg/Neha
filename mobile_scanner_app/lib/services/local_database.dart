@@ -16,7 +16,7 @@ class LocalDatabase {
     final path = p.join(await getDatabasesPath(), 'daksh_mobile_scanner.db');
     _database = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE scans (
@@ -27,6 +27,7 @@ class LocalDatabase {
             binLocation TEXT NOT NULL,
             scanType TEXT NOT NULL,
             dealerCode TEXT NOT NULL,
+            auditId TEXT NOT NULL DEFAULT '',
             userId TEXT NOT NULL,
             userName TEXT NOT NULL,
             deviceId TEXT NOT NULL,
@@ -51,6 +52,9 @@ class LocalDatabase {
         if (oldVersion < 3) {
           await db.execute(
               "ALTER TABLE scans ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'");
+        }
+        if (oldVersion < 4) {
+          await db.execute("ALTER TABLE scans ADD COLUMN auditId TEXT NOT NULL DEFAULT ''");
         }
       },
     );
@@ -112,6 +116,7 @@ class LocalDatabase {
     required String rawValue,
     required String scanType,
     required String dealerCode,
+    required String auditId,
     required String userId,
     required DateTime since,
   }) async {
@@ -120,11 +125,12 @@ class LocalDatabase {
       'scans',
       columns: ['localId'],
       where:
-          'rawValue = ? AND scanType = ? AND dealerCode = ? AND userId = ? AND createdAt >= ?',
+          'rawValue = ? AND scanType = ? AND dealerCode = ? AND auditId = ? AND userId = ? AND createdAt >= ?',
       whereArgs: [
         rawValue,
         scanType,
         dealerCode,
+        auditId,
         userId,
         since.toIso8601String()
       ],
@@ -137,16 +143,17 @@ class LocalDatabase {
     required String rawValue,
     required String scanType,
     required String dealerCode,
+    required String auditId,
     required String userId,
   }) async {
     final db = await database;
     final rows = await db.query(
       'scans',
       where:
-          'rawValue = ? AND scanType = ? AND dealerCode = ? AND userId = ? AND status = ?',
+          'rawValue = ? AND scanType = ? AND dealerCode = ? AND auditId = ? AND userId = ? AND status = ?',
       // A Pending/Failed row only exists on this phone.  It must not be used
       // as proof that the part is already in the central inventory.
-      whereArgs: [rawValue, scanType, dealerCode, userId, 'Synced'],
+      whereArgs: [rawValue, scanType, dealerCode, auditId, userId, 'Synced'],
       orderBy: 'createdAt DESC, localId DESC',
       limit: 1,
     );

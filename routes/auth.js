@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Dealer = require('../models/Dealer');
 const UserDealerMapping = require('../models/UserDealerMapping');
+const Audit = require('../models/Audit');
 const smtpConfig = require('../utils/smtpConfig');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
 
@@ -17,8 +18,10 @@ const MOBILE_TOKEN_TTL = String(process.env.MOBILE_JWT_EXPIRES_IN || '30d').trim
 const RESET_TTL_MINUTES = 15;
 const AUTH_COOKIE_NAME = 'daksh_auth';
 const AUTH_COOKIE_MAX_AGE_SECONDS = 12 * 60 * 60;
-const ROLES = ['admin', 'audit_user', 'mobile_user'];
+const ROLES = ['super_admin', 'admin', 'audit_user', 'mobile_user'];
 const LEGACY_ROLE_MAP = {
+  super_admin: 'super_admin',
+  'super admin': 'super_admin',
   admin: 'admin',
   audit_user: 'audit_user',
   mobile_user: 'mobile_user',
@@ -33,8 +36,13 @@ function normalizeRole(value, fallback = 'audit_user') {
   return LEGACY_ROLE_MAP[role] || fallback;
 }
 
+function isAdminRole(value) {
+  return ['admin', 'super_admin'].includes(normalizeRole(value));
+}
+
 function roleDisplayName(role) {
   return {
+    super_admin: 'Super Admin',
     admin: 'Admin',
     audit_user: 'Audit User',
     mobile_user: 'Mobile User'
@@ -176,7 +184,13 @@ async function requireAuth(req, res, next) {
     }
     const dealerAccess = await userDealerAccessCodes(freshUser);
     req.user = { ...publicUser({ ...freshUser, dealerAccess }), dealerAccess };
-    const requestedDealer = extractRequestDealer(req);
+    let requestedDealer = extractRequestDealer(req);
+    // Resolve a single-dealer auditor's context from the backend mapping. The
+    // client does not need to choose or persist an authoritative dealer.
+    const isAdmin = ['admin', 'super_admin'].includes(req.user.role);
+    if (!requestedDealer && !isAdmin && dealerAccess.length === 1 && dealerAccess[0] !== 'ALL') {
+      requestedDealer = dealerAccess[0];
+    }
     if (requestedDealer && requestedDealer !== 'ALL') {
       const access = await validateUserDealerAccess(req.user, requestedDealer);
       if (!access.allowed) {
@@ -188,17 +202,30 @@ async function requireAuth(req, res, next) {
         });
       }
       applyRequestDealer(req, access.requestedDealer);
-    } else if (requestedDealer === 'ALL' && req.user.role !== 'admin') {
+    } else if (requestedDealer === 'ALL' && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Only Admin can access All Dealers.'
       });
-    } else if (req.user.role !== 'admin' && isDealerScopedRequest(req)) {
+    } else if (!isAdmin && isDealerScopedRequest(req)) {
       return res.status(400).json({
         success: false,
         message: 'Select dealer first',
         userDealerAccess: dealerAccess
       });
+    }
+    const writeMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(req.method || '').toUpperCase());
+    const auditWriteBases = ['/api/scans', '/api/scan', '/api/inventory', '/api/reconciliation'];
+    if (writeMethod && !isAdmin && auditWriteBases.includes(String(req.baseUrl || '').toLowerCase())) {
+      const dealerCode = req.activeDealerId || extractRequestDealer(req);
+      const auditId = String(req.body?.auditId || req.body?.auditSessionId || req.query?.auditId || req.query?.auditSessionId || '').trim();
+      const audit = auditId
+        ? await Audit.findOne({ dealerCode, auditId }).lean()
+        : await getActiveAudit({ dealerCode });
+      const status = audit ? String(audit.auditStatus || audit.status || '').trim().toUpperCase() : '';
+      if (!audit || !['ACTIVE', 'IN_PROGRESS', 'OPEN'].includes(status)) {
+        return res.status(423).json({ success: false, code: 'AUDIT_NOT_WRITABLE', message: 'Changes are allowed only while the selected audit is ACTIVE.' });
+      }
     }
     return next();
   } catch (error) {
@@ -214,7 +241,7 @@ async function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (!req.user || normalizeRole(req.user.role) !== 'admin') {
+  if (!req.user || !['admin', 'super_admin'].includes(normalizeRole(req.user.role))) {
     return res.status(403).json({
       success: false,
       message: 'Admin permission required.'
@@ -328,7 +355,7 @@ async function userDealerAccessCodes(user = {}) {
 
 async function activeDealersForUser(user = {}) {
   const access = await userDealerAccessCodes(user);
-  const canSeeAll = normalizeRole(user.role) === 'admin';
+  const canSeeAll = ['admin', 'super_admin'].includes(normalizeRole(user.role));
   const filter = {
     dealerCode: { $not: /^SYNC/i },
     dealerName: { $not: /Sync Test/i },
@@ -349,9 +376,11 @@ async function activeDealersForUser(user = {}) {
 }
 
 function extractRequestDealer(req) {
+  const firstScan = Array.isArray(req.body) ? req.body[0] : null;
   const sources = [
     req.query && (req.query.activeDealerId || req.query.dealerId || req.query.dealerCode || req.query.dealer),
-    req.body && (req.body.activeDealerId || req.body.dealerId || req.body.dealerCode || req.body.dealer),
+    req.body && (req.body.activeDealerId || req.body.dealerId || req.body.dealerCode || req.body.dealer)
+      || firstScan && (firstScan.activeDealerId || firstScan.dealerId || firstScan.dealerCode || firstScan.dealer),
     req.params && (req.params.dealerId || req.params.dealerCode)
   ];
   return normalizeAccessCode(sources.find(Boolean) || '');
@@ -386,8 +415,9 @@ function isDealerScopedRequest(req) {
 async function validateUserDealerAccess(user, dealerCode) {
   const requestedDealer = normalizeAccessCode(dealerCode);
   const userDealerAccess = await userDealerAccessCodes(user);
-  const allowed = normalizeRole(user.role) === 'admin' || userDealerAccess.includes(requestedDealer)
-    || (requestedDealer !== 'ALL' && userDealerAccess.includes('ALL') && normalizeRole(user.role) === 'admin');
+    const isAdmin = ['admin', 'super_admin'].includes(normalizeRole(user.role));
+    const allowed = isAdmin || userDealerAccess.includes(requestedDealer)
+    || (requestedDealer !== 'ALL' && userDealerAccess.includes('ALL') && isAdmin);
   return { requestedDealer, userDealerAccess, allowed };
 }
 
@@ -548,13 +578,17 @@ async function createUserFromPayload(payload, defaults = {}) {
   const email = cleanEmail(payload.email);
   const name = String(payload.name || payload.fullName || username || 'Audit User').trim();
   const role = normalizeRole(payload.role || defaults.role || 'audit_user');
+  const dealerAccess = normalizeDealerAccess(payload.dealerAccess);
   const password = String(payload.password || '');
   const pin = String(payload.pin || '').trim();
 
   if (!username) throw new Error('Username is required');
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Valid email ID is required');
   if (pin && !/^\d{4}$/.test(pin)) throw new Error('PIN must be exactly 4 digits');
-  if (role === 'admin' && !password) throw new Error('Admin users require a password');
+  if (role === 'audit_user' && (!dealerAccess.length || dealerAccess.includes('ALL'))) {
+    throw new Error('Audit users must be assigned to at least one specific dealer.');
+  }
+  if (isAdminRole(role) && !password) throw new Error('Admin users require a password');
   if (['audit_user', 'mobile_user'].includes(role) && !pin && !password) throw new Error('Audit and Mobile users require a password or 4-digit PIN');
 
   const duplicate = await User.findOne({ username }).lean();
@@ -566,7 +600,7 @@ async function createUserFromPayload(payload, defaults = {}) {
     mobileNumber: String(payload.mobileNumber || payload.mobile || '').trim(),
     role,
     responsibility: String(payload.responsibility || '').trim(),
-    dealerAccess: normalizeDealerAccess(payload.dealerAccess),
+    dealerAccess,
     permissions: normalizePermissions(payload.permissions || payload),
     active: defaults.active !== undefined ? defaults.active : true,
     isActive: defaults.active !== undefined ? defaults.active : true,
@@ -621,12 +655,12 @@ router.post('/login', async (req, res) => {
     const pin = String(req.body.pin || req.body.passwordOrPin || '').trim();
     const user = await findUserByLogin(username);
 
-    const ruleError = loginRuleError(user, ['admin', 'audit_user', 'mobile_user']);
+    const ruleError = loginRuleError(user, ['super_admin', 'admin', 'audit_user', 'mobile_user']);
     if (ruleError) return res.status(401).json({ success: false, message: ruleError });
 
     let valid = false;
     const role = normalizeRole(user.role);
-    if (role === 'admin') {
+    if (isAdminRole(role)) {
       valid = await compareAndUpgradeSecret(user, password, ['passwordHash', 'password']);
     } else if (role === 'audit_user') {
       const secret = pin || password;
@@ -653,8 +687,8 @@ router.post('/login', async (req, res) => {
       user: { ...publicUser(user), dealerAccess },
       assignedDealers,
       activeDealers: assignedDealers,
-      needsDealerSelection: role !== 'admin' && assignedDealers.length > 1,
-      activeDealerId: role !== 'admin' && assignedDealers.length === 1 ? assignedDealers[0].dealerCode : ''
+      needsDealerSelection: !isAdminRole(role) && assignedDealers.length > 1,
+      activeDealerId: !isAdminRole(role) && assignedDealers.length === 1 ? assignedDealers[0].dealerCode : ''
     });
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });
@@ -986,6 +1020,12 @@ router.put('/users/:id/role', requireAuth, requireAdmin, async (req, res) => {
   try {
     const role = ROLES.includes(normalizeRole(req.body.role, '')) ? normalizeRole(req.body.role, '') : '';
     if (!role) return res.status(400).json({ success: false, message: 'Valid role is required' });
+    const currentUser = await User.findById(req.params.id).lean();
+    if (!currentUser) return res.status(404).json({ success: false, message: 'User not found' });
+    if (role === 'audit_user') {
+      const access = await userDealerAccessCodes(currentUser);
+      if (!access.length || access.includes('ALL')) return res.status(400).json({ success: false, message: 'Assign this user to a specific dealer before changing the role to Audit User.' });
+    }
     const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
     res.json({ success: true, user: cleanPublicUser(user) });
@@ -1117,5 +1157,6 @@ module.exports.clearAuthCookie = clearAuthCookie;
 module.exports.ROLES = ROLES;
 module.exports.LEGACY_ROLE_MAP = LEGACY_ROLE_MAP;
 module.exports.normalizeRole = normalizeRole;
+module.exports.isAdminRole = isAdminRole;
 module.exports.roleDisplayName = roleDisplayName;
 module.exports.migrateLegacyUserRoles = migrateLegacyUserRoles;

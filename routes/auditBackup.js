@@ -293,7 +293,14 @@ async function restoreCollection(key, docs, options) {
     if (options.restoreMode === 'new-audit-session') doc = rewriteForNewAuditSession(key, doc, options.sessionId, options.newAuditId);
     const filter = identityFilter(key, doc);
     if (!filter) continue;
-    if (options.restoreMode === 'merge') {
+    if (key === 'audits' && doc.dealerCode) {
+      await Dealer.findOneAndUpdate(
+        { dealerCode: doc.dealerCode },
+        { dealerCode: doc.dealerCode, dealerName: doc.dealerName || doc.dealerCode, brand: doc.brand || '', location: doc.location || '', active: true },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    }
+    if (options.restoreMode === 'merge' || (options.restoreMode === 'replace' && ['dealers', 'audits'].includes(key))) {
       await Model.findOneAndUpdate(filter, doc, { upsert: true, setDefaultsOnInsert: false });
     } else {
       await Model.create([doc]);
@@ -318,8 +325,8 @@ async function deleteExistingForReplace(keys, dealerCode, auditId, req) {
   if (keys.includes('deletedScanLogs')) deletes.push(DeletedScanLog.deleteMany(dealerScoped));
   if (keys.includes('duplicateScanLogs')) deletes.push(DuplicateScanLog.deleteMany(scoped));
   if (keys.includes('rejectedScans')) deletes.push(RejectedScan.deleteMany(dealerScoped));
-  if (keys.includes('audits')) deletes.push(Audit.deleteMany(auditId ? { auditId } : dealerScoped));
-  if (keys.includes('dealers') && dealerCode) deletes.push(Dealer.deleteOne({ dealerCode }));
+  // Dealer masters and audit sessions are durable history. Replace mode
+  // restores them with upserts instead of physically deleting either entity.
   if (keys.includes('masterParts')) deletes.push(MasterPart.deleteMany(dealerScoped));
   await Promise.all(deletes);
 }

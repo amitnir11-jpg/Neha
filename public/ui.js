@@ -841,7 +841,7 @@
   }
 
   function isAdminUser() {
-    return state.user && String(state.user.role || '').toLowerCase() === 'admin';
+    return state.user && ['admin', 'super_admin'].includes(String(state.user.role || '').toLowerCase());
   }
 
   function activeDealerId() {
@@ -1336,7 +1336,11 @@
     const dealerCode = dashboardScopeDealerCode();
     const dealer = dealerByCode(dealerCode) || {};
     const dealerName = String(dealer.dealerName || dealer.name || state.activeAudit?.dealerName || '').trim();
-    setText('dashboardScopeSummary', dealerCode ? `${dealerCode}${dealerName ? ` - ${dealerName}` : ''}` : 'All authorised dealers');
+    const header = dealerCode ? `${dealerCode}${dealerName ? ` - ${dealerName}` : ''}` : 'Select a dealer';
+    const audit = state.activeAudit && cleanDealerCode(state.activeAudit.dealerCode) === cleanDealerCode(dealerCode)
+      ? state.activeAudit
+      : null;
+    setText('dashboardScopeSummary', `${header}${audit ? ` · Audit ${audit.auditId} · ${audit.auditStatus || 'ACTIVE'}` : ''}`);
   }
 
   function setDashboardRefreshState(refreshing) {
@@ -1479,6 +1483,12 @@
     setActiveDealerId(next);
     clearScopedLiveCaches({ clearReportCache: true });
     state.dashboardDealerCode = next;
+    state.activeAudit = null;
+    state.dashboardLoaded = false;
+    state.dashboardStats = {};
+    updateDashboardCards({});
+    renderScanStream([]);
+    renderDashboardTopBins([]);
     syncScanDealerScope(next);
     state.selectedProductGroupSummary = null;
     state.productGroupDetailRows = [];
@@ -1499,6 +1509,11 @@
   function updateActiveAuditUi() {
     const audit = state.activeAudit;
     const selectedDealer = activeDealer();
+    const selectedCode = cleanDealerCode(selectedDealer?.dealerCode || selectedDealer?.code || selectedDealer?.id || dashboardScopeDealerCode());
+    const matchingAudit = audit && (!selectedCode || cleanDealerCode(audit.dealerCode) === selectedCode) ? audit : null;
+    const auditLabel = matchingAudit
+      ? `${formatDealerDisplay(matchingAudit)} · Audit ${matchingAudit.auditId} · ${matchingAudit.auditStatus || 'ACTIVE'}`
+      : '';
     if (selectedDealer) {
       $$('.dealerSelect').forEach((select) => {
         if (select.closest('#reportFilters') && isAdminUser()) return;
@@ -1510,21 +1525,21 @@
         setDealerSelectValue(select, selectedDealer.dealerCode || selectedDealer.code || selectedDealer.id || '');
         syncDealerSelectDisplay(select);
       });
-      setLivePill('activeAuditBadge', `${formatDealerDisplay(selectedDealer)}`, true);
-      setLivePill('pairingConnectionStatus', 'Ready', true);
-      setDashboardKpiValue('dashActiveAuditDealer', formatDealerDisplay(selectedDealer));
-      setText('pairingActiveAudit', formatDealerDisplay(selectedDealer));
-      setText('pairingStatusText', 'Mobile sync enabled');
+      setLivePill('activeAuditBadge', matchingAudit ? auditLabel : `${formatDealerDisplay(selectedDealer)} · No active audit`, Boolean(matchingAudit));
+      setLivePill('pairingConnectionStatus', matchingAudit ? 'Ready' : 'No active audit', Boolean(matchingAudit));
+      setDashboardKpiValue('dashActiveAuditDealer', matchingAudit ? auditLabel : formatDealerDisplay(selectedDealer));
+      setText('pairingActiveAudit', matchingAudit ? auditLabel : `${formatDealerDisplay(selectedDealer)} · No active audit`);
+      setText('pairingStatusText', matchingAudit ? 'Mobile sync enabled' : 'Mobile sync disabled');
       setText('sideActiveAuditDealer', formatDealerDisplay(selectedDealer));
-      setText('sideActiveAuditStatus', 'Mobile sync enabled');
+      setText('sideActiveAuditStatus', matchingAudit ? `Audit ${matchingAudit.auditId} · ${matchingAudit.auditStatus || 'ACTIVE'}` : 'No active audit');
     } else if (audit && audit.dealerCode) {
-      setLivePill('activeAuditBadge', `Active Audit: ${formatDealerDisplay(audit)}`, true);
+      setLivePill('activeAuditBadge', auditLabel, true);
       setLivePill('pairingConnectionStatus', 'Ready', true);
       setDashboardKpiValue('dashActiveAuditDealer', formatDealerDisplay(audit));
-      setText('pairingActiveAudit', formatDealerDisplay(audit));
+      setText('pairingActiveAudit', auditLabel);
       setText('pairingStatusText', 'Mobile sync enabled');
       setText('sideActiveAuditDealer', formatDealerDisplay(audit));
-      setText('sideActiveAuditStatus', 'Mobile sync enabled');
+      setText('sideActiveAuditStatus', `Audit ${audit.auditId} · ${audit.auditStatus || 'ACTIVE'}`);
       const createUserDealerAccess = $('#createUserForm [name="dealerAccess"]');
       if (createUserDealerAccess && !Array.from(createUserDealerAccess.selectedOptions || []).length) {
         setMultiSelectValues(createUserDealerAccess, [audit.dealerCode]);
@@ -1545,13 +1560,20 @@
       setText('sideActiveAuditDealer', 'No active audit');
       setText('sideActiveAuditStatus', 'Mobile sync disabled');
     }
+    updateDashboardScopeSummary();
     syncLocalPartFormIdentity();
     updateAuditPriceRefreshUi();
   }
 
   async function loadActiveAudit(options = {}) {
     try {
-      const data = await api('/api/audit/active');
+      const dealerCode = cleanDealerCode(options.dealerCode || dashboardScopeDealerCode() || activeDealerId());
+      if (!dealerCode) {
+        state.activeAudit = null;
+        updateActiveAuditUi();
+        return null;
+      }
+      const data = await api(`/api/audit/active?dealerCode=${encodeURIComponent(dealerCode)}`);
       if (!data.success) {
         const message = data.message || 'No active audit found. Please start audit from PC Admin.';
         if (options.allowMissing && /no active audit/i.test(message)) {
@@ -3254,7 +3276,7 @@
       const selected = cleanDealerCode(select.value);
       const firstOption = !isAdminUser()
         ? '<option value="">Select Dealer</option>'
-        : (select.closest('#reportFilters') ? '<option value="">Select Dealer</option>' : (select.id === 'dashboardDealerSelect' ? '<option value="">Active Audit</option>' : (select.classList.contains('bin-transfer-dealer') || select.id === 'binManagementDealer' || select.closest('#binSequenceTab') || select.closest('#reconciliation')) ? '<option value="">Select Dealer</option>' : '<option value="">All Dealers</option>'));
+        : (select.closest('#reportFilters') ? '<option value="">Select Dealer</option>' : (select.id === 'dashboardDealerSelect' ? '<option value="">Select Dealer</option>' : (select.classList.contains('bin-transfer-dealer') || select.id === 'binManagementDealer' || select.closest('#binSequenceTab') || select.closest('#reconciliation')) ? '<option value="">Select Dealer</option>' : '<option value="">All Dealers</option>'));
       select.innerHTML = firstOption + realDealers.map((dealer) => (
         `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
       )).join('');
@@ -8719,7 +8741,9 @@
 
   function normalizeAuditWorkflowStatus(value) {
     const status = String(value || '').trim().toUpperCase();
-    return status === 'COMPLETED' || status === 'CLOSED' ? 'COMPLETED' : 'IN_PROGRESS';
+    if (status === 'CLOSED') return 'COMPLETED';
+    if (['COMPLETED', 'DRAFT', 'ACTIVE', 'PAUSED', 'LOCKED', 'ARCHIVED', 'IN_PROGRESS'].includes(status)) return status;
+    return 'NONE';
   }
 
   function auditPriceRefreshTarget() {
@@ -8823,8 +8847,10 @@
     renderAuditPriceDealers();
     $('#dealerMasterRows').innerHTML = state.dealers.length ? state.dealers.map((dealer) => {
       const auditStatus = normalizeAuditWorkflowStatus(dealer.auditStatus || dealer.status || (dealer.active === false ? 'COMPLETED' : 'IN_PROGRESS'));
-      const auditStatusDisplay = auditStatus === 'COMPLETED' ? 'Completed' : 'In Progress';
-      const auditStatusClass = auditStatus === 'COMPLETED' ? 'status-completed' : 'status-in-progress';
+      const hasAudit = Boolean(dealer.currentAuditId);
+      const auditActive = ['ACTIVE', 'IN_PROGRESS'].includes(auditStatus) && hasAudit;
+      const auditStatusDisplay = hasAudit ? (auditActive ? 'Active' : auditStatus) : 'No audit';
+      const auditStatusClass = auditActive ? 'status-in-progress' : auditStatus === 'COMPLETED' ? 'status-completed' : '';
       return `
       <tr>
         <td>${escapeHtml(dealer.dealerName)}</td>
@@ -8835,8 +8861,11 @@
         <td>
           <select class="btn light small dealer-action-select" data-code="${escapeHtml(dealer.dealerCode)}" data-audit-id="${escapeHtml(dealer.currentAuditId || '')}">
             <option value="">Select Action</option>
-            <option value="delete">Delete</option>
-            ${auditStatus === 'IN_PROGRESS' ? `<option value="complete">Mark Complete</option>` : `<option value="reopen">Reopen</option>`}
+            <option value="start">Start New Audit</option>
+            ${auditActive ? `<option value="complete">Complete Current Audit</option>` : ''}
+            ${auditActive ? `<option value="lock">Lock Current Audit</option>` : ''}
+            ${hasAudit && auditStatus === 'COMPLETED' ? `<option value="reopen">Reopen Historical Audit</option>` : ''}
+            <option value="delete">Deactivate Dealer</option>
           </select>
         </td>
       </tr>
@@ -8848,10 +8877,56 @@
     const code = cleanDealerCode(dealerCode);
     if (!code) return toast('Dealer code is required', 'error');
     const label = dealerName ? `${dealerName} (${code})` : code;
-    if (!window.confirm(`Delete dealer setup for ${label}? Scan, master, BIN and transfer data will not be deleted.`)) return;
+    if (!window.confirm(`Deactivate ${label}? Historical audits and inventory will be retained.`)) return;
     const data = await api(`/api/master/dealers/${encodeURIComponent(code)}`, { method: 'DELETE', body: {} });
-    toast(`Dealer deleted: ${data.dealersDeleted || 0}, audits deleted: ${data.auditsDeleted || 0}`);
+    toast(data.message || 'Dealer deactivated');
     await loadDealers();
+  }
+
+  async function startNewAuditForDealer(dealerCode) {
+    const code = cleanDealerCode(dealerCode);
+    const dealer = dealerByCode(code);
+    if (!code || !dealer) throw new Error('Select a valid dealer first.');
+    const auditName = window.prompt(`Audit name for ${formatDealerDisplay(dealer)}:`, `${code} Audit`);
+    if (auditName === null) return;
+    try {
+      const data = await api('/api/audit', {
+        method: 'POST',
+        body: {
+          dealerCode: code,
+          dealerName: dealer.dealerName || code,
+          brand: dealer.brand || '',
+          location: dealer.location || '',
+          auditName: auditName.trim() || `${code} Audit`,
+          auditStatus: 'ACTIVE',
+          auditStartDate: new Date().toISOString()
+        }
+      });
+      state.dashboardDealerCode = code;
+      state.activeAudit = data.activeAudit || data.audit;
+      setDealerSelectValue($('#dashboardDealerSelect'), code);
+      state.reportCache.clear();
+      await loadDealers({ force: true });
+      await loadActiveAudit({ dealerCode: code, silent: true });
+      await loadDashboard({ force: true });
+      toast(`Started ${state.activeAudit?.auditId || 'new audit'} for ${code}`, 'success');
+    } catch (error) {
+      if (error.data?.code !== 'ACTIVE_AUDIT_EXISTS') throw error;
+      const current = error.data.activeAudit || {};
+      const choice = window.prompt(
+        `Active audit already exists: ${current.auditId || ''}\nType OPEN to open it or COMPLETE to complete it.`,
+        'OPEN'
+      );
+      if (String(choice || '').trim().toUpperCase() === 'OPEN') {
+        state.dashboardDealerCode = code;
+        setDealerSelectValue($('#dashboardDealerSelect'), code);
+        await loadActiveAudit({ dealerCode: code, silent: true });
+        await loadDashboard({ force: true });
+      } else if (String(choice || '').trim().toUpperCase() === 'COMPLETE') {
+        await handleAuditComplete(current.auditId, code);
+        toast('Start the new audit after the current audit is completed.');
+      }
+    }
   }
 
   async function handleAuditComplete(auditId, dealerCode) {
@@ -8867,10 +8942,17 @@
     if (!window.confirm('Once you mark this audit as COMPLETED, no scanning will be allowed. You sure?')) return;
 
     try {
-      const data = await api(`/api/audit/${encodeURIComponent(auditId)}/status/complete`, {
-        method: 'POST',
-        body: { remark: remark || '' }
-      });
+      const path = `/api/audit/${encodeURIComponent(auditId)}/status/complete`;
+      let data;
+      try {
+        data = await api(path, { method: 'POST', body: { remark: remark || '' } });
+      } catch (error) {
+        if (error.data?.code !== 'AUDIT_COMPLETION_PENDING_ITEMS') throw error;
+        const blockers = error.data.blockers || {};
+        const warning = `Pending items for this audit:\nOffline pending: ${blockers.pendingOfflineSync || 0}\nOffline failed: ${blockers.failedOfflineSync || 0}\nServer sync pending: ${blockers.pendingServerSync || 0}\n\nComplete anyway?`;
+        if (!window.confirm(warning)) return;
+        data = await api(path, { method: 'POST', body: { remark: remark || '', confirmPending: true } });
+      }
 
       // Show completion popup
       alert('✓ Audit marked as COMPLETED successfully.\n\nNo further changes can be made to this audit unless it is reopened by an admin.');
@@ -8914,6 +8996,18 @@
     } catch (error) {
       toast(`Failed to reopen audit: ${error.message}`, 'error');
     }
+  }
+
+  async function handleAuditLock(auditId, dealerCode) {
+    if (!auditId || !dealerCode) throw new Error('Audit ID and Dealer Code are required');
+    if (!window.confirm(`Lock audit ${auditId} for dealer ${dealerCode}? Normal changes will be blocked.`)) return;
+    await api(`/api/audit/${encodeURIComponent(auditId)}/status`, {
+      method: 'POST',
+      body: { status: 'LOCKED', remark: 'Locked after final review' }
+    });
+    toast('Audit locked', 'success');
+    await loadDealers({ force: true });
+    await loadActiveAudit({ dealerCode, silent: true, allowMissing: true });
   }
 
   async function loadBins() {
@@ -12207,13 +12301,21 @@
         if (select.id === 'dashboardDealerSelect') {
           state.dashboardDealerCode = cleanDealerCode(select.value || '');
           syncScanDealerScope(state.dashboardDealerCode, select);
+          state.activeAudit = null;
+          state.dashboardLoaded = false;
+          state.dashboardStats = {};
+          updateDashboardCards({});
+          renderScanStream([]);
+          renderDashboardTopBins([]);
           updateDashboardScopeSummary();
+          state.reportCache.clear();
           state.selectedProductGroupSummary = null;
           state.productGroupDetailRows = [];
           state.productGroupDetailTotals = null;
           renderProductGroupDetails({ rows: [], totals: {} });
           state.reportCache.clear();
           const jobs = [];
+          if (state.dashboardDealerCode) jobs.push(loadActiveAudit({ dealerCode: state.dashboardDealerCode, silent: true, allowMissing: true }));
           if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
           if ($('#reports')?.classList.contains('active') && isProductGroupSummaryReport()) jobs.push(loadReport({ forceRefresh: true }));
           Promise.all(jobs.map((job) => job.catch((error) => toast(error.message, 'error'))));
@@ -12876,18 +12978,9 @@
     $('#dealerMasterForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       const payload = formObject(event.currentTarget);
-      const auditUserOption = $('#dealerAuditUserSelect')?.selectedOptions?.[0];
-      if (auditUserOption && auditUserOption.value) {
-        payload.auditUserId = auditUserOption.value;
-        payload.auditorUsername = auditUserOption.dataset.username || '';
-        payload.auditorName = payload.auditorName || auditUserOption.dataset.name || auditUserOption.dataset.username || '';
-      }
       await api('/api/master/dealers', { method: 'POST', body: payload });
       toast('Dealer saved');
       event.currentTarget.reset();
-      renderAuditUserOptions();
-      const auditStartDate = $('[name="auditStartDate"]', event.currentTarget);
-      if (auditStartDate) auditStartDate.value = new Date().toISOString().slice(0, 10);
       await loadDealers();
     });
     $('#dealerMasterRows')?.addEventListener('click', (event) => {
@@ -12905,8 +12998,12 @@
       
       if (action === 'delete') {
         deleteDealerMaster(dealerCode).catch((error) => toast(error.message, 'error'));
+      } else if (action === 'start') {
+        startNewAuditForDealer(dealerCode).catch((error) => toast(error.message, 'error'));
       } else if (action === 'complete') {
         handleAuditComplete(auditId, dealerCode).catch((error) => toast(error.message, 'error'));
+      } else if (action === 'lock') {
+        handleAuditLock(auditId, dealerCode).catch((error) => toast(error.message, 'error'));
       } else if (action === 'reopen') {
         handleAuditReopen(auditId, dealerCode).catch((error) => toast(error.message, 'error'));
       }

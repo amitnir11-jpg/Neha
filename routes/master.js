@@ -11,7 +11,7 @@ const VerificationLog = require('../models/VerificationLog');
 const User = require('../models/User');
 const auth = require('./auth');
 const masterValidation = require('../utils/masterValidation');
-const { auditWorkflowStatus, closeOtherActiveAudits, multiAuditEnabled, publicAudit, syncDealerWithAudit } = require('../utils/audit');
+const { auditWorkflowStatus, getActiveAudit, publicAudit } = require('../utils/audit');
 const normalizer = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
@@ -837,7 +837,7 @@ router.get('/filters', auth.requireAuth, async (req, res) => {
 router.get('/dealers', auth.requireAuth, async (req, res) => {
   try {
     const userAccess = await auth.userDealerAccessCodes(req.user);
-    const canSeeAll = req.user.role === 'admin';
+    const canSeeAll = auth.isAdminRole(req.user.role);
     const allowedDealerSet = new Set(userAccess);
     if (dealerListCache.expiresAt > Date.now()) {
       const dealers = canSeeAll
@@ -875,7 +875,7 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
         auditUserId: dealer.auditUserId || (audit && audit.auditUserId) || '',
         auditorUsername: dealer.auditorUsername || (audit && audit.auditorUsername) || '',
         auditorName: dealer.auditorName || (audit && audit.auditorName) || '',
-        auditStatus: audit ? auditWorkflowStatus(audit) : (dealer.active === false ? 'COMPLETED' : 'IN_PROGRESS'),
+        auditStatus: audit ? auditWorkflowStatus(audit) : 'NONE',
         completedAt: audit ? audit.completedAt : null,
         auditClosedDate: audit ? audit.auditClosedDate : dealer.auditClosedDate
       };
@@ -925,24 +925,6 @@ router.get('/parts/categories', auth.requireAuth, async (req, res) => {
   }
 });
 
-async function auditUserPayload(body = {}) {
-  const auditUserKey = String(body.auditUserId || body.auditorUsername || '').trim();
-  let auditUser = null;
-  if (auditUserKey) {
-    const clauses = [
-      { username: auditUserKey.toLowerCase() },
-      { email: auditUserKey.toLowerCase() }
-    ];
-    if (/^[a-f0-9]{24}$/i.test(auditUserKey)) clauses.push({ _id: auditUserKey });
-    auditUser = await User.findOne({ $or: clauses }).lean();
-  }
-  return {
-    auditUserId: auditUser ? String(auditUser._id) : auditUserKey,
-    auditorUsername: auditUser ? auditUser.username || '' : String(body.auditorUsername || '').trim().toLowerCase(),
-    auditorName: String(body.auditorName || (auditUser && (auditUser.name || auditUser.username)) || '').trim()
-  };
-}
-
 router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const dealerCode = normalizePart(req.body.dealerCode);
@@ -950,44 +932,15 @@ router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) =>
     if (!dealerCode || !dealerName) {
       return res.status(400).json({ success: false, message: 'Dealer name and dealer code are required' });
     }
-    const auditStatus = String(req.body.auditStatus || req.body.status || 'Active').trim().toLowerCase();
-    const isClosed = auditStatus === 'closed';
-    const auditId = normalizePart(req.body.auditId || req.body.currentAuditId || `AUD-${dealerCode}-${Date.now()}`);
-    const auditClosedDate = isClosed ? new Date() : undefined;
-    const auditUser = await auditUserPayload(req.body);
-    const auditPayload = {
-      auditId,
-      dealerCode,
-      dealerName,
-      brand: req.body.brand || '',
-      location: req.body.location || '',
-      auditName: req.body.auditName || `${dealerCode} Audit`,
-      auditUserId: auditUser.auditUserId,
-      auditorUsername: auditUser.auditorUsername,
-      auditorName: auditUser.auditorName,
-      auditStartDate: req.body.auditStartDate ? new Date(req.body.auditStartDate) : new Date(),
-      auditClosedDate,
-      auditStatus: isClosed ? 'COMPLETED' : 'IN_PROGRESS',
-      completedAt: auditClosedDate,
-      status: isClosed ? 'closed' : 'active'
-    };
-    if (!isClosed) {
-      delete auditPayload.auditClosedDate;
-      delete auditPayload.completedAt;
-    }
-    if (!isClosed && !(await multiAuditEnabled())) {
-      await closeOtherActiveAudits(dealerCode, auditId);
-    }
-    const audit = await Audit.findOneAndUpdate(
-      { auditId },
-      isClosed ? { $set: auditPayload } : { $set: auditPayload, $unset: { auditClosedDate: '', completedAt: '', completedBy: '', completedByUserId: '', completionRemark: '' } },
+    const dealer = await Dealer.findOneAndUpdate(
+      { dealerCode },
+      { dealerCode, dealerName, brand: req.body.brand || '', location: req.body.location || '', active: req.body.active !== false },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
-    const dealer = await syncDealerWithAudit(audit);
-    if (req.io && !isClosed) req.io.emit('audit:active', publicAudit(audit));
+    const activeAudit = await getActiveAudit({ dealerCode });
     req.io.emit('dealers:update');
     invalidateMasterCaches();
-    res.json({ success: true, dealer, audit, activeAudit: isClosed ? null : publicAudit(audit) });
+    return res.json({ success: true, dealer, audit: activeAudit, activeAudit: activeAudit ? publicAudit(activeAudit) : null });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1000,12 +953,8 @@ router.delete('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async
       return res.status(400).json({ success: false, message: 'Dealer code is required' });
     }
 
-    const [dealerResult, auditResult] = await Promise.all([
-      Dealer.deleteMany({ dealerCode }),
-      Audit.deleteMany({ dealerCode })
-    ]);
-
-    if (!dealerResult.deletedCount && !auditResult.deletedCount) {
+    const dealer = await Dealer.findOneAndUpdate({ dealerCode }, { active: false }, { new: true });
+    if (!dealer) {
       return res.status(404).json({ success: false, message: 'Dealer not found' });
     }
 
@@ -1014,8 +963,8 @@ router.delete('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async
     res.json({
       success: true,
       dealerCode,
-      dealersDeleted: dealerResult.deletedCount || 0,
-      auditsDeleted: auditResult.deletedCount || 0
+      active: false,
+      message: 'Dealer deactivated; historical audits and inventory were retained.'
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

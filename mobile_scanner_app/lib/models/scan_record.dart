@@ -9,6 +9,7 @@ class ScanRecord {
     required this.binLocation,
     required this.scanType,
     required this.dealerCode,
+    this.auditId = '',
     required this.userId,
     required this.userName,
     required this.deviceId,
@@ -27,6 +28,7 @@ class ScanRecord {
   final String binLocation;
   final String scanType;
   final String dealerCode;
+  final String auditId;
   final String userId;
   final String userName;
   final String deviceId;
@@ -51,6 +53,7 @@ class ScanRecord {
       binLocation: binLocation ?? this.binLocation,
       scanType: scanType,
       dealerCode: dealerCode,
+      auditId: auditId,
       userId: userId,
       userName: userName,
       deviceId: deviceId,
@@ -71,6 +74,7 @@ class ScanRecord {
         'binLocation': binLocation,
         'scanType': scanType,
         'dealerCode': dealerCode,
+        'auditId': auditId,
         'userId': userId,
         'userName': userName,
         'deviceId': deviceId,
@@ -91,6 +95,7 @@ class ScanRecord {
       binLocation: (map['binLocation'] ?? '').toString(),
       scanType: (map['scanType'] ?? 'INWARD').toString(),
       dealerCode: (map['dealerCode'] ?? '').toString(),
+      auditId: (map['auditId'] ?? '').toString(),
       userId: (map['userId'] ?? '').toString(),
       userName: (map['userName'] ?? '').toString(),
       deviceId: (map['deviceId'] ?? '').toString(),
@@ -134,6 +139,7 @@ class ScanRecord {
       binLocation: _string(map['binLocation'] ?? map['bin'] ?? ''),
       scanType: _string(map['scanType'] ?? map['type'] ?? 'INWARD'),
       dealerCode: _string(map['dealerCode'] ?? map['dealer'] ?? ''),
+      auditId: _string(map['auditId'] ?? map['auditSessionId'] ?? ''),
       userId: _string(map['userId'] ?? map['loginId'] ?? ''),
       userName: _string(map['userName'] ?? map['staffName'] ?? map['scannedBy'] ?? ''),
       deviceId: _string(map['deviceId'] ?? map['deviceName'] ?? ''),
@@ -157,6 +163,8 @@ class ScanRecord {
         'serverSyncId': serverSyncId,
         'syncKey': localId,
         'dealerCode': dealerCode,
+        'auditId': auditId,
+        'auditSessionId': auditId,
         'userId': userId,
         'loginId': userId,
         'userName': userName,

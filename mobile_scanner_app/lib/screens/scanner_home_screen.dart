@@ -599,6 +599,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         rawValue: draft.rawValue,
         scanType: _scanType,
         dealerCode: _dealerCode,
+        auditId: _activeAuditId,
         userId: _userId,
       );
       if (duplicateRecord != null) {
@@ -692,6 +693,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         binLocation: resolvedBin,
         scanType: _scanType,
         dealerCode: _dealerCode,
+        auditId: _activeAuditId,
         userId: _userId,
         userName: _userName,
         deviceId: _deviceId,
@@ -1872,8 +1874,9 @@ class _ScanDraft {
           for (final entry in query.entries) {
             final key =
                 entry.key.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-            if (key == name && entry.value.trim().isNotEmpty)
+            if (key == name && entry.value.trim().isNotEmpty) {
               return entry.value.trim();
+            }
           }
         }
         return '';

@@ -45,6 +45,7 @@ function prepareUser(data) {
   syncAliases(data, [['active', 'isActive'], ['passwordHash', 'password'], ['pinHash', 'pin']]);
   const legacyRole = String(data.role || '').trim().toLowerCase();
   data.role = {
+    super_admin: 'super_admin',
     admin: 'admin',
     audit_user: 'audit_user',
     mobile_user: 'mobile_user',

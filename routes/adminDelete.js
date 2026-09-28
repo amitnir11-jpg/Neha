@@ -229,7 +229,7 @@ router.post('/delete-all-dealer', auth.requireAuth, auth.requireAdmin, async (re
       result.binsDeleted = (await Bin.deleteMany({ dealerCode: code })).deletedCount || 0;
       result.transferDeleted = (await BinTransferHistory.deleteMany({ dealerCode: code })).deletedCount || 0;
       result.verificationDeleted = (await VerificationLog.deleteMany({ dealerCode: code })).deletedCount || 0;
-      result.dealersDeleted = (await Dealer.deleteMany({ dealerCode: code })).deletedCount || 0;
+      result.dealerDeactivated = Boolean(await Dealer.findOneAndUpdate({ dealerCode: code }, { active: false }, { new: true }));
     }
     req.io.emit('scan:deleted');
     req.io.emit('stats:update');
@@ -272,7 +272,7 @@ router.post('/delete-location-data', auth.requireAuth, auth.requireAdmin, async 
       masterDeleted: scope.master ? (await MasterPart.deleteMany({ dealerCode: code })).deletedCount || 0 : 0,
       binsDeleted: scope.bins ? (await Bin.deleteMany({ dealerCode: code })).deletedCount || 0 : 0,
       transferDeleted: scope.transfers ? (await BinTransferHistory.deleteMany({ dealerCode: code })).deletedCount || 0 : 0,
-      dealersDeleted: scope.dealer ? (await Dealer.deleteMany({ dealerCode: code })).deletedCount || 0 : 0
+      dealerDeactivated: scope.dealer ? Boolean(await Dealer.findOneAndUpdate({ dealerCode: code }, { active: false }, { new: true })) : false
     };
     result.totalDeleted = Object.values(result).reduce((sum, value) => sum + Number(value || 0), 0);
     req.io.emit('scan:deleted');

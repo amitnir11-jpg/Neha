@@ -805,15 +805,16 @@ async function activeDashboardScope(query = {}) {
   const requestedDealerCode = normalizeDealerCode(query.dealerCode || query.dealer || '');
   const requestedAuditId = clean(query.auditId || query.audit || '');
   if (requestedDealerCode && requestedDealerCode !== 'ALL') filter.dealerCode = requestedDealerCode;
+  else filter.dealerCode = '__NO_DEALER_SELECTED__';
   if (requestedAuditId) filter.auditId = requestedAuditId;
 
-  const activeAudit = await getActiveAudit(filter.dealerCode ? { dealerCode: filter.dealerCode } : {});
-  if (!filter.dealerCode && activeAudit && activeAudit.dealerCode) {
-    filter.dealerCode = normalizeDealerCode(activeAudit.dealerCode);
-  }
+  const activeAudit = filter.dealerCode !== '__NO_DEALER_SELECTED__'
+    ? await getActiveAudit({ dealerCode: filter.dealerCode })
+    : null;
   if (!filter.auditId && activeAudit && activeAudit.auditId) {
     filter.auditId = clean(activeAudit.auditId);
   }
+  if (!filter.auditId) filter.auditId = '__NO_AUDIT_SELECTED__';
 
   const dateScope = dashboardDateScope(query.range || query.dateRange || '');
   if (dateScope.timestamp) filter.timestamp = dateScope.timestamp;
@@ -4533,7 +4534,7 @@ router.get('/history', auth.requireAuth, async (req, res) => {
 router.get('/dashboard/product-group-summary/export', auth.requireAuth, async (req, res) => {
   try {
     const { filter } = await activeDashboardScope(req.query);
-    if (filter.dealerCode) await require('./report').validateValuationReports(filter);
+    if (filter.dealerCode && filter.dealerCode !== '__NO_DEALER_SELECTED__') await require('./report').validateValuationReports(filter);
     const rows = await dashboardProductGroupSummary({ limit: 0, q: req.query.q || '', filter });
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Product Group Summary');
@@ -4565,7 +4566,7 @@ router.get('/dashboard/product-group-summary', auth.requireAuth, async (req, res
     return await sendCachedJson(res, 'dashboard', { ...req.query, view: 'product-group-summary' }, async (normalizedQuery) => {
       const { filter } = await activeDashboardScope(normalizedQuery);
       const rows = await dashboardProductGroupSummary({ limit: 100, q: normalizedQuery.q || '', filter });
-      const reconciliation = filter.dealerCode ? await require('./report').validateValuationReports(filter) : null;
+      const reconciliation = filter.dealerCode && filter.dealerCode !== '__NO_DEALER_SELECTED__' ? await require('./report').validateValuationReports(filter) : null;
       return { success: true, rows, reconciliation };
     });
   } catch (error) {
@@ -4581,7 +4582,7 @@ router.get('/dashboard/product-group-summary/details', auth.requireAuth, async (
       partSubGroup: req.query.partSubGroup || req.query.productSubGroup,
       filter
     });
-    const reconciliation = filter.dealerCode ? await require('./report').validateValuationReports(filter) : null;
+    const reconciliation = filter.dealerCode && filter.dealerCode !== '__NO_DEALER_SELECTED__' ? await require('./report').validateValuationReports(filter) : null;
     if (String(req.query.format || '').toLowerCase() === 'excel') {
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet('Group Parts');
@@ -4623,11 +4624,11 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
   try {
     return await sendCachedJson(res, 'dashboard', { ...req.query, view: 'dashboard' }, async (normalizedQuery) => {
       const { filter, reportQuery, range, activeAudit } = await activeDashboardScope(normalizedQuery);
-    const [stats, recent] = await Promise.all([
+      const [stats, recent] = await Promise.all([
       dashboardStats(filter, reportQuery),
-      dashboardRecentRows(filter, 12)
+      dashboardRecentRows(filter, 20)
     ]);
-    const reconciliation = filter.dealerCode ? await require('./report').validateValuationReports(filter) : null;
+    const reconciliation = filter.dealerCode && filter.dealerCode !== '__NO_DEALER_SELECTED__' ? await require('./report').validateValuationReports(filter) : null;
     if (reconciliation) {
       stats.totalScannedValue = reconciliation.totals.dashboard;
       stats.actualStockValueDLC = reconciliation.totals.dashboard;

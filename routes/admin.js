@@ -211,7 +211,7 @@ async function deleteDealerData(req, res, scope) {
     const code = dealerCode(req.params.dealerCode);
     if (!code) return res.status(400).json({ success: false, message: 'Dealer code is required' });
 
-    const result = { dealerCode: code, scansDeleted: 0, duplicateLogsDeleted: 0, masterPartsDeleted: 0, binsDeleted: 0, dealersDeleted: 0 };
+    const result = { dealerCode: code, scansDeleted: 0, duplicateLogsDeleted: 0, masterPartsDeleted: 0, binsDeleted: 0, dealerDeactivated: false };
     if (scope === 'scans' || scope === 'all') {
       result.scansDeleted = (await scanModification.softDeleteScans(
         { dealerCode: code },
@@ -222,7 +222,7 @@ async function deleteDealerData(req, res, scope) {
     }
     if (scope === 'master-parts' || scope === 'all') result.masterPartsDeleted = (await MasterPart.deleteMany({ dealerCode: code })).deletedCount || 0;
     if (scope === 'bins' || scope === 'all') result.binsDeleted = (await Bin.deleteMany({ dealerCode: code })).deletedCount || 0;
-    if (scope === 'all') result.dealersDeleted = (await Dealer.deleteMany({ dealerCode: code })).deletedCount || 0;
+    if (scope === 'all') result.dealerDeactivated = Boolean(await Dealer.findOneAndUpdate({ dealerCode: code }, { active: false }, { new: true }));
     await emitRefresh(req);
     return res.json({ success: true, ...result });
   } catch (error) {

@@ -67,7 +67,7 @@ function userIdentities(user = {}) {
 
 function bluetoothBaseFilter(req) {
   const filter = { isActive: { $ne: false } };
-  if (req.user && req.user.role === 'admin') return filter;
+  if (req.user && auth.isAdminRole(req.user.role)) return filter;
   const identities = userIdentities(req.user);
   filter.$or = identities.length
     ? [
@@ -84,7 +84,7 @@ function bluetoothQueryFilter(req) {
   if (req.query.approval) filter.approvalStatus = normalizeApprovalStatus(req.query.approval, clean(req.query.approval).toLowerCase());
   if (req.query.mode) filter.assignedMode = normalizeBluetoothMode(req.query.mode);
   if (req.query.dealer) filter.dealerCode = upper(req.query.dealer);
-  if (req.query.user && req.user && req.user.role === 'admin') {
+  if (req.query.user && req.user && auth.isAdminRole(req.user.role)) {
     const userText = clean(req.query.user);
     filter.$or = [
       { assignedUserId: new RegExp(userText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
@@ -148,7 +148,7 @@ async function bluetoothSummary(baseFilter = {}, logFilter = {}) {
 }
 
 async function bluetoothLogFilterForRequest(req, filter = {}) {
-  if (req.user && req.user.role === 'admin') return filter;
+  if (req.user && auth.isAdminRole(req.user.role)) return filter;
   const visibleDevices = await BluetoothDevice.find(bluetoothBaseFilter(req)).select('deviceId').lean();
   const allowedDeviceIds = visibleDevices.map((device) => device.deviceId).filter(Boolean);
   if (!allowedDeviceIds.length) return { ...filter, deviceId: '__none__' };

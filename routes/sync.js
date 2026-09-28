@@ -369,7 +369,7 @@ function identitySessionKey(scan = {}) {
 
 async function activeAuditForDealer(dealerCode = '') {
   const code = upper(dealerCode);
-  return code ? getActiveAudit({ dealerCode: code }) : getActiveAudit();
+  return code ? getActiveAudit({ dealerCode: code }) : null;
 }
 
 function noActiveAuditMessage(dealerCode = '') {
@@ -1482,12 +1482,34 @@ async function saveNormalizedScan(scan, req) {
     scanId: scan.uniqueScanId
   });
   const requestedDealerCode = upper(scan.dealerCode || req.body?.dealerCode || req.query?.dealerCode);
+  const authenticatedDealerCode = upper(req.activeDealerId || '');
+  if (req.user && authenticatedDealerCode && requestedDealerCode && requestedDealerCode !== authenticatedDealerCode) {
+    return { status: 'failed', httpStatus: 403, scan, error: 'FORBIDDEN: dealer does not match authenticated user context' };
+  }
+  if (req.user && !authenticatedDealerCode && !auth.isAdminRole(req.user.role)) {
+    return { status: 'failed', httpStatus: 403, scan, error: 'FORBIDDEN: authenticated dealer context is missing' };
+  }
   const activeAudit = await activeAuditForDealer(requestedDealerCode);
   if (!activeAudit) {
     logSync('scan rejected', { reason: 'No active audit', requestedDealerCode, deviceId: scan.deviceId, scanId: scan.uniqueScanId });
     return { status: 'failed', scan, error: noActiveAuditMessage(requestedDealerCode) };
   }
+  const submittedAuditId = clean(scan.auditId || req.body?.auditId || req.body?.auditSessionId);
+  const activeAuditId = clean(activeAudit.auditId || activeAudit._id);
+  if (submittedAuditId && submittedAuditId !== activeAuditId) {
+    return { status: 'failed', httpStatus: 409, scan, error: 'Scan audit does not match the active audit for this dealer.' };
+  }
   applyActiveAudit(scan, activeAudit);
+  if (scan.binLocation) {
+    const binCode = upper(scan.binLocation);
+    const [ownedBin, conflictingBin] = await Promise.all([
+      Bin.findOne({ dealerCode: scan.dealerCode, binCode, active: { $ne: false } }).lean(),
+      Bin.findOne({ dealerCode: { $ne: scan.dealerCode }, binCode, active: { $ne: false } }).lean()
+    ]);
+    if (!ownedBin && conflictingBin) {
+      return { status: 'failed', httpStatus: 403, scan, error: 'BIN_DOES_NOT_BELONG_TO_ACTIVE_DEALER' };
+    }
+  }
   applyUserContext(scan, await resolveScanUserContext(req, scan));
   const trustedUser = req.user || {};
   if (trustedUser.id || trustedUser._id) {
@@ -1969,6 +1991,33 @@ async function pushHandler(req, res) {
         diagnostics: payload.diagnostics
       }).catch(() => undefined);
       return res.status(409).json(payload);
+    }
+    const activeAuditIdForSync = clean(activeAudit.auditId || activeAudit._id);
+    const blockedContextRows = incomingRaw.flatMap((item, index) => {
+      const itemDealer = upper(item.activeDealerId || item.dealerId || item.dealerCode || item.dealer || requestedDealerCode);
+      const itemAudit = clean(item.auditId || item.auditSessionId);
+      if (itemDealer !== upper(activeAudit.dealerCode)) {
+        return [{ row: index + 1, scanId: clean(item.scanId || item.uniqueScanId || item.localId), status: 'SYNC_BLOCKED_DEALER_MISMATCH', errorMessage: 'SYNC_BLOCKED_DEALER_MISMATCH', reason: 'Offline scan dealer does not match the authenticated dealer.' }];
+      }
+      if (!itemAudit) {
+        return [{ row: index + 1, scanId: clean(item.scanId || item.uniqueScanId || item.localId), status: 'SYNC_BLOCKED_MISSING_AUDIT_CONTEXT', errorMessage: 'SYNC_BLOCKED_MISSING_AUDIT_CONTEXT', reason: 'Offline scan has no audit session saved at scan time.' }];
+      }
+      if (itemAudit !== activeAuditIdForSync) {
+        return [{ row: index + 1, scanId: clean(item.scanId || item.uniqueScanId || item.localId), status: 'SYNC_BLOCKED_AUDIT_MISMATCH', errorMessage: 'SYNC_BLOCKED_AUDIT_MISMATCH', reason: 'Offline scan audit does not match the active audit.' }];
+      }
+      return [];
+    });
+    if (blockedContextRows.length) {
+      return res.status(409).json({
+        success: false,
+        code: 'OFFLINE_CONTEXT_REVIEW_REQUIRED',
+        message: 'One or more offline scans have missing or mismatched dealer/audit context. Records were retained for review.',
+        receivedCount: incomingRaw.length,
+        insertedCount: 0,
+        syncedCount: 0,
+        failedCount: blockedContextRows.length,
+        failedRows: blockedContextRows
+      });
     }
     const incoming = incomingRaw.map((item) => ({
       ...item,

@@ -15,7 +15,7 @@ function activeStatusFilter() {
     $and: [
       {
         $or: [
-          { status: { $in: ['active', 'open', 'IN_PROGRESS'] } },
+          { status: { $in: ['ACTIVE', 'active', 'open', 'IN_PROGRESS'] } },
           { status: { $exists: false } },
           { status: null },
           { status: '' }
@@ -23,7 +23,7 @@ function activeStatusFilter() {
       },
       {
         $or: [
-          { auditStatus: 'IN_PROGRESS' },
+          { auditStatus: { $in: ['ACTIVE', 'IN_PROGRESS'] } },
           { auditStatus: { $exists: false } },
           { auditStatus: null },
           { auditStatus: '' }
@@ -43,10 +43,10 @@ function activeStatusFilter() {
 function auditWorkflowStatus(audit = {}) {
   const auditStatus = clean(audit.auditStatus).toUpperCase();
   const status = clean(audit.status).toUpperCase();
-  if (auditStatus === 'COMPLETED' || status === 'COMPLETED' || status === 'CLOSED' || audit.auditClosedDate) {
-    return 'COMPLETED';
-  }
-  return 'IN_PROGRESS';
+  if (auditStatus === 'COMPLETED' || status === 'COMPLETED' || status === 'CLOSED' || audit.auditClosedDate) return 'COMPLETED';
+  if (['DRAFT', 'PAUSED', 'LOCKED', 'ARCHIVED'].includes(auditStatus)) return auditStatus;
+  if (['DRAFT', 'PAUSED', 'LOCKED', 'ARCHIVED'].includes(status)) return status;
+  return auditStatus === 'ACTIVE' || status === 'ACTIVE' ? 'ACTIVE' : 'IN_PROGRESS';
 }
 
 function isCompletedAudit(audit = {}) {
@@ -85,23 +85,13 @@ async function getActiveAudit(filter = {}) {
 }
 
 async function closeOtherActiveAudits(dealerCode, auditId) {
-  await Audit.updateMany(
-    {
-      ...activeStatusFilter(),
-      auditId: { $ne: auditId }
-    },
-    {
-      $set: {
-        status: 'closed',
-        auditClosedDate: new Date()
-      }
-    }
-  );
+  // Deprecated compatibility hook. Audits are never closed as a side effect
+  // of creating or starting another session.
+  return { dealerCode: cleanCode(dealerCode), auditId: clean(auditId), closedCount: 0 };
 }
 
 async function syncDealerWithAudit(audit) {
   if (!audit || !audit.dealerCode) return null;
-  const completed = isCompletedAudit(audit);
   return Dealer.findOneAndUpdate(
     { dealerCode: cleanCode(audit.dealerCode) },
     {
@@ -115,8 +105,7 @@ async function syncDealerWithAudit(audit) {
       auditUserId: clean(audit.auditUserId),
       auditorUsername: clean(audit.auditorUsername),
       auditorName: clean(audit.auditorName),
-      currentAuditId: clean(audit.auditId),
-      active: !completed
+      currentAuditId: clean(audit.auditId)
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
