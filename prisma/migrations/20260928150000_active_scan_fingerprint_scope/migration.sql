@@ -9,9 +9,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS inventories_qr_fingerprint_active_unique
     AND "deletedAt" IS NULL;
 
 -- globalUpiKey is also a derived barcode identity. Scope its database guard in
--- the same way so it cannot reintroduce the cross-audit restriction.
+-- the same way for lookups. Existing production data can legitimately contain
+-- multiple active transactions sharing this derived key, so it is not unique.
 DROP INDEX IF EXISTS global_upi_key_unique;
-CREATE UNIQUE INDEX IF NOT EXISTS global_upi_key_active_unique
+DROP INDEX IF EXISTS global_upi_key_active_unique;
+CREATE INDEX IF NOT EXISTS inventories_global_upi_key_scope_idx
   ON inventories ("dealerCode", "auditId", "globalUpiKey")
   WHERE "globalUpiKey" IS NOT NULL
     AND "globalUpiKey" <> ''
