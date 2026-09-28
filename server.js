@@ -249,6 +249,9 @@ function databaseEnvLocation() {
 
 function databaseUnavailableMessage() {
   if (connectionConfig.isLocal) return 'PostgreSQL is unavailable. Start the configured PostgreSQL Windows service and retry; Daksh will continue automatic readiness retries.';
+  if (databaseStartupState.lastError) {
+    return `PostgreSQL startup failed: ${databaseStartupState.lastError}. Check the Railway deployment logs for the database migration details.`;
+  }
   return `PostgreSQL is unavailable. Set Railway PostgreSQL connection variables in ${databaseEnvLocation()} (${acceptedDatabaseEnvVars().join(', ')}) and redeploy.`;
 }
 
@@ -1131,24 +1134,33 @@ async function runPrismaMigrations() {
   }
   console.log(`Running Prisma migrations using ${resolvedDatabase.source}: ${maskDatabaseUrl(resolvedDatabase.url)}`);
   const prismaCli = require.resolve('prisma/build/index.js');
-  await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [prismaCli, 'migrate', 'deploy'], {
-      stdio: 'inherit',
-      env: process.env
+  const runPrismaCli = (args) => new Promise((resolve, reject) => {
+    let output = '';
+    const child = spawn(process.execPath, [prismaCli, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
+    const capture = (stream, destination) => stream.on('data', (chunk) => {
+      output = `${output}${chunk.toString()}`.slice(-30000);
+      destination.write(chunk);
     });
+    capture(child.stdout, process.stdout);
+    capture(child.stderr, process.stderr);
     child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(
-        signal
-          ? `Prisma migration failed with signal ${signal}`
-          : `Prisma migration failed with exit code ${code || 1}`
-      ));
-    });
+    child.once('exit', (code, signal) => resolve({ code: code === null ? 1 : code, signal, output }));
   });
+
+  let migration = await runPrismaCli(['migrate', 'deploy']);
+  const failedScanMigration = '20260928150000_active_scan_fingerprint_scope';
+  if (migration.code !== 0 && /P3009/.test(migration.output) && migration.output.includes(failedScanMigration)) {
+    console.warn(`Recovering the previously failed ${failedScanMigration} migration before retrying its idempotent SQL.`);
+    const resolved = await runPrismaCli(['migrate', 'resolve', '--rolled-back', failedScanMigration]);
+    if (resolved.code !== 0) {
+      throw new Error(`Could not reset failed scan migration state (exit ${resolved.code}): ${resolved.output.slice(-4000)}`);
+    }
+    migration = await runPrismaCli(['migrate', 'deploy']);
+  }
+  if (migration.code !== 0) {
+    const status = migration.signal ? `signal ${migration.signal}` : `exit code ${migration.code}`;
+    throw new Error(`Prisma migration failed with ${status}: ${migration.output.slice(-4000)}`);
+  }
   console.log('Prisma migration completed');
   process.env.DAKSH_MIGRATIONS_COMPLETED = 'true';
 }
