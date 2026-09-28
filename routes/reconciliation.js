@@ -1023,7 +1023,8 @@ async function buildReconciliationReport(query = {}) {
     });
     const rows = stockRowsWithPricing.concat(physicalOnlyRows.filter(Boolean));
 
-    const filteredRows = rows.filter((row) => stockFilter(row, filters));
+    const dealerStockOnly = ['1', 'true', 'yes'].includes(clean(filters.dealerStockOnly).toLowerCase());
+    const filteredRows = rows.filter((row) => stockFilter(row, filters) && (!dealerStockOnly || !row.notInDms));
     filteredRows.sort((a, b) => String(a.partNumber || '').localeCompare(String(b.partNumber || ''), undefined, { numeric: true, sensitivity: 'base' }));
     const stockOnlyRows = filteredRows.filter((row) => !row.notInDms);
     const totalInventoryValue = money(stockRowsWithPricing.reduce((sum, row) => sum + Number(row.stockValue || 0), 0));

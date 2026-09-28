@@ -8282,6 +8282,7 @@
     syncReconDealer(dealerCode);
     const params = new URLSearchParams(queryFromForm($('#reconFilters')));
     if (!params.get('dealerCode')) params.set('dealerCode', dealerCode);
+    params.set('dealerStockOnly', '1');
     const query = params.toString();
     const dashboardParams = new URLSearchParams();
     dashboardParams.set('dealerCode', dealerCode);
@@ -8307,6 +8308,7 @@
 
   function reconciliationExportQuery(format, full = false) {
     const params = new URLSearchParams(queryFromForm($('#reconFilters')));
+    params.set('dealerStockOnly', '1');
     params.set('format', format);
     if (full) params.set('full', '1');
     else params.set('report', $('#reconExportType')?.value || 'dealer');
