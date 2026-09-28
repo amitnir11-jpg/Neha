@@ -109,14 +109,6 @@ function reportTotals(scans = [], options = {}) {
   };
 }
 
-function movementKey(scan = {}) {
-  return [
-    upper(scan.dealerCode),
-    clean(scan.auditId),
-    scanPartNumber(scan)
-  ].join('::');
-}
-
 function scanTimeValue(scan = {}) {
   const date = new Date(scan.timestamp || scan.scanTime || scan.createdAt || 0);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
@@ -125,14 +117,11 @@ function scanTimeValue(scan = {}) {
 function applyMovementCountRules(scans = [], options = {}) {
   const rows = (Array.isArray(scans) ? scans : []).filter(Boolean).slice()
     .sort((a, b) => scanTimeValue(a) - scanTimeValue(b));
-  const availableByPart = new Map();
   const output = [];
 
   rows.forEach((scan) => {
     const type = scanType(scan);
     const qty = scanQuantity(scan, 0);
-    const key = movementKey(scan);
-    const current = availableByPart.get(key) || 0;
     let reportSignedQty = 0;
     let excluded = false;
     let exclusionReason = '';
@@ -142,24 +131,21 @@ function applyMovementCountRules(scans = [], options = {}) {
       exclusionReason = 'Verification scan is not counted';
     } else if (['INWARD', 'AUDIT'].includes(type)) {
       reportSignedQty = qty;
-      availableByPart.set(key, current + qty);
     } else if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) {
-      const allowedQty = Math.min(qty, Math.max(current, 0));
-      if (allowedQty <= 0) {
-        excluded = true;
-        exclusionReason = 'No prior inward/audit stock available for this part';
-      } else {
-        reportSignedQty = -allowedQty;
-        availableByPart.set(key, Math.max(0, current - allowedQty));
-      }
+      // Reports account for persisted scan transactions as entered. Stock
+      // availability is validated by the scan service; report aggregation must
+      // not erase or cap an OUTWARD/FITTED/DAMAGE row based on earlier scans.
+      reportSignedQty = -qty;
     } else {
       reportSignedQty = qty;
-      availableByPart.set(key, current + qty);
     }
 
     const reportQty = Math.abs(reportSignedQty);
     const normalized = {
       ...scan,
+      scanType: type,
+      type,
+      movementType: type,
       qty: reportQty,
       quantity: reportQty,
       _originalQty: scan.qty !== undefined ? scan.qty : scan.quantity,

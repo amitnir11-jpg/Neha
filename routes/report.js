@@ -1909,20 +1909,20 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
     const type = String(scan.scanType || scan.type || '').toUpperCase();
     const qty = physicalScanQty(scan);
     const absQty = Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
-    if (type === 'INWARD') total.inwardQty += qty;
-    else if (type === 'OUTWARD') total.outwardQty += qty;
+    if (type === 'INWARD') total.inwardQty += absQty;
+    else if (type === 'OUTWARD') total.outwardQty += absQty;
     else if (type === 'FITTED') total.fittedQty += absQty;
-    else if (type === 'DAMAGE') total.damageQty += qty;
+    else if (type === 'DAMAGE') total.damageQty += absQty;
     const user = firstPresent(scan.userName, scan.staffName, scan.loginId, scan.userId) || '';
     if (user) {
       const key = cleanText(user).toUpperCase();
       const item = total.users.get(key) || { name: user, scanCount: 0, totalQty: 0, inwardQty: 0, outwardQty: 0, fittedQty: 0, damageQty: 0 };
       item.scanCount += 1;
       item.totalQty += qty;
-      if (type === 'INWARD') item.inwardQty += qty;
-      else if (type === 'OUTWARD') item.outwardQty += qty;
+      if (type === 'INWARD') item.inwardQty += absQty;
+      else if (type === 'OUTWARD') item.outwardQty += absQty;
       else if (type === 'FITTED') item.fittedQty += absQty;
-      else if (type === 'DAMAGE') item.damageQty += qty;
+      else if (type === 'DAMAGE') item.damageQty += absQty;
       total.users.set(key, item);
     }
     return total;
@@ -2266,7 +2266,7 @@ async function buildReportData(query = {}) {
     masterByDealer.get(masterKey(group.partNo, group.dealerCode)) || masterByPart.get(group.partNo) || {},
     systemByPart.get(group.partNo) || {}
   )).sort((a, b) => sortText(a.partNo, b.partNo));
-  const finalRows = applyVarianceFilter(allFinalRows, query.varianceType).filter((row) => row.physicalQty > 0);
+  const finalRows = applyVarianceFilter(allFinalRows, query.varianceType);
 
   const categoryMap = new Map();
   finalRows.forEach((row) => {
