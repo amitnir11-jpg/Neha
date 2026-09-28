@@ -18,7 +18,7 @@
       if (requestedView) document.documentElement.dataset.initialView = requestedView;
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20260928-dealer-master-redesign-v2">
+  <link rel="stylesheet" href="/style.css?v=20260928-part-master-redesign-v1">
   <link rel="stylesheet" href="/variables.css?v=20260714-app-layout-v1">
   <link rel="stylesheet" href="/layout.css?v=20260714-app-layout-v1">
   <link rel="stylesheet" href="/components.css?v=20260714-app-layout-v1">
@@ -912,7 +912,6 @@
       <section id="master" class="view">
         <div class="master-tabs" role="tablist" aria-label="Master Data sections">
           <button class="master-tab active" type="button" role="tab" aria-selected="true" aria-controls="partMasterTab" data-master-tab="partMasterTab">Part Master</button>
-          <button class="master-tab admin-only" type="button" role="tab" aria-selected="false" aria-controls="auditPriceRefreshTab" data-master-tab="auditPriceRefreshTab">Refresh Audit Prices</button>
           <button class="master-tab" type="button" role="tab" aria-selected="false" aria-controls="dealerAuditTab" data-master-tab="dealerAuditTab">Dealer Master / Audit Setup</button>
           <button class="master-tab admin-only" type="button" role="tab" aria-selected="false" aria-controls="userApprovalTab" data-master-tab="userApprovalTab">User Login Approval</button>
           <button class="master-tab admin-only" type="button" role="tab" aria-selected="false" aria-controls="adminDeleteMasterTab" data-master-tab="adminDeleteMasterTab">Admin Delete Manager</button>
@@ -923,105 +922,94 @@
 
         <div class="master-tab-panels">
           <section id="partMasterTab" class="master-tab-panel active" role="tabpanel">
-            <section class="card">
-              <div class="card-head">
-                <h2>Master Catalogue</h2>
-                <div class="actions">
-                  <button id="downloadCatalogueTemplateBtn" class="btn light admin-only" type="button">Download Template</button>
-                  <button id="downloadCompletePartMasterBtn" class="btn light admin-only" type="button">Download Complete Part Master</button>
-                  <span id="partMasterExportStatus" class="muted" role="status" hidden></span>
-                  <span id="partMasterRecordCount" class="muted">Part master records: 0</span>
-                  <span id="uploadStats" class="muted"></span>
-                  <button id="downloadCatalogueFailedRowsBtn" class="btn light admin-only" type="button" hidden>Download Failed Rows</button>
-                  <button id="deleteCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete Old Catalogue</button>
+            <section class="card part-master-heading-card">
+              <header class="part-master-header">
+                <div><h2>▦ &nbsp;Master Data - Part Master</h2><p>Manage part catalogue and refresh audit prices (MRP &amp; DLC)</p></div>
+                <div class="part-master-header-actions">
+                  <button id="addPartTopBtn" class="btn primary" type="button">＋ Add Part</button>
+                  <button id="editPartTopBtn" class="btn light" type="button">✎ &nbsp;Edit Part</button>
+                  <button id="refreshPartPricesTopBtn" class="btn light part-refresh-top" type="button">⟳ &nbsp;Refresh Audit Prices</button>
+                  <button id="downloadCatalogueTemplateBtn" class="btn light admin-only" type="button">↓ &nbsp;Download Template</button>
+                  <details class="part-master-more admin-only"><summary class="btn light">••• &nbsp;More</summary>
+                    <div class="part-master-more-menu">
+                      <div class="part-more-actions">
+                        <button id="downloadCompletePartMasterBtn" class="btn light" type="button">Download Complete Part Master</button>
+                        <button id="downloadCatalogueFailedRowsBtn" class="btn light admin-only" type="button" hidden>Download Failed Rows</button>
+                        <button id="deleteCatalogueBtn" class="btn danger-soft" type="button">Delete Old Catalogue</button>
+                        <span id="partMasterExportStatus" class="muted" role="status" hidden></span>
+                        <span id="partMasterRecordCount" class="muted" hidden>Part master records: 0</span>
+                        <span id="uploadStats" class="muted"></span>
+                      </div>
+                      <form id="partUploadForm" class="inline-form catalogue-upload-form">
+                        <input name="file" type="file" accept=".xlsx,.xls,.csv" required>
+                        <button id="uploadMissingCatalogueBtn" class="btn primary" type="submit" data-catalogue-upload-mode="add-missing">Upload Missing Parts</button>
+                        <button id="updateCataloguePricesBtn" class="btn light" type="submit" data-catalogue-upload-mode="price-only">Update Latest MRP/DLC</button>
+                        <button id="deleteReuploadCatalogueBtn" class="btn danger-soft" type="button">Delete Old &amp; Upload New</button>
+                      </form>
+                      <details id="catalogueColumnsDetails" class="catalogue-columns-reference">
+                        <summary>ⓘ View Required Columns</summary>
+                        <div class="catalogue-columns-wrap"><table class="catalogue-columns-table"><thead><tr><th>Column Name</th><th>Accepted Headers</th><th>Required</th><th>Description</th></tr></thead><tbody id="catalogueRequiredColumnsBody"><tr><td colspan="4" class="muted">Loading...</td></tr></tbody></table></div>
+                        <p class="catalogue-columns-note">Download the template first. MRP/DLC update files need Part Number, MRP and DLP.</p>
+                      </details>
+                      <p class="muted">Catalogue uploads update master prices. Saved audit prices remain unchanged until explicitly refreshed.</p>
+                      <div id="catalogueUploadProgress" class="catalogue-upload-progress loading" hidden aria-live="polite" aria-busy="false"><div class="catalogue-upload-progress-head"><span class="catalogue-upload-spinner" aria-hidden="true"></span><strong id="catalogueUploadProgressLabel">Upload in progress...</strong><span id="catalogueUploadProgressPercent" class="catalogue-upload-progress-percent">0%</span></div><div class="catalogue-upload-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Upload progress"><span id="catalogueUploadProgressBarFill" class="catalogue-upload-progress-bar-fill"></span></div><div id="catalogueUploadProgressText" class="catalogue-upload-progress-text muted"></div></div>
+                      <div id="catalogueUploadMessage" class="form-message" hidden></div>
+                    </div>
+                  </details>
                 </div>
-              </div>
-              <div class="two-col catalogue-upload-layout">
-                <form id="partUploadForm" class="inline-form catalogue-upload-form">
-                  <input name="file" type="file" accept=".xlsx,.xls,.csv" required>
-                  <button id="uploadMissingCatalogueBtn" class="btn primary admin-only" type="submit" data-catalogue-upload-mode="add-missing">Upload Missing Parts</button>
-                  <button id="updateCataloguePricesBtn" class="btn primary admin-only" type="submit" data-catalogue-upload-mode="price-only">Update Latest MRP/DLC</button>
-                  <button id="deleteReuploadCatalogueBtn" class="btn danger-soft admin-only" type="button">Delete Old & Upload New</button>
-                </form>
-                <details id="catalogueColumnsDetails" class="catalogue-columns-reference">
-                  <summary>Required Excel / CSV Columns for Part Master Upload</summary>
-                  <div class="catalogue-columns-wrap">
-                    <table class="catalogue-columns-table">
-                      <thead>
-                        <tr>
-                          <th>Column Name</th>
-                          <th>Accepted Headers</th>
-                          <th>Required</th>
-                          <th>Description</th>
-                        </tr>
-                      </thead>
-                      <tbody id="catalogueRequiredColumnsBody">
-                        <tr><td colspan="4" class="muted">Loading...</td></tr>
-                      </tbody>
-                    </table>
-                  </div>
-                  <p class="catalogue-columns-note">Download the template first, then keep the first row as headers. MRP/DLC update files need Part Number, MRP and DLP only.</p>
-                </details>
-              </div>
-              <p class="muted">Catalogue uploads update master prices. Saved audit MRP and DLC stay unchanged until an administrator uses Refresh Audit Prices.</p>
-              <div id="catalogueUploadProgress" class="catalogue-upload-progress loading" hidden aria-live="polite" aria-busy="false">
-                <div class="catalogue-upload-progress-head">
-                  <span class="catalogue-upload-spinner" aria-hidden="true"></span>
-                  <strong id="catalogueUploadProgressLabel">Upload in progress...</strong>
-                  <span id="catalogueUploadProgressPercent" class="catalogue-upload-progress-percent">0%</span>
-                </div>
-                <div class="catalogue-upload-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Part Master upload progress">
-                  <span id="catalogueUploadProgressBarFill" class="catalogue-upload-progress-bar-fill"></span>
-                </div>
-                <div id="catalogueUploadProgressText" class="catalogue-upload-progress-text muted"></div>
-              </div>
-              <div id="catalogueUploadMessage" class="form-message" hidden></div>
-            </section>
-
-            <section class="card">
-              <div class="card-head"><h2>Part Search</h2></div>
-              <form id="partSearchForm" class="filter-grid small-filter advanced-part-search">
-                <label>Part Number<div class="suggest-wrap"><input name="partNumber" id="partMasterSearchInput" class="masterSuggestInput" placeholder="Type part number" autocomplete="off"><div id="partMasterSuggestMenu" class="suggest-menu master-suggest-menu"></div></div></label>
+              </header>
+              <form id="partSearchForm" class="part-master-filter">
+                <label>Part Number<div class="suggest-wrap"><input name="partNumber" id="partMasterSearchInput" class="masterSuggestInput" placeholder="Type part number or description..." autocomplete="off"><div id="partMasterSuggestMenu" class="suggest-menu master-suggest-menu"></div></div></label>
                 <label>Category<select name="category" id="partCategoryFilter"><option value="">All Categories</option></select></label>
                 <label>Product Group<select name="group" id="partGroupFilter"><option value="">All Groups</option></select></label>
-                <label>Year<select name="year" id="partYearFilter"><option value="">All Years</option></select></label>
                 <label>Model<select name="model" id="partModelFilter"><option value="">All Models</option></select></label>
-                <label>MRP<input name="mrp" id="partMrpFilter" placeholder="Exact or range e.g. 100-500"></label>
-                <div class="actions span-3 advanced-part-actions">
-                  <button class="btn primary" type="submit">Show</button>
-                  <button id="partClearSearchBtn" class="btn light" type="button">Clear</button>
-                  <button id="partExportSearchBtn" class="btn light" type="button">Export Search Result</button>
-                </div>
+                <label>Year<select name="year" id="partYearFilter"><option value="">All Years</option></select></label>
+                <label>MRP Range<span class="part-mrp-range"><input id="partMrpMinFilter" type="number" min="0" step="0.01" placeholder="Min"><input id="partMrpMaxFilter" type="number" min="0" step="0.01" placeholder="Max"></span></label>
+                <button class="btn primary" type="submit">⌕ &nbsp;Search</button><button id="partClearSearchBtn" class="btn light" type="button">↻ &nbsp;Clear</button>
+                <button id="partExportSearchBtn" class="btn light" type="button" hidden>Export Search Result</button>
               </form>
-              <div id="partSearchMessage" class="form-message">Click Show to view all parts, or use filters to narrow master details.</div>
             </section>
 
-            <section id="partMasterResultsCard" class="card" hidden>
-              <div class="card-head"><h2>Part Master Table</h2><div class="actions"><button id="partPrevPageBtn" class="btn light" type="button">Previous</button><span id="partPageInfo" class="muted">Page 1</span><button id="partNextPageBtn" class="btn light" type="button">Next</button></div></div>
-              <div class="table-wrap master-table-wrap">
-                <table class="advanced-part-result-table"><thead><tr><th>Part Number</th><th>Part Description</th><th>Category</th><th>Product Group</th><th>Product Sub Group</th><th>Year</th><th>Model</th><th>MRP</th><th>DLC</th></tr></thead><tbody id="partMasterRows"></tbody></table>
-              </div>
+            <section id="partMasterResultsCard" class="card part-list-card">
+              <div class="part-list-heading"><h3>☷ &nbsp;Part List</h3><span id="partMasterCount" class="part-list-total"></span><span id="partListRange" class="part-list-range"></span></div>
+              <div class="table-wrap part-list-table-wrap"><table class="advanced-part-result-table"><thead><tr>
+                <th><input id="partSelectAll" type="checkbox" aria-label="Select all parts on this page"></th><th>SN</th>
+                <th><button class="part-sort" data-sort="partNumber">Part Number ↕</button></th><th>Description</th>
+                <th><button class="part-sort" data-sort="productCategory">Category ↕</button></th><th><button class="part-sort" data-sort="productGroup">Product Group ↕</button></th>
+                <th><button class="part-sort" data-sort="model">Model ↕</button></th><th><button class="part-sort" data-sort="year">Year ↕</button></th>
+                <th><button class="part-sort" data-sort="mrp">MRP (₹) ↕</button></th><th><button class="part-sort" data-sort="dlc">DLC (₹) ↕</button></th>
+                <th><button class="part-sort" data-sort="updatedAt">Last Updated ↕</button></th><th>Actions</th>
+              </tr></thead><tbody id="partMasterRows"><tr><td colspan="12" class="muted">Loading Part Master...</td></tr></tbody></table></div>
+              <div class="part-list-footer"><label>Show <select id="partPageSize"><option>10</option><option>25</option><option>50</option><option>100</option></select> entries per page</label><div class="part-pagination"><button id="partPrevPageBtn" class="btn light" type="button">Previous</button><span id="partPageButtons"></span><button id="partNextPageBtn" class="btn light" type="button">Next</button></div></div>
+              <span id="partPageInfo" class="sr-only" aria-live="polite"></span><div id="partSearchMessage" class="sr-only" role="status" aria-live="polite"></div>
             </section>
+
+            <div class="part-master-bottom-grid">
+              <section id="partEntryCard" class="card part-bottom-card">
+                <div class="part-bottom-card-head"><h3 id="partEntryTitle">＋ &nbsp;Add New Part</h3></div>
+                <form id="partEntryForm" class="part-entry-form">
+                  <input name="mode" type="hidden" value="add">
+                  <label>Part Number *<input name="partNumber" required></label><label>Description *<input name="partDescription" required></label>
+                  <label>Category<input name="category"></label><label>Product Group<input name="productGroup"></label>
+                  <label>Model<input name="model"></label><label>Year<input name="year"></label>
+                  <label>MRP (₹)<input name="mrp" type="number" min="0" step="0.01"></label><label>DLC (₹)<input name="dlc" type="number" min="0" step="0.01"></label>
+                  <div class="part-entry-actions"><button id="cancelPartEditBtn" class="btn light" type="button" hidden>Cancel</button><button id="savePartBtn" class="btn primary" type="submit">Save Part</button></div>
+                </form>
+              </section>
+              <section id="auditPriceRefreshCard" class="card part-bottom-card audit-price-card">
+                <div class="part-bottom-card-head"><h3>⟳ &nbsp;Refresh Audit Prices (MRP &amp; DLC)</h3></div>
+                <div class="part-price-info">ⓘ &nbsp;This updates MRP and DLC for selected parts or all parts from the master. Existing scan, inventory and audit data is unchanged except allowed audit price values.</div>
+                <form id="auditPriceRefreshForm" class="audit-price-form" aria-busy="false">
+                  <div class="audit-price-field-row"><label>Dealer<select id="auditPriceDealerSelect" name="dealerCode" required><option value="">Select Dealer</option></select></label><label>Current Audit<input id="auditPriceCurrentAudit" readonly placeholder="Select a dealer"></label><label>Status<input id="auditPriceAuditStatus" readonly placeholder="Select a dealer"></label></div>
+                  <fieldset><legend>Update For</legend><label><input name="updateFor" type="radio" value="all" checked> All Parts</label><label><input name="updateFor" type="radio" value="selected"> Selected Parts (from table)</label></fieldset>
+                  <fieldset><legend>Price Source</legend><label><input name="priceSource" type="radio" value="master" checked> From Master</label><label><input name="priceSource" type="radio" value="upload"> From Upload File (Excel/CSV)</label></fieldset>
+                  <div id="auditPriceUploadSource" class="audit-price-upload-source" hidden><input id="auditPriceUploadFile" type="file" accept=".xlsx,.xls,.csv"><button id="refreshPriceTemplateBtn" class="btn light" type="button">Download Template</button></div>
+                  <p id="auditPriceRefreshHint" class="muted">Select one dealer with an ongoing audit.</p><div id="auditPriceRefreshMessage" class="form-message" role="status" aria-live="polite" hidden></div>
+                  <div class="part-entry-actions"><button id="cancelPriceRefreshBtn" class="btn light" type="button">Cancel</button><button id="refreshAuditPricesBtn" class="btn primary" type="submit" disabled>Refresh Prices</button></div>
+                </form>
+              </section>
+            </div>
           </section>
-
-          <section id="auditPriceRefreshTab" class="master-tab-panel admin-only" role="tabpanel" hidden>
-            <section class="card">
-              <div class="card-head"><h2>Refresh Audit Prices</h2></div>
-              <p>Apply the latest Part Master MRP and DLC to saved scans in one ongoing audit. Uploading or updating the catalogue keeps saved audit prices unchanged until you refresh them here.</p>
-              <p class="muted">Choose a dealer and check the current audit below. Completed audits cannot be refreshed. Parts missing from the master keep their saved prices.</p>
-              <form id="auditPriceRefreshForm" class="grid-form master-form" aria-busy="false">
-                <label>Dealer<select id="auditPriceDealerSelect" name="dealerCode" required><option value="">Select Dealer</option></select></label>
-                <label>Current Audit<input id="auditPriceCurrentAudit" readonly placeholder="Select a dealer"></label>
-                <label>Audit Status<input id="auditPriceAuditStatus" readonly placeholder="Select a dealer"></label>
-                <div class="actions span-3">
-                  <button id="refreshAuditPricesBtn" class="btn primary" type="submit" disabled>Refresh MRP / DLC from Master</button>
-                </div>
-              </form>
-              <p id="auditPriceRefreshHint" class="muted">Select one dealer with an ongoing audit.</p>
-              <div id="auditPriceRefreshMessage" class="form-message" role="status" aria-live="polite" hidden></div>
-            </section>
-          </section>
-
           <section id="dealerAuditTab" class="master-tab-panel" role="tabpanel" hidden>
             <section class="card dealer-master-page">
               <header class="dealer-master-header">
@@ -1729,7 +1717,7 @@
   <script src="/config.js"></script>
   <script src="/js/runtime.js?v=20260926-admin-approval-fix-v1"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260928-dealer-master-redesign-v2"></script>
+  <script src="/ui.js?v=20260928-part-master-redesign-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

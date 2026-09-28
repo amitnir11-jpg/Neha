@@ -221,8 +221,9 @@
     catalogueUploadProgress: { stage: '', percent: 0, message: '', processedRows: 0, totalRows: 0, savedRowsCount: 0, failedRowsCount: 0, duplicateRowsCount: 0 },
     masterCatalogueCount: 0,
     partMasterExportInFlight: false,
-    masterSearch: { q: '', page: 1, limit: 25, total: 0 },
+    masterSearch: { q: '', page: 1, limit: 10, total: 0, sort: 'partNumber', direction: 'asc' },
     masterSearchRows: [],
+    partMasterSelected: new Set(),
     activeAudit: null,
     auditPackInProgress: false,
     auditPackProgress: { stage: 'idle', percent: 0, message: '', activeStep: 0, status: 'idle' },
@@ -8312,12 +8313,18 @@
     return params.toString();
   }
 
-  function clearPartSearch(message = 'Click Show to view all parts, or use filters to narrow master details.') {
-    state.masterSearch = { q: '', page: 1, limit: 25, total: 0 };
+  function clearPartSearch(message = '') {
+    state.masterSearch = { ...state.masterSearch, q: '', page: 1, limit: 10, total: 0 };
     state.masterSearchRows = [];
-    $('#partMasterRows').innerHTML = '';
-    $('#partMasterResultsCard').hidden = true;
-    $('#partPageInfo').textContent = 'Page 1';
+    state.partMasterSelected.clear();
+    const rows = $('#partMasterRows');
+    if (rows) rows.innerHTML = '<tr><td colspan="12" class="muted">No parts loaded</td></tr>';
+    $('#partMasterResultsCard').hidden = false;
+    $('#partMasterCount').textContent = 'Total Parts: 0';
+    $('#partListRange').textContent = '0 - 0 of 0';
+    $('#partPageInfo').textContent = 'Page 1 of 1';
+    $('#partPageButtons').innerHTML = '';
+    $('#partSelectAll').checked = false;
     $('#partPrevPageBtn').disabled = true;
     $('#partNextPageBtn').disabled = true;
     const box = $('#partSearchMessage');
@@ -8331,12 +8338,17 @@
     const form = $('#partSearchForm');
     const payload = form ? formObject(form) : {};
     const params = new URLSearchParams();
-    ['partNumber', 'category', 'group', 'year', 'model', 'mrp'].forEach((key) => {
+    ['partNumber', 'category', 'group', 'year', 'model'].forEach((key) => {
       const value = String(payload[key] || '').trim();
       if (value) params.set(key, value);
     });
+    const min = $('#partMrpMinFilter')?.value.trim() || '';
+    const max = $('#partMrpMaxFilter')?.value.trim() || '';
+    if (min || max) params.set('mrp', min && max ? `${min}-${max}` : min ? `>=${min}` : `<=${max}`);
     params.set('page', String(page));
-    params.set('limit', String(state.masterSearch.limit || 25));
+    params.set('limit', String(state.masterSearch.limit || 10));
+    params.set('sort', state.masterSearch.sort || 'partNumber');
+    params.set('direction', state.masterSearch.direction || 'asc');
     return params;
   }
 
@@ -8347,7 +8359,7 @@
 
   async function loadParts(page = 1) {
     const params = partSearchParams(page);
-    state.masterSearch = { ...state.masterSearch, q: params.get('partNumber') || '', page, limit: state.masterSearch.limit || 25 };
+    state.masterSearch = { ...state.masterSearch, q: params.get('partNumber') || '', page, limit: state.masterSearch.limit || 10 };
     const box = $('#partSearchMessage');
     if (box) {
       box.className = 'form-message loading';
@@ -8357,27 +8369,71 @@
     state.masterSearchRows = data.parts || [];
     state.masterSearch.total = Number(data.total || 0);
     $('#partMasterResultsCard').hidden = false;
-    $('#partMasterRows').innerHTML = state.masterSearchRows.map((part) => `
-      <tr>
-        <td>${partLink(part.partNumber || part.partNo)}</td>
-        <td>${escapeHtml(part.partDescription || part.partName)}</td>
-        <td>${escapeHtml(part.productCategory || part.category)}</td>
-        <td>${escapeHtml(part.productGroup || '')}</td>
-        <td>${escapeHtml(part.partSubGroup || '')}</td>
-        <td>${escapeHtml(part.manufacturingYear || part.year || '')}</td>
-        <td>${escapeHtml(part.model || '')}</td>
-        <td>${escapeHtml(money(part.mrp))}</td>
-        <td>${escapeHtml(money(part.dlc))}</td>
-      </tr>
-    `).join('') || '<tr><td colspan="9" class="muted">No matching master catalogue parts found</td></tr>';
+    $('#partMasterRows').innerHTML = state.masterSearchRows.map((part, index) => {
+      const code = String(part.partNumber || part.partNo || '');
+      const checked = state.partMasterSelected.has(code) ? 'checked' : '';
+      const updated = part.updatedAt || part.uploadedAt || part.createdAt;
+      return `<tr><td><input class="part-row-select" type="checkbox" data-part-number="${escapeHtml(code)}" ${checked} aria-label="Select ${escapeHtml(code)}"></td>
+        <td>${(page - 1) * state.masterSearch.limit + index + 1}</td><td>${partLink(code)}</td><td>${escapeHtml(part.partDescription || part.partName || '')}</td>
+        <td>${escapeHtml(part.productCategory || part.category || '')}</td><td>${escapeHtml(part.productGroup || '')}</td><td>${escapeHtml(part.model || '')}</td>
+        <td>${escapeHtml(part.manufacturingYear || part.year || '')}</td><td>${escapeHtml(money(part.mrp))}</td><td>${escapeHtml(money(part.dlc))}</td>
+        <td>${updated ? escapeHtml(new Date(updated).toLocaleDateString()) : '—'}</td><td><button class="btn part-row-edit" data-part-number="${escapeHtml(code)}" type="button" aria-label="Edit ${escapeHtml(code)}">✎</button><button class="btn danger-soft part-row-delete" data-part-number="${escapeHtml(code)}" type="button" aria-label="Delete ${escapeHtml(code)}">▣</button></td></tr>`;
+    }).join('') || '<tr><td colspan="12" class="muted">No matching master catalogue parts found</td></tr>';
     const totalPages = Math.max(Number(data.totalPages || 1), 1);
     $('#partPageInfo').textContent = `Page ${data.page || page} of ${totalPages} | ${data.total || 0} records`;
+    $('#partMasterCount').textContent = `Total Parts: ${wholeNumber(data.total || 0)}`;
+    const start = data.total ? (page - 1) * state.masterSearch.limit + 1 : 0;
+    const end = Math.min(page * state.masterSearch.limit, Number(data.total || 0));
+    $('#partListRange').textContent = `${wholeNumber(start)} - ${wholeNumber(end)} of ${wholeNumber(data.total || 0)}`;
+    $('#partPageButtons').innerHTML = Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+      const p = Math.max(1, Math.min(totalPages - 4, page - 2)) + i;
+      return `<button class="btn ${p === page ? 'primary' : 'light'} part-page-button" type="button" data-page="${p}">${p}</button>`;
+    }).join('');
+    $('#partSelectAll').checked = Boolean(state.masterSearchRows.length && state.masterSearchRows.every((part) => state.partMasterSelected.has(String(part.partNumber || part.partNo || ''))));
     $('#partPrevPageBtn').disabled = page <= 1;
     $('#partNextPageBtn').disabled = page >= totalPages;
     if (box) {
       box.className = state.masterSearchRows.length ? 'form-message success' : 'form-message error';
       box.textContent = state.masterSearchRows.length ? `${wholeNumber(data.total || 0)} master part(s) found.` : 'No master parts found';
     }
+  }
+
+  function setPartEntryMode(mode, part = {}) {
+    const form = $('#partEntryForm');
+    if (!form) return;
+    form.elements.mode.value = mode;
+    form.elements.partNumber.value = part.partNumber || part.partNo || '';
+    form.elements.partNumber.readOnly = mode === 'edit';
+    form.elements.partDescription.value = part.partDescription || part.partName || '';
+    form.elements.category.value = part.productCategory || part.category || '';
+    form.elements.productGroup.value = part.productGroup || '';
+    form.elements.model.value = part.model || '';
+    form.elements.year.value = part.manufacturingYear || part.year || '';
+    form.elements.mrp.value = part.mrp ?? '';
+    form.elements.dlc.value = part.dlc ?? '';
+    $('#partEntryTitle').textContent = mode === 'edit' ? '✎  Edit Part' : '＋  Add New Part';
+    $('#cancelPartEditBtn').hidden = mode !== 'edit';
+    $('#partEntryCard').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function csvCell(value) { return `"${String(value ?? '').replace(/"/g, '""')}"`; }
+
+  async function submitPartEntry(event) {
+    event.preventDefault();
+    if (!isAdminUser()) return toast('Only administrators can add or edit master parts.', 'error');
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const mode = data.mode;
+    const headers = ['Part Number', 'Part Description', 'Category', 'Product Group', 'Model', 'Year', 'MRP', 'DLP'];
+    const values = [data.partNumber, data.partDescription, data.category, data.productGroup, data.model, data.year, data.mrp || '0', data.dlc || '0'];
+    const file = new File([[headers, values].map((row) => row.map(csvCell).join(',')).join('\n')], 'part-master-entry.csv', { type: 'text/csv' });
+    const body = new FormData(); body.append('file', file); body.set('mode', mode === 'edit' ? 'upsert' : 'add-missing');
+    try {
+      const result = await api('/api/master-catalogue/upload', { method: 'POST', body });
+      if (mode === 'add' && Number(result.skippedExistingRowsCount || 0)) throw new Error('That part number already exists. Use Edit Part to change it.');
+      form.reset(); setPartEntryMode('add'); await loadParts(1); await loadPartSearchFilters();
+      toast(mode === 'edit' ? 'Part updated' : 'Part added', 'success');
+    } catch (error) { toast(error.message || 'Could not save part.', 'error'); }
   }
 
   function setPartMasterRecordCount(count) {
@@ -8825,13 +8881,23 @@
       if (!isAdminUser()) throw new Error('Only administrators can refresh audit prices.');
       const target = auditPriceRefreshTarget();
       if (!target.dealer || !target.ongoing) throw new Error('Select one dealer with an ongoing current audit.');
-      if (!window.confirm(`Refresh saved MRP and DLC from Part Master for ${formatDealerDisplay(target.dealer)}?\n\nAudit: ${target.auditId}\n\nMatched scans in this audit will use the latest master prices and their valuation totals will change. Continue?`)) return;
+      const updateFor = $('input[name="updateFor"]:checked')?.value || 'all';
+      const partNumbers = updateFor === 'selected' ? Array.from(state.partMasterSelected) : null;
+      if (updateFor === 'selected' && !partNumbers.length) throw new Error('Select one or more parts from the current Part List first.');
+      const uploadFile = $('#auditPriceUploadFile')?.files?.[0];
+      const source = $('input[name="priceSource"]:checked')?.value || 'master';
+      if (source === 'upload' && !uploadFile) throw new Error('Choose a price file to upload.');
+      if (!window.confirm(`Refresh saved MRP and DLC for ${updateFor === 'selected' ? `${partNumbers.length} selected part(s)` : 'all matched parts'} in ${formatDealerDisplay(target.dealer)}?\n\nAudit: ${target.auditId}\n\nMatched scans in this audit will use the latest master prices and their valuation totals will change. Continue?`)) return;
       state.auditPriceRefreshInFlight = true;
       updateAuditPriceRefreshUi();
       setAuditPriceRefreshMessage(`Refreshing MRP and DLC for audit ${target.auditId}...`);
+      if (source === 'upload') {
+        const uploadBody = new FormData(); uploadBody.append('file', uploadFile); uploadBody.set('mode', 'price-only');
+        await api('/api/master-catalogue/upload', { method: 'POST', body: uploadBody });
+      }
       const data = await api('/api/master-catalogue/refresh-audit-prices', {
         method: 'POST',
-        body: { dealerCode: target.dealerCode, auditId: target.auditId }
+        body: { dealerCode: target.dealerCode, auditId: target.auditId, ...(partNumbers ? { partNumbers } : {}) }
       });
       if (!data.success) throw new Error(data.message || 'Audit prices could not be refreshed.');
       refreshViewsAfterAuditPriceRefresh();
@@ -8844,6 +8910,24 @@
       state.auditPriceRefreshInFlight = false;
       updateAuditPriceRefreshUi();
     }
+  }
+
+  async function editPartEntry(partNumber) {
+    const part = state.masterSearchRows.find((row) => String(row.partNumber || row.partNo) === String(partNumber));
+    if (!part) return toast('That part is not on the current page. Search for it again.', 'error');
+    setPartEntryMode('edit', part);
+  }
+
+  async function deletePartEntry(partNumber) {
+    if (!isAdminUser()) return toast('Only administrators can remove master parts.', 'error');
+    if (!window.confirm(`Remove ${partNumber} from the active Part Master list? Existing audit and inventory history will be preserved.`)) return;
+    try {
+      await api(`/api/master-catalogue/part/${encodeURIComponent(partNumber)}`, { method: 'DELETE' });
+      state.partMasterSelected.delete(String(partNumber));
+      await loadParts(state.masterSearch.page || 1);
+      await loadPartSearchFilters();
+      toast('Part removed from active master list', 'success');
+    } catch (error) { toast(error.message || 'Could not remove part.', 'error'); }
   }
 
   function renderDealerMaster() {
@@ -11910,6 +11994,7 @@
     if (viewId === 'master') {
       Promise.all([
         loadPartSearchFilters(),
+        loadParts(1),
         loadCatalogueRequiredColumns(),
         loadUsers()
       ]).catch((error) => toast(error.message, 'error'));
@@ -12007,7 +12092,7 @@
           panel.hidden = !active;
         });
         if (target === 'scanModificationHistoryTab') loadScanModificationHistory().catch((error) => toast(error.message, 'error'));
-        if (target === 'auditPriceRefreshTab') loadAuditPriceRefreshScope().catch((error) => toast(error.message, 'error'));
+        if (target === 'partMasterTab') loadAuditPriceRefreshScope().catch((error) => toast(error.message, 'error'));
       });
     });
     $$('.bin-transfer-tab').forEach((button) => {
@@ -12884,6 +12969,46 @@
       event.preventDefault();
       refreshAuditPricesFromMaster();
     });
+    $('#partEntryForm')?.addEventListener('submit', submitPartEntry);
+    $('#cancelPartEditBtn')?.addEventListener('click', () => { $('#partEntryForm').reset(); setPartEntryMode('add'); });
+    $('#addPartTopBtn')?.addEventListener('click', () => setPartEntryMode('add'));
+    $('#editPartTopBtn')?.addEventListener('click', () => {
+      const selected = Array.from(state.partMasterSelected);
+      if (selected.length !== 1) return toast('Select exactly one part in the Part List to edit.', 'error');
+      editPartEntry(selected[0]);
+    });
+    $('#refreshPartPricesTopBtn')?.addEventListener('click', () => $('#auditPriceRefreshCard')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    $('#refreshPriceTemplateBtn')?.addEventListener('click', () => downloadGet('/api/master-catalogue/template', 'Part_Master_Catalogue_Template.xlsx').catch((error) => toast(error.message, 'error')));
+    $('#auditPriceRefreshForm')?.addEventListener('change', (event) => {
+      if (event.target.name === 'priceSource') $('#auditPriceUploadSource').hidden = event.target.value !== 'upload';
+      updateAuditPriceRefreshUi();
+    });
+    $('#partSelectAll')?.addEventListener('change', (event) => {
+      state.masterSearchRows.forEach((part) => {
+        const code = String(part.partNumber || part.partNo || '');
+        if (event.target.checked) state.partMasterSelected.add(code); else state.partMasterSelected.delete(code);
+      });
+      loadParts(state.masterSearch.page || 1).catch((error) => toast(error.message, 'error'));
+    });
+    $('#partMasterRows')?.addEventListener('change', (event) => {
+      if (!event.target.matches('.part-row-select')) return;
+      const code = event.target.dataset.partNumber;
+      if (event.target.checked) state.partMasterSelected.add(code); else state.partMasterSelected.delete(code);
+    });
+    $('#partMasterRows')?.addEventListener('click', (event) => {
+      const edit = event.target.closest('.part-row-edit');
+      const remove = event.target.closest('.part-row-delete');
+      if (edit) editPartEntry(edit.dataset.partNumber);
+      if (remove) deletePartEntry(remove.dataset.partNumber);
+    });
+    $('#partPageSize')?.addEventListener('change', (event) => { state.masterSearch.limit = Number(event.target.value) || 10; loadParts(1).catch((error) => toast(error.message, 'error')); });
+    $('#partPageButtons')?.addEventListener('click', (event) => { const button = event.target.closest('[data-page]'); if (button) loadParts(Number(button.dataset.page)).catch((error) => toast(error.message, 'error')); });
+    $$('.part-sort').forEach((button) => button.addEventListener('click', () => {
+      const key = button.dataset.sort;
+      state.masterSearch.direction = state.masterSearch.sort === key && state.masterSearch.direction === 'asc' ? 'desc' : 'asc';
+      state.masterSearch.sort = key;
+      loadParts(1).catch((error) => toast(error.message, 'error'));
+    }));
     $('#partUploadForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       try {
@@ -13065,7 +13190,7 @@
     });
     $('#partClearSearchBtn')?.addEventListener('click', () => {
       $('#partSearchForm').reset();
-      clearPartSearch();
+      $('#partPageSize').value = '10'; state.masterSearch.limit = 10; clearPartSearch(); loadParts(1).catch((error) => toast(error.message, 'error'));
       const menu = $('#partMasterSuggestMenu');
       if (menu) menu.style.display = 'none';
     });

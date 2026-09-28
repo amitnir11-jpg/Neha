@@ -171,6 +171,22 @@ router.get('/upload-failures/:downloadId', auth.requireAuth, auth.requireAdmin, 
   return res.download(file, 'Master_Catalogue_Failed_Rows.xlsx');
 });
 
+router.delete('/part/:partNumber', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const normalizedPartNumber = normalizePartNumber(req.params.partNumber);
+    if (!normalizedPartNumber) return res.status(400).json({ success: false, message: 'A valid part number is required.' });
+    const result = await MasterCatalogue.updateMany({
+      $or: [{ normalizedPartNumber }, { partNumber: normalizedPartNumber }, { partNo: normalizedPartNumber }]
+    }, { $set: { activeStatus: false } });
+    if (!result.matchedCount) return res.status(404).json({ success: false, message: 'Part was not found.' });
+    req.io?.emit('master:update');
+    invalidateCatalogueCaches();
+    return res.json({ success: true, archivedCount: result.modifiedCount || 0, message: 'Part removed from the active Part Master list.' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.delete('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const [result, priceResult] = await Promise.all([

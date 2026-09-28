@@ -790,19 +790,19 @@ router.get('/filters', auth.requireAuth, async (req, res) => {
         groupPairs,
         totalParts
       ] = await Promise.all([
-        MasterCatalogue.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
-        MasterCatalogue.distinct('productGroup', { productGroup: { $nin: [null, ''] } }),
-        MasterCatalogue.distinct('partSubGroup', { partSubGroup: { $nin: [null, ''] } }),
+        MasterCatalogue.distinct('productCategory', { productCategory: { $nin: [null, ''] }, activeStatus: { $ne: false } }),
+        MasterCatalogue.distinct('productGroup', { productGroup: { $nin: [null, ''] }, activeStatus: { $ne: false } }),
+        MasterCatalogue.distinct('partSubGroup', { partSubGroup: { $nin: [null, ''] }, activeStatus: { $ne: false } }),
         Inventory.distinct('category', { category: { $nin: [null, ''] } }),
         Inventory.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
         Inventory.distinct('productGroup', { productGroup: { $nin: [null, ''] } }),
         Inventory.distinct('partSubGroup', { partSubGroup: { $nin: [null, ''] } }),
         MasterPart.distinct('category', { category: { $nin: [null, ''] } }),
         MasterPart.distinct('productCategory', { productCategory: { $nin: [null, ''] } }),
-        MasterCatalogue.distinct('model', { model: { $nin: [null, ''] } }),
-        MasterCatalogue.distinct('year', { year: { $nin: [null, ''] } }),
-        MasterCatalogue.find({ productGroup: { $nin: [null, ''] } }).select('productGroup partSubGroup').lean(),
-        MasterCatalogue.countDocuments({})
+        MasterCatalogue.distinct('model', { model: { $nin: [null, ''] }, activeStatus: { $ne: false } }),
+        MasterCatalogue.distinct('year', { year: { $nin: [null, ''] }, activeStatus: { $ne: false } }),
+        MasterCatalogue.find({ productGroup: { $nin: [null, ''] }, activeStatus: { $ne: false } }).select('productGroup partSubGroup').lean(),
+        MasterCatalogue.countDocuments({ activeStatus: { $ne: false } })
       ]);
       const cleanList = (items) => Array.from(new Set(items.map((item) => String(item || '').trim()).filter(Boolean)))
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
@@ -1292,10 +1292,15 @@ router.get('/search', auth.requireAuth, async (req, res) => {
       const limit = Math.min(Math.max(Number(normalizedQuery.limit || 25), 1), 100);
       const skip = (page - 1) * limit;
       const filter = advancedMasterFilter(normalizedQuery);
+      filter.activeStatus = { $ne: false };
+      const sortFields = new Set(['partNumber', 'productCategory', 'productGroup', 'model', 'year', 'mrp', 'dlc', 'updatedAt']);
+      const requestedSort = String(normalizedQuery.sort || 'partNumber');
+      const sortField = sortFields.has(requestedSort) ? requestedSort : 'partNumber';
+      const sortDirection = String(normalizedQuery.direction || 'asc').toLowerCase() === 'desc' ? -1 : 1;
 
       const [total, parts] = await Promise.all([
         MasterCatalogue.countDocuments(filter),
-        MasterCatalogue.find(filter).sort({ partNumber: 1 }).skip(skip).limit(limit).lean()
+        MasterCatalogue.find(filter).sort({ [sortField]: sortDirection, partNumber: 1 }).skip(skip).limit(limit).lean()
       ]);
       const formatted = parts.map(cataloguePayload);
       return { success: true, parts: formatted, page, limit, total, totalPages: Math.ceil(total / limit) };

@@ -38,6 +38,7 @@ function cataloguePayload(record = {}) {
     gstCategory: upper(record.gstCategory || ''),
     activeFlag: upper(record.activeFlag || ''),
     activeStatus: record.activeStatus !== false,
+    updatedAt: record.updatedAt || record.uploadedAt || record.createdAt || null,
     splitFlag: upper(record.splitFlag || ''),
     masterMatch: true,
     isMasterMatched: true

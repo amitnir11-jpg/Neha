@@ -12034,3 +12034,52 @@ tbody tr:hover td {
     grid-template-columns: 1fr !important;
   }
 }
+
+/* Part Master redesign */
+#partMasterTab { gap: 12px; }
+#partMasterTab .part-master-heading-card, #partMasterTab .part-list-card, #partMasterTab .part-bottom-card { border: 1px solid #dce5ef; border-radius: 12px; box-shadow: 0 3px 12px rgba(23, 57, 99, .055); }
+#partMasterTab .part-master-heading-card { padding: 16px; }
+#partMasterTab .part-master-header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:14px; }
+#partMasterTab .part-master-header h2 { margin:0 0 3px; color:#10213f; font-size:22px; }
+#partMasterTab .part-master-header p { margin:0; color:#63718a; }
+#partMasterTab .part-master-header-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
+#partMasterTab .part-master-filter { display:grid; grid-template-columns:minmax(190px,1.5fr) repeat(4,minmax(130px,1fr)) minmax(170px,1.2fr) auto auto; align-items:end; gap:10px; padding:12px; border:1px solid #e0e7f0; border-radius:10px; background:#f7f9fc; }
+#partMasterTab .part-master-filter label,#partMasterTab .part-entry-form label,#partMasterTab .audit-price-field-row label { display:grid; gap:5px; color:#263750; font-size:12px; font-weight:650; }
+#partMasterTab .part-master-filter input,#partMasterTab .part-master-filter select,#partMasterTab .part-entry-form input,#partMasterTab .audit-price-field-row input,#partMasterTab .audit-price-field-row select { min-width:0; height:38px; }
+#partMasterTab .part-mrp-range { display:flex; gap:6px; }
+#partMasterTab .part-mrp-range input { width:50%; }
+#partMasterTab .part-list-card { padding:12px; }
+#partMasterTab .part-list-heading,#partMasterTab .part-bottom-card-head { display:flex; align-items:center; gap:12px; min-height:38px; margin:-1px -1px 10px; padding:7px 12px; border:1px solid #d9e8f8; border-radius:9px; background:linear-gradient(90deg,#eaf4ff,#f6faff); }
+#partMasterTab .part-list-heading h3,#partMasterTab .part-bottom-card-head h3 { margin:0; color:#10213f; font-size:16px; }
+#partMasterTab .part-list-total { margin-left:auto; color:#07844a; font-weight:700; }
+#partMasterTab .part-list-range { color:#34445d; white-space:nowrap; }
+#partMasterTab .part-list-table-wrap { overflow:auto; border:1px solid #e0e6ef; border-radius:9px; }
+#partMasterTab .advanced-part-result-table { width:100%; min-width:1120px; border-collapse:collapse; }
+#partMasterTab .advanced-part-result-table th { background:#eef5fc; color:#13243f; white-space:nowrap; }
+#partMasterTab .advanced-part-result-table th,#partMasterTab .advanced-part-result-table td { padding:7px 9px; border:1px solid #e3e9f1; font-size:12px; }
+#partMasterTab .advanced-part-result-table tbody tr:nth-child(even) { background:#fbfdff; }
+#partMasterTab .part-sort { padding:0; border:0; color:inherit; background:transparent; font:inherit; font-weight:700; cursor:pointer; }
+#partMasterTab .part-row-edit,#partMasterTab .part-row-delete { min-width:34px; margin-right:4px; padding:5px 9px; border:0; background:#edf5ff; color:#0870ef; }
+#partMasterTab .part-row-delete { background:#fff0f0; color:#e11c28; }
+#partMasterTab .part-list-footer { display:flex; justify-content:space-between; align-items:center; gap:12px; padding-top:10px; font-size:12px; }
+#partMasterTab .part-list-footer label,.part-pagination { display:flex; align-items:center; gap:7px; }
+#partMasterTab .part-pagination #partPageButtons { display:flex; gap:5px; }
+#partMasterTab .part-pagination .btn { min-width:34px; padding:6px 9px; }
+#partMasterTab .part-master-bottom-grid { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:14px; align-items:stretch; }
+#partMasterTab .part-bottom-card { padding:12px; min-width:0; }
+#partMasterTab .part-entry-form { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px 12px; }
+#partMasterTab .part-entry-actions { display:flex; justify-content:flex-end; align-items:center; gap:8px; grid-column:1/-1; }
+#partMasterTab .audit-price-card { display:flex; flex-direction:column; }
+#partMasterTab .part-price-info { margin:0 0 10px; padding:9px 11px; border-radius:7px; background:#edf5ff; color:#25436c; font-size:12px; }
+#partMasterTab .audit-price-form { display:flex; flex:1; flex-direction:column; gap:9px; }
+#partMasterTab .audit-price-field-row { display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:8px; }
+#partMasterTab .audit-price-form fieldset { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:0; padding:7px 9px; border:0; }
+#partMasterTab .audit-price-form legend { float:left; margin-right:10px; font-size:12px; font-weight:700; }
+#partMasterTab .audit-price-form fieldset label { display:flex; align-items:center; gap:5px; font-size:12px; }
+#partMasterTab .audit-price-upload-source { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+#partMasterTab .audit-price-form .part-entry-actions { margin-top:auto; }
+#partMasterTab .part-master-more { position:relative; }
+#partMasterTab .part-master-more-menu { position:absolute; z-index:30; right:0; top:calc(100% + 6px); width:min(600px,90vw); max-height:70vh; overflow:auto; padding:14px; border:1px solid #dbe4ef; border-radius:10px; background:white; box-shadow:0 10px 30px #1d355722; }
+#partMasterTab .part-more-actions,#partMasterTab .catalogue-upload-form { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+@media(max-width:1100px) { #partMasterTab .part-master-filter { grid-template-columns:repeat(4,minmax(0,1fr)); } #partMasterTab .part-master-bottom-grid { grid-template-columns:1fr; } }
+@media(max-width:700px) { #partMasterTab .part-master-header { align-items:flex-start; flex-direction:column; } #partMasterTab .part-master-filter { grid-template-columns:repeat(2,minmax(0,1fr)); } #partMasterTab .part-entry-form { grid-template-columns:repeat(2,minmax(0,1fr)); } #partMasterTab .audit-price-field-row { grid-template-columns:1fr; } #partMasterTab .part-list-footer { align-items:flex-start; flex-direction:column; } }

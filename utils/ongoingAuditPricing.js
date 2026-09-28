@@ -58,6 +58,10 @@ async function refreshOngoingAuditPrices(input = {}, user = {}) {
     throw refreshError('Select a dealer and its ongoing audit before refreshing prices.', 400);
   }
   const scope = { dealerCode, auditId };
+  const requestedParts = Array.isArray(input.partNumbers)
+    ? [...new Set(input.partNumbers.map(normalizePartNumber).filter(Boolean))]
+    : null;
+  if (requestedParts && !requestedParts.length) throw refreshError('Select at least one part from the Part List.', 400);
   return database.withDatabaseTransaction(async (db) => {
     // Lock the audit through commit so a concurrent close cannot be repriced.
     const audits = await db.$queryRaw(database.Prisma.sql`
@@ -74,8 +78,17 @@ async function refreshOngoingAuditPrices(input = {}, user = {}) {
         || !['', 'IN_PROGRESS'].includes(workflow) || data.auditClosedDate) {
       throw refreshError('Prices can only be refreshed for an ongoing audit.', 409);
     }
+    const partScope = requestedParts ? {
+      ...scope,
+      $or: [
+        { normalizedPartNumber: { $in: requestedParts } },
+        { partNumber: { $in: requestedParts } },
+        { part: { $in: requestedParts } },
+        { partNo: { $in: requestedParts } }
+      ]
+    } : scope;
     const [scans, stocks] = await Promise.all([
-      Inventory.find(scope).lean(), DealerStock.find(scope).lean()
+      Inventory.find(partScope).lean(), DealerStock.find(partScope).lean()
     ]);
     const parts = [...new Set([...scans, ...stocks].map(partKey).filter(Boolean))];
     const masterPrices = await partMasterPrice.getPricesFromPartMaster(parts, dealerCode);
