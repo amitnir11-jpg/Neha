@@ -932,11 +932,28 @@ router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) =>
     if (!dealerCode || !dealerName) {
       return res.status(400).json({ success: false, message: 'Dealer name and dealer code are required' });
     }
+    const auditUserId = String(req.body.auditUserId || '').trim();
+    let auditUser = null;
+    if (auditUserId) {
+      auditUser = await User.findById(auditUserId);
+      if (!auditUser || !['audit_user', 'auditor'].includes(String(auditUser.role || '').toLowerCase())) {
+        return res.status(400).json({ success: false, message: 'Select a valid audit user.' });
+      }
+    }
     const dealer = await Dealer.findOneAndUpdate(
       { dealerCode },
-      { dealerCode, dealerName, brand: req.body.brand || '', location: req.body.location || '', active: req.body.active !== false },
+      { dealerCode, dealerName, brand: req.body.brand || '', location: req.body.location || '', active: req.body.active !== false,
+        ...(auditUser ? { auditUserId: String(auditUser._id), auditorUsername: auditUser.username || '', auditorName: auditUser.name || auditUser.username || '' } : {}) },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    if (auditUser) {
+      const access = await auth.userDealerAccessCodes(auditUser);
+      if (!access.includes(dealerCode)) {
+        auditUser.dealerAccess = [...new Set([...access, dealerCode])];
+        await auditUser.save();
+        await auth.syncUserDealerMappings(auditUser._id, auditUser.dealerAccess);
+      }
+    }
     const activeAudit = await getActiveAudit({ dealerCode });
     req.io.emit('dealers:update');
     invalidateMasterCaches();

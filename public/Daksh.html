@@ -1025,6 +1025,10 @@
           <section id="dealerAuditTab" class="master-tab-panel" role="tabpanel" hidden>
             <section class="card">
               <div class="card-head"><h2>Dealer Master</h2></div>
+              <div class="master-subtabs" role="tablist" aria-label="Dealer master actions">
+                <button class="btn light active" type="button" data-dealer-form-tab="add" role="tab" aria-selected="true">Add Dealer</button>
+                <button class="btn light" type="button" data-dealer-form-tab="edit" role="tab" aria-selected="false">Edit Dealer</button>
+              </div>
               <form id="dealerMasterForm" class="grid-form master-form">
                 <label>Dealer Name<input name="dealerName" placeholder="Dealer Name" required></label>
                 <label>Dealer Code<input name="dealerCode" placeholder="Dealer Code" required></label>
@@ -1032,7 +1036,14 @@
                 <label>Location<input name="location" placeholder="Location"></label>
                 <label>Audit User<select name="auditUserId" id="dealerMasterAuditUser"><option value="">No audit user</option></select></label>
                 <button class="btn primary admin-only form-action" type="submit">Save Dealer</button>
-                <button class="btn light form-action" type="button" id="cancelDealerEditBtn" hidden>Cancel Edit</button>
+              </form>
+              <form id="dealerEditForm" class="grid-form master-form" hidden>
+                <label>Select Dealer<select name="dealerCode" id="dealerEditSelect" required><option value="">Select Dealer</option></select></label>
+                <label>Dealer Name<input name="dealerName" placeholder="Dealer Name" required></label>
+                <label>Brand<input name="brand" placeholder="Brand"></label>
+                <label>Location<input name="location" placeholder="Location"></label>
+                <label>Audit User<select name="auditUserId" id="dealerEditAuditUser"><option value="">No audit user</option></select></label>
+                <button class="btn primary admin-only form-action" type="submit">Update Dealer</button>
               </form>
             </section>
 

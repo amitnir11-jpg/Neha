@@ -1290,6 +1290,22 @@ a:focus-visible,
   min-width: min(160px, 100%);
 }
 
+.master-subtabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+
+.master-subtabs .active {
+  border-color: var(--primary, #2563eb);
+  color: var(--primary, #2563eb);
+}
+
+#dealerMasterForm[hidden],
+#dealerEditForm[hidden] {
+  display: none !important;
+}
+
 .master-table-wrap {
   max-height: min(58vh, 620px);
 }
