@@ -27,7 +27,7 @@
   <link rel="stylesheet" href="/css/select-system.css?v=20260908-enterprise-select-v3">
   <link rel="stylesheet" href="/horizontal-shell.css?v=20260908-enterprise-shell-v4">
   <link rel="stylesheet" href="/css/app-controls.css?v=20260908-enterprise-controls-v2">
-  <link rel="stylesheet" href="/dashboard-layout.css?v=20260924-recon-merged-layout-v1">
+  <link rel="stylesheet" href="/dashboard-layout.css?v=20260928-dashboard-dealer-picker-v1">
   <link rel="stylesheet" href="/compact-layout.css?v=20260921-global-density-v2">
 </head>
 <body class="app-booting">
@@ -170,6 +170,7 @@
             <p>Live overview of inventory audit</p>
           </div>
           <div class="dashboard-heading-controls">
+            <label class="dashboard-audit-dealer-picker admin-only" for="dashboardAuditDealerSelect"><span>Dealer</span><select id="dashboardAuditDealerSelect" class="dealerSelect" aria-label="Select dealer for dashboard audit status"><option value="">Select Dealer</option></select></label>
             <span id="dashboardScopeSummary" class="dashboard-scope-summary" title="Dashboard follows the dealer selected in the application header">All authorised dealers</span>
             <label class="dashboard-date-filter" for="dashboardDateRange">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1717,7 +1718,7 @@
   <script src="/config.js"></script>
   <script src="/js/runtime.js?v=20260926-admin-approval-fix-v1"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20260928-dealer-recon-filter-v2"></script>
+  <script src="/ui.js?v=20260928-dashboard-dealer-picker-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

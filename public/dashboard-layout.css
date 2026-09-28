@@ -68,12 +68,16 @@ body #dashboard.daksh-dashboard-v2.view.active .dashboard-page-heading p {
 #dashboard.daksh-dashboard-v2 .dashboard-page-heading p { margin: 5px 0 0 !important; color: #7586a4 !important; font-size: 13px !important; line-height: 1.25 !important; }
 #dashboard.daksh-dashboard-v2 .dashboard-heading-controls { display: flex !important; align-items: center !important; justify-content: flex-end !important; gap: 10px !important; min-width: 0 !important; }
 #dashboard.daksh-dashboard-v2 .dashboard-scope-summary, #dashboard.daksh-dashboard-v2 .dashboard-date-filter,
+#dashboard.daksh-dashboard-v2 .dashboard-audit-dealer-picker,
 #dashboard.daksh-dashboard-v2 .dashboard-refresh-button, #dashboard.daksh-dashboard-v2 .dashboard-page-status {
   display: inline-flex !important; align-items: center !important; min-height: 43px !important; padding: 0 14px !important; border: 1px solid var(--dash-border) !important;
   border-radius: 7px !important; background: var(--dash-surface) !important; color: var(--dash-text) !important; font-size: 12px !important;
   font-weight: 700 !important; line-height: 1.2 !important; white-space: nowrap !important; box-shadow: 0 1px 3px rgba(24,52,91,.04) !important;
 }
 #dashboard.daksh-dashboard-v2 .dashboard-scope-summary { max-width: 270px !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+#dashboard.daksh-dashboard-v2 .dashboard-audit-dealer-picker { gap: 7px !important; padding-right: 9px !important; }
+#dashboard.daksh-dashboard-v2 .dashboard-audit-dealer-picker span { color: #687a96 !important; font-size: 11px !important; font-weight: 800 !important; }
+#dashboard.daksh-dashboard-v2 .dashboard-audit-dealer-picker select { width: 195px !important; min-width: 150px !important; height: 38px !important; margin: 0 !important; padding: 0 22px 0 0 !important; border: 0 !important; outline: 0 !important; background-color: transparent !important; color: inherit !important; font: inherit !important; font-weight: 750 !important; cursor: pointer !important; }
 #dashboard.daksh-dashboard-v2 .dashboard-date-filter { gap: 8px !important; padding-right: 8px !important; }
 #dashboard.daksh-dashboard-v2 .dashboard-date-filter svg, #dashboard.daksh-dashboard-v2 .dashboard-refresh-button svg { flex: 0 0 auto !important; width: 17px !important; height: 17px !important; }
 #dashboard.daksh-dashboard-v2 .dashboard-date-filter select { min-width: 104px !important; height: 38px !important; margin: 0 !important; padding: 0 22px 0 0 !important; border: 0 !important; outline: 0 !important; background-color: transparent !important; color: inherit !important; font: inherit !important; cursor: pointer !important; }
@@ -497,8 +501,9 @@ body #dashboard.daksh-dashboard-v2.view.active .dashboard-page-heading p {
   #dashboard.daksh-dashboard-v2 .dashboard-page-heading { gap: 10px !important; min-height: 0 !important; }
   #dashboard.daksh-dashboard-v2 .dashboard-heading-controls { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
   #dashboard.daksh-dashboard-v2 .dashboard-scope-summary, #dashboard.daksh-dashboard-v2 .dashboard-page-status { grid-column: 1 / -1 !important; max-width: none !important; width: 100% !important; }
-  #dashboard.daksh-dashboard-v2 .dashboard-date-filter, #dashboard.daksh-dashboard-v2 .dashboard-refresh-button { justify-content: center !important; width: 100% !important; }
-  #dashboard.daksh-dashboard-v2 .dashboard-scope-summary, #dashboard.daksh-dashboard-v2 .dashboard-date-filter, #dashboard.daksh-dashboard-v2 .dashboard-refresh-button, #dashboard.daksh-dashboard-v2 .dashboard-page-status { min-height: 38px !important; padding-right: 10px !important; padding-left: 10px !important; }
+  #dashboard.daksh-dashboard-v2 .dashboard-date-filter, #dashboard.daksh-dashboard-v2 .dashboard-refresh-button, #dashboard.daksh-dashboard-v2 .dashboard-audit-dealer-picker { justify-content: center !important; width: 100% !important; }
+  #dashboard.daksh-dashboard-v2 .dashboard-scope-summary, #dashboard.daksh-dashboard-v2 .dashboard-date-filter, #dashboard.daksh-dashboard-v2 .dashboard-refresh-button, #dashboard.daksh-dashboard-v2 .dashboard-audit-dealer-picker, #dashboard.daksh-dashboard-v2 .dashboard-page-status { min-height: 38px !important; padding-right: 10px !important; padding-left: 10px !important; }
+  #dashboard.daksh-dashboard-v2 .dashboard-audit-dealer-picker select { width: min(68vw, 260px) !important; }
   #dashboard.daksh-dashboard-v2 .dashboard-page-status { padding-top: 5px !important; padding-bottom: 5px !important; }
   body #dashboard.daksh-dashboard-v2.view.active .dashboard-kpis { grid-template-columns: repeat(2,minmax(0,1fr)) !important; gap: 8px !important; }
   #dashboard.daksh-dashboard-v2 .dashboard-kpi { grid-template-columns: 34px minmax(0,1fr) !important; gap: 7px !important; min-height: 92px !important; padding: 9px !important; }

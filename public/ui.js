@@ -1275,8 +1275,8 @@
   }
 
   function selectedDashboardDealerCode() {
-    const select = $('#dashboardDealerSelect');
-    const dealerCode = cleanDealerCode((select && select.value) || state.dashboardDealerCode || '');
+    const select = $('#dashboardAuditDealerSelect') || $('#dashboardDealerSelect');
+    const dealerCode = cleanDealerCode(select ? select.value : (state.dashboardDealerCode || activeDealerId() || state.activeAudit?.dealerCode || ''));
     return dealerCode === 'ALL' ? '' : dealerCode;
   }
 
@@ -1325,6 +1325,11 @@
   }
 
   function appendDashboardScopeQuery(params = new URLSearchParams()) {
+    const dealerSelect = $('#dashboardAuditDealerSelect') || $('#dashboardDealerSelect');
+    if (isAdminUser() && dealerSelect && !cleanDealerCode(dealerSelect.value)) {
+      params.set('dealerCode', '__NO_DEALER_SELECTED__');
+      return params;
+    }
     const dealerCode = selectedDashboardDealerCode();
     if (dealerCode) params.set('dealerCode', dealerCode);
     else appendActiveAuditQuery(params);
@@ -1344,7 +1349,7 @@
     const audit = state.activeAudit && cleanDealerCode(state.activeAudit.dealerCode) === cleanDealerCode(dealerCode)
       ? state.activeAudit
       : null;
-    setText('dashboardScopeSummary', `${header}${audit ? ` · Audit ${audit.auditId} · ${audit.auditStatus || 'ACTIVE'}` : ''}`);
+    setText('dashboardScopeSummary', `${header}${audit ? ` · Audit ${audit.auditId} · ${audit.auditStatus || 'ACTIVE'}` : dealerCode ? ' · No active audit' : ''}`);
   }
 
   function setDashboardRefreshState(refreshing) {
@@ -1521,7 +1526,7 @@
     if (selectedDealer) {
       $$('.dealerSelect').forEach((select) => {
         if (select.closest('#reportFilters') && isAdminUser()) return;
-        if (select.id === 'dashboardDealerSelect' && state.dashboardDealerCode) {
+        if (['dashboardDealerSelect', 'dashboardAuditDealerSelect'].includes(select.id) && state.dashboardDealerCode) {
           setDealerSelectValue(select, state.dashboardDealerCode);
           syncDealerSelectDisplay(select);
           return;
@@ -3280,7 +3285,7 @@
       const selected = cleanDealerCode(select.value);
       const firstOption = !isAdminUser()
         ? '<option value="">Select Dealer</option>'
-        : (select.closest('#reportFilters') ? '<option value="">Select Dealer</option>' : (select.id === 'dashboardDealerSelect' ? '<option value="">Select Dealer</option>' : (select.classList.contains('bin-transfer-dealer') || select.id === 'binManagementDealer' || select.closest('#binSequenceTab') || select.closest('#reconciliation')) ? '<option value="">Select Dealer</option>' : '<option value="">All Dealers</option>'));
+        : (select.closest('#reportFilters') ? '<option value="">Select Dealer</option>' : (['dashboardDealerSelect', 'dashboardAuditDealerSelect'].includes(select.id) ? '<option value="">Select Dealer</option>' : (select.classList.contains('bin-transfer-dealer') || select.id === 'binManagementDealer' || select.closest('#binSequenceTab') || select.closest('#reconciliation')) ? '<option value="">Select Dealer</option>' : '<option value="">All Dealers</option>'));
       select.innerHTML = firstOption + realDealers.map((dealer) => (
         `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
       )).join('');
@@ -3290,11 +3295,16 @@
         ? (scopedDealer || activeDealer || selected)
         : select.closest('#reportFilters')
           ? (selected || scopedDealer || activeDealer)
-          : select.id === 'dashboardDealerSelect'
+          : ['dashboardDealerSelect', 'dashboardAuditDealerSelect'].includes(select.id)
             ? (cleanDealerCode(state.dashboardDealerCode || '') || scopedDealer || activeDealer || selected)
             : (scopedDealer || selected || (select.classList.contains('bin-transfer-dealer') ? activeDealer : ''));
       select.value = Array.from(select.options).some((option) => option.value === preferred) ? preferred : select.options[0].value;
       syncDealerSelectDisplay(select);
+    });
+    if (!state.dashboardDealerCode) state.dashboardDealerCode = cleanDealerCode($('#dashboardAuditDealerSelect')?.value || $('#dashboardDealerSelect')?.value || activeDealerId() || '');
+    if (state.dashboardDealerCode) ['#dashboardDealerSelect', '#dashboardAuditDealerSelect'].forEach((selector) => {
+      const select = $(selector);
+      if (select) { setDealerSelectValue(select, state.dashboardDealerCode); syncDealerSelectDisplay(select); }
     });
     renderActiveDealerSwitch();
     renderDealerAccessOptions();
@@ -12495,9 +12505,16 @@
           switchActiveDealer(select.value).catch((error) => toast(error.message, 'error'));
           return;
         }
-        if (select.id === 'dashboardDealerSelect') {
+        if (select.id === 'dashboardDealerSelect' || select.id === 'dashboardAuditDealerSelect') {
           state.dashboardDealerCode = cleanDealerCode(select.value || '');
-          syncScanDealerScope(state.dashboardDealerCode, select);
+          ['#dashboardDealerSelect', '#dashboardAuditDealerSelect'].forEach((selector) => {
+            const dashboardSelect = $(selector);
+            if (dashboardSelect && dashboardSelect !== select && state.dashboardDealerCode) {
+              setDealerSelectValue(dashboardSelect, state.dashboardDealerCode);
+              syncDealerSelectDisplay(dashboardSelect);
+            }
+          });
+          if (select.id === 'dashboardDealerSelect') syncScanDealerScope(state.dashboardDealerCode, select);
           state.activeAudit = null;
           state.dashboardLoaded = false;
           state.dashboardStats = {};
