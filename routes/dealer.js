@@ -29,7 +29,10 @@ router.get('/', auth.requireAuth, async (req, res) => {
       if (audit.auditId && !auditMap[audit.auditId]) {
         auditMap[audit.auditId] = {
           auditStatus: auditWorkflowStatus(audit),
-          completedAt: audit.completedAt
+          completedAt: audit.completedAt,
+          auditUserId: audit.auditUserId || '',
+          auditorName: audit.auditorName || '',
+          auditorUsername: audit.auditorUsername || ''
         };
       }
     });
@@ -39,7 +42,12 @@ router.get('/', auth.requireAuth, async (req, res) => {
       ...dealer,
       auditStatus: dealer.currentAuditId && auditMap[dealer.currentAuditId] 
         ? auditMap[dealer.currentAuditId].auditStatus 
-        : 'IN_PROGRESS'
+        : 'IN_PROGRESS',
+      ...(dealer.currentAuditId && auditMap[dealer.currentAuditId] ? {
+        auditUserId: auditMap[dealer.currentAuditId].auditUserId,
+        auditorName: auditMap[dealer.currentAuditId].auditorName,
+        auditorUsername: auditMap[dealer.currentAuditId].auditorUsername
+      } : {})
     }));
     
     res.json({ success: true, dealers: dealersWithStatus, audits });

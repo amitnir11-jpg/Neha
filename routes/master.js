@@ -946,6 +946,59 @@ router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) =>
   }
 });
 
+router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const dealerCode = normalizePart(req.params.dealerCode);
+    const dealerName = String(req.body.dealerName || '').trim();
+    if (!dealerCode || !dealerName) return res.status(400).json({ success: false, message: 'Dealer name is required' });
+    const dealer = await Dealer.findOne({ dealerCode });
+    if (!dealer) return res.status(404).json({ success: false, message: 'Dealer not found' });
+
+    const auditUserId = String(req.body.auditUserId || '').trim();
+    let auditUser = null;
+    if (auditUserId) {
+      auditUser = await User.findById(auditUserId);
+      if (!auditUser || !['audit_user', 'auditor'].includes(String(auditUser.role || '').toLowerCase())) {
+        return res.status(400).json({ success: false, message: 'Select a valid audit user.' });
+      }
+    }
+
+    dealer.dealerName = dealerName;
+    dealer.brand = String(req.body.brand || '').trim();
+    dealer.location = String(req.body.location || '').trim();
+    if (auditUser) {
+      dealer.auditUserId = String(auditUser._id);
+      dealer.auditorUsername = auditUser.username || '';
+      dealer.auditorName = auditUser.name || auditUser.username || '';
+    }
+    await dealer.save();
+    if (auditUser) {
+      const access = await auth.userDealerAccessCodes(auditUser);
+      if (!access.includes(dealerCode)) {
+        auditUser.dealerAccess = [...new Set([...access, dealerCode])];
+        await auditUser.save();
+        await auth.syncUserDealerMappings(auditUser._id, auditUser.dealerAccess);
+      }
+    }
+
+    const activeAudit = await getActiveAudit({ dealerCode });
+    if (activeAudit) {
+      const auditUpdate = { dealerName, brand: dealer.brand || '', location: dealer.location || '' };
+      if (auditUser) {
+        auditUpdate.auditUserId = String(auditUser._id);
+        auditUpdate.auditorUsername = auditUser.username || '';
+        auditUpdate.auditorName = auditUser.name || auditUser.username || '';
+      }
+      await Audit.updateOne({ _id: activeAudit._id }, { $set: auditUpdate });
+    }
+    req.io.emit('dealers:update');
+    invalidateMasterCaches();
+    res.json({ success: true, dealer, activeAudit: activeAudit ? publicAudit({ ...activeAudit, dealerName, brand: dealer.brand || '', location: dealer.location || '', ...(auditUser ? { auditUserId: String(auditUser._id), auditorUsername: auditUser.username || '', auditorName: auditUser.name || auditUser.username || '' } : {}) }) : null });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.delete('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const dealerCode = normalizePart(req.params.dealerCode);

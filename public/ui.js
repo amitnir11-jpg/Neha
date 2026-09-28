@@ -8845,6 +8845,15 @@
 
   function renderDealerMaster() {
     renderAuditPriceDealers();
+    const auditUserSelect = $('#dealerMasterAuditUser');
+    if (auditUserSelect) {
+      const selectedAuditUser = auditUserSelect.value;
+      const auditors = (state.users || []).filter((user) => ['audit_user', 'auditor'].includes(String(user.role || '').toLowerCase()) && user.active !== false);
+      auditUserSelect.innerHTML = '<option value="">No audit user</option>' + auditors.map((user) =>
+        `<option value="${escapeHtml(user.id || user._id || '')}">${escapeHtml(auditUserLabel(user))}</option>`
+      ).join('');
+      if (selectedAuditUser) auditUserSelect.value = selectedAuditUser;
+    }
     $('#dealerMasterRows').innerHTML = state.dealers.length ? state.dealers.map((dealer) => {
       const auditStatus = normalizeAuditWorkflowStatus(dealer.auditStatus || dealer.status || (dealer.active === false ? 'COMPLETED' : 'IN_PROGRESS'));
       const hasAudit = Boolean(dealer.currentAuditId);
@@ -8867,10 +8876,34 @@
             ${hasAudit && auditStatus === 'COMPLETED' ? `<option value="reopen">Reopen Historical Audit</option>` : ''}
             <option value="delete">Deactivate Dealer</option>
           </select>
+          <button class="btn light small dealer-edit-btn" type="button" data-code="${escapeHtml(dealer.dealerCode)}">Edit</button>
         </td>
       </tr>
     `;
     }).join('') : '<tr><td colspan="6" class="muted">No dealers yet</td></tr>';
+  }
+
+  function editDealerMaster(dealerCode) {
+    const dealer = dealerByCode(dealerCode);
+    if (!dealer) return toast('Dealer not found', 'error');
+    const form = $('#dealerMasterForm');
+    $('[name="dealerName"]', form).value = dealer.dealerName || '';
+    $('[name="dealerCode"]', form).value = dealer.dealerCode || '';
+    $('[name="dealerCode"]', form).readOnly = true;
+    $('[name="brand"]', form).value = dealer.brand || '';
+    $('[name="location"]', form).value = dealer.location || '';
+    $('#dealerMasterAuditUser').value = dealer.auditUserId || '';
+    $('button[type="submit"]', form).textContent = 'Update Dealer';
+    $('#cancelDealerEditBtn').hidden = false;
+    form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function resetDealerMasterEdit() {
+    const form = $('#dealerMasterForm');
+    form.reset();
+    $('[name="dealerCode"]', form).readOnly = false;
+    $('button[type="submit"]', form).textContent = 'Save Dealer';
+    $('#cancelDealerEditBtn').hidden = true;
   }
 
   async function deleteDealerMaster(dealerCode, dealerName = '') {
@@ -12977,17 +13010,31 @@
     $('#partNextPageBtn')?.addEventListener('click', () => loadParts((state.masterSearch.page || 1) + 1).catch((error) => toast(error.message, 'error')));
     $('#dealerMasterForm').addEventListener('submit', async (event) => {
       event.preventDefault();
-      const payload = formObject(event.currentTarget);
-      await api('/api/master/dealers', { method: 'POST', body: payload });
-      toast('Dealer saved');
-      event.currentTarget.reset();
+      const form = event.currentTarget;
+      const payload = formObject(form);
+      const editingCode = $('[name="dealerCode"]', form).readOnly ? cleanDealerCode(payload.dealerCode) : '';
+      if (editingCode) {
+        await api(`/api/master/dealers/${encodeURIComponent(editingCode)}`, { method: 'PUT', body: payload });
+        toast('Dealer details updated');
+        resetDealerMasterEdit();
+      } else {
+        await api('/api/master/dealers', { method: 'POST', body: payload });
+        toast('Dealer saved');
+        form.reset();
+      }
       await loadDealers();
     });
     $('#dealerMasterRows')?.addEventListener('click', (event) => {
+      const editButton = event.target.closest('.dealer-edit-btn');
+      if (editButton) {
+        editDealerMaster(editButton.dataset.code);
+        return;
+      }
       const button = event.target.closest('.dealer-master-delete');
       if (!button) return;
       deleteDealerMaster(button.dataset.code, button.dataset.name).catch((error) => toast(error.message, 'error'));
     });
+    $('#cancelDealerEditBtn')?.addEventListener('click', resetDealerMasterEdit);
     $('#dealerMasterRows')?.addEventListener('change', (event) => {
       const select = event.target.closest('.dealer-action-select');
       if (!select) return;
@@ -13151,20 +13198,21 @@
     $('#dealerAuditUserSelect')?.addEventListener('change', applySelectedAuditUserToForm);
     $('#createUserForm').addEventListener('submit', async (event) => {
       event.preventDefault();
+      const form = event.currentTarget;
       try {
-        const payload = formObject(event.currentTarget);
+        const payload = formObject(form);
         if (payload.role !== 'admin' && !cleanDealerAccessInput(payload.dealerAccess).length) {
           payload.dealerAccess = selectedScanDealerCode() || selectedDashboardDealerCode() || (state.activeAudit && state.activeAudit.dealerCode) || '';
         }
         payload.dealerAccess = cleanDealerAccessInput(payload.dealerAccess);
-        payload.approved = $('[name="approved"]', event.currentTarget).checked;
-        payload.active = $('[name="active"]', event.currentTarget).checked;
+        payload.approved = $('[name="approved"]', form).checked;
+        payload.active = $('[name="active"]', form).checked;
         const data = await api('/api/users/create', { method: 'POST', body: payload });
         toast('User created');
-        event.currentTarget.reset();
+        form.reset();
         renderDealerAccessOptions();
-        $('[name="approved"]', event.currentTarget).checked = true;
-        $('[name="active"]', event.currentTarget).checked = true;
+        $('[name="approved"]', form).checked = true;
+        $('[name="active"]', form).checked = true;
         showCreatedUser(data.user);
         renderAuditUserOptions();
       } catch (error) {
