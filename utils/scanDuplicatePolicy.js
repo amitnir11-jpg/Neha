@@ -25,7 +25,11 @@ function boolValue(value, fallback = false) {
 
 function scanType(input = {}) {
   const type = upper(input.scanType || input.type || input.action || 'INWARD');
-  return type === 'VERIFY' ? 'VERIFICATION' : type;
+  if (type === 'VERIFY') return 'VERIFICATION';
+  if (['OUT', 'OUTGOING'].includes(type)) return 'OUTWARD';
+  if (['FIT', 'FITTED_ON_VEHICLE'].includes(type)) return 'FITTED';
+  if (['DAMAGED'].includes(type)) return 'DAMAGE';
+  return type;
 }
 
 function smartBinDecisionAllowsDuplicate(input = {}) {
@@ -162,7 +166,13 @@ function globalUpiKey(input = {}) {
   const identity = globalQrIdentity(input);
   if (!identity.value) return '';
   const dealerCode = scanDealerCode(input);
-  return createHash('sha256').update(`${dealerCode || 'NO-DEALER'}|${identity.type}|${identity.value}`).digest('hex');
+  return createHash('sha256').update(`${dealerCode || 'NO-DEALER'}|${scanAuditId(input)}|${scanType(input)}|${identity.type}|${identity.value}`).digest('hex');
+}
+
+function scopedGlobalUpiKey(input = {}, key = input.globalUpiKey) {
+  const value = clean(key || globalUpiKey(input));
+  if (!value) return '';
+  return [scanDealerCode(input) || 'NO-DEALER', scanAuditId(input), scanType(input), value].join('::');
 }
 
 function activeUpiDuplicateFilter(input = {}) {
@@ -206,6 +216,10 @@ function activeUpiDuplicateFilter(input = {}) {
   };
   const dealerCode = scanDealerCode(input);
   if (dealerCode) filter.dealerCode = dealerCode;
+  const auditId = scanAuditId(input);
+  if (auditId) filter.auditId = auditId;
+  const type = scanType(input);
+  filter.$and = [{ $or: [{ scanType: type }, { type }, { movementType: type }] }];
   return filter;
 }
 
@@ -334,6 +348,7 @@ module.exports = {
   scanPartNumber,
   scanSyncKey,
   scanType,
+  scopedGlobalUpiKey,
   sameBinLocation,
   smartBinDecisionAllowsDuplicate
 };

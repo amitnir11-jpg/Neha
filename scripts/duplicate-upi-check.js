@@ -36,12 +36,23 @@ const nonInward = {
   ...sameScopeInward,
   scanType: 'DAMAGE'
 };
+const outwardSameQr = {
+  ...sameScopeInward,
+  scanType: 'OUTWARD'
+};
+const fittedSameQr = {
+  ...sameScopeInward,
+  scanType: 'FITTED'
+};
 
 assert.strictEqual(duplicatePolicy.canonicalUpiValue(inwardScan), 'OEM/UPI-987654/X/PART-100/1/500');
 assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentScopeInward));
 assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentBinInward));
 assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentPartInward));
 assert.strictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(sameScopeInward));
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(outwardSameQr), 'the same QR must be allowed once per movement type');
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(fittedSameQr), 'FITTED must not collide with INWARD by QR identity');
+assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey({ ...inwardScan, auditId: 'AUDIT-2' }), 'QR identity must be scoped to audit');
 assert.notStrictEqual(duplicatePolicy.globalUpiKey(inwardScan), duplicatePolicy.globalUpiKey(differentQrSamePartSameBin));
 assert.strictEqual(duplicatePolicy.globalUpiKey({ partNumber: 'PART-100', rawScanString: 'MANUAL:PART-100', source: 'manual' }), '');
 
@@ -64,9 +75,13 @@ assert.notStrictEqual(duplicatePolicy.globalUpiKey(qr1A15), duplicatePolicy.glob
 const activeFilter = duplicatePolicy.activeUpiDuplicateFilter(sameScopeInward);
 assert(activeFilter, 'global UPI duplicate filter should exist for QR scans');
 assert.strictEqual(activeFilter.dealerCode, 'D001');
-assert.strictEqual(Object.prototype.hasOwnProperty.call(activeFilter, 'auditId'), false);
+assert.strictEqual(activeFilter.auditId, 'AUDIT-1');
+assert(activeFilter.$and.some((term) => term.$or?.some((typeTerm) => typeTerm.scanType === 'INWARD' || typeTerm.type === 'INWARD' || typeTerm.movementType === 'INWARD')));
 assert.strictEqual(Object.prototype.hasOwnProperty.call(activeFilter, 'activeInventory'), false);
 assert(activeFilter.$or.some((term) => term.upiCode?.$regex || term.upiNo?.$regex || term.upiId?.$regex));
+const outwardFilter = duplicatePolicy.activeUpiDuplicateFilter(outwardSameQr);
+assert.strictEqual(outwardFilter.auditId, 'AUDIT-1');
+assert(outwardFilter.$and.some((term) => term.$or?.some((typeTerm) => typeTerm.scanType === 'OUTWARD' || typeTerm.type === 'OUTWARD' || typeTerm.movementType === 'OUTWARD')));
 assert(duplicatePolicy.globalUpiDuplicateFilter(nonInward), 'damage QR scans must also use global duplicate validation');
 
 const identityFilter = duplicatePolicy.identityDuplicateFilter({

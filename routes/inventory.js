@@ -375,7 +375,10 @@ async function findBackendDuplicate(input = {}, options = {}) {
   const payload = duplicateLookupPayload(input);
   if (payload.scanType === 'VERIFICATION' || !payload.globalUpiKey) return null;
 
-  const globalDuplicate = await Inventory.findOne({ globalUpiKey: payload.globalUpiKey }).sort({ timestamp: 1, createdAt: 1 }).lean();
+  const globalDuplicateFilter = duplicatePolicy.activeUpiDuplicateFilter(payload);
+  const globalDuplicate = globalDuplicateFilter
+    ? await Inventory.findOne({ ...globalDuplicateFilter, globalUpiKey: payload.globalUpiKey }).sort({ timestamp: 1, createdAt: 1 }).lean()
+    : null;
   if (globalDuplicate) {
     return {
       existing: globalDuplicate,

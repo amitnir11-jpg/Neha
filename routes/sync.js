@@ -2202,8 +2202,9 @@ async function pushHandler(req, res) {
         existingIdentityByKey.set(scan.qrFingerprint, identity);
       }
       if (scan.globalUpiKey) {
-        existingScanIds.add(scan.globalUpiKey);
-        existingIdentityByKey.set(scan.globalUpiKey, identity);
+        const scopedKey = duplicatePolicy.scopedGlobalUpiKey(scan, scan.globalUpiKey);
+        existingScanIds.add(scopedKey);
+        existingIdentityByKey.set(scopedKey, identity);
       }
     });
     const duplicateScanIds = new Set();
@@ -2324,7 +2325,7 @@ async function pushHandler(req, res) {
       const identityUser = identityUserKey(scan);
       const identitySession = identitySessionKey(scan);
       scan.rawUpiHash = scan.rawUpiHash || duplicatePolicy.rawUpiHash(scan);
-      scan.globalUpiKey = scan.globalUpiKey || duplicatePolicy.globalUpiKey(scan);
+      scan.globalUpiKey = duplicatePolicy.globalUpiKey(scan);
       scan.upiCode = scan.upiCode || upiCodeValue(scan);
       scan.movementType = scan.movementType || movementTypeValue(scan);
       scan.activeInventory = scan.activeInventory !== undefined ? scan.activeInventory : scan.movementType === 'INWARD';
@@ -2344,13 +2345,14 @@ async function pushHandler(req, res) {
         ? await Inventory.findOne(activeFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
         : null;
       const globalUpiKey = scan.globalUpiKey || duplicatePolicy.globalUpiKey(scan);
-      const storedQrDuplicate = Boolean(globalUpiKey && existingScanIds.has(globalUpiKey));
-      const batchQrDuplicate = Boolean(globalUpiKey && duplicateScanIds.has(globalUpiKey));
+      const scopedGlobalKey = duplicatePolicy.scopedGlobalUpiKey(scan, globalUpiKey);
+      const storedQrDuplicate = Boolean(scopedGlobalKey && existingScanIds.has(scopedGlobalKey));
+      const batchQrDuplicate = Boolean(scopedGlobalKey && duplicateScanIds.has(scopedGlobalKey));
       const normalDuplicate = Boolean(activeDuplicate || (!fittedKey && (storedIdentityDuplicate || batchIdentityDuplicate || storedQrDuplicate || batchQrDuplicate)));
       if (fittedDuplicate || normalDuplicate) {
         if (fittedKey) duplicateScanIds.add(fittedKey);
-        if (globalUpiKey) duplicateScanIds.add(globalUpiKey);
-        let existingIdentity = activeDuplicate || existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(globalUpiKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.scanId) || existingIdentityByKey.get(scan.syncKey) || existingIdentityByKey.get(scan.qrFingerprint) || {};
+        if (scopedGlobalKey) duplicateScanIds.add(scopedGlobalKey);
+        let existingIdentity = activeDuplicate || existingIdentityByKey.get(fittedKey) || existingIdentityByKey.get(scopedGlobalKey) || existingIdentityByKey.get(scan.uniqueScanId) || existingIdentityByKey.get(scan.scanId) || existingIdentityByKey.get(scan.syncKey) || existingIdentityByKey.get(scan.qrFingerprint) || {};
         existingIdentity = await backfillDuplicateMrp(existingIdentity, scan, { manualEntry, req });
         const duplicateMessage = activeDuplicate
           ? duplicatePolicy.duplicateUpiMessage(existingIdentity)
@@ -2420,10 +2422,9 @@ async function pushHandler(req, res) {
       if (scan.syncKey) duplicateScanIds.add(scan.syncKey);
       scan.qrFingerprint = manualEntry || fittedKey ? '' : makeQrFingerprint(scan);
       if (fittedKey) duplicateScanIds.add(fittedKey);
-      if (scan.globalUpiKey) existingIdentityByKey.set(scan.globalUpiKey, scan);
-      if (globalUpiKey) {
-        duplicateScanIds.add(globalUpiKey);
-        existingIdentityByKey.set(globalUpiKey, scan);
+      if (scopedGlobalKey) {
+        duplicateScanIds.add(scopedGlobalKey);
+        existingIdentityByKey.set(scopedGlobalKey, scan);
       }
 
       const finalQty = Number(scan.quantity || 1);
