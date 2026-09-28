@@ -2,7 +2,6 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const ExcelJS = require('exceljs');
-const { finished } = require('stream/promises');
 const { prisma } = require('../services/prisma');
 
 const EXPORT_ERROR = 'Complete Part Master could not be downloaded. Please try again or contact administrator.';
@@ -50,17 +49,15 @@ function exportRow(record) {
 // Count and cursor share a repeatable-read snapshot, so concurrent uploads
 // cannot add, remove, or duplicate rows partway through an export.
 async function writePartMasterWorkbook(db, file, { signal, stats = {} } = {}) {
-  const stream = fs.createWriteStream(file);
-  const streamFinished = finished(stream);
-  streamFinished.catch(() => {});
-  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream, useSharedStrings: false, useStyles: true, zip: { zlib: { level: 1 } } });
+  const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Daksh Inventory';
   const sheet = workbook.addWorksheet('Part Master', { views: [{ state: 'frozen', ySplit: 1 }] });
   sheet.columns = EXPORT_COLUMNS;
   sheet.autoFilter = 'A1:O1';
   sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
-  sheet.getRow(1).commit();
+  sheet.getRow(1).height = 22;
+  sheet.getRow(1).eachCell((cell) => { cell.alignment = { vertical: 'middle' }; });
   stats.exported = 0;
   stats.queryMs = 0;
   const started = Date.now();
@@ -78,21 +75,17 @@ async function writePartMasterWorkbook(db, file, { signal, stats = {} } = {}) {
       stats.queryMs += Date.now() - queryStarted;
       if (!rows.length) break;
       for (const row of rows) {
-        sheet.addRow(exportRow(row)).commit();
+        sheet.addRow(exportRow(row));
         stats.exported += 1;
       }
       await new Promise((resolve) => setImmediate(resolve));
     }
     await db.$executeRawUnsafe('CLOSE daksh_part_master_export');
     if (stats.exported !== stats.expected) throw new Error(`Export count mismatch: ${stats.expected} expected, ${stats.exported} written`);
-    sheet.commit();
-    await workbook.commit();
-    await streamFinished;
+    await workbook.xlsx.writeFile(file, { useSharedStrings: true });
     return stats;
   } catch (error) {
-    workbook.zip.abort();
-    stream.destroy();
-    await streamFinished.catch(() => {});
+    await fs.promises.rm(file, { force: true }).catch(() => {});
     throw error;
   } finally {
     stats.exportMs = Date.now() - started;
