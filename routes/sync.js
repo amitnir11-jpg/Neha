@@ -36,7 +36,7 @@ const {
   remainingQtyValue,
   upiCodeValue
 } = require('../utils/inventoryMovementState');
-const { isDatabaseReady } = require('../services/prisma');
+const { isDatabaseReady, withDatabaseTransaction } = require('../services/prisma');
 const { invalidateCache } = require('../utils/safeCache');
 const scanModification = require('../services/ScanModificationService');
 const {
@@ -51,6 +51,9 @@ const {
 const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
 const BIN_REQUIRED_MESSAGE = 'Please enter/select the source bin location first.';
+const UPI_LOCATION_REQUIRED_MESSAGE = 'Unable to identify current location of this UPI. Please verify transaction history.';
+const UPI_ALREADY_OUTWARD_MESSAGE = 'This UPI is already outwarded.';
+const UPI_ALREADY_FITTED_MESSAGE = 'This UPI is already available in workshop/fitted status.';
 const INVALID_PART_MESSAGE = masterValidation.INVALID_PART_MESSAGE || 'Invalid part number - not found in master catalogue';
 const SYNC_VERBOSE_LOGS = process.env.SYNC_VERBOSE_LOGS === 'true';
 
@@ -279,6 +282,18 @@ async function autoDetectOutwardBin(scan = {}) {
   const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
   const requestedBin = upper(scan.binLocation || scan.bin || '');
   if (!dealerCode || !partNumber) return null;
+  const upiCode = upiCodeValue(scan);
+  if (upiCode) {
+    const location = scan._upiCurrentLocation || await resolveUpiCurrentLocation(scan);
+    if (!location) return null;
+    if (location.status === 'AVAILABLE' && location.locationType === 'BIN' && location.binLocation) {
+      return { binLocation: location.binLocation, sourceLocationType: 'BIN', location };
+    }
+    if (scan.scanType === 'OUTWARD' && location.status === 'FITTED' && location.locationType === 'WORKSHOP') {
+      return { binLocation: '', sourceLocationType: 'WORKSHOP', location };
+    }
+    return null;
+  }
   const match = {
     dealerCode,
     scanStatus: { $in: acceptedStatuses() },
@@ -348,6 +363,103 @@ async function autoDetectOutwardBin(scan = {}) {
     binLocation: upper(rows[0]._id),
     availableQty: Number(rows[0].availableQty || 0)
   };
+}
+
+async function resolveUpiCurrentLocation(scan = {}) {
+  const upiCode = upper(upiCodeValue(scan));
+  const dealerCode = upper(scan.dealerCode);
+  if (!upiCode || !dealerCode) return null;
+  const rows = await Inventory.find({
+    dealerCode,
+    isDeleted: { $ne: true },
+    deletedAt: null,
+    syncStatus: { $nin: ['failed', 'rejected', 'duplicate'] },
+    $or: [{ upiCode }, { upiNo: upiCode }, { upiId: upiCode }]
+  }).lean();
+  const validRows = rows.filter((row) => (
+    ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'].includes(upper(row.scanStatus || 'ACCEPTED'))
+    && ['INWARD', 'FITTED_RETURN', 'FITTED', 'OUTWARD', 'DAMAGE'].includes(movementTypeValue(row))
+  ));
+  const eventTime = (row) => {
+    const movement = movementTypeValue(row);
+    const candidate = movement === 'FITTED' && row.fittedStatusUpdatedAt
+      ? row.fittedStatusUpdatedAt
+      : (row.timestamp || row.createdAt || row.updatedAt);
+    const parsed = new Date(candidate || 0).getTime();
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  validRows.sort((a, b) => eventTime(a) - eventTime(b) || String(a._id || a.id || '').localeCompare(String(b._id || b.id || '')));
+  const latest = validRows[validRows.length - 1];
+  if (!latest) return null;
+  const requestedPart = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
+  const historyPart = normalizePartNumber(latest.normalizedPartNumber || latest.partNumber || latest.part);
+  if (!historyPart || (requestedPart && requestedPart !== historyPart)) return null;
+
+  const explicitStatus = upper(latest.upiStatus || '');
+  const explicitLocation = upper(latest.currentLocationType || '');
+  if (explicitStatus === 'OUTWARD' || explicitLocation === 'OUTWARD') {
+    return { upiCode, partNumber: historyPart, status: 'OUTWARD', locationType: 'OUTWARD', row: latest };
+  }
+  if (explicitStatus === 'DAMAGE' || explicitLocation === 'DAMAGE') {
+    return { upiCode, partNumber: historyPart, status: 'DAMAGE', locationType: 'DAMAGE', row: latest };
+  }
+  if (explicitStatus === 'FITTED' || explicitLocation === 'WORKSHOP') {
+    return { upiCode, partNumber: historyPart, status: 'FITTED', locationType: 'WORKSHOP', row: latest };
+  }
+  if (explicitStatus === 'AVAILABLE' && explicitLocation === 'BIN') {
+    const binLocation = upper(latest.currentBin || latest.binLocation || latest.bin || '');
+    if (binLocation) return { upiCode, partNumber: historyPart, status: 'AVAILABLE', locationType: 'BIN', binLocation, row: latest };
+  }
+
+  const movement = movementTypeValue(latest);
+  const fittedState = fittedStock.fittedStatus(latest);
+  if (movement === 'OUTWARD' || (movement === 'FITTED' && fittedState === 'BILLED')) {
+    return { upiCode, partNumber: historyPart, status: 'OUTWARD', locationType: 'OUTWARD', row: latest };
+  }
+  if (movement === 'DAMAGE') return { upiCode, partNumber: historyPart, status: 'DAMAGE', locationType: 'DAMAGE', row: latest };
+  if (movement === 'FITTED' && fittedState === 'FITTED_PENDING') {
+    return { upiCode, partNumber: historyPart, status: 'FITTED', locationType: 'WORKSHOP', row: latest };
+  }
+  if (movement === 'FITTED' && ['RETURNED_TO_BIN', 'CANCELLED'].includes(fittedState)) {
+    const binLocation = upper(latest.returnedToBin || latest.currentBin || latest.binLocation || latest.bin || '');
+    if (binLocation) return { upiCode, partNumber: historyPart, status: 'AVAILABLE', locationType: 'BIN', binLocation, row: latest };
+  }
+  if (movement === 'INWARD' || movement === 'FITTED_RETURN') {
+    const binLocation = upper(latest.currentBin || latest.binLocation || latest.bin || '');
+    if (binLocation && Number(latest.qty ?? latest.quantity ?? 0) > 0) {
+      return { upiCode, partNumber: historyPart, status: 'AVAILABLE', locationType: 'BIN', binLocation, row: latest };
+    }
+  }
+  return null;
+}
+
+async function prepareUpiSourceLocation(scan = {}) {
+  if (!['OUTWARD', 'FITTED'].includes(scan.scanType) || !upiCodeValue(scan)) return null;
+  if (Number(scan.quantity || 1) !== 1) {
+    return 'A unique UPI scan must have quantity 1.';
+  }
+  const location = await resolveUpiCurrentLocation(scan);
+  if (!location) return UPI_LOCATION_REQUIRED_MESSAGE;
+  if (location.status === 'OUTWARD') return UPI_ALREADY_OUTWARD_MESSAGE;
+  if (location.status === 'FITTED' && scan.scanType === 'FITTED') return UPI_ALREADY_FITTED_MESSAGE;
+  if (location.status === 'FITTED' && scan.scanType === 'OUTWARD') {
+    scan._upiCurrentLocation = location;
+    scan._upiSourceLocationType = 'WORKSHOP';
+    scan._upiSourceRow = location.row;
+    scan.binLocation = '';
+    scan.stockDeductedFromBin = '';
+    return null;
+  }
+  if (location.status !== 'AVAILABLE' || location.locationType !== 'BIN' || !location.binLocation) {
+    return UPI_LOCATION_REQUIRED_MESSAGE;
+  }
+  scan._upiCurrentLocation = location;
+  scan._upiSourceLocationType = 'BIN';
+  scan._upiSourceRow = location.row;
+  scan.binLocation = location.binLocation;
+  scan.stockDeductedFromBin = location.binLocation;
+  scan.sourceBin = location.binLocation;
+  return null;
 }
 
 function scanIdentityScope(filter = {}, scan = {}) {
@@ -1500,6 +1612,8 @@ async function saveNormalizedScan(scan, req) {
     return { status: 'failed', httpStatus: 409, scan, error: 'Scan audit does not match the active audit for this dealer.' };
   }
   applyActiveAudit(scan, activeAudit);
+  const upiLocationError = await prepareUpiSourceLocation(scan);
+  if (upiLocationError) return { status: 'failed', scan, error: upiLocationError };
   if (scan.binLocation) {
     const binCode = upper(scan.binLocation);
     const [ownedBin, conflictingBin] = await Promise.all([
@@ -1560,7 +1674,11 @@ async function saveNormalizedScan(scan, req) {
   if (!scan.partNumber) errors.push('Part number missing');
   if (scan.partNumber && !isValidPartNumber(scan.partNumber)) errors.push('Invalid part number format');
   if (!master) errors.push(INVALID_PART_MESSAGE);
-  if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scan.scanType) && !scan.binLocation) errors.push(BIN_REQUIRED_MESSAGE);
+  if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scan.scanType)
+    && !scan.binLocation
+    && !(upiCodeValue(scan) && ['OUTWARD', 'FITTED'].includes(scan.scanType) && scan._upiSourceLocationType === 'WORKSHOP')) {
+    errors.push(BIN_REQUIRED_MESSAGE);
+  }
   if (scan.scanType === 'FITTED') {
     inventory.prepareFittedScan(scan, scan.quantity || 1);
     if (!scan.regdNo || !scan.jobCardNo) errors.push('Regd No and Job Card No are required for fitted parts.');
@@ -1608,11 +1726,12 @@ async function saveNormalizedScan(scan, req) {
 
   if (['OUTWARD', 'FITTED'].includes(scan.scanType)) {
     const detected = await autoDetectOutwardBin(scan);
-    if (!detected || !detected.binLocation) {
+    if (!detected || (!detected.binLocation && detected.sourceLocationType !== 'WORKSHOP')) {
       logSync('outward auto bin failed', { deviceId: scan.deviceId, scanId: scan.uniqueScanId, partNumber: scan.partNumber });
-      return { status: 'failed', scan, error: NO_OUTWARD_STOCK_MESSAGE };
+      return { status: 'failed', scan, error: upiCodeValue(scan) ? UPI_LOCATION_REQUIRED_MESSAGE : NO_OUTWARD_STOCK_MESSAGE };
     }
     scan.binLocation = detected.binLocation;
+    scan._upiSourceLocationType = detected.sourceLocationType || 'BIN';
     scan.autoDetectedBin = false;
     scan.binSelectionMode = 'MANUAL';
     scan.stockDeductedFromBin = detected.binLocation;
@@ -1636,7 +1755,51 @@ async function saveNormalizedScan(scan, req) {
     logSync('scan policy blocked', { status: preSmartBinPolicy.status, reason: preSmartBinPolicy.reason, deviceId: scan.deviceId, scanId: scan.uniqueScanId, existingId: preSmartBinPolicy.existing && preSmartBinPolicy.existing._id });
     return duplicateResult(preSmartBinPolicy, scan);
   }
-  const smartBinState = await smartBinWarningForScan(scan);
+  if (scan.scanType === 'OUTWARD' && scan._upiSourceLocationType === 'WORKSHOP' && scan._upiSourceRow) {
+    const now = new Date();
+    const fittedRow = scan._upiSourceRow;
+    const updatedFitted = await Inventory.findOneAndUpdate({
+      _id: fittedRow._id,
+      scanType: 'FITTED',
+      status: 'FITTED_PENDING',
+      isDeleted: { $ne: true }
+    }, {
+      $set: {
+        status: 'BILLED',
+        fittedStatus: 'BILLED',
+        fittedStatusUpdatedAt: now,
+        fittedStatusUpdatedBy: scanUserName(req, scan),
+        fittedStatusReason: 'UPI scanned as OUTWARD from workshop',
+        upiStatus: 'OUTWARD',
+        currentLocationType: 'OUTWARD',
+        currentBin: '',
+        outwardedAt: now,
+        outwardScanId: scan.uniqueScanId,
+        movementHistory: [
+          ...(Array.isArray(fittedRow.movementHistory) ? fittedRow.movementHistory : []),
+          {
+            movementType: 'OUTWARD',
+            sourceLocationType: 'WORKSHOP',
+            currentLocationType: 'OUTWARD',
+            scanId: scan.uniqueScanId,
+            dealerCode: scan.dealerCode,
+            auditId: scan.auditId,
+            movedAt: now,
+            movedBy: scanUserName(req, scan)
+          }
+        ]
+      }
+    }, { new: true }).lean();
+    if (!updatedFitted) {
+      return { status: 'failed', scan, error: UPI_ALREADY_OUTWARD_MESSAGE };
+    }
+    invalidateScanCaches(updatedFitted);
+    await emitEnterpriseRealtime(req.io || req.app.get('io'), [updatedFitted]);
+    return { status: 'synced', scan: updatedFitted, error: '', updated: true };
+  }
+  const smartBinState = upiCodeValue(scan) && ['OUTWARD', 'FITTED'].includes(scan.scanType)
+    ? null
+    : await smartBinWarningForScan(scan);
   if (smartBinState) {
     // If the client has already made a decision, apply it and proceed.
     // Otherwise, return the warning to the client to prompt the user.
@@ -1699,7 +1862,34 @@ async function saveNormalizedScan(scan, req) {
 
   let doc;
   try {
-    doc = await Inventory.create({
+    doc = await withDatabaseTransaction(async () => {
+      if (upiCodeValue(scan) && ['OUTWARD', 'FITTED'].includes(scan.scanType) && scan._upiSourceRow) {
+        const currentBin = upper(scan._upiCurrentLocation?.binLocation || '');
+        const nextStatus = scan.scanType === 'FITTED' ? 'FITTED' : 'OUTWARD';
+        const claimed = await Inventory.findOneAndUpdate({
+          _id: scan._upiSourceRow._id,
+          isDeleted: { $ne: true },
+          $and: [
+            { $or: [{ upiStatus: 'AVAILABLE' }, { upiStatus: '' }, { upiStatus: null }] },
+            { $or: [{ currentLocationType: 'BIN' }, { currentLocationType: '' }, { currentLocationType: null }] },
+            { $or: [{ currentBin }, { binLocation: currentBin }, { bin: currentBin }] }
+          ]
+        }, {
+          $set: {
+            upiStatus: nextStatus,
+            currentLocationType: scan.scanType === 'FITTED' ? 'WORKSHOP' : 'OUTWARD',
+            currentBin: '',
+            locationUpdatedAt: new Date(),
+            locationUpdatedByScanId: scan.uniqueScanId
+          }
+        }, { new: true }).lean();
+        if (!claimed) {
+          const error = new Error(UPI_LOCATION_REQUIRED_MESSAGE);
+          error.code = 'UPI_LOCATION_CHANGED';
+          throw error;
+        }
+      }
+      return Inventory.create({
     uniqueScanId: scan.uniqueScanId,
     scanId: scan.uniqueScanId,
     qrFingerprint: scan.qrFingerprint,
@@ -1747,6 +1937,11 @@ async function saveNormalizedScan(scan, req) {
     fittedLocation: scan.scanType === 'FITTED' ? 'VEHICLE' : '',
     status: scan.scanType === 'FITTED' ? 'FITTED_PENDING' : '',
     stockDeductedFromBin: scan.stockDeductedFromBin || (['OUTWARD', 'FITTED'].includes(scan.scanType) ? finalBin : ''),
+    sourceBin: scan._upiCurrentLocation?.binLocation || scan.sourceBin || (['OUTWARD', 'FITTED'].includes(scan.scanType) ? finalBin : ''),
+    sourceLocationType: scan._upiSourceLocationType || (['OUTWARD', 'FITTED'].includes(scan.scanType) ? 'BIN' : ''),
+    currentBin: scan.scanType === 'INWARD' ? finalBin : '',
+    currentLocationType: scan.scanType === 'INWARD' ? 'BIN' : scan.scanType === 'FITTED' ? 'WORKSHOP' : scan.scanType === 'OUTWARD' ? 'OUTWARD' : scan.scanType === 'DAMAGE' ? 'DAMAGE' : '',
+    upiStatus: scan.scanType === 'INWARD' ? 'AVAILABLE' : scan.scanType === 'FITTED' ? 'FITTED' : scan.scanType === 'OUTWARD' ? 'OUTWARD' : scan.scanType === 'DAMAGE' ? 'DAMAGE' : '',
     type: scan.scanType,
     scanType: scan.scanType,
     upiId: scan.upiId,
@@ -1789,8 +1984,12 @@ async function saveNormalizedScan(scan, req) {
     masterFound: Boolean(master),
     masterMatch: Boolean(master),
     isMasterMatched: Boolean(master)
+      });
     });
     } catch (error) {
+      if (error.code === 'UPI_LOCATION_CHANGED') {
+        return { status: 'failed', httpStatus: 409, scan, error: UPI_LOCATION_REQUIRED_MESSAGE };
+      }
       if (!isDuplicateKeyError(error)) throw error;
       const retryExisting = duplicateQuery(scan) ? await Inventory.findOne(duplicateQuery(scan)).lean() : null;
       if (retryExisting) {
@@ -2033,6 +2232,68 @@ async function pushHandler(req, res) {
     const deviceId = clean(body.deviceId || (incoming[0] && incoming[0].deviceId));
     const dealerCode = upper(activeAudit.dealerCode);
     const activeAuditId = clean(activeAudit.auditId || activeAudit._id);
+    const hasUniqueUpiMovement = incoming.some((item) => {
+      const normalized = normalizeScan(item);
+      return ['OUTWARD', 'FITTED'].includes(normalized.scanType) && Boolean(upiCodeValue(normalized));
+    });
+    if (hasUniqueUpiMovement) {
+      const logs = [];
+      const failedRows = [];
+      const insertedRecords = [];
+      let insertedCount = 0;
+      let duplicateCount = 0;
+      let failedCount = 0;
+      for (let index = 0; index < incoming.length; index += 1) {
+        const normalized = normalizeScan(incoming[index]);
+        const ack = ackMetaFromScan(normalized, index + 1);
+        try {
+          const result = await saveNormalizedScan(normalized, req);
+          const status = clean(result.status).toLowerCase();
+          if (status === 'synced' || status === 'verification') {
+            const logStatus = result.updated ? 'synced' : 'inserted';
+            logs.push(syncLogFromAck(result.scan || normalized, ack, logStatus));
+            if (logStatus === 'inserted') insertedCount += 1;
+            if (result.scan && !result.updated) insertedRecords.push(publicScanRow(result.scan));
+          } else if (status === 'duplicate') {
+            duplicateCount += 1;
+            logs.push(syncLogFromAck(result.scan || normalized, ack, 'duplicate', result.message || result.error || 'Duplicate scan skipped'));
+          } else {
+            failedCount += 1;
+            const reason = result.message || result.error || 'Scan could not be saved';
+            failedRows.push({ row: index + 1, scanId: ack.scanId, partNumber: normalized.partNumber, reason, status: 'failed' });
+            logs.push(syncLogFromAck(result.scan || normalized, ack, 'failed', reason));
+          }
+        } catch (error) {
+          failedCount += 1;
+          const reason = error.message || 'Scan could not be saved';
+          failedRows.push({ row: index + 1, scanId: ack.scanId, partNumber: normalized.partNumber, reason, status: 'failed' });
+          logs.push(syncLogFromAck(normalized, ack, 'failed', reason));
+        }
+      }
+      const syncedCount = insertedCount + logs.filter((item) => item.status === 'synced').length;
+      return res.json({
+        success: failedCount === 0,
+        activeAudit: activeAuditPayload,
+        dealerCode,
+        dealerName: activeAuditPayload.dealerName,
+        auditId: activeAuditId,
+        receivedCount: incoming.length,
+        insertedCount,
+        verifiedInsertedCount: insertedCount,
+        syncedCount,
+        duplicateCount,
+        failedCount,
+        failedRows,
+        insertedRecords,
+        logs,
+        syncBatchId,
+        completedAt: new Date().toISOString(),
+        synced: syncedCount,
+        duplicates: duplicateCount,
+        failed: failedCount,
+        message: failedCount ? `${failedCount} scan(s) need attention` : 'Mobile sync completed successfully'
+      });
+    }
     const requestUserContext = await resolveScanUserContext(req, { ...body, deviceId });
     const logs = [];
     const failedRows = [];
@@ -2486,6 +2747,11 @@ async function pushHandler(req, res) {
         fittedLocation: scan.scanType === 'FITTED' ? 'VEHICLE' : '',
         status: scan.scanType === 'FITTED' ? 'FITTED_PENDING' : scan.scanType === 'DAMAGE' ? 'DAMAGE_STOCK' : '',
         stockDeductedFromBin: scan.stockDeductedFromBin || (['OUTWARD', 'FITTED'].includes(scan.scanType) ? finalBin : ''),
+        sourceBin: scan._upiCurrentLocation?.binLocation || scan.sourceBin || (['OUTWARD', 'FITTED'].includes(scan.scanType) ? finalBin : ''),
+        sourceLocationType: scan._upiSourceLocationType || (['OUTWARD', 'FITTED'].includes(scan.scanType) ? 'BIN' : ''),
+        currentBin: scan.scanType === 'INWARD' ? finalBin : '',
+        currentLocationType: scan.scanType === 'INWARD' ? 'BIN' : scan.scanType === 'FITTED' ? 'WORKSHOP' : scan.scanType === 'OUTWARD' ? 'OUTWARD' : scan.scanType === 'DAMAGE' ? 'DAMAGE' : '',
+        upiStatus: scan.scanType === 'INWARD' ? 'AVAILABLE' : scan.scanType === 'FITTED' ? 'FITTED' : scan.scanType === 'OUTWARD' ? 'OUTWARD' : scan.scanType === 'DAMAGE' ? 'DAMAGE' : '',
         type: scan.scanType,
         scanType: scan.scanType,
         upiId: scan.upiId,

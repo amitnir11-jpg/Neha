@@ -333,7 +333,13 @@ async function transferPart({ dealerCode, fromBin, toBin, partNumber, qty, trans
     if (recordQty <= remaining) {
       await Inventory.updateOne(
         { _id: record._id },
-        { $set: { binLocation: toBin, bin: toBin } }
+        { $set: {
+          binLocation: toBin,
+          bin: toBin,
+          ...(record.upiCode || record.upiNo || record.upiId
+            ? { currentBin: upper(toBin), currentLocationType: 'BIN', upiStatus: 'AVAILABLE' }
+            : {})
+        } }
       );
       remaining -= recordQty;
     } else {
@@ -353,6 +359,11 @@ async function transferPart({ dealerCode, fromBin, toBin, partNumber, qty, trans
       clone.quantity = movedQty;
       clone.binLocation = toBin;
       clone.bin = toBin;
+      if (clone.upiCode || clone.upiNo || clone.upiId) {
+        clone.currentBin = upper(toBin);
+        clone.currentLocationType = 'BIN';
+        clone.upiStatus = 'AVAILABLE';
+      }
       clone.timestamp = new Date();
       await Inventory.create(clone);
       remaining = 0;
