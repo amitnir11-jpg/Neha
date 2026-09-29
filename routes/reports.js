@@ -3333,6 +3333,7 @@ async function sendExcel(res, title, rows, type, query = {}) {
       };
     });
   });
+  highlightTotalDealerStockQty(sheet, tableColumns, 3);
   const buffer = await workbook.xlsx.writeBuffer();
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${title.replace(/[^a-z0-9]/gi, '_')}.xlsx"`);
@@ -3363,7 +3364,26 @@ async function buildExcelBuffer(title, rows, type, query = {}) {
       };
     });
   });
+  highlightTotalDealerStockQty(sheet, tableColumns, 3);
   return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+function highlightTotalDealerStockQty(sheet, columns, headerRowNumber = 3) {
+  const columnIndex = (columns || []).findIndex((column) => (
+    String(column.key || '').toLowerCase() === 'totaldealerstockqty'
+    || String(column.header || '').trim().toLowerCase() === 'total dealer stock qty'
+  ));
+  if (columnIndex < 0) return;
+
+  const excelColumn = columnIndex + 1;
+  const headerCell = sheet.getRow(headerRowNumber).getCell(excelColumn);
+  headerCell.font = { bold: true, color: { argb: 'FF1F2937' } };
+  headerCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFD966' } };
+  for (let rowNumber = headerRowNumber + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    const cell = sheet.getRow(rowNumber).getCell(excelColumn);
+    cell.font = { bold: true, color: { argb: 'FF1F2937' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
+  }
 }
 
 function sendPdf(res, title, rows, type, query = {}) {

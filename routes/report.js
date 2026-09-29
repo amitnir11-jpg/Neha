@@ -767,6 +767,24 @@ function applyHeaderStyle(sheet) {
   };
 }
 
+function highlightTotalDealerStockQty(sheet, columns, headerRowNumber = 1) {
+  const columnIndex = (columns || []).findIndex((column) => (
+    String(column.key || '').toLowerCase() === 'totaldealerstockqty'
+    || String(column.header || '').trim().toLowerCase() === 'total dealer stock qty'
+  ));
+  if (columnIndex < 0) return;
+
+  const excelColumn = columnIndex + 1;
+  const headerCell = sheet.getRow(headerRowNumber).getCell(excelColumn);
+  headerCell.font = { bold: true, color: { argb: 'FF1F2937' } };
+  headerCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFD966' } };
+  for (let rowNumber = headerRowNumber + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    const cell = sheet.getRow(rowNumber).getCell(excelColumn);
+    cell.font = { bold: true, color: { argb: 'FF1F2937' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
+  }
+}
+
 function addSheet(workbook, name, columns, rows) {
   const sheet = workbook.addWorksheet(name);
   const activeColumns = (columns || []).filter((column) => !isRemovedReportColumn(column));
@@ -795,6 +813,7 @@ function addSheet(workbook, name, columns, rows) {
       };
     });
   });
+  highlightTotalDealerStockQty(sheet, activeColumns);
   return sheet;
 }
 
@@ -2978,6 +2997,7 @@ function addPartwiseInventoryAuditSheet(workbook, data, name = 'Partwise Invento
       cell.alignment = { vertical: 'middle', wrapText: true };
     });
   });
+  highlightTotalDealerStockQty(sheet, columns, headerRowNumber);
   return sheet;
 }
 
