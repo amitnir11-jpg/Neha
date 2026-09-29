@@ -29,7 +29,7 @@ const { fittedPhysicalMovement, fittedStatus, fittedWorkshopQuantity } = require
 const { applyCacheHeaders, getCachedReport, getCachedResponse } = require('../utils/reportCache');
 const { Prisma, prisma } = require('../services/prisma');
 const stockValuationModule = require('../utils/stockValuation');
-const { assertDlcReconciliation, calculateStockValuation } = stockValuationModule;
+const { reconcileDlcTotals, calculateStockValuation } = stockValuationModule;
 const stockValuationTotals = typeof stockValuationModule.stockValuationTotals === 'function'
   ? stockValuationModule.stockValuationTotals
   : function stockValuationTotals(rows = []) {
@@ -151,7 +151,15 @@ async function resolveReportAuditQuery(query = {}) {
     Dealer.findOne({ dealerCode: resolved.dealerCode }).lean().catch(() => null),
     getActiveAudit({ dealerCode: resolved.dealerCode }).catch(() => null)
   ]);
-  const resolvedAuditId = cleanText((dealer && dealer.currentAuditId) || (activeAudit && activeAudit.auditId) || '');
+  let resolvedAuditId = cleanText((dealer && dealer.currentAuditId) || (activeAudit && activeAudit.auditId) || '');
+  if (!resolvedAuditId) {
+    const latestAudit = await Audit.findOne({ dealerCode: resolved.dealerCode })
+      .sort({ auditStartDate: -1, createdAt: -1 })
+      .select('auditId')
+      .lean()
+      .catch(() => null);
+    resolvedAuditId = cleanText(latestAudit && latestAudit.auditId);
+  }
   if (resolvedAuditId) resolved.auditId = resolvedAuditId;
   return resolved;
 }
@@ -3416,6 +3424,11 @@ function stockSummarySystemQty(row = {}) {
 }
 
 function stockSummaryPhysicalQty(row = {}) {
+  // Reconcile the same dealer-owned quantity used by the partwise valuation,
+  // including stock fitted to vehicles as well as stock in bins.
+  if (row.totalDealerStockQty !== undefined && row.totalDealerStockQty !== null && row.totalDealerStockQty !== '') {
+    return numberValue(row.totalDealerStockQty, 0);
+  }
   return firstPositiveNumber(row.finalAuditQty, row.actualAuditQty, row.physicalQty, row.actualQty);
 }
 
@@ -3687,7 +3700,9 @@ async function validateValuationReports(query = {}, provided = {}) {
   ]);
   const partwiseTotal = stockValuationTotals(partwise.rows).actualDlcTotal;
   const dashboardTotal = stockValuationTotals(partwise.rows).actualDlcTotal;
-  return assertDlcReconciliation({
+  // A reconciliation mismatch is useful report metadata, but it must not
+  // prevent users from opening or downloading the underlying report.
+  return reconcileDlcTotals({
     partwise: partwiseTotal,
     stockSummary: Number(stockSummary.sections && stockSummary.sections.grandTotal ? stockSummary.sections.grandTotal.physicalValue : 0),
     category: Number(category.grandTotal ? category.grandTotal.sumPhysicalValueOnDLC : 0),
@@ -3986,6 +4001,14 @@ async function movementWiseStockAnalysisQuery(payload = {}) {
       getActiveAudit({ dealerCode: query.dealerCode }).catch(() => null)
     ]);
     query.auditId = cleanText((dealer && dealer.currentAuditId) || (activeAudit && activeAudit.auditId) || '');
+    if (!query.auditId) {
+      const latestAudit = await Audit.findOne({ dealerCode: query.dealerCode })
+        .sort({ auditStartDate: -1, createdAt: -1 })
+        .select('auditId')
+        .lean()
+        .catch(() => null);
+      query.auditId = cleanText(latestAudit && latestAudit.auditId);
+    }
   }
   if (!query.auditId) {
     const error = new Error('Active Audit ID is required for Movement Wise Stock Analysis Report');
