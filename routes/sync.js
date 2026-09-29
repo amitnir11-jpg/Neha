@@ -373,10 +373,11 @@ async function resolveUpiCurrentLocation(scan = {}) {
     dealerCode,
     isDeleted: { $ne: true },
     deletedAt: null,
-    syncStatus: { $nin: ['failed', 'rejected', 'duplicate'] },
     $or: [{ upiCode }, { upiNo: upiCode }, { upiId: upiCode }]
   }).lean();
   const validRows = rows.filter((row) => (
+    !['FAILED', 'REJECTED', 'DUPLICATE'].includes(upper(row.syncStatus || ''))
+    &&
     ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'].includes(upper(row.scanStatus || 'ACCEPTED'))
     && ['INWARD', 'FITTED_RETURN', 'FITTED', 'OUTWARD', 'DAMAGE'].includes(movementTypeValue(row))
   ));
