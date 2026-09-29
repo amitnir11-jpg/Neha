@@ -3369,21 +3369,27 @@ async function buildExcelBuffer(title, rows, type, query = {}) {
 }
 
 function highlightTotalDealerStockQty(sheet, columns, headerRowNumber = 3) {
-  const columnIndex = (columns || []).findIndex((column) => (
-    String(column.key || '').toLowerCase() === 'totaldealerstockqty'
-    || String(column.header || '').trim().toLowerCase() === 'total dealer stock qty'
-  ));
-  if (columnIndex < 0) return;
-
-  const excelColumn = columnIndex + 1;
-  const headerCell = sheet.getRow(headerRowNumber).getCell(excelColumn);
-  headerCell.font = { bold: true, color: { argb: 'FF1F2937' } };
-  headerCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFD966' } };
-  for (let rowNumber = headerRowNumber + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
-    const cell = sheet.getRow(rowNumber).getCell(excelColumn);
-    cell.font = { bold: true, color: { argb: 'FF1F2937' } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
-  }
+  const emphasizedHeaders = new Set([
+    'totaldealerstockqty',
+    'actualstockvaluedlc',
+    'dmsstockvaluedlc'
+  ]);
+  const columnIndexes = (columns || []).reduce((indexes, column, index) => {
+    const key = String(column.key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const header = String(column.header || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (emphasizedHeaders.has(key) || emphasizedHeaders.has(header)) indexes.push(index + 1);
+    return indexes;
+  }, []);
+  columnIndexes.forEach((excelColumn) => {
+    const headerCell = sheet.getRow(headerRowNumber).getCell(excelColumn);
+    headerCell.font = { bold: true, color: { argb: 'FF1F2937' } };
+    headerCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFD966' } };
+    for (let rowNumber = headerRowNumber + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+      const cell = sheet.getRow(rowNumber).getCell(excelColumn);
+      cell.font = { bold: true, color: { argb: 'FF1F2937' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
+    }
+  });
 }
 
 function sendPdf(res, title, rows, type, query = {}) {
