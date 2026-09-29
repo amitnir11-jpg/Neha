@@ -4841,6 +4841,7 @@
     const rawInput = $('[name="rawScan"]', form);
     if (partInput) {
       partInput.disabled = false;
+      partInput.required = !upiFirstBarcode;
       partInput.readOnly = upiFirstBarcode;
       partInput.closest('label')?.classList.toggle('hidden', upiFirstBarcode);
     }
@@ -9199,6 +9200,7 @@
       toast('Audit marked as completed', 'success');
       await loadActiveAudit({ silent: true, allowMissing: true });
       await loadDealers();
+      if ($('#dashboard')?.classList.contains('active')) await loadDashboard({ force: true });
     } catch (error) {
       toast(`Failed to complete audit: ${error.message}`, 'error');
     }
