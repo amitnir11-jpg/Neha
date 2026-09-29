@@ -4822,24 +4822,28 @@
     const binInput = $('[name="bin"], [name="binLocation"]', form);
     const binLabel = binInput?.closest('label');
     const needsSourceBinFirst = ['OUTWARD', 'FITTED'].includes(scanType);
+    const partFirstBarcode = form.id === 'barcodeScanForm' && needsSourceBinFirst;
+    const showPartLookupBin = !partFirstBarcode || Boolean(String(binInput?.value || '').trim() || $('#barcodePartLocationStatus')?.dataset.lookupDone === 'true');
     if (binInput) {
-      binInput.required = needsSourceBinFirst || (form.id === 'barcodeScanForm' && ['INWARD', 'DAMAGE'].includes(scanType));
+      binInput.required = (needsSourceBinFirst && showPartLookupBin) || (form.id === 'barcodeScanForm' && ['INWARD', 'DAMAGE'].includes(scanType));
       binInput.disabled = form.id === 'barcodeScanForm' && scanType === 'VERIFICATION';
     }
     if (binLabel && form.id === 'barcodeScanForm') {
-      binLabel.classList.toggle('hidden', ['VERIFICATION'].includes(scanType));
+      const showBin = !['VERIFICATION'].includes(scanType)
+        && showPartLookupBin;
+      binLabel.classList.toggle('hidden', !showBin);
     }
     if (binLabel) {
       binLabel.classList.toggle('source-bin-required', needsSourceBinFirst);
       binLabel.classList.toggle('source-bin-missing', needsSourceBinFirst && !String(binInput?.value || '').trim());
     }
-    const waitingForBin = needsSourceBinFirst && !String(binInput?.value || '').trim();
     const partInput = $('[name="part"]', form);
     const rawInput = $('[name="rawScan"]', form);
-    if (partInput) partInput.disabled = waitingForBin;
-    if (rawInput) rawInput.disabled = waitingForBin;
+    if (partInput) partInput.disabled = false;
+    if (rawInput) rawInput.disabled = needsSourceBinFirst && !String(binInput?.value || '').trim();
     if (form.id === 'barcodeScanForm') {
-      setLivePill('barcodeReadyStatus', needsSourceBinFirst ? (binInput?.value ? 'Ready for Scan' : 'Enter Bin Location') : 'Ready for Scan', needsSourceBinFirst ? Boolean(binInput?.value) : true);
+      const ready = !needsSourceBinFirst || Boolean(String(binInput?.value || '').trim());
+      setLivePill('barcodeReadyStatus', ready ? 'Ready for Scan' : partFirstBarcode ? 'Scan Part Number First' : 'Enter Bin Location', ready);
     }
   }
 
@@ -4901,8 +4905,7 @@
           resetBarcodeScanFields(form, normalized, options.expectedRaw);
           setStatusPill('barcodeReadyStatus', data.message || (data.found ? 'Part Found' : 'Part Not Found'), data.found ? 'yellow' : 'red');
           setTimeout(() => {
-            setLivePill('barcodeReadyStatus', 'Ready for Scan', true);
-            $('#barcodeRaw')?.focus();
+            focusNextBarcodeField();
           }, 1200);
         } else {
           resetManualScanFields(form);
@@ -4913,7 +4916,7 @@
         if (isBarcodeForm) {
           setLivePill('barcodeReadyStatus', 'Verification failed', false);
           resetBarcodeScanFields(form, normalized, options.expectedRaw);
-          setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+          setTimeout(focusNextBarcodeField, 900);
         }
       }
       return;
@@ -4925,7 +4928,7 @@
       if (isBarcodeForm) {
         setLivePill('barcodeReadyStatus', 'Rejected - Ready', false);
         resetBarcodeScanFields(form, normalized, options.expectedRaw);
-        setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+        setTimeout(focusNextBarcodeField, 900);
       }
       return;
     }
@@ -4988,7 +4991,7 @@
     if (isBarcodeForm && isBarcodeScanRecentlyLocked(normalized, 3000)) {
       setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
       resetBarcodeScanFields(form, normalized, options.expectedRaw);
-      setTimeout(() => $('#barcodeRaw')?.focus(), 700);
+      setTimeout(focusNextBarcodeField, 700);
       return;
     }
 
@@ -5077,10 +5080,9 @@
         state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
         state.barcodeLastAt = Date.now();
         resetBarcodeScanFields(form, normalized, options.expectedRaw);
-        setLivePill('barcodeReadyStatus', data.duplicate ? 'Duplicate skipped' : 'Saved - Ready Next', true);
+        setLivePill('barcodeReadyStatus', data.duplicate ? 'Duplicate skipped' : 'Saved', true);
         setTimeout(() => {
-          setLivePill('barcodeReadyStatus', 'Ready for Scan', true);
-          $('#barcodeRaw')?.focus();
+          focusNextBarcodeField();
         }, 900);
       } else {
         resetManualScanFields(form);
@@ -5098,9 +5100,8 @@
         });
         if (!decision) {
           if (isBarcodeForm) {
-            setLivePill('barcodeReadyStatus', 'Ready for Scan', true);
             resetBarcodeScanFields(form, normalized, options.expectedRaw);
-            setTimeout(() => $('#barcodeRaw')?.focus(), 700);
+            setTimeout(focusNextBarcodeField, 700);
           } else {
             resetManualScanFields(form);
           }
@@ -5181,10 +5182,9 @@
           state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
           state.barcodeLastAt = Date.now();
           resetBarcodeScanFields(form, normalized, options.expectedRaw);
-          setLivePill('barcodeReadyStatus', retryData.duplicate ? 'Duplicate skipped' : 'Saved - Ready Next', true);
+          setLivePill('barcodeReadyStatus', retryData.duplicate ? 'Duplicate skipped' : 'Saved', true);
           setTimeout(() => {
-            setLivePill('barcodeReadyStatus', 'Ready for Scan', true);
-            $('#barcodeRaw')?.focus();
+            focusNextBarcodeField();
           }, 900);
         } else {
           resetManualScanFields(form);
@@ -5211,7 +5211,7 @@
         if (isBarcodeForm) {
           setLivePill('barcodeReadyStatus', 'Duplicate - Ready Next', false);
           resetBarcodeScanFields(form, normalized, options.expectedRaw);
-          setTimeout(() => $('#barcodeRaw')?.focus(), 700);
+          setTimeout(focusNextBarcodeField, 700);
         }
         return;
       }
@@ -5229,7 +5229,10 @@
           const updateData = await api('/api/scans/process', { method: 'POST', body: normalized });
           playScanTone('success');
           toast(updateData.message || 'Fitted part quantity updated');
-          if (isBarcodeForm) resetBarcodeScanFields(form, normalized, options.expectedRaw);
+          if (isBarcodeForm) {
+            resetBarcodeScanFields(form, normalized, options.expectedRaw);
+            setTimeout(focusNextBarcodeField, 700);
+          }
           else resetManualScanFields(form);
           if (updateData.scan) handleNewScan(updateData.scan, { showSuccess: true }).catch(() => undefined);
         }
@@ -5261,7 +5264,7 @@
           state.barcodeLastAt = Date.now();
           resetBarcodeScanFields(form, normalized, options.expectedRaw);
           setLivePill('barcodeReadyStatus', 'Saved locally', true);
-          setTimeout(() => $('#barcodeRaw')?.focus(), 900);
+          setTimeout(focusNextBarcodeField, 900);
         } else {
           resetManualScanFields(form);
         }
@@ -5276,7 +5279,7 @@
       if (isBarcodeForm) {
         setLivePill('barcodeReadyStatus', /not found|reject/i.test(error.message) ? 'Rejected - Ready' : 'Fix Error', false);
         resetBarcodeScanFields(form, normalized, options.expectedRaw);
-        setTimeout(() => $('#barcodeRaw')?.focus(), 1000);
+        setTimeout(focusNextBarcodeField, 1000);
       }
     }
   }
@@ -11854,6 +11857,61 @@
     return bins;
   }
 
+  async function lookupBarcodePartLocation() {
+    const form = $('#barcodeScanForm');
+    const partInput = $('#barcodePartNumber');
+    const status = $('#barcodePartLocationStatus');
+    if (!form || !partInput || !status) return [];
+    const partNumber = normalizePartText(partInput.value);
+    const scanType = String(form.elements.type.value || '').toUpperCase();
+    if (!['OUTWARD', 'FITTED'].includes(scanType) || !partNumber) return [];
+
+    const dealerCode = cleanDealerCode(form.elements.dealerCode.value || currentDealerCode());
+    if (!dealerCode) {
+      status.textContent = 'Select a dealer to check available bin locations.';
+      return [];
+    }
+
+    status.dataset.lookupDone = 'false';
+    status.dataset.lookupPart = partNumber;
+    status.textContent = 'Checking available bin locations...';
+    const binInput = $('#barcodeBinLocation');
+    binInput.value = '';
+    localStorage.removeItem(BARCODE_LAST_BIN_KEY);
+    updateScanTypeFields(form);
+    try {
+      const query = new URLSearchParams({ dealerCode, partNumber });
+      const data = await api(`/api/bin-transfer/parts?${query.toString()}`);
+      if (normalizePartText(partInput.value) !== partNumber) return [];
+      const matches = (data.parts || []).filter((row) => normalizePartText(row.partNumber) === partNumber);
+      const bins = Array.from(new Set(matches.map((row) => cleanDealerCode(row.currentBin || row.binLocation || row.binCode || '')).filter(Boolean)));
+      status.dataset.lookupDone = 'true';
+      status.dataset.lookupPart = partNumber;
+      if (bins.length === 1) {
+        binInput.value = bins[0];
+        localStorage.setItem(BARCODE_LAST_BIN_KEY, bins[0]);
+        $('#barcodeBinOptions').innerHTML = `<option value="${escapeHtml(bins[0])}"></option>`;
+        status.textContent = `Available in bin ${bins[0]}. Scan the UPI / QR code next.`;
+      } else if (bins.length > 1) {
+        $('#barcodeBinOptions').innerHTML = bins.map((bin) => `<option value="${escapeHtml(bin)}"></option>`).join('');
+        status.textContent = `Available in ${bins.length} bins. Select the bin for this part, then scan its UPI / QR code.`;
+      } else {
+        status.textContent = 'No available bin was found for this part. Enter the source bin location, then scan the UPI / QR code.';
+      }
+      updateScanTypeFields(form);
+      if (bins.length > 1 || bins.length === 0) binInput.focus();
+      return bins;
+    } catch (error) {
+      if (normalizePartText(partInput.value) !== partNumber) return [];
+      status.dataset.lookupDone = 'true';
+      status.textContent = `Could not check bin locations (${error.message}). Enter the source bin location manually.`;
+      $('#barcodeBinLabel').classList.remove('hidden');
+      binInput.focus();
+      updateScanTypeFields(form);
+      return [];
+    }
+  }
+
   function restoreBarcodeScanDefaults() {
     const form = $('#barcodeScanForm');
     if (!form) return;
@@ -11885,10 +11943,42 @@
       fillBarcodePartFromRaw();
     }
     const scanType = String($('[name="type"]', form)?.value || normalized.scanType || normalized.type || '').toUpperCase();
-    if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType)) $('[name="binLocation"]', form).value = normalized.binLocation || $('[name="binLocation"]', form).value || '';
+    if (['OUTWARD', 'FITTED'].includes(scanType)) {
+      $('[name="binLocation"]', form).value = '';
+      localStorage.removeItem(BARCODE_LAST_BIN_KEY);
+      const status = $('#barcodePartLocationStatus');
+      if (status) {
+        status.dataset.lookupDone = 'false';
+        status.dataset.lookupPart = '';
+        status.textContent = '';
+      }
+    } else if (['INWARD', 'DAMAGE'].includes(scanType)) {
+      $('[name="binLocation"]', form).value = normalized.binLocation || $('[name="binLocation"]', form).value || '';
+    }
     $('#barcodeDeviceId').value = ensureDeviceId();
     updateScanTypeFields(form);
     return rawStillCurrent;
+  }
+
+  function focusNextBarcodeField() {
+    const form = $('#barcodeScanForm');
+    const scanType = String(form?.elements.type.value || '').toUpperCase();
+    if (['OUTWARD', 'FITTED'].includes(scanType)) {
+      form.elements.part.value = '';
+      form.elements.binLocation.value = '';
+      localStorage.removeItem(BARCODE_LAST_BIN_KEY);
+      const status = $('#barcodePartLocationStatus');
+      if (status) {
+        status.dataset.lookupDone = 'false';
+        status.dataset.lookupPart = '';
+        status.textContent = '';
+      }
+      updateScanTypeFields(form);
+      setLivePill('barcodeReadyStatus', 'Scan Part Number First', false);
+      $('#barcodePartNumber')?.focus();
+      return;
+    }
+    $('#barcodeRaw')?.focus();
   }
 
   function scheduleBarcodeAutosave(delay = 35) {
@@ -11909,8 +11999,7 @@
       }
       setTimeout(() => {
         $('#barcodeRaw').value = '';
-        $('#barcodeRaw').focus();
-        setLivePill('barcodeReadyStatus', 'Ready for Scan', true);
+        focusNextBarcodeField();
       }, 850);
       return;
     }
@@ -12259,6 +12348,30 @@
       setLivePill('barcodeReadyStatus', event.target.value ? 'Ready for Scan' : 'Enter Bin Location', Boolean(event.target.value));
       updateScanTypeFields(event.target.closest('form'));
     });
+    $('#barcodePartNumber')?.addEventListener('input', (event) => {
+      const form = event.target.closest('form');
+      const status = $('#barcodePartLocationStatus');
+      const scanType = String(form?.elements.type.value || '').toUpperCase();
+      if (!['OUTWARD', 'FITTED'].includes(scanType)) return;
+      clearTimeout(event.target.lookupTimer);
+      const partNumber = normalizePartText(event.target.value);
+      if (status) {
+        status.dataset.lookupDone = 'false';
+        status.dataset.lookupPart = '';
+        status.textContent = '';
+      }
+      $('#barcodeBinLocation').value = '';
+      $('#barcodeBinOptions').innerHTML = '';
+      localStorage.removeItem(BARCODE_LAST_BIN_KEY);
+      updateScanTypeFields(form);
+      if (partNumber) event.target.lookupTimer = setTimeout(() => lookupBarcodePartLocation(), 250);
+    });
+    $('#barcodePartNumber')?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      clearTimeout(event.target.lookupTimer);
+      lookupBarcodePartLocation();
+    });
     $('#manualScanForm [name="bin"]')?.addEventListener('input', (event) => {
       event.target.value = cleanDealerCode(event.target.value);
       updateScanTypeFields(event.target.closest('form'));
@@ -12370,13 +12483,6 @@
     $('#manualScanForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
-      const scanType = String(form.elements.type.value || '').toUpperCase();
-      if (['OUTWARD', 'FITTED'].includes(scanType) && !String(form.elements.bin.value || '').trim()) {
-        updateScanTypeFields(form);
-        form.elements.bin.focus();
-        toast('Enter the source bin location before entering a part number.', 'error');
-        return;
-      }
       if (form.dataset.submitting === 'true') return;
       setScanFormSubmitting(form, true);
       try {
@@ -12466,11 +12572,22 @@
     $$('#manualScanForm [name="type"], #barcodeScanForm [name="type"]').forEach((select) => {
       updateScanTypeFields(select.closest('form'));
       select.addEventListener('change', () => {
+        if (select.closest('#barcodeScanForm') && ['OUTWARD', 'FITTED'].includes(String(select.value || '').toUpperCase())) {
+          $('#barcodeBinLocation').value = '';
+          $('#barcodeBinOptions').innerHTML = '';
+          localStorage.removeItem(BARCODE_LAST_BIN_KEY);
+          const status = $('#barcodePartLocationStatus');
+          if (status) {
+            status.dataset.lookupDone = 'false';
+            status.dataset.lookupPart = '';
+            status.textContent = '';
+          }
+        }
         updateScanTypeFields(select.closest('form'));
         if (['OUTWARD', 'FITTED'].includes(String(select.value || '').toUpperCase())) {
           const form = select.closest('form');
-          const bin = form?.querySelector('[name="bin"], [name="binLocation"]');
-          if (!String(bin?.value || '').trim()) bin?.focus();
+          if (form?.id === 'barcodeScanForm') form.elements.part.focus();
+          else form?.querySelector('[name="part"]')?.focus();
         }
         if (select.closest('#barcodeScanForm')) scheduleBarcodeAutosave(35);
       });

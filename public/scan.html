@@ -98,9 +98,10 @@
       </div>
 
       <section id="binPanel" class="bin-panel">
-        <label class="field">
+        <label id="activeBinField" class="field">
           <span>Source Bin Location *</span>
-          <input id="activeBinLocation" autocapitalize="characters" autocomplete="off" placeholder="Enter source bin before scanning">
+          <input id="activeBinLocation" list="activeBinOptions" autocapitalize="characters" autocomplete="off" placeholder="Enter source bin after part lookup">
+          <datalist id="activeBinOptions"></datalist>
         </label>
         <div class="bin-actions">
           <button id="saveBinBtn" class="btn btn-primary" type="button">Set Bin</button>
@@ -206,7 +207,7 @@
 
       <label id="manualBinWrap" class="field">
         <span>Source Bin Location *</span>
-        <input id="manualBinLocation" name="binLocation" autocapitalize="characters" placeholder="BIN-01">
+        <input id="manualBinLocation" name="binLocation" list="activeBinOptions" autocapitalize="characters" placeholder="Enter source bin after part lookup">
       </label>
 
       <label class="field">
@@ -298,6 +299,6 @@
   <script src="/config.js"></script>
   <script src="/js/runtime.js?v=20260923-recon-upload-dashboard-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
-  <script src="/scan.js?v=20260927-source-bin-required-v1"></script>
+  <script src="/scan.js?v=20260929-part-first-bin-lookup-v1"></script>
 </body>
 </html>

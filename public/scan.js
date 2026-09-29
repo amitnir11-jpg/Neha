@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20260926-fast-mobile-decoder-v1';
+  const APP_VERSION = '20260929-part-first-bin-lookup-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -131,6 +131,7 @@
     smartBinPromptResolver: null,
     duplicateAlertOpen: false,
     manualRaw: '',
+    pendingSourcePart: '',
     manualResumeAfterClose: false,
     manualMode: loadMode(),
     health: null,
@@ -338,6 +339,22 @@
 
   function requiresBin(mode = state.mode) {
     return Boolean(currentModeInfo(mode).requiresBin);
+  }
+
+  function partFirstMode(mode = state.mode) {
+    return ['OUTWARD', 'FITTED'].includes(upper(mode));
+  }
+
+  async function availableBinsForPart(partNumber) {
+    const dealerCode = activeDealerCode();
+    if (!dealerCode || !partNumber) return [];
+    const query = new URLSearchParams({ dealerCode, partNumber: upper(partNumber) });
+    const data = await api(`/api/bin-transfer/parts?${query.toString()}`);
+    const normalizedPart = upper(partNumber);
+    return Array.from(new Set((data.parts || [])
+      .filter((row) => upper(row.partNumber) === normalizedPart && Number(row.availableQty || 0) > 0)
+      .map((row) => upper(row.currentBin || row.binLocation || row.binCode || ''))
+      .filter(Boolean)));
   }
 
   function suppressTimedKey(map, key, ttlMs = DUPLICATE_NOTICE_MS) {
@@ -1508,9 +1525,9 @@
     regWrap.classList.toggle('hidden', !fitted);
     jobWrap.classList.toggle('hidden', !fitted);
 
-    binInput.required = info.requiresBin;
+    binInput.required = info.requiresBin && (!partFirstMode() || Boolean(state.pendingSourcePart));
     const partInput = byId('manualPartNumber');
-    if (partInput) partInput.disabled = info.requiresBin && !upper(binInput.value);
+    if (partInput) partInput.disabled = false;
     qtyInput.required = !verification;
     mrpInput.required = false;
     if (dlcInput) dlcInput.required = false;
@@ -1527,17 +1544,24 @@
     if (!panel || !input || !message) return;
 
     panel.classList.toggle('hidden', !info.requiresBin && state.mode !== 'OUTWARD');
+    byId('activeBinField')?.classList.toggle('hidden', partFirstMode() && !state.pendingSourcePart);
     input.value = current;
-    input.required = info.requiresBin;
+    input.required = info.requiresBin && (!partFirstMode() || Boolean(state.pendingSourcePart));
     if (info.requiresBin) {
       const ready = Boolean(current);
       panel.classList.toggle('ready', ready);
       panel.classList.toggle('blocked', !ready);
-      message.textContent = ready
-        ? ['OUTWARD', 'FITTED'].includes(state.mode)
-          ? `Parts will be deducted from source bin ${current}.`
+      message.textContent = partFirstMode() && !state.pendingSourcePart
+        ? 'Scan or enter the part number first. The system will find its source bin.'
+        : ready
+        ? partFirstMode()
+          ? `Part ${state.pendingSourcePart} is assigned to source bin ${current}. Scan the UPI / QR code next.`
           : `Scanning will save to bin ${current}.`
-        : `Enter the source bin before ${info.label.toLowerCase()} scans.`;
+        : partFirstMode()
+          ? state.pendingSourcePart
+            ? `No bin was selected for ${state.pendingSourcePart}. Choose an available bin or enter the source bin, then scan its UPI / QR code.`
+            : 'Scan or enter the part number first. The system will find its source bin.'
+          : `Enter the source bin before ${info.label.toLowerCase()} scans.`;
     } else if (state.mode === 'VERIFICATION') {
       panel.classList.remove('blocked');
       panel.classList.remove('ready');
@@ -1552,12 +1576,13 @@
   }
 
   function ensureActiveBinReady() {
+    if (partFirstMode() && !state.pendingSourcePart) return true;
     if (!requiresBin()) return true;
     const bin = loadActiveBin();
     if (bin) return true;
     state.cameraRequested = true;
-    cameraState('Camera on - enter a bin to save this scan.');
-    toast('Enter a bin location before scanning parts in this mode.', 'error');
+    cameraState('Choose the source bin for this part, then scan its UPI.');
+    toast('Choose or enter the source bin location for this part.', 'error');
     byId('activeBinLocation').focus();
     return false;
   }
@@ -2081,6 +2106,7 @@
   function captureReadyMessage(fallback = '') {
     const bin = loadActiveBin();
     if (fallback) return fallback;
+    if (partFirstMode() && !state.pendingSourcePart) return 'Scan the part number first; its source bin will be looked up automatically.';
     return bin ? `Bin ${bin} ready. Camera will scan here when live preview is available.` : insecureCameraMessage();
   }
 
@@ -2098,10 +2124,10 @@
 
   function startCaptureScan() {
     if (!ensureScanSession()) return;
-    if (requiresBin() && !loadActiveBin()) {
+    if (requiresBin() && !(partFirstMode() && !state.pendingSourcePart) && !loadActiveBin()) {
       state.cameraRequested = true;
-      cameraState('Enter bin first, then turn the camera on.');
-      toast('Enter a bin location before scanning parts in this mode.', 'error');
+      cameraState('Choose the source bin for this part, then scan its UPI.');
+      toast('Choose or enter the source bin location for this part.', 'error');
       byId('activeBinLocation')?.focus();
       renderCameraControlState({ live: false, starting: false });
       return;
@@ -3220,7 +3246,7 @@
     state.paused = false;
     clearTimeout(state.autoCameraTimer);
     state.autoCameraTimer = null;
-    if (requiresBin() && !loadActiveBin() && focusBin) byId('activeBinLocation')?.focus();
+    if (requiresBin() && !partFirstMode() && !loadActiveBin() && focusBin) byId('activeBinLocation')?.focus();
     if (forceRestart && state.scanning) stopCamera({ preserveRequest: true });
     cameraState('Ready to scan');
     const startAttempt = () => {
@@ -3421,17 +3447,57 @@
       cameraState('Ready to scan');
       return;
     }
+    if (partFirstMode() && !state.pendingSourcePart) {
+      const partNumber = parsePartCandidate(raw);
+      if (!partNumber || extractUpiIdFromText({ rawScanString: raw, rawScan: raw })) {
+        cameraState('Scan part number first');
+        toast('Scan the part number barcode first. The UPI / QR code comes next.', 'warning');
+        return;
+      }
+      state.pendingSourcePart = upper(partNumber);
+      let bins = [];
+      try {
+        bins = await availableBinsForPart(partNumber);
+      } catch (error) {
+        console.warn('[SCAN] part bin lookup failed', error);
+      }
+      const options = byId('activeBinOptions');
+      if (options) options.innerHTML = bins.map((bin) => `<option value="${escapeHtml(bin)}"></option>`).join('');
+      if (bins.length === 1) {
+        setActiveBin(bins[0]);
+        renderBinPanel();
+        cameraState(`Part ${partNumber} found in ${bins[0]}. Scan its UPI / QR code.`);
+        toast(`Part found in bin ${bins[0]}. Scan the UPI / QR code next.`, 'success');
+      } else {
+        setActiveBin('');
+        renderBinPanel();
+        state.paused = true;
+        stopCamera({ preserveRequest: true });
+        cameraState(bins.length ? 'Choose the part source bin' : 'Enter the part source bin');
+        toast(bins.length
+          ? `Part ${partNumber} is available in multiple bins. Choose its source bin.`
+          : `No available bin found for ${partNumber}. Enter its source bin.`, 'warning');
+        byId('activeBinLocation')?.focus();
+      }
+      return;
+    }
+    const scannedPart = parsePartCandidate(raw);
+    if (scannedPart && state.pendingSourcePart && upper(scannedPart) !== upper(state.pendingSourcePart)) {
+      cameraState('Part number does not match');
+      toast(`Scanned code is for ${scannedPart}, but the selected part is ${state.pendingSourcePart}. Scan the correct UPI / QR code.`, 'error');
+      return;
+    }
     if (mode === 'FITTED') {
       toast('Fitted scans need vehicle and job card details', 'warning');
       vibrate([30, 40, 30]);
       openManualDialog({
         rawText: raw,
         title: 'Complete fitted details',
-        autoPartNumber: parsePartCandidate(raw)
+        autoPartNumber: state.pendingSourcePart || parsePartCandidate(raw)
       });
       return;
     }
-    const partNumber = parsePartCandidate(raw);
+    const partNumber = state.pendingSourcePart || parsePartCandidate(raw);
     if (!partNumber) {
       cameraState('Part number not found');
       toast('The code was read, but it does not contain a recognized part number. Use manual entry or check the QR data.', 'error');
@@ -3450,6 +3516,8 @@
         return;
       }
       await saveRecord(record, { silent: true, deferSync: false });
+      state.pendingSourcePart = '';
+      renderBinPanel();
       byId('manualRawPreview').hidden = true;
       cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
       beep('ok');
@@ -3737,11 +3805,11 @@
     renderModeFields();
     byId('manualForm').reset();
     byId('manualTitle').textContent = title || (state.mode === 'FITTED' ? 'Complete fitted details' : state.mode === 'VERIFICATION' ? 'Verification entry' : 'Add scan manually');
-    byId('manualPartNumber').value = upper(autoPartNumber || parsePartCandidate(rawText));
+    byId('manualPartNumber').value = upper(autoPartNumber || state.pendingSourcePart || parsePartCandidate(rawText));
     byId('manualQty').value = '1';
     byId('manualMrp').value = '';
     if (byId('manualDlc')) byId('manualDlc').value = '';
-    byId('manualBinLocation').value = requiresBin() ? loadActiveBin() : '';
+    byId('manualBinLocation').value = requiresBin() ? (partFirstMode() && !state.pendingSourcePart ? '' : loadActiveBin()) : '';
     byId('manualRegdNo').value = '';
     byId('manualJobCardNo').value = '';
     byId('partSuggestions').innerHTML = '';
@@ -3754,7 +3822,8 @@
     }
     renderModeFields();
     dialog.showModal();
-    if (requiresBin() && !byId('manualBinLocation').value) byId('manualBinLocation').focus();
+    if (partFirstMode() && !state.pendingSourcePart) byId('manualPartNumber').focus();
+    else if (requiresBin() && !byId('manualBinLocation').value) byId('manualBinLocation').focus();
     else byId('manualPartNumber').focus();
   }
 
@@ -3779,12 +3848,7 @@
     const form = new FormData(event.currentTarget);
     const mode = currentScanType();
     const qty = Number(form.get('qty') || 1);
-    const binLocation = upper(form.get('binLocation') || '');
-    if (requiresBin() && !binLocation) {
-      toast('Enter a bin location before entering a part number.', 'error');
-      byId('manualBinLocation').focus();
-      return;
-    }
+    let binLocation = upper(form.get('binLocation') || '');
     const partNumber = upper(form.get('partNumber'));
     if (!partNumber) {
       toast('Part number is required', 'error');
@@ -3795,9 +3859,24 @@
     const jobCardNo = upper(form.get('jobCardNo') || '');
 
     if (requiresBin() && !binLocation) {
-      toast('Bin location is required for this mode', 'error');
-      byId('manualBinLocation').focus();
-      return;
+      let bins = [];
+      if (partFirstMode()) {
+        try { bins = await availableBinsForPart(partNumber); } catch (_) {}
+      }
+      const options = byId('activeBinOptions');
+      if (options) options.innerHTML = bins.map((bin) => `<option value="${escapeHtml(bin)}"></option>`).join('');
+      if (bins.length === 1) {
+        binLocation = bins[0];
+        byId('manualBinLocation').value = binLocation;
+        setActiveBin(binLocation);
+      } else {
+        byId('manualNote').textContent = bins.length > 1
+          ? `Part found in ${bins.join(', ')}. Choose its source bin, then save.`
+          : `No available bin found for ${partNumber}. Enter the source bin, then save.`;
+        toast(bins.length ? 'Choose the source bin for this part.' : 'Enter the source bin for this part.', 'warning');
+        byId('manualBinLocation').focus();
+        return;
+      }
     }
 
     if (mode === 'FITTED' && (!regdNo || !jobCardNo)) {
@@ -3821,6 +3900,8 @@
       record = await preflightSmartBinDecision(record);
       if (!record) return;
       await saveRecord(record, { silent: true, deferSync: false });
+      state.pendingSourcePart = '';
+      renderBinPanel();
       closeManualDialog();
       cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
       toast(navigator.onLine ? 'Queued' : 'Network pending', navigator.onLine ? 'success' : 'warning');
@@ -3924,8 +4005,6 @@
     });
     byId('manualBinLocation').addEventListener('input', (event) => {
       event.target.value = upper(event.target.value);
-      const partInput = byId('manualPartNumber');
-      if (partInput) partInput.disabled = requiresBin() && !event.target.value;
     });
     byId('activeBinLocation').addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;
@@ -4145,6 +4224,7 @@
 
   function setMode(mode, { silent = false } = {}) {
     const nextMode = MODE_INFO[upper(mode)] ? upper(mode) : 'INWARD';
+    if (nextMode !== state.mode) state.pendingSourcePart = '';
     saveMode(nextMode);
     renderModeButtons();
     renderModeMeta();
@@ -4159,7 +4239,7 @@
       const activeBin = loadActiveBin();
       if (activeBin) {
         byId('manualBinLocation').value = activeBin;
-      } else if (['OUTWARD', 'FITTED'].includes(nextMode)) {
+      } else if (!partFirstMode(nextMode) && ['OUTWARD', 'FITTED'].includes(nextMode)) {
         setTimeout(() => byId('activeBinLocation')?.focus(), 0);
       }
     }
