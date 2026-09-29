@@ -4822,10 +4822,10 @@
     const binInput = $('[name="bin"], [name="binLocation"]', form);
     const binLabel = binInput?.closest('label');
     const needsSourceBinFirst = ['OUTWARD', 'FITTED'].includes(scanType);
-    const partFirstBarcode = form.id === 'barcodeScanForm' && needsSourceBinFirst;
-    const showPartLookupBin = !partFirstBarcode || Boolean(String(binInput?.value || '').trim() || $('#barcodePartLocationStatus')?.dataset.lookupDone === 'true');
+    const upiFirstBarcode = form.id === 'barcodeScanForm' && needsSourceBinFirst;
+    const showPartLookupBin = !upiFirstBarcode;
     if (binInput) {
-      binInput.required = (needsSourceBinFirst && showPartLookupBin) || (form.id === 'barcodeScanForm' && ['INWARD', 'DAMAGE'].includes(scanType));
+      binInput.required = (!upiFirstBarcode && needsSourceBinFirst) || (form.id === 'barcodeScanForm' && ['INWARD', 'DAMAGE'].includes(scanType));
       binInput.disabled = form.id === 'barcodeScanForm' && scanType === 'VERIFICATION';
     }
     if (binLabel && form.id === 'barcodeScanForm') {
@@ -4839,11 +4839,15 @@
     }
     const partInput = $('[name="part"]', form);
     const rawInput = $('[name="rawScan"]', form);
-    if (partInput) partInput.disabled = false;
-    if (rawInput) rawInput.disabled = needsSourceBinFirst && !String(binInput?.value || '').trim();
+    if (partInput) {
+      partInput.disabled = false;
+      partInput.readOnly = upiFirstBarcode;
+      partInput.closest('label')?.classList.toggle('hidden', upiFirstBarcode);
+    }
+    if (rawInput) rawInput.disabled = false;
     if (form.id === 'barcodeScanForm') {
-      const ready = !needsSourceBinFirst || Boolean(String(binInput?.value || '').trim());
-      setLivePill('barcodeReadyStatus', ready ? 'Ready for Scan' : partFirstBarcode ? 'Scan Part Number First' : 'Enter Bin Location', ready);
+      const ready = upiFirstBarcode || !needsSourceBinFirst || Boolean(String(binInput?.value || '').trim());
+      setLivePill('barcodeReadyStatus', ready ? (upiFirstBarcode ? 'Ready for UPI / QR Scan' : 'Ready for Scan') : 'Enter Bin Location', ready);
     }
   }
 
@@ -4922,7 +4926,9 @@
       return;
     }
     const scanPartNumber = normalizePartText(normalized.partNumber || normalized.part || '');
-    if (!validPartText(scanPartNumber)) {
+    const upiFirstBarcode = isBarcodeForm && ['OUTWARD', 'FITTED'].includes(normalized.scanType);
+    const hasUpiIdentity = Boolean(normalized.upiId || normalized.upiNo || extractUpiIdFromText(normalized));
+    if (!validPartText(scanPartNumber) && !(upiFirstBarcode && hasUpiIdentity)) {
       playScanTone('error');
       toast('Invalid part number format', 'error');
       if (isBarcodeForm) {
@@ -4962,12 +4968,10 @@
     normalized.synced = true;
     normalized.isSynced = true;
     normalized.syncStatus = 'synced';
-    const needsManualBin = ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(normalized.scanType);
+    const needsManualBin = ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(normalized.scanType) && !upiFirstBarcode;
     if (needsManualBin && !normalized.binLocation) {
       playScanTone('error');
-      const prompt = ['OUTWARD', 'FITTED'].includes(normalized.scanType)
-        ? 'Enter the source bin location before entering or scanning a part.'
-        : 'Please enter/select bin location before scanning.';
+      const prompt = 'Please enter/select bin location before scanning.';
       toast(prompt, 'error');
       if (isBarcodeForm) {
         setLivePill('barcodeReadyStatus', 'Enter Bin Location', false);
@@ -11974,8 +11978,8 @@
         status.textContent = '';
       }
       updateScanTypeFields(form);
-      setLivePill('barcodeReadyStatus', 'Scan Part Number First', false);
-      $('#barcodePartNumber')?.focus();
+      setLivePill('barcodeReadyStatus', 'Ready for UPI / QR Scan', true);
+      $('#barcodeRaw')?.focus();
       return;
     }
     $('#barcodeRaw')?.focus();
@@ -12008,7 +12012,8 @@
       if (state.barcodeAutoSaving) return;
       const scanType = String($('[name="type"]', form)?.value || 'INWARD').toUpperCase();
       const bin = normalizePartText($('[name="binLocation"]', form)?.value || '');
-      if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType) && !bin) {
+      const upiFirstBarcode = ['OUTWARD', 'FITTED'].includes(scanType);
+      if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType) && !bin && !upiFirstBarcode) {
         playScanTone('error');
         toast('Please enter/select bin location before scanning.', 'error');
         setLivePill('barcodeReadyStatus', 'Enter Bin Location', false);
@@ -12586,7 +12591,7 @@
         updateScanTypeFields(select.closest('form'));
         if (['OUTWARD', 'FITTED'].includes(String(select.value || '').toUpperCase())) {
           const form = select.closest('form');
-          if (form?.id === 'barcodeScanForm') form.elements.part.focus();
+          if (form?.id === 'barcodeScanForm') form.elements.rawScan.focus();
           else form?.querySelector('[name="part"]')?.focus();
         }
         if (select.closest('#barcodeScanForm')) scheduleBarcodeAutosave(35);

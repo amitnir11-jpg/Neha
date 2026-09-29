@@ -441,6 +441,11 @@ async function prepareUpiSourceLocation(scan = {}) {
   }
   const location = await resolveUpiCurrentLocation(scan);
   if (!location) return UPI_LOCATION_REQUIRED_MESSAGE;
+  if (!scan.partNumber && location.partNumber) {
+    scan.partNumber = location.partNumber;
+    scan.normalizedPartNumber = location.partNumber;
+    scan.part = location.partNumber;
+  }
   if (location.status === 'OUTWARD') return UPI_ALREADY_OUTWARD_MESSAGE;
   if (location.status === 'FITTED' && scan.scanType === 'FITTED') return UPI_ALREADY_FITTED_MESSAGE;
   if (location.status === 'FITTED' && scan.scanType === 'OUTWARD') {
