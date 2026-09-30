@@ -51,6 +51,9 @@ router.put('/:id', async (req, res) => {
       isActive: req.body.active !== false && req.body.active !== 'false',
       approved: req.body.approved !== false && req.body.approved !== 'false'
     };
+    if (!update.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(update.email)) {
+      return res.status(400).json({ success: false, message: 'Registered email address is required.' });
+    }
     if (['audit_user', 'mobile_user'].includes(update.role) && (!update.dealerAccess.length || update.dealerAccess.includes('ALL'))) {
       return res.status(400).json({ success: false, message: 'Audit and Mobile users must be assigned to at least one specific dealer.' });
     }

@@ -518,6 +518,14 @@ app.use(async (req, res, next) => {
   });
 });
 
+app.use((req, res, next) => {
+  if (req.query && req.query.resetToken) {
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+  }
+  next();
+});
+
 app.use(express.static(PUBLIC_DIR, {
   etag: true,
   lastModified: true,
@@ -834,9 +842,15 @@ app.use('/api', (req, res) => {
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
   const status = error.status || error.statusCode || 500;
+  let safeUrl = req.originalUrl;
+  try {
+    const parsedUrl = new URL(req.originalUrl || '/', 'http://localhost');
+    ['token', 'resetToken', 'otp'].forEach((key) => parsedUrl.searchParams.delete(key));
+    safeUrl = `${parsedUrl.pathname}${parsedUrl.search}`;
+  } catch (_) { safeUrl = '/'; }
   console.error('API error', {
     method: req.method,
-    url: req.originalUrl,
+    url: safeUrl,
     status,
     message: error.message
   });

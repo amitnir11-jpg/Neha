@@ -154,6 +154,32 @@ body[data-page="login"].login-body .reset-flow > form.active {
   display: grid;
 }
 
+body[data-page="login"].login-body .reset-flow h2 {
+  margin: 0;
+  color: #172b49;
+  font-size: 21px;
+}
+
+body[data-page="login"].login-body .reset-flow p {
+  margin: 0;
+  color: var(--login-muted);
+  line-height: 1.5;
+}
+
+body[data-page="login"].login-body .reset-password-strength {
+  color: #8a4b10;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+body[data-page="login"].login-body .reset-password-strength.is-valid {
+  color: #157347;
+}
+
+body[data-page="login"].login-body .reset-back-login {
+  margin-top: 12px;
+}
+
 body[data-page="login"].login-body .login-field {
   display: grid;
   gap: 7px;

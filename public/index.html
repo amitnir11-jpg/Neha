@@ -245,49 +245,41 @@
 
         <section id="resetLoginForm" class="login-form reset-flow" aria-label="Reset access">
           <form id="resetRequestForm" class="reset-step">
+            <h2>Forgot Password</h2>
+            <p>Enter your User ID or registered email address. A password reset link will be sent to your registered email.</p>
             <label class="login-field">
-              <span class="field-label">Username or Email ID</span>
+              <span class="field-label">User ID / Registered Email</span>
               <span class="input-wrap">
                 <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
-                <input name="usernameOrEmail" type="text" autocomplete="username" required>
+                <input name="identifier" type="text" autocomplete="username" required>
               </span>
             </label>
             <button class="primary-button login-submit" type="submit">
-              <span>Send OTP Reset Link</span>
+              <span>Send Reset Link</span>
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
             </button>
           </form>
 
           <form id="resetPasswordForm" class="reset-step">
-            <label class="login-field">
-              <span class="field-label">Email ID</span>
-              <span class="input-wrap">
-                <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
-                <input name="email" id="resetEmailInput" type="email" autocomplete="email" required>
-              </span>
-            </label>
-            <label class="login-field">
-              <span class="field-label">Reset Link Token</span>
-              <span class="input-wrap">
-                <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 7h.01"/><path d="M10 14 21 3"/><path d="M21 3h-6v6"/><circle cx="8" cy="16" r="5"/></svg>
-                <input name="token" id="resetTokenInput" autocomplete="one-time-code" required>
-              </span>
-            </label>
-            <label class="login-field">
-              <span class="field-label">OTP</span>
-              <span class="input-wrap">
-                <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg>
-                <input name="otp" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required>
-              </span>
-            </label>
+            <h2>Reset Password</h2>
+            <input name="token" id="resetTokenInput" type="hidden" required>
             <label class="login-field">
               <span class="field-label">New Password</span>
               <span class="input-wrap">
                 <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-                <input name="password" type="password" autocomplete="new-password" required>
+                <input name="newPassword" id="newResetPassword" type="password" autocomplete="new-password" required>
                 <button class="password-toggle" type="button" data-password-toggle aria-label="Show password">
                   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
+              </span>
+            </label>
+            <div id="resetPasswordStrength" class="reset-password-strength" aria-live="polite">Use 8+ characters with uppercase, lowercase, a number, and a special character.</div>
+            <label class="login-field">
+              <span class="field-label">Confirm New Password</span>
+              <span class="input-wrap">
+                <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                <input name="confirmPassword" id="confirmResetPassword" type="password" autocomplete="new-password" required>
+                <button class="password-toggle" type="button" data-password-toggle aria-label="Show password"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button>
               </span>
             </label>
             <button class="primary-button login-submit" type="submit">
@@ -295,6 +287,11 @@
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
             </button>
           </form>
+          <div id="resetSuccessPanel" class="reset-step reset-success hidden">
+            <h2>Password reset successfully.</h2><p>Please login again using your new password.</p>
+            <button id="resetGoToLogin" class="primary-button login-submit" type="button">Go to Login</button>
+          </div>
+          <button class="text-link reset-back-login" type="button" data-login-tab="admin">Back to Login</button>
         </section>
 
         <div id="loginMessage" class="form-message" aria-live="polite"></div>

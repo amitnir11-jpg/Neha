@@ -335,6 +335,7 @@ module.exports = {
   MasterCatalogue: model('MasterCatalogue', 'masterCatalogue', 'mastercatalogues', { prepare: prepareMasterCatalogue }),
   MasterPart: model('MasterPart', 'masterPart', 'masterparts', { prepare: prepareMasterPart }),
   OfflineQueue: model('OfflineQueue', 'offlineQueue', 'offlinequeues', { prepare: prepareCommonLog }),
+  PasswordResetToken: model('PasswordResetToken', 'passwordResetToken', 'password_reset_tokens'),
   PartPriceHistory: model('PartPriceHistory', 'partPriceHistory', 'partpricehistories', { prepare: preparePartPriceHistory }),
   RejectedScan: model('RejectedScan', 'rejectedScan', 'rejectedscans', { prepare: prepareCommonLog }),
   ReportFilterSetting: model('ReportFilterSetting', 'reportFilterSetting', 'reportfiltersettings', { prepare: prepareCommonLog }),

@@ -738,11 +738,10 @@
 
     if (params.get('resetToken')) {
       const tokenInput = $('#resetTokenInput');
-      const emailInput = $('#resetEmailInput');
       if (tokenInput) tokenInput.value = params.get('resetToken') || '';
-      if (emailInput) emailInput.value = params.get('email') || '';
       const resetButton = $('[data-login-tab="reset"]');
       if (resetButton) resetButton.click();
+      window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.hash}`);
     }
 
     $$('[data-password-toggle]').forEach((button) => {
@@ -821,28 +820,66 @@
     $('#resetRequestForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       const message = $('#loginMessage');
+      const submit = event.currentTarget.querySelector('button[type="submit"]');
+      if (submit?.disabled) return;
+      if (submit) submit.disabled = true;
       try {
         const data = await api('/api/auth/forgot-password', { method: 'POST', body: formValues(event.currentTarget) });
-        message.className = data.mailSent === false ? 'form-message error' : 'form-message success';
-        message.textContent = data.message || 'OTP reset link sent.';
+        message.className = data.success === false ? 'form-message error' : 'form-message success';
+        message.textContent = data.message || 'If the account exists and has a registered email address, a password reset link has been sent.';
       } catch (error) {
         message.className = 'form-message error';
         message.textContent = error.message;
+      } finally {
+        window.setTimeout(() => { if (submit) submit.disabled = false; }, 30000);
+      }
+    });
+
+    const resetPasswordInput = $('#newResetPassword');
+    const strength = $('#resetPasswordStrength');
+    resetPasswordInput?.addEventListener('input', () => {
+      const value = resetPasswordInput.value;
+      const checks = [value.length >= 8, /[A-Z]/.test(value), /[a-z]/.test(value), /[0-9]/.test(value), /[^A-Za-z0-9]/.test(value)];
+      const score = checks.filter(Boolean).length;
+      if (strength) {
+        strength.textContent = score === 5 ? 'Password meets all requirements.' : `${score < 3 ? 'Weak' : score < 5 ? 'Almost there' : 'Strong'} · ${checks.map((ok, i) => ok ? '' : ['8+ characters', 'uppercase letter', 'lowercase letter', 'number', 'special character'][i]).filter(Boolean).join(', ')}`;
+        strength.classList.toggle('is-valid', score === 5);
       }
     });
 
     $('#resetPasswordForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       const message = $('#loginMessage');
+      const form = event.currentTarget;
+      const password = form.elements.newPassword.value;
+      if (password !== form.elements.confirmPassword.value) {
+        message.className = 'form-message error';
+        message.textContent = 'New password and confirmation must match.';
+        return;
+      }
+      if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
+        message.className = 'form-message error';
+        message.textContent = 'Use at least 8 characters with an uppercase letter, lowercase letter, number, and special character.';
+        return;
+      }
       try {
-        const data = await api('/api/auth/reset-password', { method: 'POST', body: formValues(event.currentTarget) });
-        event.currentTarget.reset();
+        const data = await api('/api/auth/reset-password', { method: 'POST', body: {
+          token: form.elements.token.value, newPassword: password, confirmPassword: form.elements.confirmPassword.value
+        } });
+        form.reset();
+        form.classList.remove('active');
+        $('#resetSuccessPanel')?.classList.remove('hidden');
+        $('.reset-back-login')?.classList.add('hidden');
         message.className = 'form-message success';
-        message.textContent = data.message || 'Password reset successful.';
+        message.textContent = data.message || 'Password reset successfully. Please login again using your new password.';
       } catch (error) {
         message.className = 'form-message error';
         message.textContent = error.message;
       }
+    });
+    $('#resetGoToLogin')?.addEventListener('click', () => {
+      $('#resetSuccessPanel')?.classList.add('hidden');
+      $('[data-login-tab="admin"]')?.click();
     });
   }
 

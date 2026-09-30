@@ -6,16 +6,14 @@ const User = require('../models/User');
 const Dealer = require('../models/Dealer');
 const UserDealerMapping = require('../models/UserDealerMapping');
 const Audit = require('../models/Audit');
-const smtpConfig = require('../utils/smtpConfig');
+const passwordReset = require('../services/PasswordResetService');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
 const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();
 const DEFAULT_ADMIN_PASSWORD = String(process.env.DEFAULT_ADMIN_PASSWORD || 'admin');
-const DEFAULT_OTP_MAIL_ID = 'amitsvision4u@gmail.com';
 const MOBILE_TOKEN_TTL = String(process.env.MOBILE_JWT_EXPIRES_IN || '30d').trim() || '30d';
-const RESET_TTL_MINUTES = 15;
 const AUTH_COOKIE_NAME = 'daksh_auth';
 const AUTH_COOKIE_MAX_AGE_SECONDS = 12 * 60 * 60;
 const ROLES = ['super_admin', 'admin', 'audit_user', 'mobile_user'];
@@ -30,6 +28,16 @@ const LEGACY_ROLE_MAP = {
   scanner: 'audit_user',
   outward_counter: 'audit_user'
 };
+
+function safeRequestUrl(req) {
+  try {
+    const parsed = new URL(req.originalUrl || '/', 'http://localhost');
+    ['token', 'resetToken', 'otp'].forEach((key) => parsed.searchParams.delete(key));
+    return `${parsed.pathname}${parsed.search}`;
+  } catch (_) {
+    return '/';
+  }
+}
 
 function normalizeRole(value, fallback = 'audit_user') {
   const role = String(value || '').trim().toLowerCase();
@@ -122,7 +130,7 @@ async function requirePageAuth(req, res, next) {
   try {
     const claims = jwt.verify(token, JWT_SECRET);
     const freshUser = await User.findOne({ _id: claims.id, approved: { $ne: false } }).lean();
-    if (!freshUser || !isUserActive(freshUser)) throw new Error('Session is no longer active');
+    if (!freshUser || !isUserActive(freshUser) || !sessionIsCurrent(claims, freshUser)) throw new Error('Session is no longer active');
     req.user = { ...publicUser(freshUser), dealerAccess: await userDealerAccessCodes(freshUser) };
     return next();
   } catch (error) {
@@ -139,7 +147,7 @@ async function authenticateSocket(socket, next) {
   try {
     const claims = jwt.verify(token, JWT_SECRET);
     const freshUser = await User.findOne({ _id: claims.id, approved: { $ne: false } }).lean();
-    if (!freshUser || !isUserActive(freshUser)) return next(new Error('User is inactive or not approved'));
+    if (!freshUser || !isUserActive(freshUser) || !sessionIsCurrent(claims, freshUser)) return next(new Error('User is inactive or not approved'));
     socket.user = { ...publicUser(freshUser), dealerAccess: await userDealerAccessCodes(freshUser) };
     return next();
   } catch (error) {
@@ -176,7 +184,7 @@ async function requireAuth(req, res, next) {
       });
     }
     const freshUser = await User.findOne({ _id: req.user.id, approved: { $ne: false } }).lean();
-    if (!freshUser || !isUserActive(freshUser)) {
+    if (!freshUser || !isUserActive(freshUser) || !sessionIsCurrent(req.user, freshUser)) {
       return res.status(401).json({
         success: false,
         message: 'User is inactive or not approved'
@@ -232,7 +240,7 @@ async function requireAuth(req, res, next) {
     return next();
   } catch (error) {
     console.error('Auth database check failed', {
-      url: req.originalUrl,
+      url: safeRequestUrl(req),
       message: error.message
     });
     return res.status(503).json({
@@ -250,6 +258,11 @@ function requireAdmin(req, res, next) {
     });
   }
   return next();
+}
+
+function sessionIsCurrent(claims = {}, user = {}) {
+  if (!user.passwordChangedAt || !claims.iat) return true;
+  return Number(claims.iat) >= Math.ceil(new Date(user.passwordChangedAt).getTime() / 1000);
 }
 
 function matrixAccessError(user, req) {
@@ -571,50 +584,6 @@ function cleanPublicUser(user) {
   };
 }
 
-async function sendOtpMail(user, otp, token, req) {
-  const otpMailId = cleanEmail(process.env.REPORT_EMAIL) || DEFAULT_OTP_MAIL_ID;
-  const resetUrl = `${req.protocol}://${req.get('host')}/?resetToken=${encodeURIComponent(token)}&email=${encodeURIComponent(user.email)}`;
-  const mail = await smtpConfig.sendOtpEmail(user.email, otp, {
-    subject: 'Daksh Inventory password reset OTP',
-    text: [
-      `Hello ${user.name || user.username},`,
-      '',
-      'A password reset request was created for your Daksh Inventory account.',
-      `OTP: ${otp}`,
-      `Reset link: ${resetUrl}`,
-      '',
-      `This OTP expires in ${RESET_TTL_MINUTES} minutes.`,
-      'If you did not request this reset, contact the administrator.'
-    ].join('\n'),
-    html: `
-      <p>Hello ${user.name || user.username},</p>
-      <p>A password reset request was created for your Daksh Inventory account.</p>
-      <p><strong>OTP:</strong> ${otp}</p>
-      <p><a href="${resetUrl}">Open password reset page</a></p>
-      <p>This OTP expires in ${RESET_TTL_MINUTES} minutes.</p>
-      <p>If you did not request this reset, contact the administrator.</p>
-    `
-  });
-  return { sent: true, otpMailId: mail.fromEmail || otpMailId, resetUrl };
-}
-
-async function createResetRequest(user, req) {
-  if (!user.email) {
-    throw new Error('This user does not have an email ID for OTP reset');
-  }
-  await smtpConfig.getVerifiedSmtpConfig();
-
-  const otp = String(crypto.randomInt(100000, 999999));
-  const token = crypto.randomBytes(32).toString('hex');
-  const mail = await sendOtpMail(user, otp, token, req);
-  user.resetOtpHash = await bcrypt.hash(otp, 10);
-  user.resetTokenHash = await bcrypt.hash(token, 10);
-  user.resetExpiresAt = new Date(Date.now() + RESET_TTL_MINUTES * 60 * 1000);
-  user.resetRequestedAt = new Date();
-  await user.save();
-  return { mail, expiresAt: user.resetExpiresAt };
-}
-
 async function createUserFromPayload(payload, defaults = {}) {
   const username = cleanUsername(payload.username);
   const email = cleanEmail(payload.email);
@@ -625,7 +594,7 @@ async function createUserFromPayload(payload, defaults = {}) {
   const pin = String(payload.pin || '').trim();
 
   if (!username) throw new Error('Username is required');
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Valid email ID is required');
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Registered email address is required');
   if (pin && !/^\d{4}$/.test(pin)) throw new Error('PIN must be exactly 4 digits');
   if (['audit_user', 'mobile_user'].includes(role) && (!dealerAccess.length || dealerAccess.includes('ALL'))) {
     throw new Error(`${roleDisplayName(role)}s must be assigned to at least one specific dealer.`);
@@ -650,7 +619,7 @@ async function createUserFromPayload(payload, defaults = {}) {
     approvedBy: defaults.approvedBy || '',
     approvedAt: defaults.approved ? new Date() : undefined
   };
-  if (email) userPayload.email = email;
+  userPayload.email = email;
 
   const user = new User(userPayload);
 
@@ -895,30 +864,12 @@ router.post('/register', async (req, res) => {
 
 async function requestPasswordReset(req, res) {
   try {
-    const login = cleanUsername(req.body.usernameOrEmail || req.body.username || req.body.email);
-    const user = await findUserByLogin(login);
-
-    if (!user) {
-      return res.json({ success: true, message: 'If the account exists, an OTP reset email has been sent.' });
-    }
-    if (!isUserApproved(user)) return res.status(403).json({ success: false, message: unapprovedMessage() });
-    if (!isUserActive(user)) return res.status(403).json({ success: false, message: inactiveMessage() });
-
-    const result = await createResetRequest(user, req);
-    return res.json({
-      success: true,
-      message: result.mail.sent ? 'OTP reset link sent to registered email ID.' : result.mail.message,
-      mailSent: result.mail.sent,
-      otpMailId: result.mail.otpMailId,
-      expiresAt: result.expiresAt
-    });
+    const identifier = req.body.identifier || req.body.usernameOrEmail || req.body.username || req.body.email || '';
+    const result = await passwordReset.requestReset(identifier, req);
+    return res.json({ success: true, message: result.message });
   } catch (error) {
-    if (error.status) {
-      return res.status(error.status).json({ success: false, message: error.message });
-    }
-    const status = /^SMTP is not configured|^SMTP configuration failed/i.test(error.message) ? 400 : 500;
-    const message = status === 400 ? 'SMTP not configured. Please contact administrator to reset password.' : error.message;
-    return res.status(status).json({ success: false, message });
+    console.error('Password reset request failed:', error.message);
+    return res.status(503).json({ success: false, message: 'Unable to process the password reset request at this time. Please try again.' });
   }
 }
 
@@ -928,53 +879,15 @@ router.post('/send-otp', requestPasswordReset);
 
 router.post('/reset-password', async (req, res) => {
   try {
-    const email = cleanEmail(req.body.email);
-    const otp = String(req.body.otp || '').trim();
-    const token = String(req.body.token || '').trim();
-    const password = String(req.body.password || '');
-
-    if (!email || !otp || !token || !password) {
-      return res.status(400).json({ success: false, message: 'Email, reset token, OTP, and new password are required' });
+    const newPassword = req.body.newPassword || req.body.password;
+    if (String(req.body.confirmPassword || '') !== String(newPassword || '')) {
+      return res.status(400).json({ success: false, message: 'New password and confirmation must match.' });
     }
-    if (!password) {
-      return res.status(400).json({ success: false, message: 'New password is required' });
-    }
-
-    const resetUsers = await User.find({
-      email,
-      resetExpiresAt: { $gt: new Date() },
-      resetOtpHash: { $ne: '' },
-      resetTokenHash: { $ne: '' }
-    });
-    let user = null;
-    for (const candidate of resetUsers) {
-      if (await bcrypt.compare(token, candidate.resetTokenHash)) {
-        user = candidate;
-        break;
-      }
-    }
-    if (!user || !user.resetOtpHash || !user.resetTokenHash) {
-      return res.status(400).json({ success: false, message: 'Reset request expired or invalid' });
-    }
-
-    const otpOk = await bcrypt.compare(otp, user.resetOtpHash);
-    if (!otpOk) {
-      return res.status(400).json({ success: false, message: 'Invalid OTP or reset link' });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    user.passwordHash = passwordHash;
-    user.password = passwordHash;
-    user.forcePasswordChange = false;
-    user.resetOtpHash = '';
-    user.resetTokenHash = '';
-    user.resetExpiresAt = undefined;
-    user.resetRequestedAt = undefined;
-    await user.save();
-
-    return res.json({ success: true, message: 'Password reset successful. You can login now.' });
+    const result = await passwordReset.completeReset(req.body.token, newPassword, req);
+    return res.status(result.status || 200).json({ success: result.ok, message: result.message });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    console.error('Password reset completion failed:', error.message);
+    return res.status(503).json({ success: false, message: 'Unable to reset the password at this time. Please try again.' });
   }
 });
 
@@ -1149,17 +1062,11 @@ router.post('/users/:id/send-reset', requireAuth, requireAdmin, async (req, res)
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    const result = await createResetRequest(user, req);
-    res.json({
-      success: true,
-      message: result.mail.sent ? 'OTP reset link sent to user email ID.' : result.mail.message,
-      mailSent: result.mail.sent,
-      otpMailId: result.mail.otpMailId,
-      expiresAt: result.expiresAt
-    });
+    const result = await passwordReset.requestReset(user.username, req, { admin: true });
+    res.status(result.limited ? 429 : 200).json({ success: !result.limited && result.sent, message: result.message });
   } catch (error) {
-    const status = /^SMTP is not configured|^SMTP configuration failed/i.test(error.message) ? 400 : 500;
-    res.status(status).json({ success: false, message: error.message });
+    console.error('Admin password reset request failed:', error.message);
+    res.status(503).json({ success: false, message: passwordReset.MAIL_ERROR });
   }
 });
 

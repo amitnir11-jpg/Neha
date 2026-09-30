@@ -4,15 +4,29 @@ const MasterPart = require('../models/MasterPart');
 const Bin = require('../models/Bin');
 const Dealer = require('../models/Dealer');
 const Device = require('../models/Device');
+const User = require('../models/User');
 const VerificationLog = require('../models/VerificationLog');
 const DuplicateScanLog = require('../models/DuplicateScanLog');
 const auth = require('./auth');
 const inventory = require('./inventory');
 const scanModification = require('../services/ScanModificationService');
+const passwordReset = require('../services/PasswordResetService');
 const { cleanText, normalizePartNumber } = require('../utils/normalize');
 
 const router = express.Router();
 const DELETE_MESSAGE = 'Are you sure you want to delete this data? This action cannot be undone.';
+
+router.post('/users/:userId/send-password-reset', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    const result = await passwordReset.requestReset(user.username, req, { admin: true });
+    return res.status(result.limited ? 429 : 200).json({ success: Boolean(result.sent), message: result.message });
+  } catch (error) {
+    console.error('Admin password reset request failed:', error.message);
+    return res.status(503).json({ success: false, message: passwordReset.MAIL_ERROR });
+  }
+});
 
 function publicMobileDevice(device = {}) {
   return {

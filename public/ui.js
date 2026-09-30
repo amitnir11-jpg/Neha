@@ -11352,7 +11352,7 @@
             <option value="approve">Approve</option>
             <option value="toggle">${user.active ? 'Block' : 'Activate'}</option>
             <option value="email">Email</option>
-            <option value="send-reset">Send OTP</option>
+            <option value="send-reset">Send Password Reset Link</option>
             <option value="reset-password">Reset</option>
             <option value="delete">Delete</option>
           </select>
@@ -11389,8 +11389,13 @@
       return;
     }
     if (action === 'send-reset') {
-      const data = await api(`/api/auth/users/${id}/send-reset`, { method: 'POST', body: {} });
-      toast(data.message || 'OTP reset link sent', data.mailSent === false ? 'error' : 'success');
+      const email = String(select.dataset.email || '').trim();
+      const [localPart, domain] = email.split('@');
+      const masked = domain ? `${localPart.slice(0, 2)}****@${domain}` : '';
+      if (!email) throw new Error('Add a registered email address before sending a reset link.');
+      if (!window.confirm(`Send password reset link to the registered email address?\n\n${masked}`)) return;
+      const data = await api(`/api/admin/users/${encodeURIComponent(id)}/send-password-reset`, { method: 'POST', body: {} });
+      toast(data.message || 'Password reset request submitted', data.success === false ? 'error' : 'success');
       return;
     }
     if (action === 'reset-password') {

@@ -1376,6 +1376,23 @@ model User {
   @@map("users")
 }
 
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  requestIp String?
+  userAgent String?
+  appEnv    String    @default("production")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([appEnv, userId, usedAt, expiresAt])
+  @@map("password_reset_tokens")
+}
+
 model UserDealerMapping {
   id                   String    @id @default(cuid())
   data                 Json      @default("{}")
