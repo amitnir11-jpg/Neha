@@ -509,7 +509,13 @@ app.use(async (req, res, next) => {
   } catch (error) {
     return res.status(503).send('License validation is temporarily unavailable.');
   }
-  return authRoutes.requirePageAuth(req, res, next);
+  return authRoutes.requirePageAuth(req, res, () => {
+    const adminPages = new Set(['/admin-network.html', '/admin-logs.html']);
+    if (adminPages.has(String(req.path || '').toLowerCase()) && !authRoutes.isAdminRole(req.user && req.user.role)) {
+      return res.status(403).send('Admin permission required.');
+    }
+    return next();
+  });
 });
 
 app.use(express.static(PUBLIC_DIR, {

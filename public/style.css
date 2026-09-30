@@ -12083,3 +12083,13 @@ tbody tr:hover td {
 #partMasterTab .part-more-actions,#partMasterTab .catalogue-upload-form { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
 @media(max-width:1100px) { #partMasterTab .part-master-filter { grid-template-columns:repeat(4,minmax(0,1fr)); } #partMasterTab .part-master-bottom-grid { grid-template-columns:1fr; } }
 @media(max-width:700px) { #partMasterTab .part-master-header { align-items:flex-start; flex-direction:column; } #partMasterTab .part-master-filter { grid-template-columns:repeat(2,minmax(0,1fr)); } #partMasterTab .part-entry-form { grid-template-columns:repeat(2,minmax(0,1fr)); } #partMasterTab .audit-price-field-row { grid-template-columns:1fr; } #partMasterTab .part-list-footer { align-items:flex-start; flex-direction:column; } }
+/* Read-only part search is available to operational roles without exposing
+   part-master editing and maintenance controls. */
+.restricted-role #partEntryCard,
+.restricted-role .part-master-header-actions,
+.restricted-role .advanced-part-result-table th:first-child,
+.restricted-role .advanced-part-result-table td:first-child,
+.restricted-role .advanced-part-result-table th:last-child,
+.restricted-role .advanced-part-result-table td:last-child {
+  display: none !important;
+}

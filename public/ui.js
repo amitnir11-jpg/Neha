@@ -3213,12 +3213,44 @@
       login: userLoginName()
     });
     const roleName = roleDisplayName(state.user && state.user.role);
+    const role = String(state.user && state.user.role || '').toLowerCase();
+    const isAdmin = ['admin', 'super_admin'].includes(role);
+    const limitedRole = ['audit_user', 'mobile_user'].includes(role);
+    const canViewReports = state.user?.permissions?.canViewReports !== false;
     const loginName = userLoginName();
     setText('userRoleLabel', roleName);
     setText('userBadge', loginName);
     setText('userDropdownLogin', loginName);
     setText('userDropdownRole', roleName);
-    $$('.admin-only').forEach((node) => node.classList.toggle('hidden', !state.user || state.user.role !== 'admin'));
+    document.body.classList.toggle('restricted-role', limitedRole);
+    const masterLink = $('.side-link[data-view="master"]');
+    if (masterLink) masterLink.querySelector('span').textContent = limitedRole ? 'Part Search' : 'Master Data';
+    const dealerAuditTab = $('.master-tab[data-master-tab="dealerAuditTab"]');
+    if (dealerAuditTab) dealerAuditTab.classList.toggle('hidden', limitedRole);
+    const binSequenceTabButton = $('.bin-transfer-tab[data-bin-transfer-tab="binSequenceTab"]');
+    if (binSequenceTabButton) binSequenceTabButton.classList.toggle('hidden', limitedRole);
+    $$('.admin-only').forEach((node) => node.classList.toggle('hidden', !isAdmin));
+    const operationalViews = new Set(['dashboard', 'scan', 'binTransfer', 'reports', 'master']);
+    $$('.side-link').forEach((node) => {
+      node.classList.toggle('hidden', limitedRole && !operationalViews.has(node.dataset.view));
+      if (node.dataset.view === 'reports') node.classList.toggle('hidden', !canViewReports);
+    });
+    const reportTypeSelect = $('#reportTypeSelect');
+    if (reportTypeSelect) {
+      const limitedReports = new Set(['bin-wise-stock', 'category-wise-variance-summary']);
+      Array.from(reportTypeSelect.options).forEach((option) => {
+        if (!option.value) return;
+        option.hidden = limitedRole && !limitedReports.has(option.value);
+        option.disabled = option.hidden;
+      });
+      if (limitedRole && !limitedReports.has(reportTypeSelect.value)) {
+        reportTypeSelect.value = 'bin-wise-stock';
+      }
+    }
+    ['#reportExcel', '#reportPdf', '#reportPrint', '#downloadCompleteAuditPackBtn'].forEach((selector) => {
+      const node = $(selector);
+      if (node) node.classList.toggle('hidden', role === 'mobile_user');
+    });
     updateSystemSubline();
     $('#manualStaff').value = state.user ? state.user.name || state.user.username || '' : '';
     syncLocalPartFormIdentity();
@@ -5243,7 +5275,7 @@
         }
         return;
       }
-      if (error.status === 409 && state.user && state.user.role === 'admin') {
+      if (error.status === 409 && isAdmin()) {
         const warnings = (error.data.warnings || []).join(', ');
         const unknownBlocked = /part does not exist|unknown/i.test(warnings) && localStorage.getItem('dakshAllowUnknown') !== 'true';
         if (unknownBlocked) {
@@ -10074,7 +10106,7 @@
   }
 
   function isAdmin() {
-    return Boolean(state.user && state.user.role === 'admin');
+    return Boolean(state.user && ['admin', 'super_admin'].includes(String(state.user.role || '').toLowerCase()));
   }
 
   async function autoDetectScanners() {
@@ -10158,14 +10190,14 @@
         <span>App Version: ${escapeHtml(device.appVersion || '-')}</span>
         <div class="actions">
           <button class="btn light viewScannerLogs" data-id="${escapeHtml(device.deviceId)}" type="button">Logs</button>
-          <button class="btn light admin-only renameScanner ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" data-name="${escapeHtml(device.deviceName)}" type="button">Rename</button>
-          <button class="btn light admin-only priorityScanner ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" data-priority="${escapeHtml(device.scannerPriority || 0)}" type="button">Priority</button>
-          <button class="btn light admin-only messageMobileDevice ${state.user && state.user.role === 'admin' && device.deviceType === 'mobile' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Message</button>
-          <button class="btn danger-soft admin-only blockMobileDevice ${state.user && state.user.role === 'admin' && device.deviceType === 'mobile' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" data-block="${device.approved === false ? 'false' : 'true'}" type="button">${device.approved === false ? 'Approve Device' : 'Block Device'}</button>
-          <button class="btn danger-soft admin-only forceLogoutMobileDevice ${state.user && state.user.role === 'admin' && device.deviceType === 'mobile' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Force Logout</button>
-          <button class="btn danger-soft admin-only disconnectDevice ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Disconnect</button>
-          <button class="btn light admin-only forceReconnectDevice ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Force Reconnect</button>
-          <button class="btn danger-soft admin-only removeDevice ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Remove Device</button>
+          <button class="btn light admin-only renameScanner ${isAdmin() ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" data-name="${escapeHtml(device.deviceName)}" type="button">Rename</button>
+          <button class="btn light admin-only priorityScanner ${isAdmin() ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" data-priority="${escapeHtml(device.scannerPriority || 0)}" type="button">Priority</button>
+          <button class="btn light admin-only messageMobileDevice ${isAdmin() && device.deviceType === 'mobile' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Message</button>
+          <button class="btn danger-soft admin-only blockMobileDevice ${isAdmin() && device.deviceType === 'mobile' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" data-block="${device.approved === false ? 'false' : 'true'}" type="button">${device.approved === false ? 'Approve Device' : 'Block Device'}</button>
+          <button class="btn danger-soft admin-only forceLogoutMobileDevice ${isAdmin() && device.deviceType === 'mobile' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Force Logout</button>
+          <button class="btn danger-soft admin-only disconnectDevice ${isAdmin() ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Disconnect</button>
+          <button class="btn light admin-only forceReconnectDevice ${isAdmin() ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Force Reconnect</button>
+          <button class="btn danger-soft admin-only removeDevice ${isAdmin() ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Remove Device</button>
         </div>
       </div>
     `).join('') : '<div class="muted">No live devices in the last 30 seconds.</div>';
@@ -10181,7 +10213,7 @@
           <td>${escapeHtml(dateTime(device.lastSyncTime) || 'Never')}</td>
           <td>${escapeHtml(device.pendingCount || 0)}</td>
           <td><span class="${scannerStatusClass(device) === 'green-dot' ? 'status-ok' : 'status-warn'}">${escapeHtml(device.healthStatus || 'Online')}</span></td>
-          <td><button class="btn danger-soft admin-only disconnectDevice ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Disconnect</button></td>
+          <td><button class="btn danger-soft admin-only disconnectDevice ${isAdmin() ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Disconnect</button></td>
         </tr>
       `).join('');
     }
@@ -10195,8 +10227,8 @@
           <td>${escapeHtml(dateTime(device.lastSyncTime) || 'Never')}</td>
           <td><span class="status-warn">${escapeHtml(device.status || 'offline')}</span></td>
           <td>
-            <button class="btn light admin-only forceReconnectDevice ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Reconnect</button>
-            <button class="btn danger-soft admin-only removePermanentDevice ${state.user && state.user.role === 'admin' ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Remove Permanently</button>
+            <button class="btn light admin-only forceReconnectDevice ${isAdmin() ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Reconnect</button>
+            <button class="btn danger-soft admin-only removePermanentDevice ${isAdmin() ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Remove Permanently</button>
           </td>
         </tr>
       `).join('') : '<tr><td colspan="6" class="muted">No disconnected devices.</td></tr>';
@@ -11225,7 +11257,7 @@
   }
 
   function auditUserLabel(user = {}) {
-    const role = user.role === 'admin' ? 'Admin' : user.role === 'mobile_user' ? 'Mobile User' : 'Audit User';
+    const role = roleDisplayName(user.role);
     const name = user.name || user.username || user.email || 'User';
     const username = user.username ? ` (${user.username})` : '';
     return `${name}${username} - ${role}`;
@@ -11262,7 +11294,7 @@
   }
 
   async function loadUsers() {
-    if (!state.user || state.user.role !== 'admin') return;
+    if (!isAdmin()) return;
     const data = await api('/api/users');
     state.users = data.users || [];
     renderUsers();
@@ -11285,7 +11317,7 @@
         <td>${escapeHtml(user.name)}</td>
         <td>${escapeHtml(user.username)}</td>
         <td>${escapeHtml(user.email)}</td>
-        <td>${escapeHtml(user.role === 'admin' ? 'Admin' : user.role === 'mobile_user' ? 'Mobile User' : 'Audit User')}</td>
+        <td>${escapeHtml(roleDisplayName(user.role))}</td>
         <td>${escapeHtml(dealerAccessDisplay(user.dealerAccess || []))}</td>
         <td>${user.approved ? '<span class="status-ok">Approved</span>' : '<span class="status-warn">Pending</span>'}</td>
         <td>${user.active ? '<span class="status-ok">Active</span>' : '<span class="status-warn">Blocked</span>'}</td>
@@ -11534,9 +11566,15 @@
       loadSmartBinSuggestionSettings()
     ];
     if ($('#reports')?.classList.contains('active')) viewJobs.push(loadCategories());
-    if ($('#scan')?.classList.contains('active')) viewJobs.push(loadScanHistory(), loadBins(), loadBarcodeBins(), loadPairingQr());
+    if ($('#scan')?.classList.contains('active')) {
+      viewJobs.push(loadScanHistory(), loadBarcodeBins(), loadPairingQr());
+      if (isAdmin()) viewJobs.push(loadBins());
+    }
     if ($('#binTransfer')?.classList.contains('active')) viewJobs.push(loadBinTransferHistory());
-    if ($('#master')?.classList.contains('active')) viewJobs.push(loadPartSearchFilters(), loadCatalogueRequiredColumns(), loadUsers());
+    if ($('#master')?.classList.contains('active')) {
+      viewJobs.push(loadPartSearchFilters());
+      if (isAdmin()) viewJobs.push(loadCatalogueRequiredColumns(), loadUsers());
+    }
     if ($('#validator')?.classList.contains('active')) viewJobs.push(loadMasterScanValidator());
     if ($('#devices')?.classList.contains('active')) viewJobs.push(loadDevices(), loadPairingQr());
     await Promise.all(viewJobs);
@@ -12093,14 +12131,29 @@
 
   function openView(viewId, title) {
     if (viewId === 'admin') viewId = 'master';
+    const role = String(state.user && state.user.role || '').toLowerCase();
+    if (['audit_user', 'mobile_user'].includes(role)
+      && !['dashboard', 'scan', 'binTransfer', 'reports', 'master'].includes(viewId)) {
+      toast('This section is not available for your role.', 'error');
+      return;
+    }
+    if (viewId === 'reports' && state.user?.permissions?.canViewReports === false) {
+      toast('Report access is disabled for this account.', 'error');
+      return;
+    }
     if (!$(`#${viewId}`)) viewId = 'dashboard';
     localStorage.setItem(ACTIVE_VIEW_KEY, viewId);
-    document.body.className = `view-active-${viewId}`;
+    Array.from(document.body.classList)
+      .filter((className) => className.startsWith('view-active-'))
+      .forEach((className) => document.body.classList.remove(className));
+    document.body.classList.add(`view-active-${viewId}`);
     $$('.side-link').forEach((item) => item.classList.toggle('active', item.dataset.view === viewId));
     $$('.view').forEach((view) => view.classList.remove('active'));
     const target = $(`#${viewId}`);
     if (target) target.classList.add('active');
-    const viewTitle = VIEW_TITLES[viewId] || title || 'Dashboard';
+    const viewTitle = viewId === 'master' && ['audit_user', 'mobile_user'].includes(String(state.user?.role || '').toLowerCase())
+      ? 'Part Search'
+      : VIEW_TITLES[viewId] || title || 'Dashboard';
     $('#viewTitle').textContent = viewTitle;
     document.title = `DAKSH INVENTORY SYSTEM - ${viewTitle}`;
     updateSystemSubline();
@@ -12115,7 +12168,9 @@
       else loadBinTransferHistory().catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'scan') {
-      Promise.all([loadScanHistory(), loadBins(), loadBarcodeBins(), loadPairingQr()]).catch((error) => toast(error.message, 'error'));
+      const scanJobs = [loadScanHistory(), loadBarcodeBins(), loadPairingQr()];
+      if (isAdmin()) scanJobs.push(loadBins());
+      Promise.all(scanJobs).catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'reports') {
       loadCategories().catch((error) => toast(error.message, 'error'));
@@ -12127,12 +12182,9 @@
       }
     }
     if (viewId === 'master') {
-      Promise.all([
-        loadPartSearchFilters(),
-        loadParts(1),
-        loadCatalogueRequiredColumns(),
-        loadUsers()
-      ]).catch((error) => toast(error.message, 'error'));
+      const searchJobs = [loadPartSearchFilters(), loadParts(1)];
+      if (isAdmin()) searchJobs.push(loadCatalogueRequiredColumns(), loadUsers());
+      Promise.all(searchJobs).catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'validator') {
       loadMasterScanValidator().catch((error) => toast(error.message, 'error'));
@@ -12212,7 +12264,7 @@
     $$('.master-tab').forEach((button) => {
       button.addEventListener('click', () => {
         const target = button.dataset.masterTab;
-        if (button.classList.contains('admin-only') && (!state.user || state.user.role !== 'admin')) {
+        if (button.classList.contains('admin-only') && !isAdmin()) {
           toast('Administrator access is required to open this section.', 'error');
           return;
         }
@@ -13798,15 +13850,15 @@
     socket.on('audit:active', (audit) => {
       state.activeAudit = audit;
       updateActiveAuditUi();
-      loadBins().catch(console.warn);
+      if (isAdmin()) loadBins().catch(console.warn);
       queueDashboardRefresh(250);
     });
     function handleInactiveAuditEvent() {
       state.activeAudit = null;
       updateActiveAuditUi();
-      loadBins().catch(console.warn);
+      if (isAdmin()) loadBins().catch(console.warn);
       queueDashboardRefresh(250);
-      loadDevices().catch(console.warn);
+      if (isAdmin()) loadDevices().catch(console.warn);
       loadDealers({ force: true }).catch(console.warn);
     }
     socket.on('audit:completed', handleInactiveAuditEvent);
@@ -13862,9 +13914,12 @@
       state.reportFilterDropdownsLoadedAt = 0;
       markReportsStale('master update');
       const jobs = [];
-      if ($('#scan')?.classList.contains('active')) jobs.push(loadBins());
+      if ($('#scan')?.classList.contains('active') && isAdmin()) jobs.push(loadBins());
       if ($('#reports')?.classList.contains('active')) jobs.push(loadCategories());
-      if ($('#master')?.classList.contains('active')) jobs.push(loadPartSearchFilters(), loadCatalogueRequiredColumns(), loadUsers());
+      if ($('#master')?.classList.contains('active')) {
+        jobs.push(loadPartSearchFilters());
+        if (isAdmin()) jobs.push(loadCatalogueRequiredColumns(), loadUsers());
+      }
       queueDashboardRefresh(400);
       if (hasPartSearchFilter() || !$('#partMasterResultsCard')?.hidden) jobs.push(loadParts(state.masterSearch.page || 1));
       if (jobs.length) Promise.all(jobs).catch(console.warn);

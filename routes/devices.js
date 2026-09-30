@@ -268,6 +268,25 @@ function cleanDevicePayload(req, defaults = {}) {
   return payload;
 }
 
+async function requireApprovedMobileDevice(req, res, payload) {
+  const existing = await Device.findOne({ deviceId: payload.deviceId, removedAt: null }).lean();
+  if (existing && existing.approved !== false) return existing;
+
+  const pending = existing || await Device.findOneAndUpdate(
+    { deviceId: payload.deviceId },
+    { $setOnInsert: { ...payload, approved: false, status: 'pending', approvalRequestedAt: new Date() } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  ).lean();
+  if (req.io) req.io.emit('devices:update');
+  res.status(existing ? 403 : 202).json({
+    success: false,
+    approved: false,
+    status: existing ? (existing.status || 'pending') : 'approval_required',
+    message: existing ? 'This mobile device is awaiting Admin approval.' : 'Device approval required. Ask an Admin to approve this device.'
+  });
+  return null;
+}
+
 function cleanDevice(device) {
   if (!device) return device;
   const lastSeen = device.lastSeen ? new Date(device.lastSeen) : null;
@@ -597,9 +616,12 @@ router.post('/bluetooth/clear-ghosts', auth.requireAuth, auth.requireAdmin, asyn
 async function connectHandler(req, res) {
   try {
     const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
-    const requestedDealerCode = clean(req.body.dealerCode || req.query.dealerCode);
+    const deviceId = clean(req.body.deviceId) || randomUUID();
+    const existingDevice = await Device.findOne({ deviceId, removedAt: null }).lean();
+    const requestedDealerCode = clean(existingDevice?.dealerCode || req.body.dealerCode || req.query.dealerCode);
     const activeAudit = await getActiveAudit(requestedDealerCode ? { dealerCode: requestedDealerCode } : {});
     const payload = cleanDevicePayload(req, {
+      deviceId,
       deviceName: 'Mobile Scanner',
       serverUrl: info.serverUrl,
       deviceType: 'mobile',
@@ -612,6 +634,10 @@ async function connectHandler(req, res) {
       payload.dealerName = String(activeAudit.dealerName || '').trim();
       payload.auditId = String(activeAudit.auditId || activeAudit._id || '').trim();
     }
+    const approvedDevice = await requireApprovedMobileDevice(req, res, payload);
+    if (!approvedDevice) return;
+    payload.dealerCode = approvedDevice.dealerCode || payload.dealerCode;
+    payload.dealerName = approvedDevice.dealerName || payload.dealerName;
     const device = await Device.findOneAndUpdate(
       { deviceId: payload.deviceId },
       { ...payload, connectedAt: new Date(), approved: true, deviceType: 'mobile' },
@@ -648,14 +674,11 @@ async function heartbeatHandler(req, res) {
       return res.status(400).json({ success: false, message: 'Device ID is required' });
     }
     const existingDevice = await Device.findOne({ deviceId: clean(req.body.deviceId), removedAt: null }).lean();
-    if (existingDevice && existingDevice.approved === false) {
-      req.io.emit('devices:update');
-      return res.status(403).json({ success: false, approved: false, status: 'blocked', message: 'This mobile device is blocked by admin.' });
-    }
     const info = serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
-    const requestedDealerCode = clean(req.body.dealerCode || req.query.dealerCode);
+    const requestedDealerCode = clean(existingDevice?.dealerCode || req.body.dealerCode || req.query.dealerCode);
     const activeAudit = await getActiveAudit(requestedDealerCode ? { dealerCode: requestedDealerCode } : {});
     const payload = cleanDevicePayload(req, {
+      deviceId: clean(req.body.deviceId),
       serverUrl: info.serverUrl,
       deviceType: 'mobile',
       dealerCode: activeAudit ? activeAudit.dealerCode : '',
@@ -667,6 +690,10 @@ async function heartbeatHandler(req, res) {
       payload.dealerName = String(activeAudit.dealerName || '').trim();
       payload.auditId = String(activeAudit.auditId || activeAudit._id || '').trim();
     }
+    const approvedDevice = await requireApprovedMobileDevice(req, res, payload);
+    if (!approvedDevice) return;
+    payload.dealerCode = approvedDevice.dealerCode || payload.dealerCode;
+    payload.dealerName = approvedDevice.dealerName || payload.dealerName;
     const device = await Device.findOneAndUpdate(
       { deviceId: payload.deviceId },
       {
@@ -820,6 +847,7 @@ router.get('/discovery', auth.optionalAuth, async (req, res) => {
 module.exports = router;
 module.exports.connectHandler = connectHandler;
 module.exports.heartbeatHandler = heartbeatHandler;
+module.exports.requireApprovedMobileDevice = requireApprovedMobileDevice;
 module.exports.listDevices = listDevices;
 module.exports.markExpiredDevicesOffline = markExpiredDevicesOffline;
 module.exports.liveCutoff = liveCutoff;

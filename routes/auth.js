@@ -215,7 +215,7 @@ async function requireAuth(req, res, next) {
       });
     }
     const writeMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(req.method || '').toUpperCase());
-    const auditWriteBases = ['/api/scans', '/api/scan', '/api/inventory', '/api/reconciliation'];
+    const auditWriteBases = ['/api/scans', '/api/scan', '/api/inventory', '/api/reconciliation', '/api/bin-transfer'];
     if (writeMethod && !isAdmin && auditWriteBases.includes(String(req.baseUrl || '').toLowerCase())) {
       const dealerCode = req.activeDealerId || extractRequestDealer(req);
       const auditId = String(req.body?.auditId || req.body?.auditSessionId || req.query?.auditId || req.query?.auditSessionId || '').trim();
@@ -227,6 +227,8 @@ async function requireAuth(req, res, next) {
         return res.status(423).json({ success: false, code: 'AUDIT_NOT_WRITABLE', message: 'Changes are allowed only while the selected audit is ACTIVE.' });
       }
     }
+    const matrixError = matrixAccessError(req.user, req);
+    if (matrixError) return res.status(403).json({ success: false, message: matrixError });
     return next();
   } catch (error) {
     console.error('Auth database check failed', {
@@ -248,6 +250,45 @@ function requireAdmin(req, res, next) {
     });
   }
   return next();
+}
+
+function matrixAccessError(user, req) {
+  const role = normalizeRole(user && user.role);
+  if (!user || isAdminRole(role)) return '';
+  const base = String(req.baseUrl || '').toLowerCase();
+  const path = String(req.path || '/').toLowerCase();
+  const method = String(req.method || 'GET').toUpperCase();
+  const write = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+  const adminOnly = 'This action is available to Admin users only.';
+
+  if (['/api/admin', '/api/admin-delete', '/api/users', '/api/system', '/api/backup', '/api/audit-backup', '/api/scan-audit', '/api/master-catalogue', '/api/bin-master'].includes(base)) return adminOnly;
+  if (base === '/api/dealers') return adminOnly;
+  if (base === '/api/audit' && !(method === 'GET' && path === '/active')) return adminOnly;
+  if (base === '/api/reconciliation' || base === '/api/dealer-stock') return adminOnly;
+  if (base === '/api/devices' || base === '/api/scanner-network' || base === '/api/settings') return adminOnly;
+
+  if (base === '/api/master' || base === '/api/master-parts') {
+    if (write) return adminOnly;
+    const allowedReads = ['/dealers', '/parts', '/parts/search', '/parts/suggest', '/search', '/suggestions', '/categories', '/parts/categories', '/filters', '/bins'];
+    if (!allowedReads.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return adminOnly;
+  }
+
+  if (base === '/api/reports') {
+    if (user.permissions?.canViewReports === false) return 'Report access is disabled for this account.';
+    const reportPath = path.replace(/\/$/, '');
+    const limitedReport = /^\/(?:bin-wise-stock|bin-wise|bin-stock|category-wise-variance-summary)(?:\/(?:email|export))?$/.test(reportPath);
+    if (!limitedReport) return 'This role can access bin-wise and category-wise reports only.';
+    if (write) return adminOnly;
+    if (role === 'mobile_user' && ['excel', 'xlsx', 'csv', 'pdf'].includes(String(req.query?.format || '').toLowerCase())) {
+      return 'Report export is not enabled for Mobile Users.';
+    }
+  }
+
+  if (base === '/api/mobile' && role === 'mobile_user' && path === '/reports/export-excel') {
+    return 'Report export is not enabled for Mobile Users.';
+  }
+
+  return '';
 }
 
 function cleanEmail(value) {
@@ -408,7 +449,8 @@ function isDealerScopedRequest(req) {
     '/api/mobile',
     '/api/audit-backup',
     '/api/audit',
-    '/api/master-parts'
+    '/api/master-parts',
+    '/api/master'
   ].includes(base);
 }
 
@@ -585,8 +627,8 @@ async function createUserFromPayload(payload, defaults = {}) {
   if (!username) throw new Error('Username is required');
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Valid email ID is required');
   if (pin && !/^\d{4}$/.test(pin)) throw new Error('PIN must be exactly 4 digits');
-  if (role === 'audit_user' && (!dealerAccess.length || dealerAccess.includes('ALL'))) {
-    throw new Error('Audit users must be assigned to at least one specific dealer.');
+  if (['audit_user', 'mobile_user'].includes(role) && (!dealerAccess.length || dealerAccess.includes('ALL'))) {
+    throw new Error(`${roleDisplayName(role)}s must be assigned to at least one specific dealer.`);
   }
   if (isAdminRole(role) && !password) throw new Error('Admin users require a password');
   if (['audit_user', 'mobile_user'].includes(role) && !pin && !password) throw new Error('Audit and Mobile users require a password or 4-digit PIN');
@@ -1137,6 +1179,7 @@ module.exports = router;
 module.exports.optionalAuth = optionalAuth;
 module.exports.requireAuth = requireAuth;
 module.exports.requireAdmin = requireAdmin;
+module.exports.matrixAccessError = matrixAccessError;
 module.exports.cleanPublicUser = cleanPublicUser;
 module.exports.createUserFromPayload = createUserFromPayload;
 module.exports.cleanUsername = cleanUsername;
