@@ -19,10 +19,14 @@ function expiryMinutes() {
   return Number.isInteger(n) && n > 0 && n <= 60 ? n : 15;
 }
 function appUrl() {
-  const value = String(process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  const railwayDomain = String(process.env.RAILWAY_PUBLIC_DOMAIN || '').trim().replace(/^https?:\/\//i, '');
+  const configured = process.env.APP_URL || process.env.PUBLIC_BASE_URL || (railwayDomain ? `https://${railwayDomain}` : '');
+  const value = String(configured || '').trim().replace(/\/+$/, '');
   if (!value) throw new Error('APP_URL is not configured');
   const parsed = new URL(value);
   if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('APP_URL must use HTTP or HTTPS');
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error('APP_URL must be a base URL without credentials or query parameters');
+  if (appEnv() === 'production' && parsed.protocol !== 'https:') throw new Error('Production APP_URL must use HTTPS');
   return value;
 }
 function passwordProblem(value) {
@@ -64,14 +68,21 @@ function allowAttempt(req, identifier) {
   return true;
 }
 function transporter() {
-  const user = String(process.env.EMAIL_USER || '').trim();
-  const pass = String(process.env.EMAIL_APP_PASSWORD || '').replace(/\s/g, '');
-  if (!user || !pass) throw new Error('Password reset email is not configured');
+  // SMTP_* aliases support deployments that already have the same official Gmail
+  // account configured for report mail. Secrets remain environment-only.
+  const user = String(process.env.EMAIL_USER || process.env.SMTP_USER || '').trim();
+  const pass = String(process.env.EMAIL_APP_PASSWORD || process.env.SMTP_PASS || '').replace(/\s/g, '');
+  if (!user) throw new Error('EMAIL_USER (or SMTP_USER) is not configured');
+  if (!pass) throw new Error('EMAIL_APP_PASSWORD (or SMTP_PASS) is not configured');
   if (user.toLowerCase() !== 'dakshinventory@gmail.com') throw new Error('Password reset sender must be dakshinventory@gmail.com');
   return { user, transport: nodemailer.createTransport({
     host: 'smtp.gmail.com', port: 465, secure: true, connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
     auth: { user, pass }
   }) };
+}
+function checkResetMailConfiguration() {
+  transporter();
+  appUrl();
 }
 function escapeHtml(value) {
   return String(value || '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -115,6 +126,13 @@ async function requestReset(identifier, req, { admin = false } = {}) {
   const token = crypto.randomBytes(32).toString('base64url');
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const expiresAt = new Date(Date.now() + expiryMinutes() * 60 * 1000);
+  try {
+    checkResetMailConfiguration();
+  } catch (error) {
+    console.error('Password reset mail configuration unavailable:', error.message);
+    await recordAudit('PASSWORD_RESET_EMAIL', user, req, 'EMAIL_NOT_CONFIGURED', { adminTriggered: admin });
+    return { sent: false, message: admin ? MAIL_ERROR : GENERIC_RESPONSE };
+  }
   try {
     await withDatabaseTransaction(async () => {
       await PasswordResetToken.updateMany({ userId: user._id, appEnv: appEnv(), usedAt: null }, { usedAt: new Date() });
