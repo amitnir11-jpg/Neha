@@ -3232,18 +3232,16 @@
     if (masterLink) masterLink.querySelector('span').textContent = limitedRole ? 'Part Search' : 'Master Data';
     if (limitedRole) {
       $$('.master-tab').forEach((node) => {
-        if (node.dataset.masterTab !== 'partMasterTab') node.remove();
-        else {
-          node.classList.add('active');
-          node.setAttribute('aria-selected', 'true');
-        }
+        const partMaster = node.dataset.masterTab === 'partMasterTab';
+        node.classList.toggle('hidden', !partMaster);
+        node.classList.toggle('active', partMaster);
+        node.setAttribute('aria-selected', String(partMaster));
       });
       $$('.master-tab-panel').forEach((node) => {
-        if (node.id !== 'partMasterTab') node.remove();
-        else {
-          node.hidden = false;
-          node.classList.add('active');
-        }
+        const partMaster = node.id === 'partMasterTab';
+        node.hidden = !partMaster;
+        node.classList.toggle('hidden', !partMaster);
+        node.classList.toggle('active', partMaster);
       });
       const partHeading = $('#partMasterHeading');
       if (partHeading) partHeading.textContent = 'Part Search';
@@ -3275,10 +3273,13 @@
       if (node) node.classList.toggle('hidden', role === 'mobile_user');
     });
     updateSystemSubline();
-    $('#manualStaff').value = state.user ? state.user.name || state.user.username || '' : '';
+    const manualStaff = $('#manualStaff');
+    if (manualStaff) manualStaff.value = state.user ? state.user.name || state.user.username || '' : '';
     syncLocalPartFormIdentity();
-    $('#barcodeDeviceId').value = ensureDeviceId();
-    $('#allowUnknownToggle').checked = storageGet('dakshAllowUnknown') === 'true';
+    const barcodeDeviceId = $('#barcodeDeviceId');
+    if (barcodeDeviceId) barcodeDeviceId.value = ensureDeviceId();
+    const allowUnknownToggle = $('#allowUnknownToggle');
+    if (allowUnknownToggle) allowUnknownToggle.checked = storageGet('dakshAllowUnknown') === 'true';
     bootLog('setUserChrome complete', {
       userBadgePresent: Boolean($('#userBadge')),
       adminOnlyCount: $$('.admin-only').length
@@ -13710,7 +13711,7 @@
     });
     $('#refreshUsersBtn').addEventListener('click', () => loadUsers().then(() => toast('Users refreshed')).catch((error) => toast(error.message, 'error')));
     $('#userRows')?.addEventListener('change', onUserActionChange);
-    $('#allowUnknownToggle').addEventListener('change', (event) => {
+    $('#allowUnknownToggle')?.addEventListener('change', (event) => {
       localStorage.setItem('dakshAllowUnknown', event.target.checked ? 'true' : 'false');
       toast(event.target.checked ? 'Unknown save prompt enabled' : 'Unknown save prompt disabled');
     });
