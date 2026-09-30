@@ -817,6 +817,16 @@ async function activeDashboardScope(query = {}) {
   if (!filter.auditId && activeAudit && activeAudit.auditId) {
     filter.auditId = clean(activeAudit.auditId);
   }
+  // The dashboard's "Current audit" view should remain useful after an audit
+  // is completed. In that case there is no active audit, so use the dealer's
+  // most recently started audit unless the caller explicitly selected one.
+  if (!filter.auditId && filter.dealerCode !== '__NO_DEALER_SELECTED__') {
+    const latestAudit = await Audit.findOne({ dealerCode: filter.dealerCode })
+      .sort({ auditStartDate: -1, createdAt: -1 })
+      .select('auditId')
+      .lean();
+    if (latestAudit && latestAudit.auditId) filter.auditId = clean(latestAudit.auditId);
+  }
   if (!filter.auditId) filter.auditId = '__NO_AUDIT_SELECTED__';
 
   const dateScope = dashboardDateScope(query.range || query.dateRange || '');

@@ -10,7 +10,9 @@
   const LAST_SYNC_KEY = 'dakshFreshLastSync';
   const VERSION_RELOAD_KEY = '__dakshFreshVersionReloadAttempt';
   const SYNC_INTERVAL_MS = 45000;
-  const RECENT_REFRESH_INTERVAL_MS = 8000;
+  // Socket events provide live updates. Keep polling as a low-frequency
+  // recovery path so an idle scanner tab does not wake the CPU every few seconds.
+  const RECENT_REFRESH_INTERVAL_MS = 30000;
   const HEARTBEAT_INTERVAL_MS = 90000;
   const API_TIMEOUT_MS = 45000;
   const LOGIN_CONFIG_TIMEOUT_MS = 15000;
@@ -1825,7 +1827,7 @@
       facingMode: { ideal: 'environment' },
       width: { ideal: 1280, min: 640 },
       height: { ideal: 720, min: 480 },
-      frameRate: { ideal: 30, min: 15, max: 45 },
+      frameRate: { ideal: 24, min: 12, max: 30 },
       advanced: [
         { focusMode: 'continuous' },
         { exposureMode: 'continuous' },
@@ -1881,7 +1883,7 @@
     return clean(code.rawValue || code.rawText || code.displayValue || code.text || '');
   }
 
-  function scheduleNativeDetection(video, runId, delay = 20) {
+  function scheduleNativeDetection(video, runId, delay = 100) {
     if (!state.nativeDetectorRunning || runId !== state.nativeDetectorRunId) return;
     state.nativeDetectorTimer = setTimeout(() => {
       if (!state.nativeDetectorRunning || runId !== state.nativeDetectorRunId) return;
@@ -1909,7 +1911,7 @@
     } catch (_) {
       // Native detector support varies by browser; ZXing remains the main fallback.
     }
-    scheduleNativeDetection(video, runId, 20);
+    scheduleNativeDetection(video, runId, 100);
   }
 
   async function startNativeDetector(video) {
@@ -1919,7 +1921,7 @@
     state.nativeDetectorRunning = true;
     const detector = await nativeBarcodeDetector();
     if (!detector || !state.nativeDetectorRunning || runId !== state.nativeDetectorRunId) return;
-    scheduleNativeDetection(video, runId, 30);
+    scheduleNativeDetection(video, runId, 100);
   }
 
   function stopCamera({ preserveRequest = false } = {}) {

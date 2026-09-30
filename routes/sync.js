@@ -52,6 +52,7 @@ const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
 const BIN_REQUIRED_MESSAGE = 'Please enter/select the source bin location first.';
 const UPI_LOCATION_REQUIRED_MESSAGE = 'Unable to identify current location of this UPI. Please verify transaction history.';
+const OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE = 'Part not available in scanned inventory. Outward not allowed.';
 const UPI_ALREADY_OUTWARD_MESSAGE = 'This UPI is already outwarded.';
 const UPI_ALREADY_FITTED_MESSAGE = 'This UPI is already available in workshop/fitted status.';
 const INVALID_PART_MESSAGE = masterValidation.INVALID_PART_MESSAGE || 'Invalid part number - not found in master catalogue';
@@ -435,12 +436,16 @@ async function resolveUpiCurrentLocation(scan = {}) {
 }
 
 async function prepareUpiSourceLocation(scan = {}) {
-  if (!['OUTWARD', 'FITTED'].includes(scan.scanType) || !upiCodeValue(scan)) return null;
+  if (!['OUTWARD', 'FITTED'].includes(scan.scanType)) return null;
+  // OUTWARD always requires a barcode/UPI that resolves to this dealer's valid
+  // physical scan history. Part master/DMS stock is not sufficient evidence.
+  if (scan.scanType === 'OUTWARD' && !upiCodeValue(scan)) return OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE;
+  if (!upiCodeValue(scan)) return null;
   if (Number(scan.quantity || 1) !== 1) {
     return 'A unique UPI scan must have quantity 1.';
   }
   const location = await resolveUpiCurrentLocation(scan);
-  if (!location) return UPI_LOCATION_REQUIRED_MESSAGE;
+  if (!location) return scan.scanType === 'OUTWARD' ? OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE : UPI_LOCATION_REQUIRED_MESSAGE;
   if (!scan.partNumber && location.partNumber) {
     scan.partNumber = location.partNumber;
     scan.normalizedPartNumber = location.partNumber;
@@ -457,7 +462,7 @@ async function prepareUpiSourceLocation(scan = {}) {
     return null;
   }
   if (location.status !== 'AVAILABLE' || location.locationType !== 'BIN' || !location.binLocation) {
-    return UPI_LOCATION_REQUIRED_MESSAGE;
+    return scan.scanType === 'OUTWARD' ? OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE : UPI_LOCATION_REQUIRED_MESSAGE;
   }
   scan._upiCurrentLocation = location;
   scan._upiSourceLocationType = 'BIN';
@@ -539,9 +544,29 @@ function scanUserName(req, scan = {}) {
 
 function roleScanError(role, scanType) {
   if (!role) return '';
-  if (['admin', 'audit_user', 'mobile_user'].includes(auth.normalizeRole(role))) return '';
+  const normalizedRole = auth.normalizeRole(role);
+  if (['admin', 'super_admin'].includes(normalizedRole)) return '';
+  if (['audit_user', 'mobile_user'].includes(normalizedRole)) return '';
   if (role === 'outward_counter') return scanType === 'OUTWARD' ? '' : 'Outward Counter can only perform OUTWARD scans';
   if (role === 'scanner') return scanType === 'OUTWARD' ? 'Scanner users cannot perform OUTWARD scans' : '';
+  return '';
+}
+
+function scanPermissionError(user, scanType) {
+  const role = auth.normalizeRole(user?.role);
+  if (!user || ['admin', 'super_admin'].includes(role)) return '';
+
+  const permissionByType = {
+    INWARD: 'canScanInward',
+    OUTWARD: 'canScanOutward',
+    FITTED: 'canScanFitted',
+    DAMAGE: 'canScanDamage',
+    VERIFICATION: 'canVerifyParts'
+  };
+  const permission = permissionByType[upper(scanType)];
+  if (permission && user.permissions?.[permission] !== true) {
+    return `Your account is not permitted to perform ${upper(scanType)} scans.`;
+  }
   return '';
 }
 
@@ -1697,7 +1722,7 @@ async function saveNormalizedScan(scan, req) {
     scan.manualMasterMissing = true;
   }
   const role = scanRole(req, scan);
-  const roleError = roleScanError(role, scan.scanType);
+  const roleError = roleScanError(role, scan.scanType) || scanPermissionError(req.user, scan.scanType);
   if (roleError) errors.push(roleError);
   logSync('validation result', {
     deviceId: scan.deviceId,
@@ -1734,7 +1759,7 @@ async function saveNormalizedScan(scan, req) {
     const detected = await autoDetectOutwardBin(scan);
     if (!detected || (!detected.binLocation && detected.sourceLocationType !== 'WORKSHOP')) {
       logSync('outward auto bin failed', { deviceId: scan.deviceId, scanId: scan.uniqueScanId, partNumber: scan.partNumber });
-      return { status: 'failed', scan, error: upiCodeValue(scan) ? UPI_LOCATION_REQUIRED_MESSAGE : NO_OUTWARD_STOCK_MESSAGE };
+      return { status: 'failed', scan, error: scan.scanType === 'OUTWARD' ? OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE : (upiCodeValue(scan) ? UPI_LOCATION_REQUIRED_MESSAGE : NO_OUTWARD_STOCK_MESSAGE) };
     }
     scan.binLocation = detected.binLocation;
     scan._upiSourceLocationType = detected.sourceLocationType || 'BIN';
@@ -1994,7 +2019,12 @@ async function saveNormalizedScan(scan, req) {
     });
     } catch (error) {
       if (error.code === 'UPI_LOCATION_CHANGED') {
-        return { status: 'failed', httpStatus: 409, scan, error: UPI_LOCATION_REQUIRED_MESSAGE };
+        return {
+          status: 'failed',
+          httpStatus: 409,
+          scan,
+          error: scan.scanType === 'OUTWARD' ? OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE : UPI_LOCATION_REQUIRED_MESSAGE
+        };
       }
       if (!isDuplicateKeyError(error)) throw error;
       const retryExisting = duplicateQuery(scan) ? await Inventory.findOne(duplicateQuery(scan)).lean() : null;

@@ -10,6 +10,7 @@ const SyncLog = require('../models/SyncLog');
 const AuditLogService = require('../services/AuditLogService');
 const auth = require('./auth');
 const { compactClosedAuditRawScans } = require('../services/AuditArchiveService');
+const { invalidateCache } = require('../utils/safeCache');
 const {
   clean,
   cleanCode,
@@ -20,6 +21,17 @@ const {
 
 const router = express.Router();
 const AUDIT_DATA_DIR = require('../utils/writablePaths').writablePath('Audit Data');
+
+function invalidateAuditDashboardCache(audit = {}) {
+  const scope = {};
+  if (audit.dealerCode) scope.dealerCode = cleanCode(audit.dealerCode);
+  if (audit.auditId) scope.auditId = clean(audit.auditId);
+  invalidateCache({
+    namespaces: ['dashboard', 'report', 'report-download', 'reconciliation'],
+    tags: ['audit', 'dashboard', 'report', 'scan'],
+    scope
+  });
+}
 
 async function buildAuditId(dealerCode) {
   const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -254,6 +266,7 @@ router.post('/:auditId/close', auth.requireAuth, auth.requireAdmin, async (req, 
     await syncDealerWithAudit(audit);
     const backupArchive = await createClosedAuditBackup(audit.toObject ? audit.toObject() : audit, completedByUser);
     const rawArchive = await compactClosedAuditRawScans({ dealerCode: audit.dealerCode, auditId: audit.auditId });
+    invalidateAuditDashboardCache(audit);
 
     const io = req.io || req.app.get('io');
     if (io) {
@@ -316,6 +329,7 @@ router.post('/:auditId/status/complete', auth.requireAuth, auth.requireAdmin, as
     }
 
     const dealer = await syncDealerWithAudit(updatedAudit);
+    invalidateAuditDashboardCache(updatedAudit);
 
     const io = req.io || req.app.get('io');
     if (io) {
@@ -377,6 +391,7 @@ router.post('/:auditId/status/reopen', auth.requireAuth, auth.requireAdmin, asyn
     }
 
     const dealer = await syncDealerWithAudit(updatedAudit);
+    invalidateAuditDashboardCache(updatedAudit);
 
     const io = req.io || req.app.get('io');
     if (io) {
@@ -442,6 +457,7 @@ router.post('/:auditId/status', auth.requireAuth, auth.requireAdmin, async (req,
       metadata: { auditStatus: nextStatus, remark: clean(req.body.remark), lockedAt: nextStatus === 'LOCKED' ? changedAt : undefined }
     });
     const dealer = await syncDealerWithAudit(updatedAudit);
+    invalidateAuditDashboardCache(updatedAudit);
     const io = req.io || req.app.get('io');
     io?.to(`dealer:${cleanCode(audit.dealerCode)}:audit:${auditId}`).emit('audit:status', publicAudit(updatedAudit));
     return res.json({ success: true, audit: updatedAudit, dealer, activeAudit: nextStatus === 'ACTIVE' ? publicAudit(updatedAudit) : null });
