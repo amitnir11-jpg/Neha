@@ -845,7 +845,7 @@
   }
 
   function isAdminUser() {
-    return state.user && ['admin', 'super_admin'].includes(String(state.user.role || '').toLowerCase());
+    return state.user && ['admin', 'super_admin'].includes(normalizeUiRole(state.user.role));
   }
 
   function activeDealerId() {
@@ -1123,8 +1123,13 @@
     setStatusPill(id, label, ok ? 'green' : known ? 'red' : 'orange');
   }
 
+  function normalizeUiRole(role) {
+    const normalized = String(role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return ['staff', 'scanner', 'supervisor', 'outward_counter'].includes(normalized) ? 'audit_user' : normalized;
+  }
+
   function roleDisplayName(role) {
-    const normalized = String(role || '').toLowerCase();
+    const normalized = normalizeUiRole(role);
     if (normalized === 'admin') return 'Administrator';
     if (normalized === 'mobile_user') return 'Mobile User';
     if (['audit_user', 'staff', 'scanner', 'supervisor', 'outward_counter'].includes(normalized)) return 'Audit User';
@@ -3213,7 +3218,7 @@
       login: userLoginName()
     });
     const roleName = roleDisplayName(state.user && state.user.role);
-    const role = String(state.user && state.user.role || '').toLowerCase();
+    const role = normalizeUiRole(state.user && state.user.role);
     const isAdmin = ['admin', 'super_admin'].includes(role);
     const limitedRole = ['audit_user', 'mobile_user'].includes(role);
     const canViewReports = state.user?.permissions?.canViewReports !== false;
@@ -3225,8 +3230,26 @@
     document.body.classList.toggle('restricted-role', limitedRole);
     const masterLink = $('.side-link[data-view="master"]');
     if (masterLink) masterLink.querySelector('span').textContent = limitedRole ? 'Part Search' : 'Master Data';
-    const dealerAuditTab = $('.master-tab[data-master-tab="dealerAuditTab"]');
-    if (dealerAuditTab) dealerAuditTab.classList.toggle('hidden', limitedRole);
+    if (limitedRole) {
+      $$('.master-tab').forEach((node) => {
+        if (node.dataset.masterTab !== 'partMasterTab') node.remove();
+        else {
+          node.classList.add('active');
+          node.setAttribute('aria-selected', 'true');
+        }
+      });
+      $$('.master-tab-panel').forEach((node) => {
+        if (node.id !== 'partMasterTab') node.remove();
+        else {
+          node.hidden = false;
+          node.classList.add('active');
+        }
+      });
+      const partHeading = $('#partMasterHeading');
+      if (partHeading) partHeading.textContent = 'Part Search';
+      const partSubheading = $('#partMasterSubheading');
+      if (partSubheading) partSubheading.textContent = 'Search the part catalogue for your assigned dealer.';
+    }
     const binSequenceTabButton = $('.bin-transfer-tab[data-bin-transfer-tab="binSequenceTab"]');
     if (binSequenceTabButton) binSequenceTabButton.classList.toggle('hidden', limitedRole);
     $$('.admin-only').forEach((node) => node.classList.toggle('hidden', !isAdmin));
@@ -10106,7 +10129,7 @@
   }
 
   function isAdmin() {
-    return Boolean(state.user && ['admin', 'super_admin'].includes(String(state.user.role || '').toLowerCase()));
+    return Boolean(state.user && ['admin', 'super_admin'].includes(normalizeUiRole(state.user.role)));
   }
 
   async function autoDetectScanners() {
@@ -12131,7 +12154,7 @@
 
   function openView(viewId, title) {
     if (viewId === 'admin') viewId = 'master';
-    const role = String(state.user && state.user.role || '').toLowerCase();
+    const role = normalizeUiRole(state.user && state.user.role);
     if (['audit_user', 'mobile_user'].includes(role)
       && !['dashboard', 'scan', 'binTransfer', 'reports', 'master'].includes(viewId)) {
       toast('This section is not available for your role.', 'error');
@@ -12151,7 +12174,7 @@
     $$('.view').forEach((view) => view.classList.remove('active'));
     const target = $(`#${viewId}`);
     if (target) target.classList.add('active');
-    const viewTitle = viewId === 'master' && ['audit_user', 'mobile_user'].includes(String(state.user?.role || '').toLowerCase())
+    const viewTitle = viewId === 'master' && ['audit_user', 'mobile_user'].includes(normalizeUiRole(state.user?.role))
       ? 'Part Search'
       : VIEW_TITLES[viewId] || title || 'Dashboard';
     $('#viewTitle').textContent = viewTitle;

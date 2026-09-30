@@ -12086,6 +12086,7 @@ tbody tr:hover td {
 /* Read-only part search is available to operational roles without exposing
    part-master editing and maintenance controls. */
 .restricted-role #partEntryCard,
+.restricted-role #auditPriceRefreshCard,
 .restricted-role .part-master-header-actions,
 .restricted-role .advanced-part-result-table th:first-child,
 .restricted-role .advanced-part-result-table td:first-child,
