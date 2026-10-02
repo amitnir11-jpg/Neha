@@ -360,7 +360,6 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       final syncedAt = DateTime.now();
       await _refreshLocalState();
       await _refreshRecentScans(forceServer: true);
-      await _registerDevice();
       if (!mounted) return;
       setState(() {
         _lastSyncAt = syncedAt;

@@ -3071,9 +3071,14 @@ async function pushHandler(req, res) {
       if (io) io.emit('device:heartbeat', { deviceId, dealerCode, status: 'online', lastSeen: completedAt });
     }
 
-    const summary = await syncSummary(req.app.locals.activePort, dealerCode, req);
-    markBatchPerf('syncSummary');
+    // The inventory write and device heartbeat are complete. Compute the
+    // dashboard summary while realtime notifications are being delivered so
+    // this non-essential reporting work does not extend the sync response.
+    const summaryPromise = syncSummary(req.app.locals.activePort, dealerCode, req);
+    summaryPromise.catch(() => undefined);
     await emitEnterpriseRealtime(io, savedScans);
+    const summary = await summaryPromise;
+    markBatchPerf('syncSummary');
     const payload = {
       success: !allRowsRejected,
       activeAudit: activeAuditPayload,
