@@ -54,7 +54,8 @@ class LocalDatabase {
               "ALTER TABLE scans ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'");
         }
         if (oldVersion < 4) {
-          await db.execute("ALTER TABLE scans ADD COLUMN auditId TEXT NOT NULL DEFAULT ''");
+          await db.execute(
+              "ALTER TABLE scans ADD COLUMN auditId TEXT NOT NULL DEFAULT ''");
         }
       },
     );
@@ -82,12 +83,17 @@ class LocalDatabase {
     );
   }
 
-  Future<List<ScanRecord>> pendingScans({int limit = 200}) async {
+  Future<List<ScanRecord>> pendingScans(
+      {int limit = 200, bool includeFailed = false}) async {
     final db = await database;
     final rows = await db.query(
       'scans',
-      where: 'status IN (?, ?) AND scanType != ?',
-      whereArgs: ['Pending', 'Failed', 'VERIFICATION'],
+      where: includeFailed
+          ? 'status IN (?, ?) AND scanType != ?'
+          : 'status = ? AND scanType != ?',
+      whereArgs: includeFailed
+          ? ['Pending', 'Failed', 'VERIFICATION']
+          : ['Pending', 'VERIFICATION'],
       orderBy: 'createdAt ASC',
       limit: limit,
     );

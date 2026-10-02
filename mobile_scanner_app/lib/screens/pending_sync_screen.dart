@@ -24,7 +24,8 @@ class _PendingSyncScreenState extends State<PendingSyncScreen> {
   }
 
   Future<void> _load() async {
-    final records = await LocalDatabase.instance.pendingScans(limit: 500);
+    final records = await LocalDatabase.instance
+        .pendingScans(limit: 500, includeFailed: true);
     if (!mounted) return;
     setState(() => _records = records);
   }
@@ -36,7 +37,7 @@ class _PendingSyncScreenState extends State<PendingSyncScreen> {
       _message = 'Syncing pending records...';
     });
     try {
-      final result = await SyncService().syncPending();
+      final result = await SyncService().syncPending(includeFailed: true);
       await _load();
       if (!mounted) return;
       setState(() {

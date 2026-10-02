@@ -4259,7 +4259,8 @@
     setDashboardKpiValue('dashLastScannedPart', scan.partNumber || scan.part || '-');
     setStatusPill('topRealtimeStatus', 'Realtime: Scan Received', 'blue');
     setDashboardKpiValue('dashRealtimeActivity', compactDateTime(scan.timestamp || new Date()), { time: true });
-    if (options.skipDashboardRefresh !== true) queueDashboardRefresh(350);
+    // The save response and realtime payload update the visible counters/rows.
+    // Do not reload the full dashboard after every individual scan.
   }
 
   function setDashboardLoading(loading) {
@@ -5000,27 +5001,8 @@
       }
       return;
     }
-    // Barcode scans are validated and enriched by the save request itself. Avoid
-    // a separate master lookup before every scan; it adds a full network roundtrip.
-    if (!isBarcodeForm) {
-      try {
-        const masterPart = await validatePartAgainstMaster(scanPartNumber, normalized.dealerCode || currentDealerCode());
-        if (!masterPart) {
-          playScanTone('error');
-          toast('Invalid part number - not found in master catalogue', 'error');
-          return;
-        }
-        Object.assign(normalized, masterPart);
-        fillPart(form, masterPart);
-      } catch (error) {
-        if (!isRetryableTransportError(error)) {
-          playScanTone('error');
-          toast(error.message || 'Unable to validate part number', 'error');
-          return;
-        }
-        addConnectionLog(`Master lookup deferred until sync: ${error.message}`, 'warning');
-      }
-    }
+    // Keep manual saves to one request. The save endpoint validates the part
+    // against master data and enriches the saved inventory record itself.
     if (!isBarcodeForm && !payload.rawScan && !payload.rawScanString && !payload.rawBarcode && !payload.rawScanValue && !payload.barcode && !payload.barcodeValue && !payload.scanValue && !payload.scanText) {
       normalized.rawScan = '';
       normalized.rawScanString = '';
@@ -5061,54 +5043,10 @@
       return;
     }
 
-    const smartBinSettings = state.smartBinSettingsLoaded
-      ? state.smartBinSettings
-      : { enabled: true, requireReason: true };
-    const smartBinEligibleScan = ['INWARD', 'DAMAGE', 'AUDIT'].includes(normalized.scanType);
-    let smartBinPrompted = false;
-    if (!isBarcodeForm && smartBinSettings.enabled !== false && smartBinEligibleScan && normalized.dealerCode && normalized.auditId && normalized.partNumber && normalized.binLocation) {
-      try {
-        let suggestion = localSmartBinSuggestion(normalized);
-        if (!suggestion?.shouldPrompt) {
-          suggestion = await api('/api/scans/smart-bin-check', {
-            method: 'POST',
-            body: {
-              dealerCode: normalized.dealerCode,
-              auditId: normalized.auditId,
-              partNumber: normalized.partNumber,
-              partDescription: normalized.partDescription || normalized.partName || '',
-              binLocation: normalized.binLocation,
-              scanType: normalized.scanType,
-              qty: normalized.qty,
-              refresh: true
-            },
-            timeoutMs: 1800
-          });
-        }
-        if (suggestion && suggestion.shouldPrompt) {
-          smartBinPrompted = true;
-          const decision = await openSmartBinSuggestionModal({
-            ...suggestion,
-            currentBin: suggestion.currentBin || normalized.binLocation,
-            newBin: suggestion.newBin || normalized.binLocation,
-            existingBin: suggestion.existingBin || (Array.isArray(suggestion.existingBins) && suggestion.existingBins[0] && suggestion.existingBins[0].binLocation) || '',
-            requireReason: Boolean(smartBinSettings.requireReason)
-          });
-          if (!decision) return;
-          applySmartBinDecisionToScan(normalized, suggestion, decision, {
-            reasonRequired: Boolean(smartBinSettings.requireReason)
-          });
-            }
-      } catch (error) {
-        console.warn('[SMART BIN] preflight skipped', error.message);
-        addConnectionLog(`Smart bin preflight skipped: ${error.message}`, 'warning');
-      }
-    }
+    // The save endpoint validates duplicates and smart-bin conflicts together.
+    // Do not make a separate preflight request for manual saves.
 
-    // The save endpoint applies the same duplicate policy atomically. A separate
-    // duplicate-check request here only delays barcode saves and creates a race.
-
-    if (!isBarcodeForm && options.confirmBeforeSave !== false && !smartBinPrompted) {
+    if (!isBarcodeForm && options.confirmBeforeSave !== false) {
       const confirmMessage = [
         'Do you want to save this manual scan?',
         `Part: ${normalized.partNumber}`,
@@ -5479,20 +5417,9 @@
             addConnectionLog(`Smart bin preflight skipped: ${error.message}`, 'warning');
           }
         }
-        const duplicateBeforePrompt = await checkServerBarcodeDuplicate(outbound);
-        if (duplicateBeforePrompt && duplicateBeforePrompt.duplicate) {
-          outcomes.set(recordKey, { remove: true });
-          duplicateCount += 1;
-          logs.push({
-            partNumber: record.partNumber || record.part,
-            upiId: record.upiId,
-            dealer: record.dealerCode,
-            status: 'duplicate',
-            errorMessage: duplicateBeforePrompt.message || barcodeDuplicateMessage(duplicateBeforePrompt.scan || duplicateBeforePrompt.existing || record)
-          });
-          handleBarcodeDuplicate(record, duplicateBeforePrompt);
-          continue;
-        }
+        // /api/scans/process applies the duplicate policy as part of the save.
+        // A separate duplicate request here can hang queue retries and repeats
+        // work already done by the authoritative save endpoint.
         try {
           const result = await api('/api/scans/process', { method: 'POST', body: outbound, timeoutMs: 20000 });
           const saved = result.scan || outbound;
@@ -12602,7 +12529,7 @@
       if (form.dataset.submitting === 'true') return;
       setScanFormSubmitting(form, true);
       try {
-        await submitScan(form, { confirmBeforeSave: true });
+        await submitScan(form, { confirmBeforeSave: false });
       } catch (error) {
         playScanTone('error');
         toast(error.message || 'Manual scan could not be saved', 'error');
@@ -13800,8 +13727,8 @@
         handleNewScan(scan).catch(console.warn);
       }
       queueRealtimeReportRefresh('scan saved');
-      if ($('#dashboard')?.classList.contains('active')) queueDashboardRefresh(700);
-      if ($('#scan')?.classList.contains('active')) queueScanRefresh(700);
+      // handleNewScan already inserts the committed scan into the visible list;
+      // reloading full scan history after every save slows continuous scanning.
       if ($('#binTransfer')?.classList.contains('active')) {
         Promise.all([loadBinTransferParts(activeBinTransferForm()), loadBinTransferHistory()]).catch(console.warn);
       }
