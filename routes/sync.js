@@ -1495,7 +1495,10 @@ async function emitEnterpriseRealtime(io, scans = []) {
   io.emit('reports:update', realtimePayload);
   io.emit('warehouse:feed', realtimePayload);
   io.emit('syncData', realtimePayload);
-  try {
+  // Hydrate dashboard aggregates after the scan response path has completed.
+  setImmediate(async () => {
+    const refreshStartedAt = performance.now();
+    try {
     const recentFilter = { ...dashboardFilter };
     if (inventory.nonVerificationScanClause) {
       recentFilter.$and = (recentFilter.$and || []).concat([inventory.nonVerificationScanClause()]);
@@ -1523,9 +1526,18 @@ async function emitEnterpriseRealtime(io, scans = []) {
     io.emit('scan:last10:update', updatePayload);
     io.emit('dashboard:update', updatePayload);
     io.emit('inventory:update', updatePayload);
-  } catch (error) {
-    logSync('realtime dashboard payload failed', { message: error.message });
-  }
+    if (process.env.SCAN_PERF_LOGS === 'true') {
+      console.info('[SCAN_PERF_REALTIME]', JSON.stringify({
+        dashboardRefreshMs: Math.round(performance.now() - refreshStartedAt),
+        count: publicScans.length,
+        dealerCode: dashboardFilter.dealerCode || '',
+        auditId: dashboardFilter.auditId || ''
+      }));
+    }
+    } catch (error) {
+      logSync('realtime dashboard payload failed', { message: error.message });
+    }
+  });
   logSync('socket broadcast success', { count: publicScans.length, events: ['scan:new', 'scan:saved', 'scanData', 'reports:update', 'syncData', 'dashboard:update'] });
 }
 
@@ -1615,6 +1627,26 @@ async function scanPolicyResult(scan = {}) {
 }
 
 async function saveNormalizedScan(scan, req) {
+  const perfEnabled = process.env.SCAN_PERF_LOGS === 'true';
+  const perfStart = performance.now();
+  let perfLast = perfStart;
+  const perfStages = {};
+  const markPerf = (stage) => {
+    if (!perfEnabled) return;
+    const now = performance.now();
+    perfStages[stage] = Math.round(now - perfLast);
+    perfLast = now;
+  };
+  const logPerf = (status) => {
+    if (perfEnabled) console.info('[SCAN_PERF]', JSON.stringify({
+      totalMs: Math.round(performance.now() - perfStart),
+      stagesMs: perfStages,
+      status,
+      scanType: scan.scanType,
+      source: scan.source,
+      scanId: scan.uniqueScanId
+    }));
+  };
   logSync('server scan received', {
     deviceId: scan.deviceId,
     rawScanReceived: scan.rawScanString,
@@ -1633,6 +1665,7 @@ async function saveNormalizedScan(scan, req) {
     return { status: 'failed', httpStatus: 403, scan, error: 'FORBIDDEN: authenticated dealer context is missing' };
   }
   const activeAudit = await activeAuditForDealer(requestedDealerCode);
+  markPerf('activeAudit');
   if (!activeAudit) {
     logSync('scan rejected', { reason: 'No active audit', requestedDealerCode, deviceId: scan.deviceId, scanId: scan.uniqueScanId });
     return { status: 'failed', scan, error: noActiveAuditMessage(requestedDealerCode) };
@@ -1644,6 +1677,7 @@ async function saveNormalizedScan(scan, req) {
   }
   applyActiveAudit(scan, activeAudit);
   const upiLocationError = await prepareUpiSourceLocation(scan);
+  markPerf('upiLocation');
   if (upiLocationError) return { status: 'failed', scan, error: upiLocationError };
   if (scan.binLocation) {
     const binCode = upper(scan.binLocation);
@@ -1655,7 +1689,9 @@ async function saveNormalizedScan(scan, req) {
       return { status: 'failed', httpStatus: 403, scan, error: 'BIN_DOES_NOT_BELONG_TO_ACTIVE_DEALER' };
     }
   }
+  markPerf('binOwnership');
   applyUserContext(scan, await resolveScanUserContext(req, scan));
+  markPerf('userContext');
   const trustedUser = req.user || {};
   if (trustedUser.id || trustedUser._id) {
     scan.userId = clean(trustedUser.id || trustedUser._id);
@@ -1683,6 +1719,7 @@ async function saveNormalizedScan(scan, req) {
     rawScannedValue: scan.rawScanString,
     logger: console
   });
+  markPerf('partMaster');
   const master = validation.master;
   
   if (!scan.dealerCode && master && master.dealerCode) {
@@ -1699,6 +1736,7 @@ async function saveNormalizedScan(scan, req) {
   const dealer = scan.dealerCode ? await Dealer.findOne({ dealerCode: scan.dealerCode }).lean() : null;
   const manualEntry = isManualEntry(scan);
   const masterPrice = master ? await getMasterPrice(scan.partNumber, scan.dealerCode, master, scan.auditId) : null;
+  markPerf('dealerAndPricing');
   const valueFields = valuationFields({ masterPrice, master, qty: scan.quantity || 1 });
 
   const errors = [];
@@ -1779,6 +1817,7 @@ async function saveNormalizedScan(scan, req) {
   let storedUpiToken = scan.upiNo || scan.upiId;
   scan.globalUpiKey = duplicatePolicy.globalUpiKey(scan);
   const preSmartBinPolicy = await scanPolicyResult(scan);
+  markPerf('firstDuplicatePolicy');
   if (!preSmartBinPolicy.ok) {
     const confirmedUpdate = await confirmedDuplicateUpdate(preSmartBinPolicy, scan, req);
     if (confirmedUpdate) return confirmedUpdate;
@@ -1851,6 +1890,7 @@ async function saveNormalizedScan(scan, req) {
   }
   storedUpiToken = scan.upiNo || scan.upiId;
   const policy = await scanPolicyResult(scan);
+  markPerf('finalDuplicatePolicy');
   if (!policy.ok) {
     const confirmedUpdate = await confirmedDuplicateUpdate(policy, scan, req);
     if (confirmedUpdate) return confirmedUpdate;
@@ -2017,6 +2057,7 @@ async function saveNormalizedScan(scan, req) {
     isMasterMatched: Boolean(master)
       });
     });
+    markPerf('transactionSave');
     } catch (error) {
       if (error.code === 'UPI_LOCATION_CHANGED') {
         return {
@@ -2059,9 +2100,13 @@ async function saveNormalizedScan(scan, req) {
   logSync('DB insert success', { id: doc._id, deviceId: doc.deviceId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, syncKey: doc.syncKey });
   logSync('saved valid scan', { id: doc._id, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'mobile' });
   await recomputeUpiInventoryState(Inventory, doc).catch(() => undefined);
+  markPerf('inventoryState');
   await recordPartBinLocationFromScan(doc).catch(() => undefined);
+  markPerf('binHistory');
   invalidateScanCaches(doc);
   await emitEnterpriseRealtime(req.io || req.app.get('io'), [doc]);
+  markPerf('socketEnqueue');
+  logPerf('synced');
   return { status: 'synced', scan: doc, error: '' };
 }
 

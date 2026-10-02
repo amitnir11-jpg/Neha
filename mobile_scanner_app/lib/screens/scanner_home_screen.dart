@@ -76,6 +76,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   bool _savingScan = false;
   bool _syncInFlight = false;
   bool _syncRequested = false;
+  Timer? _liveRefreshTimer;
   bool _duplicateDialogOpen = false;
   int _pendingCount = 0;
   int _failedCount = 0;
@@ -93,7 +94,10 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       try {
         await _socket.connect(_settings);
         void scheduleLiveRefresh([dynamic _]) {
-          unawaited(_refreshRecentScans(forceServer: true));
+          _liveRefreshTimer?.cancel();
+          _liveRefreshTimer = Timer(const Duration(milliseconds: 250), () {
+            if (mounted) unawaited(_refreshRecentScans(forceServer: true));
+          });
         }
 
         _socket.on('sync:clockSkew', (data) {
@@ -132,12 +136,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         });
         _socket.on('scan:saved', scheduleLiveRefresh);
         _socket.on('scan:deleted', scheduleLiveRefresh);
-        _socket.on('reports:update', scheduleLiveRefresh);
         _socket.on('sync:completed', scheduleLiveRefresh);
-        _socket.on('syncData', scheduleLiveRefresh);
-        _socket.on('scan:last10:update', scheduleLiveRefresh);
-        _socket.on('dashboard:update', scheduleLiveRefresh);
-        _socket.on('inventory:update', scheduleLiveRefresh);
       } catch (_) {}
     });
 
@@ -165,6 +164,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _foregroundSyncTimer?.cancel();
+    _liveRefreshTimer?.cancel();
     _qrIdleTimer?.cancel();
     _connectivitySub?.cancel();
     _defaultBinController.dispose();

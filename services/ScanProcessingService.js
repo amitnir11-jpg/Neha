@@ -47,9 +47,12 @@ function scanProcessLog(level, stage, details = {}) {
 }
 
 async function processScan(input = {}, options = {}) {
+  const perfEnabled = process.env.SCAN_PERF_LOGS === 'true';
+  const perfStart = performance.now();
   const sync = require('../routes/sync');
   const req = requestLike(options.req || {}, input);
   const normalized = sync.normalizeScan(input);
+  const normalizedAt = performance.now();
   scanProcessLog('info', 'incoming', {
     route: clean(req.originalUrl || req.url || '/api/scans/process'),
     source: clean(normalized.scanSource || input.scanSource || input.source || 'unknown'),
@@ -62,6 +65,7 @@ async function processScan(input = {}, options = {}) {
     scanId: clean(normalized.scanId || normalized.uniqueScanId || '')
   });
   const result = await sync.saveNormalizedScan(normalized, req);
+  const savedAt = performance.now();
   const status = clean(result.status).toLowerCase();
   const success = status === 'synced' || status === 'verification';
   const scan = publicScan(result.scan || result.updated || normalized);
@@ -100,6 +104,16 @@ async function processScan(input = {}, options = {}) {
     syncKey: clean(scan.syncKey || normalized.syncKey || ''),
     message
   });
+
+  if (perfEnabled) console.info('[SCAN_PERF_REQUEST]', JSON.stringify({
+    totalMs: Math.round(performance.now() - perfStart),
+    normalizeMs: Math.round(normalizedAt - perfStart),
+    saveNormalizedScanMs: Math.round(savedAt - normalizedAt),
+    responseFormattingMs: Math.round(performance.now() - savedAt),
+    status,
+    scanType: normalized.scanType,
+    source: normalized.source
+  }));
 
   return {
     success,
