@@ -27,7 +27,8 @@ const fittedStock = require('../utils/fittedStock');
 const smartBinSettingsRoute = require('./settings');
 const {
   getSmartBinSuggestion,
-  recordPartBinLocationFromScan
+  recordPartBinLocationFromScan,
+  recordPartBinLocationsForScans
 } = require('../services/PartBinLocationService');
 const {
   activeInventoryValue,
@@ -2101,7 +2102,7 @@ async function saveNormalizedScan(scan, req) {
   logSync('saved valid scan', { id: doc._id, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'mobile' });
   await recomputeUpiInventoryState(Inventory, doc).catch(() => undefined);
   markPerf('inventoryState');
-  await recordPartBinLocationFromScan(doc).catch(() => undefined);
+  await recordPartBinLocationFromScan(doc, { incremental: true }).catch(() => undefined);
   markPerf('binHistory');
   invalidateScanCaches(doc);
   await emitEnterpriseRealtime(req.io || req.app.get('io'), [doc]);
@@ -2160,6 +2161,23 @@ async function syncSummary(activePort, dealerCode = '', req = null) {
 async function pushHandler(req, res) {
   const io = req.io || req.app.get('io');
   const startedAt = new Date();
+  const perfEnabled = process.env.SCAN_PERF_LOGS === 'true';
+  const perfStartedAt = performance.now();
+  let perfMarkAt = perfStartedAt;
+  const perfStages = {};
+  const markBatchPerf = (stage) => {
+    if (!perfEnabled) return;
+    const now = performance.now();
+    perfStages[stage] = Math.round(now - perfMarkAt);
+    perfMarkAt = now;
+  };
+  const logBatchPerf = (status) => {
+    if (perfEnabled) console.info('[SCAN_PERF_SYNC_BULK]', JSON.stringify({
+      totalMs: Math.round(performance.now() - perfStartedAt),
+      stagesMs: perfStages,
+      status
+    }));
+  };
   const syncBatchId = (randomUUID && randomUUID()) || `batch-${Date.now()}`;
   const serverTimeZone = (Intl && Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'UTC';
   try {
@@ -2169,6 +2187,7 @@ async function pushHandler(req, res) {
     }
 
     const incomingRaw = incomingScansFromBody(body);
+    markBatchPerf('decodeAndNormalizeRequest');
     logSync('server request received', {
       route: req.originalUrl,
       method: req.method,
@@ -2232,6 +2251,7 @@ async function pushHandler(req, res) {
       });
     }
     const activeAudit = await activeAuditForDealer(requestedDealerCode);
+    markBatchPerf('activeAuditAndContext');
     if (!activeAudit) {
       logSync('request rejected', { reason: 'No active audit', requestedDealerCode, receivedCount: incomingRaw.length });
       return res.json({
@@ -2351,7 +2371,9 @@ async function pushHandler(req, res) {
           logs.push(syncLogFromAck(normalized, ack, 'failed', reason));
         }
       }
+      markBatchPerf('sequentialUpiSave');
       const syncedCount = insertedCount + logs.filter((item) => item.status === 'synced').length;
+      logBatchPerf('completed');
       return res.json({
         success: failedCount === 0,
         activeAudit: activeAuditPayload,
@@ -2476,6 +2498,7 @@ async function pushHandler(req, res) {
         ]
         }).select('uniqueScanId scanId syncKey qrFingerprint rawUpiHash globalUpiKey rawScan rawScanString rawUpi upiNo upiId dealerCode auditId syncBatchId userId loginId userName staffName binLocation bin scanType type normalizedPartNumber partNumber part regdNo jobCardNo qty quantity mrp scanMRP manualMRP valuationMRP finalMRP valuationSource currentCatalogueMRP currentCatalogueDLC dlc timestamp scanTime createdAt').lean()
     ]);
+    markBatchPerf('masterDealerAndDuplicateLookups');
     const masterByPart = new Map();
     const masterByDealer = new Map();
     catalogueMasters.map(cataloguePayload).forEach((master) => {
@@ -2963,6 +2986,7 @@ async function pushHandler(req, res) {
         if (!writeErrors.length) throw error;
       }
     }
+    markBatchPerf('databaseInsertAndDuplicateHandling');
 
     const insertedScanIds = insertDocs
       .filter((doc, index) => !failedOperationIndexes.has(index) && !existingScanIds.has(doc.uniqueScanId))
@@ -2995,7 +3019,8 @@ async function pushHandler(req, res) {
       const meta = metaByScanId.get(clean(scan.uniqueScanId || scan.scanId)) || ackMetaFromScan(scan);
       ackList(meta).forEach((ack) => logs.push(syncLogFromAck(scan, ack, 'inserted', '')));
     });
-    await Promise.all(savedScans.map((scan) => recordPartBinLocationFromScan(scan).catch(() => undefined)));
+    await recordPartBinLocationsForScans(savedScans);
+    markBatchPerf('partBinProjection');
 
     const duplicateCount = logs.filter((log) => log.status === 'duplicate').length;
     const failedCount = failedRows.filter((row) => row.status !== 'invalid').length;
@@ -3047,6 +3072,7 @@ async function pushHandler(req, res) {
     }
 
     const summary = await syncSummary(req.app.locals.activePort, dealerCode, req);
+    markBatchPerf('syncSummary');
     await emitEnterpriseRealtime(io, savedScans);
     const payload = {
       success: !allRowsRejected,
@@ -3124,6 +3150,8 @@ async function pushHandler(req, res) {
       logSync('socket broadcast success', { events: ['sync:completed', 'syncData'], insertedCount, duplicateCount, failedCount, deviceId });
     }
     logSync('success response', { insertedCount, duplicateCount, failedCount, totalSynced: payload.totalSynced, deviceId });
+    markBatchPerf('responseLogging');
+    logBatchPerf('completed');
     return res.status(allRowsRejected ? 422 : 200).json(payload);
   } catch (error) {
     const payload = { success: false, startedAt, failedAt: new Date(), message: error.message };

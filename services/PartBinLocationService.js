@@ -325,8 +325,100 @@ async function recordPartBinLocationFromScan(scan = {}, options = {}) {
     auditId: scope.auditId,
     partNumber: scope.partNumber
   };
+  if (options.incremental) {
+    const existingRows = await queryPartBinLocationRows(refreshScope);
+    // Bootstrap a missing projection from history once. Later new scans can
+    // update just their bin instead of rereading every historical scan.
+    if (!existingRows.length && !options.projectionKnown) return rebuildPartBinLocations(refreshScope);
+
+    const delta = movementQty(scan);
+    if (!delta) return sortLocationRows(existingRows);
+    const binLocation = scope.currentBin;
+    const id = rowId(refreshScope, binLocation);
+    const actor = clean(scan.smartBinDecisionBy || scan.userName || scan.staffName || scan.loginId || scan.userId || '');
+    const scanAt = scan.timestamp || scan.scanTime || scan.createdAt || new Date();
+    const reason = clean(scan.smartBinReason || scan.smartBinDecisionReason || scan.reason || scan.remarks || scan.comment || scan.comments || '');
+    const update = {
+      $inc: { quantity: delta },
+      $set: {
+        dealerCode: scope.dealerCode,
+        auditId: scope.auditId,
+        partNumber: scope.partNumber,
+        normalizedPartNumber: scope.partNumber,
+        binLocation,
+        lastScanDate: scanAt,
+        ...(reason ? { reason } : {})
+      },
+      $setOnInsert: {
+        createdBy: actor,
+        createdDate: scanAt,
+        locationType: 'SECONDARY'
+      }
+    };
+    try {
+      await PartBinLocation.updateOne({ _id: id }, update, { upsert: true });
+    } catch (error) {
+      // A simultaneous first scan can win the upsert race. Apply this scan's
+      // quantity change to the row it created rather than losing the update.
+      if (!/unique|duplicate/i.test(String(error.message || ''))) throw error;
+      await PartBinLocation.updateOne({ _id: id }, update);
+    }
+
+    const currentRow = await PartBinLocation.findById(id).lean();
+    if (currentRow && Number(currentRow.quantity || 0) <= 0) {
+      await PartBinLocation.deleteOne({ _id: id });
+    }
+    const refreshedRows = await queryPartBinLocationRows(refreshScope);
+    const rankedRows = sortLocationRows(refreshedRows);
+    await Promise.all(rankedRows.map((row, index) => {
+      const locationType = index === 0 ? 'PRIMARY' : 'SECONDARY';
+      if (row.locationType === locationType) return Promise.resolve();
+      return PartBinLocation.updateOne(
+        { _id: row.id || row._id },
+        { $set: { locationType } }
+      );
+    }));
+    invalidateCache({ tags: ['smart-bin'], scope: { dealerCode: scope.dealerCode, auditId: scope.auditId } });
+    return rankedRows.map((row, index) => ({
+      ...row,
+      locationType: index === 0 ? 'PRIMARY' : 'SECONDARY'
+    }));
+  }
   const rows = await rebuildPartBinLocations(refreshScope);
   return rows;
+}
+
+async function recordPartBinLocationsForScans(scans = []) {
+  const scopes = new Map();
+  for (const scan of scans) {
+    const scope = normalizePartBinScope(scan);
+    if (!scope.dealerCode || !scope.auditId || !scope.partNumber || !scope.currentBin) continue;
+    const key = [scope.dealerCode, scope.auditId, scope.partNumber].join('|');
+    if (!scopes.has(key)) scopes.set(key, { scope, scans: [] });
+    scopes.get(key).scans.push(scan);
+  }
+  await Promise.all(Array.from(scopes.values(), async ({ scope, scans: partScans }) => {
+    try {
+      const existingRows = await queryPartBinLocationRows(scope);
+      if (!existingRows.length) {
+        // The rebuild sees every row from this already-inserted batch, so do
+        // not apply the batch deltas again afterwards.
+        await rebuildPartBinLocations(scope);
+        return;
+      }
+      partScans.sort((a, b) => {
+        const timeA = new Date(a.timestamp || a.scanTime || a.createdAt || 0).getTime();
+        const timeB = new Date(b.timestamp || b.scanTime || b.createdAt || 0).getTime();
+        return timeA - timeB;
+      });
+      for (const scan of partScans) {
+        await recordPartBinLocationFromScan(scan, { incremental: true, projectionKnown: true });
+      }
+    } catch (_) {
+      // Scan persistence has already succeeded; projection maintenance remains
+      // best effort, matching the existing sync behavior.
+    }
+  }));
 }
 
 module.exports = {
@@ -335,6 +427,7 @@ module.exports = {
   getSmartBinSuggestion,
   normalizePartBinScope,
   recordPartBinLocationFromScan,
+  recordPartBinLocationsForScans,
   rebuildPartBinLocations,
   sortLocationRows
 };
