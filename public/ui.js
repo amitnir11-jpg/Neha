@@ -3339,10 +3339,15 @@
     ensureActiveDealerSelection();
     $$('.dealerSelect').forEach((select) => {
       const selected = cleanDealerCode(select.value);
+      const scanDealers = select.closest('#scan')
+        ? realDealers.filter((dealer) => ['ACTIVE', 'IN_PROGRESS'].includes(
+          normalizeAuditWorkflowStatus(dealer.auditStatus || dealer.status || 'NONE')
+        ))
+        : realDealers;
       const firstOption = !isAdminUser()
         ? '<option value="">Select Dealer</option>'
         : (select.closest('#reportFilters') ? '<option value="">Select Dealer</option>' : (['dashboardDealerSelect', 'dashboardAuditDealerSelect'].includes(select.id) ? '<option value="">Select Dealer</option>' : (select.classList.contains('bin-transfer-dealer') || select.id === 'binManagementDealer' || select.closest('#binSequenceTab') || select.closest('#reconciliation')) ? '<option value="">Select Dealer</option>' : '<option value="">All Dealers</option>'));
-      select.innerHTML = firstOption + realDealers.map((dealer) => (
+      select.innerHTML = firstOption + scanDealers.map((dealer) => (
         `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
       )).join('');
       const activeDealer = state.activeAudit && state.activeAudit.dealerCode ? cleanDealerCode(state.activeAudit.dealerCode) : '';
