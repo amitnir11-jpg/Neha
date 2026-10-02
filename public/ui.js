@@ -9852,12 +9852,29 @@
     }
     const panel = $('#binLabelBinsPanel');
     if (panel) {
-      panel.innerHTML = bins.length ? bins.map((bin, index) => {
+      panel.innerHTML = bins.length ? `<label class="bin-label-multi-option bin-label-select-all-option"><input id="binLabelSelectAllBins" type="checkbox"><span>Select All Bins</span></label><div class="bin-label-multi-divider" role="separator"></div>${bins.map((bin, index) => {
         const value = binOptionValue(bin);
         return `<label class="bin-label-multi-option"><input class="bin-label-bin-option" type="checkbox" value="${escapeHtml(value)}" data-index="${escapeHtml(index)}"><span>${escapeHtml(value)}</span></label>`;
-      }).join('') : '<div class="bin-label-multi-empty">No bins found</div>';
+      }).join('')}` : '<div class="bin-label-multi-empty">No bins found</div>';
     }
     updateBinLabelBinsButton();
+  }
+
+  function syncBinLabelBinsSelectAllState() {
+    const boxes = $$('.bin-label-bin-option');
+    const checkedCount = boxes.filter((box) => box.checked).length;
+    const selectAll = $('#binLabelSelectAllBins');
+    if (selectAll) {
+      selectAll.checked = boxes.length > 0 && checkedCount === boxes.length;
+      selectAll.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+    }
+    const select = $('#binLabelBins');
+    if (select) {
+      const selectedValues = new Set(boxes.filter((box) => box.checked).map((box) => box.value));
+      Array.from(select.options).forEach((option) => {
+        option.selected = selectedValues.has(option.value);
+      });
+    }
   }
 
   function updateBinLabelBinsButton() {
@@ -12519,7 +12536,13 @@
       $('#binLabelBinsControl')?.classList.toggle('open', panel?.hidden === false);
     });
     $('#binLabelBinsPanel')?.addEventListener('click', (event) => event.stopPropagation());
-    $('#binLabelBinsPanel')?.addEventListener('change', () => {
+    $('#binLabelBinsPanel')?.addEventListener('change', (event) => {
+      if (event.target.id === 'binLabelSelectAllBins') {
+        $$('.bin-label-bin-option').forEach((box) => {
+          box.checked = event.target.checked;
+        });
+      }
+      syncBinLabelBinsSelectAllState();
       updateBinLabelBinsButton();
       clearBinLabelSelection('Click Show Parts to load available parts for selected bins.');
       updateBinLabelBinsButton();

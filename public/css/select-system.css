@@ -214,6 +214,11 @@
   cursor: pointer;
 }
 
+.bin-label-multi-option {
+  grid-template-columns: 18px minmax(0, 1fr);
+  padding-left: 10px;
+}
+
 .bin-label-multi-option:hover,
 .plain-bin-multi-option:hover {
   background: #fff5f5;
@@ -225,7 +230,6 @@
   color: var(--ds-primary-hover);
 }
 
-.bin-label-multi-option:has(input:checked)::after,
 .plain-bin-multi-option:has(input:checked)::after {
   content: "✓";
   color: var(--ds-primary);
@@ -233,13 +237,32 @@
   font-weight: 800;
 }
 
-.bin-label-multi-option input,
 .plain-bin-multi-option input {
   position: absolute;
   width: 1px;
   height: 1px;
   opacity: 0;
   pointer-events: none;
+}
+
+.bin-label-multi-option input {
+  position: static;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  opacity: 1;
+  pointer-events: auto;
+  accent-color: var(--ds-primary);
+}
+
+.bin-label-multi-divider {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--ds-border);
+}
+
+.bin-label-select-all-option {
+  font-weight: 700;
 }
 
 .bin-label-multi-option span,
