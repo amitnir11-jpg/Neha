@@ -198,12 +198,14 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     final dealerCode = await _settings.dealerCode;
     final dealerName = await _settings.dealerName;
     final deviceId = await _settings.deviceId;
+    final savedAuditId = await _settings.auditContextForDealer(dealerCode);
     if (!mounted) return;
     setState(() {
       _online = network != ConnectivityResult.none;
       _dealerCode = dealerCode;
       _dealerName = dealerName;
       _deviceId = deviceId;
+      _activeAuditId = savedAuditId;
       _userId = session['loginId'] ?? session['userId'] ?? '';
       _userName = session['userName'] ?? session['loginId'] ?? '';
       _role = session['role'] ?? '';
@@ -249,6 +251,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       setState(() {
         _activeAuditId = auditId.toString().trim();
       });
+      await _settings.saveAuditContext(_dealerCode, _activeAuditId);
     } catch (_) {}
   }
 
@@ -612,8 +615,14 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         return;
       }
 
-      if (_isSmartBinEligible(_scanType) && _online && _activeAuditId.isEmpty) {
+      if (_online && _activeAuditId.isEmpty) {
         await _refreshAuditContext();
+      }
+      if (_activeAuditId.isEmpty) {
+        _setStatus(
+            'No audit context available. Connect to the server and refresh before scanning.',
+            Colors.red);
+        return;
       }
 
       final localId = 'MOB-${const Uuid().v4()}';

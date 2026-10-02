@@ -32,6 +32,7 @@ class SettingsStore {
   static const _sessionKey = 'session';
   static const _dealerCodeKey = 'dealer_code';
   static const _dealerNameKey = 'dealer_name';
+  static const _auditContextPrefix = 'audit_context_';
 
   Future<String> get token async {
     try {
@@ -126,6 +127,26 @@ class SettingsStore {
   Future<String> get dealerName async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_dealerNameKey) ?? '';
+  }
+
+  Future<String> auditContextForDealer(String code) async {
+    final dealer = code.trim().toUpperCase();
+    if (dealer.isEmpty) return '';
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('$_auditContextPrefix$dealer') ?? '';
+  }
+
+  Future<void> saveAuditContext(String code, String auditId) async {
+    final dealer = code.trim().toUpperCase();
+    if (dealer.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final key = '$_auditContextPrefix$dealer';
+    final value = auditId.trim();
+    if (value.isEmpty) {
+      await prefs.remove(key);
+    } else {
+      await prefs.setString(key, value);
+    }
   }
 
   Future<Map<String, String>> get session async {
