@@ -9,7 +9,7 @@
   <title>Daksh Scan</title>
   <link rel="icon" href="/brand/favicon.ico" type="image/x-icon">
   <link rel="apple-touch-icon" sizes="512x512" href="/brand/app-icon.png">
-  <link rel="stylesheet" href="/scan.css?v=20260926-fast-mobile-decoder-v1">
+  <link rel="stylesheet" href="/scan.css?v=20261002-mobile-camera-focus-v1">
   <link rel="stylesheet" href="/css/select-system.css?v=20260908-enterprise-select-v3">
 </head>
 <body class="scan-page">
@@ -47,11 +47,11 @@
         <div class="field-grid">
           <label class="field">
             <span>User ID / Username / Email</span>
-            <input name="login" autocomplete="username" required placeholder="Enter user ID" autofocus>
+            <input name="login" type="text" inputmode="text" autocomplete="username" required placeholder="Enter user ID">
           </label>
           <label class="field">
             <span>Password or PIN</span>
-            <input name="passwordOrPin" type="password" autocomplete="current-password" required placeholder="Enter password or 4-digit PIN">
+            <input name="passwordOrPin" type="password" inputmode="text" autocomplete="current-password" required placeholder="Enter password or 4-digit PIN">
           </label>
           <label class="field">
             <span>Dealer Code</span>
@@ -297,8 +297,7 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="/config.js"></script>
-  <script src="/js/runtime.js?v=20260923-recon-upload-dashboard-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
-  <script src="/scan.js?v=20260929-part-first-bin-lookup-v1"></script>
+  <script src="/scan.js?v=20261002-mobile-camera-focus-v1"></script>
 </body>
 </html>

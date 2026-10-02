@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20260929-part-first-bin-lookup-v1';
+  const APP_VERSION = '20261002-mobile-camera-focus-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -604,31 +604,13 @@
       storageRemove(VERSION_RELOAD_KEY);
       return false;
     }
-    try {
-      if (window.DAKSH_RUNTIME && typeof window.DAKSH_RUNTIME.refreshForVersionMismatch === 'function') {
-        return await window.DAKSH_RUNTIME.refreshForVersionMismatch(build, { quiet: false });
-      }
-    } catch (error) {
-      console.warn('[VERSION] runtime refresh failed', error);
-    }
-    const signature = `${CACHE_VERSION}->${build}`;
-    if (storageGet(VERSION_RELOAD_KEY, '') === signature) {
-      console.warn('[VERSION] Scanner build mismatch remained after reload; continuing without another reload.', {
-        scannerBuild: CACHE_VERSION,
-        serverBuild: build
-      });
-      return false;
-    }
-    storageSet(VERSION_RELOAD_KEY, signature);
-    try {
-      if (window.DAKSH_RUNTIME && typeof window.DAKSH_RUNTIME.clearClientCaches === 'function') {
-        await window.DAKSH_RUNTIME.clearClientCaches();
-      }
-    } catch (error) {
-      console.warn('[VERSION] cache clear fallback failed', error);
-    }
-    window.location.reload();
-    return true;
+    // A build check must never reload an active scanner or interrupt login typing.
+    // Assets are versioned in the page itself; a new deployment is picked up on next navigation.
+    console.warn('[VERSION] Scanner build mismatch; continuing without reloading the page.', {
+      scannerBuild: CACHE_VERSION,
+      serverBuild: build
+    });
+    return false;
   }
 
   async function checkScannerBuild() {
@@ -3282,6 +3264,9 @@
       renderCameraControlState({ live: false, starting: false });
       return;
     }
+    // Includes an in-progress getUserMedia request, so concurrent lifecycle and
+    // mode updates cannot open a second stream.
+    if (state.scanning) return;
     stopCamera({ preserveRequest: true });
     const runId = state.cameraRunId + 1;
     state.cameraRunId = runId;
@@ -4233,10 +4218,6 @@
     renderModeFields();
     renderBinPanel();
     const info = currentModeInfo();
-    if (state.scanning && !state.paused) {
-      stopCamera({ preserveRequest: true });
-      startCamera().catch((error) => toast(error.message || 'Camera failed to restart', 'error'));
-    }
     if (info.requiresBin) {
       const activeBin = loadActiveBin();
       if (activeBin) {
