@@ -1892,7 +1892,10 @@ async function smartBinSuggestionForScan(input = {}) {
     partNumber,
     binLocation: currentBin
   }, {
-    refresh: true,
+    // The bin projection is maintained as scans are saved. Rebuilding it from
+    // the complete inventory history for every barcode makes scan latency
+    // grow with the age of the dealer's data.
+    refresh: false,
     settings: smartBinSettings || {}
   }).catch(() => ({
     dealerCode,
@@ -3022,7 +3025,7 @@ async function saveScanRequest(req, res) {
     scanDebug("Matched category:", scan.category || '');
     scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
     await refreshInventoryUpiState(scan).catch(() => undefined);
-    await recordPartBinLocationFromScan(scan).catch(() => undefined);
+    await recordPartBinLocationFromScan(scan, { incremental: true }).catch(() => undefined);
     emitScanUpdate(req, scan).catch((error) => console.warn('[MANUAL SCAN] realtime refresh failed', error.message));
     res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
   } catch (error) {
