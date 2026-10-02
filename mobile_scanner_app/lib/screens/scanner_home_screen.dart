@@ -152,9 +152,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     });
     _foregroundSyncTimer = Timer.periodic(_backgroundSyncInterval, (_) {
       if (!_online || _syncInFlight) return;
-      if (_pendingCount > 0 || _failedCount > 0) {
+      if (_pendingCount > 0) {
         unawaited(_syncPending(silent: true));
-      } else {
+      } else if (_failedCount == 0) {
         unawaited(_testServer(silent: true));
       }
     });
@@ -340,7 +340,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     }
   }
 
-  Future<void> _syncPending({bool silent = false}) async {
+  Future<void> _syncPending(
+      {bool silent = false, bool includeFailed = false}) async {
     // Scans can be saved while the previous batch is uploading.  Remember the
     // request so that the newly saved rows are uploaded as soon as that batch
     // completes instead of waiting for the two-minute background timer.
@@ -356,10 +357,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       }
     });
     try {
-      final result = await _syncService.syncPending();
+      final result =
+          await _syncService.syncPending(includeFailed: includeFailed);
       final syncedAt = DateTime.now();
       await _refreshLocalState();
-      await _refreshRecentScans(forceServer: true);
+      if (result.success) await _refreshRecentScans(forceServer: true);
       if (!mounted) return;
       setState(() {
         _lastSyncAt = syncedAt;
@@ -373,9 +375,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         if (!silent || !result.success) {
           _statusText = result.success
               ? result.message
-              : (result.message.trim().isEmpty
+              : result.message.trim().isEmpty
                   ? 'Sync failed - scan remains pending'
-                  : 'Sync pending: ${result.message}');
+                  : '${result.serverReached ? 'Scan not synced' : 'Sync pending'}: ${result.message}';
           _statusColor = result.success ? Colors.green : Colors.red;
         }
       });
@@ -760,7 +762,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   Future<void> _saveScanLocally(ScanRecord record) async {
     try {
       await _database.insertScan(record);
-      await _refreshLocalState();
+      // Start upload as soon as the durable local insert completes. Refreshing
+      // the two status counters first adds extra SQLite round trips to every scan.
       if (!_online && mounted) {
         _setStatus('Offline saved', Colors.orange);
       } else {
@@ -769,6 +772,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
           unawaited(_syncPending(silent: true));
         } catch (_) {}
       }
+      unawaited(_refreshLocalState());
     } catch (error) {
       if (mounted) _setStatus('Local save failed', Colors.red);
     }
@@ -1022,9 +1026,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   }
 
   bool get _requiresBinBeforeScan =>
-      _scanType == 'INWARD' ||
-      _scanType == 'OUTWARD' ||
-      _scanType == 'DAMAGE';
+      _scanType == 'INWARD' || _scanType == 'OUTWARD' || _scanType == 'DAMAGE';
 
   void _resetScanLock({String message = 'Ready to rescan'}) {
     _qrIdleTimer?.cancel();
@@ -1381,8 +1383,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                         const SizedBox(width: 8),
                         Expanded(
                           child: FilledButton.icon(
-                            onPressed:
-                                _syncInFlight ? null : () => _syncPending(),
+                            onPressed: _syncInFlight
+                                ? null
+                                : () => _syncPending(includeFailed: true),
                             icon: const Icon(Icons.sync),
                             label: FittedBox(
                               fit: BoxFit.scaleDown,

@@ -47,7 +47,7 @@ class SyncService {
 
   Future<void> _markFailuresFromResponse(List<ScanRecord> pending,
       Map<String, dynamic> data, String fallbackMessage) async {
-    final failedByKey = <String, String>{};
+    final statusByKey = <String, ({String status, String message})>{};
     for (final group in [data['logs'], data['failedRows']]) {
       if (group is! List) continue;
       for (final item in group) {
@@ -57,25 +57,43 @@ class SyncService {
         final message =
             (log['errorMessage'] ?? log['reason'] ?? fallbackMessage)
                 .toString();
+        final rawStatus = (log['status'] ?? '').toString().toLowerCase();
+        final status = switch (rawStatus) {
+          'inserted' || 'synced' || 'accepted' => 'Synced',
+          'duplicate' => 'Duplicate',
+          'failed' || 'invalid' || 'rejected' => 'Failed',
+          _ => '',
+        };
+        if (status.isEmpty) continue;
         for (final key in keys) {
-          failedByKey[key] = message;
+          statusByKey[key] = (status: status, message: message);
         }
       }
     }
 
     var matched = false;
+    final completedAt = (data['completedAt'] ?? '').toString();
     for (final record in pending) {
       final keys = _recordKeys(record);
-      var failedKey = '';
+      var matchedResult = <String, String>{'status': '', 'message': ''};
       for (final key in keys) {
-        if (failedByKey.containsKey(key)) {
-          failedKey = key;
+        if (statusByKey.containsKey(key)) {
+          final result = statusByKey[key]!;
+          matchedResult = {'status': result.status, 'message': result.message};
           break;
         }
       }
-      if (failedKey.isEmpty) continue;
-      await database.updateStatus(record.localId, 'Failed',
-          errorMessage: failedByKey[failedKey] ?? fallbackMessage);
+      final status = matchedResult['status'] ?? '';
+      if (status.isEmpty) continue;
+      await database.updateStatus(record.localId, status,
+          serverSyncId: status == 'Failed' ? '' : completedAt,
+          errorMessage: status == 'Failed'
+              ? (matchedResult['message']!.isEmpty
+                  ? fallbackMessage
+                  : matchedResult['message']!)
+              : status == 'Duplicate'
+                  ? matchedResult['message']!
+                  : '');
       matched = true;
     }
 
@@ -87,10 +105,10 @@ class SyncService {
     }
   }
 
-  Future<SyncResult> syncPending() {
+  Future<SyncResult> syncPending({bool includeFailed = false}) {
     final running = _globalSyncFuture;
     if (running != null) return running;
-    final future = _syncPendingBatch();
+    final future = _syncPendingBatch(includeFailed: includeFailed);
     _globalSyncFuture = future;
     return future.whenComplete(() {
       if (identical(_globalSyncFuture, future)) {
@@ -99,12 +117,12 @@ class SyncService {
     });
   }
 
-  Future<SyncResult> _syncPendingBatch() async {
+  Future<SyncResult> _syncPendingBatch({required bool includeFailed}) async {
     if (!await hasNetwork) {
       return SyncResult(false, 'Offline', synced: 0, serverReached: false);
     }
 
-    final pending = await database.pendingScans();
+    final pending = await database.pendingScans(includeFailed: includeFailed);
     if (pending.isEmpty) {
       try {
         await ApiClient(settings).health();
@@ -114,12 +132,6 @@ class SyncService {
         return SyncResult(true, 'No pending records',
             synced: 0, serverReached: false);
       }
-    }
-
-    try {
-      await ApiClient(settings).mobileStatus();
-    } catch (_) {
-      // The sync request below is the source of truth; this is only a heartbeat.
     }
 
     try {
@@ -252,7 +264,8 @@ class SyncService {
               (error.data['logs'] as List).isNotEmpty) ||
           (error.data['failedRows'] is List &&
               (error.data['failedRows'] as List).isNotEmpty);
-      final shouldMarkFailed = statusCode == 422 ||
+      final shouldMarkFailed = error.data['success'] == false ||
+          statusCode == 422 ||
           (hasRowFailureDetails &&
               statusCode >= 400 &&
               statusCode < 500 &&

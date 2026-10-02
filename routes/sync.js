@@ -1228,7 +1228,10 @@ async function smartBinWarningForScan(scan = {}) {
     partNumber,
     binLocation: currentBin
   }, {
-    refresh: true,
+    // The bin projection is updated when each scan is committed. Rebuilding it
+    // from the full inventory history on every save makes latency grow with
+    // audit size; only a missing projection should trigger a one-time rebuild.
+    refresh: false,
     settings: settings || {}
   }).catch(() => null);
 
@@ -1734,9 +1737,11 @@ async function saveNormalizedScan(scan, req) {
     });
   }
 
-  const dealer = scan.dealerCode ? await Dealer.findOne({ dealerCode: scan.dealerCode }).lean() : null;
   const manualEntry = isManualEntry(scan);
-  const masterPrice = master ? await getMasterPrice(scan.partNumber, scan.dealerCode, master, scan.auditId) : null;
+  const [dealer, masterPrice] = await Promise.all([
+    scan.dealerCode ? Dealer.findOne({ dealerCode: scan.dealerCode }).lean() : null,
+    master ? getMasterPrice(scan.partNumber, scan.dealerCode, master, scan.auditId) : null
+  ]);
   markPerf('dealerAndPricing');
   const valueFields = valuationFields({ masterPrice, master, qty: scan.quantity || 1 });
 
@@ -1890,7 +1895,10 @@ async function saveNormalizedScan(scan, req) {
     scan.globalUpiKey = duplicatePolicy.globalUpiKey(scan);
   }
   storedUpiToken = scan.upiNo || scan.upiId;
-  const policy = await scanPolicyResult(scan);
+  // The first policy check is still valid when the smart-bin lookup makes no
+  // suggestion. Only re-run it when applying a smart-bin decision changed the
+  // scan's bin or cross-bin allowance.
+  const policy = smartBinState ? await scanPolicyResult(scan) : preSmartBinPolicy;
   markPerf('finalDuplicatePolicy');
   if (!policy.ok) {
     const confirmedUpdate = await confirmedDuplicateUpdate(policy, scan, req);

@@ -355,6 +355,10 @@ async function recordPartBinLocationFromScan(scan = {}, options = {}) {
         locationType: 'SECONDARY'
       }
     };
+    const isPositiveScanInOnlyKnownBin = delta > 0
+      && existingRows.length === 1
+      && normalizeBinLocation(existingRows[0].binLocation) === binLocation;
+    if (isPositiveScanInOnlyKnownBin) update.$set.locationType = 'PRIMARY';
     try {
       await PartBinLocation.updateOne({ _id: id }, update, { upsert: true });
     } catch (error) {
@@ -364,9 +368,21 @@ async function recordPartBinLocationFromScan(scan = {}, options = {}) {
       await PartBinLocation.updateOne({ _id: id }, update);
     }
 
-    const currentRow = await PartBinLocation.findById(id).lean();
-    if (currentRow && Number(currentRow.quantity || 0) <= 0) {
-      await PartBinLocation.deleteOne({ _id: id });
+    if (isPositiveScanInOnlyKnownBin) {
+      invalidateCache({ tags: ['smart-bin'], scope: { dealerCode: scope.dealerCode, auditId: scope.auditId } });
+      return [{
+        ...existingRows[0],
+        quantity: numberValue(existingRows[0].quantity, 0) + delta,
+        lastScanDate: scanAt,
+        locationType: 'PRIMARY'
+      }];
+    }
+
+    if (delta < 0) {
+      const currentRow = await PartBinLocation.findById(id).lean();
+      if (currentRow && Number(currentRow.quantity || 0) <= 0) {
+        await PartBinLocation.deleteOne({ _id: id });
+      }
     }
     const refreshedRows = await queryPartBinLocationRows(refreshScope);
     const rankedRows = sortLocationRows(refreshedRows);
@@ -379,6 +395,8 @@ async function recordPartBinLocationFromScan(scan = {}, options = {}) {
       );
     }));
     invalidateCache({ tags: ['smart-bin'], scope: { dealerCode: scope.dealerCode, auditId: scope.auditId } });
+    // rankedRows already contains the values written above. Avoid a second
+    // read of the same projection rows on every committed scan.
     return rankedRows.map((row, index) => ({
       ...row,
       locationType: index === 0 ? 'PRIMARY' : 'SECONDARY'

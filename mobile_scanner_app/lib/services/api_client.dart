@@ -8,7 +8,7 @@ import '../models/scan_record.dart';
 import '../models/session.dart';
 import 'settings_store.dart';
 
-const mobileAppVersionName = 'Daksh Scan Lite v1.2.13';
+const mobileAppVersionName = 'Daksh Scan Lite v1.2.15';
 
 class ApiException implements Exception {
   ApiException(this.message,
@@ -64,18 +64,21 @@ class ApiClient {
     String method = 'GET',
     Map<String, dynamic>? body,
     bool auth = true,
+    bool fast = false,
     Duration timeout = const Duration(seconds: 8),
   }) async {
     final savedBaseUrl =
         SettingsStore.normalizeServerUrl(await settings.savedServerUrl);
     // Saved server identity -> daksh.local for LAN. Cloud is used only before a
     // server is saved, or when cloud is the saved server.
-    final candidates = candidateBaseUrls(savedBaseUrl: savedBaseUrl);
+    final availableCandidates = candidateBaseUrls(savedBaseUrl: savedBaseUrl);
+    final candidates =
+        fast ? availableCandidates.take(1).toList() : availableCandidates;
     ApiException? lastApiError;
     Object? lastError;
 
     for (final baseUrl in candidates) {
-      for (var attempt = 0; attempt < 2; attempt++) {
+      for (var attempt = 0; attempt < (fast ? 1 : 2); attempt++) {
         try {
           final data = await _requestOnce(baseUrl, path,
               method: method, body: body, auth: auth, timeout: timeout);
@@ -84,11 +87,11 @@ class ApiClient {
         } on ApiException catch (error) {
           lastApiError = error;
           if (!error.retryable) rethrow;
-          if (attempt == 1) break;
+          if (fast || attempt == 1) break;
           await Future.delayed(Duration(milliseconds: 400 * (attempt + 1)));
         } catch (error) {
           lastError = error;
-          if (attempt == 1) break;
+          if (fast || attempt == 1) break;
           await Future.delayed(Duration(milliseconds: 400 * (attempt + 1)));
         }
       }
@@ -197,6 +200,8 @@ class ApiClient {
       '/api/scans/smart-bin-check',
       method: 'POST',
       auth: false,
+      fast: true,
+      timeout: const Duration(seconds: 2),
       body: {
         'dealerCode': dealerCode.trim().toUpperCase(),
         'auditId': auditId.trim(),
