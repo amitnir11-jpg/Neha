@@ -337,11 +337,17 @@ function advancedMasterFilter(query = {}) {
   if (partText) {
     const safePart = escapeRegExp(normalizePartNumber(partText));
     const safeText = escapeRegExp(partText);
-    filter.$or = [
-      { partNumber: { $regex: safePart, $options: 'i' } },
-      { normalizedPartNumber: { $regex: safePart, $options: 'i' } },
-      { partDescription: { $regex: safeText, $options: 'i' } }
-    ];
+    const partNumberLookup = /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(partText);
+    filter.$or = partNumberLookup
+      ? [
+          { partNumber: { $regex: `^${safePart}`, $options: 'i' } },
+          { normalizedPartNumber: { $regex: `^${safePart}`, $options: 'i' } }
+        ]
+      : [
+          { partNumber: { $regex: safePart, $options: 'i' } },
+          { normalizedPartNumber: { $regex: safePart, $options: 'i' } },
+          { partDescription: { $regex: safeText, $options: 'i' } }
+        ];
   }
   const category = regexFilter(query.category);
   const group = regexFilter(query.group || query.productGroup);
@@ -679,9 +685,18 @@ router.get('/parts/suggest', auth.requireAuth, async (req, res) => {
       const limit = Math.min(Number(normalizedQuery.limit || 12), 30);
       const startsWith = new RegExp(`^${safeQ}`, 'i');
       const contains = new RegExp(safeQ, 'i');
-      const partContains = new RegExp(safePartQ, 'i');
+      const partNumberLookup = /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(q);
+      const partContains = new RegExp(`${partNumberLookup ? '^' : ''}${safePartQ}`, 'i');
       const filter = q
-        ? {
+        ? partNumberLookup
+          ? {
+              $or: [
+                { partNo: partContains },
+                { partNumber: partContains },
+                { normalizedPartNumber: partContains }
+              ]
+            }
+          : {
             $or: [
               { partNo: partContains },
               { partNumber: partContains },
@@ -694,10 +709,15 @@ router.get('/parts/suggest', auth.requireAuth, async (req, res) => {
               { category: contains },
               { productCategory: contains }
             ]
-          }
+            }
         : {};
       if (normalizedQuery.dealerCode || normalizedQuery.activeDealerId) filter.dealerCode = normalizePart(normalizedQuery.dealerCode || normalizedQuery.activeDealerId);
-      const catalogueParts = await MasterCatalogue.find(q ? {
+      const catalogueFilter = q ? (partNumberLookup ? {
+        $or: [
+          { partNumber: partContains },
+          { normalizedPartNumber: partContains }
+        ]
+      } : {
         $or: [
           { partNumber: partContains },
           { normalizedPartNumber: partContains },
@@ -708,7 +728,8 @@ router.get('/parts/suggest', auth.requireAuth, async (req, res) => {
           { productCategory: contains },
           { productGroup: contains }
         ]
-      } : {})
+      }) : {};
+      const catalogueParts = await MasterCatalogue.find(catalogueFilter)
         .sort({ partNumber: 1 })
         .limit(limit * 3)
         .lean();

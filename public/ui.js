@@ -4736,6 +4736,7 @@
     const menu = $('.master-suggest-menu', input.closest('.suggest-wrap'));
     let timer;
     let activeIndex = -1;
+    let searchSequence = 0;
     const chooseItem = async (item) => {
       if (!item) return;
       const part = JSON.parse(item.dataset.part);
@@ -4754,12 +4755,16 @@
       clearTimeout(timer);
       timer = setTimeout(async () => {
         const q = input.value.trim();
+        const sequence = ++searchSequence;
         if (!q) {
           menu.style.display = 'none';
+          menu.innerHTML = '';
+          if (!hasPartSearchFilter()) clearPartSearch();
           return;
         }
         try {
           const data = await api(`/api/master/parts/suggest?q=${encodeURIComponent(q)}&limit=20`);
+          if (sequence !== searchSequence || input.value.trim() !== q) return;
           const parts = data.suggestions || data.parts || [];
           menu.innerHTML = parts.map((part) => `
             <div class="suggest-item master-suggest-item" data-part="${escapeHtml(JSON.stringify(part))}">
@@ -4774,7 +4779,7 @@
             item.addEventListener('click', () => chooseItem(item).catch((error) => toast(error.message, 'error')));
           });
         } catch (error) {
-          toast(error.message, 'error');
+          if (sequence === searchSequence && error.name !== 'AbortError') toast(error.message, 'error');
         }
       }, 160);
     });
@@ -8539,33 +8544,6 @@
     fill('partGroupFilter', data.groups || [], 'All Groups');
     fill('partModelFilter', data.models || [], 'All Models');
     fill('partYearFilter', data.years || [], 'All Years');
-  }
-
-  async function loadPartNumberSuggestions(query) {
-    const menu = $('#partMasterSuggestMenu');
-    if (!menu) return;
-    const value = String(query || '').trim();
-    if (!value) {
-      menu.style.display = 'none';
-      menu.innerHTML = '';
-      return;
-    }
-    const data = await api(`/api/master/suggestions?query=${encodeURIComponent(value)}&limit=20`);
-    const parts = data.suggestions || data.parts || [];
-    menu.innerHTML = parts.map((part) => `
-      <div class="suggest-item master-suggest-item" data-part="${escapeHtml(part.partNumber || part.partNo || '')}">
-        <strong>${partLink(part.partNumber || part.partNo)}</strong>
-        <span>${escapeHtml(part.partDescription || part.partName || '')} | ${escapeHtml(part.productCategory || part.category || '')} | ${escapeHtml(part.model || '')}</span>
-      </div>
-    `).join('') || '<div class="suggest-item muted">No matching part numbers</div>';
-    menu.style.display = 'block';
-    $$('.master-suggest-item', menu).forEach((item) => {
-      item.addEventListener('mousedown', (event) => {
-        event.preventDefault();
-        $('#partMasterSearchInput').value = item.dataset.part || '';
-        menu.style.display = 'none';
-      });
-    });
   }
 
   function exportPartSearchResults() {
@@ -13430,13 +13408,6 @@
       if (menu) menu.style.display = 'none';
     });
     $('#partExportSearchBtn')?.addEventListener('click', exportPartSearchResults);
-    let partMasterSuggestTimer;
-    $('#partMasterSearchInput')?.addEventListener('input', (event) => {
-      clearTimeout(partMasterSuggestTimer);
-      const value = event.target.value.trim();
-      if (!value && !hasPartSearchFilter()) clearPartSearch();
-      partMasterSuggestTimer = setTimeout(() => loadPartNumberSuggestions(value).catch((error) => toast(error.message, 'error')), 160);
-    });
     $('#partMasterSearchInput')?.addEventListener('blur', () => {
       setTimeout(() => {
         const menu = $('#partMasterSuggestMenu');
