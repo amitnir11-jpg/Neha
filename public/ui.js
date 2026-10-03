@@ -1027,20 +1027,39 @@
   }
 
   async function downloadGet(path, fileName, options = {}) {
-    const { headers: optionHeaders, ...fetchOptions } = options || {};
-    const response = await fetch(apiUrl(withActiveDealerQuery(path)), {
-      ...fetchOptions,
-      cache: fetchOptions.cache || 'no-store',
-      headers: {
-        ...(optionHeaders || {}),
-        ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
-      }
-    });
-    if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
-    const blob = await response.blob();
-    const finalName = resolveDownloadFileName(response, path, fileName);
-    triggerDownload(blob, finalName);
-    return finalName;
+    const { headers: optionHeaders, timeoutMs = 120000, ...fetchOptions } = options || {};
+    const controller = new AbortController();
+    const externalSignal = fetchOptions.signal;
+    const abort = () => controller.abort(externalSignal.reason);
+    if (externalSignal?.aborted) abort();
+    else externalSignal?.addEventListener('abort', abort, { once: true });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    try {
+      const response = await fetch(apiUrl(withActiveDealerQuery(path)), {
+        ...fetchOptions,
+        signal: controller.signal,
+        cache: fetchOptions.cache || 'no-store',
+        headers: {
+          ...(optionHeaders || {}),
+          ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
+        }
+      });
+      if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
+      const blob = await response.blob();
+      const finalName = resolveDownloadFileName(response, path, fileName);
+      triggerDownload(blob, finalName);
+      return finalName;
+    } catch (error) {
+      if (timedOut) throw new Error('Report download timed out. Please retry.');
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', abort);
+    }
   }
 
   async function downloadPost(path, body, fileName, options = {}) {
@@ -6530,13 +6549,21 @@
 
   async function downloadActiveReportExcel(options = {}) {
     const { silent = false } = options;
+    if (state.reportExcelDownloading) return false;
     if (!validateReportSelection(!silent)) return false;
     if (isProductGroupSummaryReport()) {
       await exportProductGroupSummary();
       return true;
     }
-    await downloadGet(reportPath('excel'), reportDownloadName('xlsx'));
-    return true;
+    state.reportExcelDownloading = true;
+    updateReportButtons();
+    try {
+      await downloadGet(reportPath('excel'), reportDownloadName('xlsx'));
+      return true;
+    } finally {
+      state.reportExcelDownloading = false;
+      updateReportButtons();
+    }
   }
 
   function updateReportButtons() {
@@ -6548,7 +6575,7 @@
     const auditPackButton = $('#downloadCompleteAuditPackBtn');
     $('#reportShow').disabled = !canShow || state.reportLoading;
     $('#reportRefresh').disabled = !canShow || state.reportLoading;
-    $('#reportExcel').disabled = isCsvReport || !canShow || state.reportLoading;
+    $('#reportExcel').disabled = isCsvReport || !canShow || state.reportLoading || state.reportExcelDownloading;
     if ($('#reportPdf')) $('#reportPdf').disabled = isCsvReport || blocksPdfEmail || !state.reportLoaded || state.reportLoading;
     if ($('#reportPrint')) $('#reportPrint').disabled = !state.reportLoaded || state.reportLoading;
     if ($('#reportEmail')) $('#reportEmail').disabled = isCsvReport || blocksPdfEmail || !state.reportLoaded || state.reportLoading;

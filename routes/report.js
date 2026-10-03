@@ -2761,8 +2761,8 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   const includeFullMaster = showFullMasterWithZeroScan(query);
   let [rawScans, dealers, audits, allCatalogueCount] = await Promise.all([
     Inventory.find(scanFilter).select(REPORT_SCAN_SELECT).sort({ timestamp: 1 }).lean(),
-    Dealer.find({}).sort({ dealerName: 1 }).lean(),
-    Audit.find({}).sort({ createdAt: -1 }).lean(),
+    Dealer.find(query.dealerCode ? { dealerCode: query.dealerCode } : {}).sort({ dealerName: 1 }).lean(),
+    Audit.find(query.auditId ? { auditId: query.auditId } : (query.dealerCode ? { dealerCode: query.dealerCode } : {})).sort({ createdAt: -1 }).lean(),
     MasterCatalogue.countDocuments({})
   ]);
   const rawScanCountBeforeDedupe = rawScans.length;
@@ -2866,6 +2866,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
     stockFilter ? DealerStock.find(stockFilter).lean() : []
   ]);
   validationLog.totalMasterParts = Math.max(validationLog.totalMasterParts, dealerStockRows.length || systemParts.length);
+  const scannedPartSet = new Set(scannedParts);
   const partSet = new Set(scannedParts);
   if (includeFullMaster) {
     systemParts.forEach((part) => {
@@ -2905,7 +2906,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
 
   const groupedRows = Array.from(groups.values()).map((group) => partwiseRowFrom(group.partNo, group, priceByPart.get(group.partNo), systemByPart.get(group.partNo)));
   const zeroScanRows = includeFullMaster
-    ? allParts.filter((partNo) => !scannedParts.includes(partNo)).map((partNo) => partwiseRowFrom(partNo, { partNo, scans: [], physicalQty: 0 }, priceByPart.get(partNo), systemByPart.get(partNo)))
+    ? allParts.filter((partNo) => !scannedPartSet.has(partNo)).map((partNo) => partwiseRowFrom(partNo, { partNo, scans: [], physicalQty: 0 }, priceByPart.get(partNo), systemByPart.get(partNo)))
     : [];
   log('Rows grouped', { withScans: groupedRows.length, zeroScans: zeroScanRows.length });
   const rows = applyPartwiseFilters(groupedRows.concat(zeroScanRows), query)
@@ -3074,10 +3075,10 @@ function addCategoryVarianceGroup(groupMap, productCategory, action, varianceQty
   groupMap.set(key, group);
 }
 
-async function buildCategoryWiseVarianceSummary(query = {}) {
+async function buildCategoryWiseVarianceSummary(query = {}, providedPartwise = null) {
   query = normalizeReportQuery(query);
   {
-  const partwise = await cachedBuildPartwiseInventoryAuditReport(query);
+  const partwise = providedPartwise || await cachedBuildPartwiseInventoryAuditReport(query);
   const groupMap = new Map();
   partwise.rows.forEach((row) => {
     const category = displayCategory(row.productCategory);
@@ -3651,10 +3652,10 @@ function stockSummaryMetadata(selectedDealer = {}, selectedAudit = {}, query = {
   ];
 }
 
-async function buildStockSummaryReport(query = {}) {
+async function buildStockSummaryReport(query = {}, providedPartwise = null) {
   query = normalizeReportQuery(query);
   const dealerCode = query.dealerCode;
-  const partwise = await cachedBuildPartwiseInventoryAuditReport({ ...query, showFullMasterWithZeroScan: 'on' });
+  const partwise = providedPartwise || await cachedBuildPartwiseInventoryAuditReport({ ...query, showFullMasterWithZeroScan: 'on' });
   const rows = partwise.rows.filter((row) => stockSummaryRowMatchesFilters(row, query));
   const selectedDealer = partwise.selectedDealer || null;
   const selectedAudit = partwise.selectedAudit || null;
@@ -3721,8 +3722,8 @@ async function validateValuationReports(query = {}, provided = {}) {
   const reportQuery = requireDealerForReport(query);
   const partwise = provided.partwise || await cachedBuildPartwiseInventoryAuditReport(reportQuery);
   const [stockSummary, category] = await Promise.all([
-    provided.stockSummary ? Promise.resolve(provided.stockSummary) : cachedBuildStockSummaryReport(reportQuery),
-    provided.category ? Promise.resolve(provided.category) : cachedBuildCategoryWiseVarianceSummary(reportQuery)
+    provided.stockSummary ? Promise.resolve(provided.stockSummary) : (showFullMasterWithZeroScan(reportQuery) ? buildStockSummaryReport(reportQuery, partwise) : cachedBuildStockSummaryReport(reportQuery)),
+    provided.category ? Promise.resolve(provided.category) : buildCategoryWiseVarianceSummary(reportQuery, partwise)
   ]);
   const partwiseTotal = stockValuationTotals(partwise.rows).actualDlcTotal;
   const dashboardTotal = stockValuationTotals(partwise.rows).actualDlcTotal;
@@ -4256,6 +4257,7 @@ router.get('/partwise-inventory-audit', auth.requireAuth, async (req, res) => {
         return sendSelectedColumnsWorkbook(res, 'Partwise_Inventory_Audit_Report.xlsx', 'Partwise Inventory Audit', data.columns, data.rows, reportQuery);
       }
       return sendCachedDownload(res, 'report-download', {
+        ...reportQuery,
         reportType: 'partwise-inventory-audit',
         downloadType: 'excel'
       }, async () => {
@@ -4271,6 +4273,7 @@ router.get('/partwise-inventory-audit', auth.requireAuth, async (req, res) => {
     }
     if (req.query.format === 'pdf') {
       return sendCachedDownload(res, 'report-download', {
+        ...reportQuery,
         reportType: 'partwise-inventory-audit',
         downloadType: 'pdf'
       }, async () => buildPartwiseInventoryAuditPdfBuffer(data), {
@@ -4311,6 +4314,7 @@ async function handlePartwiseVarianceReport(req, res, varianceType, title, type 
     }
     if (req.query.format === 'pdf') {
       return sendCachedDownload(res, 'report-download', {
+        ...reportQuery,
         reportType: type || varianceType,
         downloadType: 'pdf',
         title
