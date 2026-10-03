@@ -12775,7 +12775,10 @@
         if (select.closest('#scan')) {
           const dealerCode = cleanDealerCode(select.value || '');
           syncScanDealerScope(dealerCode, select);
-          loadScanHistory().catch((error) => toast(error.message, 'error'));
+          // History filter selects have their own refresh listener below.
+          if (!select.closest('#scanHistoryFilters')) {
+            loadScanHistory().catch((error) => toast(error.message, 'error'));
+          }
         }
         if (select.closest('#barcodeScanForm')) {
           loadBarcodeBins().catch((error) => toast(error.message, 'error'));

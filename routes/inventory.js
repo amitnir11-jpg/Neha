@@ -4064,9 +4064,11 @@ async function verifyPartRequest(req, res) {
 }
 
 async function processScanRequest(req, res) {
+  const startedAt = performance.now();
   try {
     const { processScan } = require('../services/ScanProcessingService');
     const result = await processScan(req.body || {}, { req });
+    res.setHeader('Server-Timing', `scan;dur=${(performance.now() - startedAt).toFixed(1)}`);
     return res.status(result.httpStatus || (result.success ? 201 : 422)).json(result);
   } catch (error) {
     return res.status(500).json({ success: false, status: 'failed', message: error.message });

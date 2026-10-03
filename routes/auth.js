@@ -200,7 +200,7 @@ async function requireAuth(req, res, next) {
       requestedDealer = dealerAccess[0];
     }
     if (requestedDealer && requestedDealer !== 'ALL') {
-      const access = await validateUserDealerAccess(req.user, requestedDealer);
+      const access = await validateUserDealerAccess(req.user, requestedDealer, dealerAccess);
       if (!access.allowed) {
         return res.status(403).json({
           success: false,
@@ -467,9 +467,12 @@ function isDealerScopedRequest(req) {
   ].includes(base);
 }
 
-async function validateUserDealerAccess(user, dealerCode) {
+async function validateUserDealerAccess(user, dealerCode, resolvedAccess = undefined) {
   const requestedDealer = normalizeAccessCode(dealerCode);
-  const userDealerAccess = await userDealerAccessCodes(user);
+  // Only server-resolved, request-local mappings are passed by requireAuth.
+  const userDealerAccess = resolvedAccess === undefined
+    ? await userDealerAccessCodes(user)
+    : resolvedAccess;
     const isAdmin = ['admin', 'super_admin'].includes(normalizeRole(user.role));
     const allowed = isAdmin || userDealerAccess.includes(requestedDealer)
     || (requestedDealer !== 'ALL' && userDealerAccess.includes('ALL') && isAdmin);

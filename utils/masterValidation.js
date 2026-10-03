@@ -87,11 +87,13 @@ async function validatePartAgainstMaster({ partNumber, dealerCode, rawScannedVal
     logger.log('RAW_SCAN_RECEIVED', rawScannedValue || extractedPartNumber);
     logger.log('EXTRACTED_PART_NUMBER', extractedPartNumber);
   }
-  const master = extractedPartNumber ? await findMasterPart(extractedPartNumber, dealerCode) : null;
+  const price = extractedPartNumber ? await getPriceFromPartMaster(extractedPartNumber, dealerCode) : null;
+  const master = price ? price.masterRecord || price : null;
   if (logger && logger.log) logger.log('MASTER_MATCH_FOUND', Boolean(master));
   return {
     valid: Boolean(master),
     master,
+    price,
     extractedPartNumber,
     reason: master ? '' : INVALID_PART_MESSAGE
   };

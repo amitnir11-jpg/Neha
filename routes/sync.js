@@ -151,15 +151,18 @@ function upper(value) {
   return clean(value).toUpperCase();
 }
 
-async function getMasterPrice(partNumber, dealerCode = '', master = null, auditId = '') {
-  const current = await getPriceFromPartMaster(partNumber, dealerCode);
-  if (!auditId) return current;
+async function getMasterPrice(partNumber, dealerCode = '', master = null, auditId = '', validatedPrice = undefined) {
+  const currentPrice = validatedPrice === undefined
+    ? getPriceFromPartMaster(partNumber, dealerCode)
+    : Promise.resolve(validatedPrice);
+  if (!auditId) return currentPrice;
   const part = normalizePartNo(partNumber);
   const filter = {
     dealerCode: upper(dealerCode), auditId: clean(auditId),
     $or: [{ normalizedPartNumber: part }, { partNumber: part }, { part }]
   };
-  const [savedScan, savedStock] = await Promise.all([
+  const [current, savedScan, savedStock] = await Promise.all([
+    currentPrice,
     Inventory.findOne(filter).sort({ timestamp: 1, createdAt: 1 }).lean(),
     DealerStock.findOne(filter).sort({ createdAt: 1 }).lean()
   ]);
@@ -260,7 +263,9 @@ async function resolveScanUserContext(req = {}, scan = {}) {
   }
 
   const deviceId = clean(scan.deviceId || body.deviceId);
-  if (deviceId) {
+  // Manual browser saves use the authenticated identity, which is applied
+  // again before persistence. They do not need scanner-device enrichment.
+  if (deviceId && !(req.user && isManualEntry(scan))) {
     const device = await Device.findOne({ deviceId }).lean().catch(() => null);
     if (device) applyUserContext(context, device);
   }
@@ -1753,7 +1758,7 @@ async function saveNormalizedScan(scan, req) {
   const manualEntry = isManualEntry(scan);
   const [dealer, masterPrice] = await Promise.all([
     scan.dealerCode ? Dealer.findOne({ dealerCode: scan.dealerCode }).lean() : null,
-    master ? getMasterPrice(scan.partNumber, scan.dealerCode, master, scan.auditId) : null
+    master ? getMasterPrice(scan.partNumber, scan.dealerCode, master, scan.auditId, validation.price) : null
   ]);
   markPerf('dealerAndPricing');
   const valueFields = valuationFields({ masterPrice, master, qty: scan.quantity || 1 });
