@@ -23,9 +23,16 @@ function partLookup(partNumber) {
   return {
     $or: [
       { normalizedPartNumber: part },
-      { partNumber: part },
-      { partNo: part },
-      { part: part }
+      { partNumber: part }
+    ]
+  };
+}
+
+function legacyPartLookup(partNumber) {
+  return {
+    $or: [
+      { partNo: normalizePartNumber(partNumber) },
+      { part: normalizePartNumber(partNumber) }
     ]
   };
 }
@@ -36,11 +43,19 @@ function partListLookup(partNumbers = []) {
   return {
     $or: [
       { normalizedPartNumber: { $in: parts } },
-      { partNumber: { $in: parts } },
+      { partNumber: { $in: parts } }
+    ]
+  };
+}
+
+function legacyPartListLookup(partNumbers = []) {
+  const parts = Array.from(new Set(partNumbers.map(normalizePartNumber).filter(Boolean)));
+  return parts.length ? {
+    $or: [
       { partNo: { $in: parts } },
       { part: { $in: parts } }
     ]
-  };
+  } : { _id: '__NO_PARTS__' };
 }
 
 function dateMs(value) {
@@ -265,10 +280,17 @@ async function getPriceFromPartMaster(partNumber, dealerCode = '') {
   const part = normalizePartNumber(partNumber);
   if (!part) return null;
   const lookup = partLookup(part);
-  const [catalogueRows, masterRows] = await Promise.all([
+  let [catalogueRows, masterRows] = await Promise.all([
     MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean(),
     MasterPart.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean()
   ]);
+  const hasMatch = catalogueRows.length > 0 || masterRows.length > 0;
+  if (!hasMatch) {
+    [catalogueRows, masterRows] = await Promise.all([
+      MasterCatalogue.find(legacyPartLookup(part)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean(),
+      MasterPart.find(legacyPartLookup(part)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean()
+    ]);
+  }
   return mergePriceRecordCandidates(
     catalogueRows.map((record) => ({ source: 'MASTER_CATALOGUE', record }))
       .concat(masterRows.map((record) => ({ source: 'MASTER_PART', record }))),
@@ -281,10 +303,22 @@ async function getPricesFromPartMaster(partNumbers = [], dealerCode = '') {
   const map = new Map();
   if (!parts.length) return map;
   const lookup = partListLookup(parts);
-  const [catalogueRows, masterRows] = await Promise.all([
+  let [catalogueRows, masterRows] = await Promise.all([
     MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean(),
     MasterPart.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean()
   ]);
+  const foundParts = new Set([...catalogueRows, ...masterRows]
+    .map((row) => normalizePartNumber(row.normalizedPartNumber || row.partNumber || ''))
+    .filter(Boolean));
+  const legacyParts = parts.filter((part) => !foundParts.has(part));
+  if (legacyParts.length) {
+    const [legacyCatalogueRows, legacyMasterRows] = await Promise.all([
+      MasterCatalogue.find(legacyPartListLookup(legacyParts)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean(),
+      MasterPart.find(legacyPartListLookup(legacyParts)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean()
+    ]);
+    catalogueRows = catalogueRows.concat(legacyCatalogueRows);
+    masterRows = masterRows.concat(legacyMasterRows);
+  }
   const byPart = new Map();
   [...catalogueRows.map((record) => ({ source: 'MASTER_CATALOGUE', record })), ...masterRows.map((record) => ({ source: 'MASTER_PART', record }))].forEach((entry) => {
     const normalized = asPriceRecord(entry.record, entry.source, dealerCode);

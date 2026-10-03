@@ -691,7 +691,6 @@ router.get('/parts/suggest', auth.requireAuth, async (req, res) => {
         ? partNumberLookup
           ? {
               $or: [
-                { partNo: partContains },
                 { partNumber: partContains },
                 { normalizedPartNumber: partContains }
               ]
@@ -764,11 +763,16 @@ router.get('/suggestions', auth.requireAuth, async (req, res) => {
       const safeText = escapeRegExp(query);
       const safePart = escapeRegExp(normalizePartNumber(query));
       const filter = query ? {
-        $or: [
-          { partNumber: { $regex: safePart, $options: 'i' } },
-          { normalizedPartNumber: { $regex: safePart, $options: 'i' } },
-          { partDescription: { $regex: safeText, $options: 'i' } }
-        ]
+        $or: /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(query)
+          ? [
+              { partNumber: { $regex: `^${safePart}`, $options: 'i' } },
+              { normalizedPartNumber: { $regex: `^${safePart}`, $options: 'i' } }
+            ]
+          : [
+              { partNumber: { $regex: safePart, $options: 'i' } },
+              { normalizedPartNumber: { $regex: safePart, $options: 'i' } },
+              { partDescription: { $regex: safeText, $options: 'i' } }
+            ]
       } : {};
       const rows = await MasterCatalogue.find(filter)
         .sort({ partNumber: 1 })
@@ -1336,18 +1340,23 @@ router.get('/parts/search', auth.requireAuth, async (req, res) => {
     return await sendCachedJson(res, 'search', req.query, async (normalizedQuery) => {
       const q = String(normalizedQuery.q || '').trim();
       const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const safePartQ = normalizePartNumber(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const partNumberLookup = /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(q);
       const limit = Math.min(Number(normalizedQuery.limit || 50), 100);
       const filter = q
-        ? {
-            $or: [
+        ? partNumberLookup
+          ? { $or: [
+              { normalizedPartNumber: { $regex: `^${safePartQ}` } },
+              { partNumber: { $regex: `^${safePartQ}`, $options: 'i' } }
+            ] }
+          : { $or: [
               { partNo: { $regex: safeQ, $options: 'i' } },
               { partName: { $regex: safeQ, $options: 'i' } },
               { partDescription: { $regex: safeQ, $options: 'i' } },
               { bin: { $regex: safeQ, $options: 'i' } },
               { category: { $regex: safeQ, $options: 'i' } },
               { productCategory: { $regex: safeQ, $options: 'i' } }
-            ]
-          }
+            ] }
         : {};
       if (normalizedQuery.dealerCode || normalizedQuery.activeDealerId) filter.dealerCode = normalizePart(normalizedQuery.dealerCode || normalizedQuery.activeDealerId);
 

@@ -561,25 +561,29 @@ router.get('/master-search', auth.requireAuth, async (req, res) => {
       const dealerCode = upper(normalizedQuery.dealerCode || '');
       const limit = Math.min(Math.max(Number(normalizedQuery.limit || 10), 1), 25);
       if (!q || q.length < 2) return { success: true, count: 0, parts: [], suggestions: [] };
-      const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const partNumberLookup = /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(q);
+      const regex = new RegExp(`${partNumberLookup ? '^' : ''}${safeQ}`, 'i');
       const [dealerParts, catalogueParts] = await Promise.all([
         MasterPart.find({
-          $or: [
-            { normalizedPartNumber: regex },
-            { partNumber: regex },
-            { partNo: regex },
-            { partDescription: regex },
-            { partName: regex }
-          ]
+          $or: partNumberLookup
+            ? [{ normalizedPartNumber: regex }, { partNumber: regex }]
+            : [
+                { normalizedPartNumber: regex },
+                { partNumber: regex },
+                { partDescription: regex },
+                { partName: regex }
+              ]
         }).sort({ dealerCode: -1, partNumber: 1 }).limit(limit).lean(),
         MasterCatalogue.find({
-          $or: [
-            { normalizedPartNumber: regex },
-            { partNumber: regex },
-            { partNo: regex },
-            { partDescription: regex },
-            { partName: regex }
-          ]
+          $or: partNumberLookup
+            ? [{ normalizedPartNumber: regex }, { partNumber: regex }]
+            : [
+                { normalizedPartNumber: regex },
+                { partNumber: regex },
+                { partDescription: regex },
+                { partName: regex }
+              ]
         }).sort({ partNumber: 1 }).limit(limit).lean()
       ]);
       const candidates = Array.from(new Set(dealerParts.concat(catalogueParts)
