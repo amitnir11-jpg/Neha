@@ -23,7 +23,7 @@ const { formatDateLikeFields } = require('../utils/time');
 const { decorateScanValue } = require('../utils/inventoryValueEngine');
 const { uniqueReportScans, reportScanIdentity } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
-const { getPriceFromPartMaster, getPricesFromPartMaster, scanWithSavedAuditPrice } = require('../utils/partMasterPrice');
+const { getPriceFromPartMaster, getPricesFromPartMaster, pickBestPriceRecord, scanWithSavedAuditPrice } = require('../utils/partMasterPrice');
 const { applyCacheHeaders, getCachedResponse } = require('../utils/safeCache');
 
 const router = express.Router();
@@ -586,11 +586,23 @@ router.get('/master-search', auth.requireAuth, async (req, res) => {
               ]
         }).sort({ partNumber: 1 }).limit(limit).lean()
       ]);
-      const candidates = Array.from(new Set(dealerParts.concat(catalogueParts)
-        .map((part) => normalizePartNumber(part.normalizedPartNumber || part.partNumber || part.partNo || part.part))
-        .filter(Boolean)));
-      const priceByPart = await getPricesFromPartMaster(candidates, dealerCode);
-      const parts = candidates.map((partNumber) => priceByPart.get(partNumber)).filter(Boolean)
+      // Search results already contain the master records needed for these
+      // suggestions. Resolving every candidate through getPricesFromPartMaster
+      // added two more database queries (and sometimes two legacy fallbacks)
+      // to every keystroke. Normalize and rank the returned records directly.
+      const recordsByPart = new Map();
+      dealerParts.map((record) => ({ record, source: 'MASTER_PART' }))
+        .concat(catalogueParts.map((record) => ({ record, source: 'MASTER_CATALOGUE' })))
+        .forEach(({ record, source }) => {
+        const partNumber = normalizePartNumber(record.normalizedPartNumber || record.partNumber || record.partNo || record.part);
+        if (!partNumber) return;
+        const candidates = recordsByPart.get(partNumber) || [];
+        candidates.push({ source, record });
+        recordsByPart.set(partNumber, candidates);
+      });
+      const parts = Array.from(recordsByPart, ([partNumber, records]) =>
+        pickBestPriceRecord(records, dealerCode))
+        .filter(Boolean)
         .sort((a, b) => Number(b.partNumber === q) - Number(a.partNumber === q) || a.partNumber.localeCompare(b.partNumber))
         .slice(0, limit)
         .map((price) => ({

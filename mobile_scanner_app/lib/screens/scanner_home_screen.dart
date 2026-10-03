@@ -1661,7 +1661,10 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
       _loadingSuggestions = true;
       _suggestionError = '';
     });
-    _suggestTimer = Timer(const Duration(milliseconds: 280), () {
+    // Keep typing responsive while still coalescing fast key strokes into one
+    // request. The server response, rather than the old long debounce, is now
+    // the main part of the suggestion wait.
+    _suggestTimer = Timer(const Duration(milliseconds: 100), () {
       _loadSuggestions(query);
     });
   }
