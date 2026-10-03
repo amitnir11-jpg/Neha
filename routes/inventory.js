@@ -1877,11 +1877,14 @@ async function smartBinSuggestionForScan(input = {}) {
   const partNumber = normalizePartNumber(input.partNumber || input.part || '');
   const currentBin = normalizeBinLocation(input.binLocation || input.bin || '');
   const partDescription = clean(input.partDescription || input.partName || input.description || '');
-  const dealer = dealerCode ? await Dealer.findOne({ dealerCode }).lean().catch(() => null) : null;
-  const auditId = clean(input.auditId || (dealer ? dealer.currentAuditId : '') || '');
-  const smartBinSettings = smartBinSettingsRoute.readSettings
-    ? await smartBinSettingsRoute.readSettings().catch(() => null)
-    : null;
+  const requestedAuditId = clean(input.auditId || '');
+  const [dealer, smartBinSettings] = await Promise.all([
+    dealerCode && !requestedAuditId ? Dealer.findOne({ dealerCode }).lean().catch(() => null) : null,
+    smartBinSettingsRoute.readSettings
+      ? smartBinSettingsRoute.readSettings().catch(() => null)
+      : null
+  ]);
+  const auditId = requestedAuditId || clean(dealer ? dealer.currentAuditId : '');
 
   if (!dealerCode || !partNumber || !auditId || !currentBin) {
     return {

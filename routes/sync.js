@@ -1681,6 +1681,18 @@ async function saveNormalizedScan(scan, req) {
     return { status: 'failed', httpStatus: 409, scan, error: 'Scan audit does not match the active audit for this dealer.' };
   }
   applyActiveAudit(scan, activeAudit);
+  // A request may have committed successfully even if the response never
+  // reached the scanner. A retry with the same transaction ID must return the
+  // saved record as an acknowledgement, without applying stock movement again.
+  const transactionId = clean(scan.uniqueScanId || scan.scanId);
+  if (transactionId) {
+    const existingTransaction = await Inventory.findOne(scanIdentityScope({
+      $or: [{ uniqueScanId: transactionId }, { scanId: transactionId }]
+    }, scan)).lean();
+    if (existingTransaction) {
+      return { status: 'synced', scan: existingTransaction, error: '', alreadyApplied: true };
+    }
+  }
   const upiLocationError = await prepareUpiSourceLocation(scan);
   markPerf('upiLocation');
   if (upiLocationError) return { status: 'failed', scan, error: upiLocationError };

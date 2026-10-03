@@ -137,6 +137,7 @@
     manualResumeAfterClose: false,
     manualMode: loadMode(),
     health: null,
+    backendReachable: null,
     authReady: false,
     loginConfigLoading: true,
     loginConfigError: '',
@@ -645,6 +646,8 @@
     console.log('[API DEBUG]', { method: fetchOptions.method || 'GET', path, fullUrl, baseUrl: apiBaseUrl() });
     
     return fetch(fullUrl, fetchOptions).then(async (response) => {
+      state.backendReachable = true;
+      renderConnectionBadge();
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.success === false) {
         const error = new Error(data.message || response.statusText || 'Request failed');
@@ -655,6 +658,12 @@
       }
       return data;
     }).catch((error) => {
+      if (error && error.status) {
+        state.backendReachable = true;
+      } else {
+        state.backendReachable = false;
+      }
+      renderConnectionBadge();
       if (error && error.name === 'AbortError') {
         console.error('[API TIMEOUT]', { path, timeoutMs });
         throw new Error('Request timed out. Check network and retry.');
@@ -669,7 +678,7 @@
   function isRetryableTransportError(error = {}) {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
     const status = Number(error.status || 0);
-    if ([408, 502, 503, 504].includes(status)) return true;
+    if (status === 408 || status === 429 || status >= 500) return true;
     if (status) return false;
     return /network|failed to fetch|load failed|timed?\s*out|timeout|offline|connection/i.test(clean(error.message || ''));
   }
@@ -1433,9 +1442,10 @@
 
   function renderConnectionBadge() {
     const badge = byId('networkBadge');
-    const online = navigator.onLine;
-    badge.textContent = online ? 'Online' : 'Offline';
-    badge.className = `status-pill ${online ? 'online' : 'offline'}`;
+    const online = navigator.onLine && state.backendReachable === true;
+    const checking = navigator.onLine && state.backendReachable === null;
+    badge.textContent = online ? 'Online' : checking ? 'Checking server…' : 'Server unavailable';
+    badge.className = `status-pill ${online ? 'online' : checking ? 'warning' : 'offline'}`;
   }
 
   function renderSessionHeader() {
@@ -1643,7 +1653,9 @@
       const status = rowStatus(row);
       const statusLabel = status === 'failed-duplicate'
         ? 'Duplicate'
-        : (status || 'pending').replace(/^./, (char) => char.toUpperCase());
+        : status === 'failed' && row.retryable !== false
+          ? 'Retrying'
+          : (status || 'pending').replace(/^./, (char) => char.toUpperCase());
       const time = fmtTime(row.mobileCreatedAt || row.timestamp || row.createdAt);
       const title = escapeHtml(row.syncError || '');
       return `
@@ -1663,7 +1675,7 @@
           <td>${escapeHtml(fmtNumber(rowQty(row)))}</td>
           <td>${escapeHtml(rowMode(row))}</td>
           <td>${escapeHtml(rowBin(row) || '-')}</td>
-          <td title="${title}">${escapeHtml(statusLabel)}</td>
+          <td title="${title}${row.nextRetryAt ? ` · Next retry ${fmtTime(row.nextRetryAt)}` : ''}">${escapeHtml(statusLabel)}</td>
       </tr>
       `;
     }).join('');
@@ -3391,7 +3403,14 @@
       return;
     }
     if (!state.session?.token || !navigator.onLine) return;
-    const rows = sessionRows().filter((row) => rowStatus(row) === 'pending');
+    const now = Date.now();
+    const rows = sessionRows().filter((row) => {
+      const status = rowStatus(row);
+      const nextRetryAt = new Date(row.nextRetryAt || 0).getTime();
+      if (Number.isFinite(nextRetryAt) && nextRetryAt > now) return false;
+      if (status === 'pending') return true;
+      return status === 'failed' && row.retryable !== false;
+    });
     if (!rows.length) {
       renderQueueBadgeCounts();
       renderHistoryRows();
@@ -3405,6 +3424,7 @@
     let rejectedCount = 0;
     let failedCount = 0;
     let pendingCount = 0;
+    let retryDelayMs = null;
     try {
       for (const row of batch) {
         try {
@@ -3450,11 +3470,17 @@
                 status: 'failed',
                 syncStatus: 'failed',
                 syncError: retryMessage,
-                retryCount: Number(updatedRow.retryCount || 0) + 1
+                retryCount: Number(updatedRow.retryCount || 0) + 1,
+                retryable: ![400, 401, 403, 404, 422].includes(Number(retryError.status)),
+                nextRetryAt: new Date(Date.now() + Math.min(300000, 1000 * (2 ** Math.min(Number(updatedRow.retryCount || 0) + 1, 8)))).toISOString()
               };
               await putRecord(next);
               upsertStateRow(next);
               failedCount += 1;
+              if (next.retryable) {
+                const retryDelay = Math.max(0, new Date(next.nextRetryAt).getTime() - Date.now());
+                retryDelayMs = retryDelayMs === null ? retryDelay : Math.min(retryDelayMs, retryDelay);
+              }
               continue;
             }
           }
@@ -3471,28 +3497,55 @@
               status: 'pending',
               syncStatus: 'pending',
               syncError: message,
-              retryCount: Number(row.retryCount || 0) + 1
+              retryCount: Number(row.retryCount || 0) + 1,
+              retryable: true,
+              nextRetryAt: new Date(Date.now() + Math.min(30000, 1000 * (2 ** Math.min(Number(row.retryCount || 0) + 1, 5)))).toISOString()
             };
             await putRecord(next);
             upsertStateRow(next);
+            // Keep transiently failed saves moving without waiting for the
+            // regular 45-second queue poll or requiring the user to tap Sync.
+            // Back off each row's retries to avoid hammering an unavailable server.
+            const retryDelay = Math.max(0, new Date(next.nextRetryAt).getTime() - Date.now());
+            retryDelayMs = retryDelayMs === null ? retryDelay : Math.min(retryDelayMs, retryDelay);
             continue;
           }
-          const rejected = [400, 404, 409, 422].includes(Number(error.status))
+          const rejected = [400, 403, 404, 409, 422].includes(Number(error.status))
             || ['invalid', 'rejected'].includes(clean(data.status).toLowerCase());
           if (rejected) rejectedCount += 1;
           else failedCount += 1;
           if (rejected) {
-            await removeStoredQueueRecord(row);
-          } else {
             const next = {
               ...row,
               status: 'failed',
               syncStatus: 'failed',
               syncError: message,
-              retryCount: Number(row.retryCount || 0) + 1
+              retryCount: Number(row.retryCount || 0) + 1,
+              retryable: false,
+              nextRetryAt: ''
             };
             await putRecord(next);
             upsertStateRow(next);
+          } else {
+            const retryCount = Number(row.retryCount || 0) + 1;
+            const retryable = ![400, 401, 403, 404, 422].includes(Number(error.status));
+            const next = {
+              ...row,
+              status: 'failed',
+              syncStatus: 'failed',
+              syncError: message,
+              retryCount,
+              retryable,
+              nextRetryAt: retryable
+                ? new Date(Date.now() + Math.min(300000, 1000 * (2 ** Math.min(retryCount, 8)))).toISOString()
+                : ''
+            };
+            await putRecord(next);
+            upsertStateRow(next);
+            if (next.retryable) {
+              const retryDelay = Math.max(0, new Date(next.nextRetryAt).getTime() - Date.now());
+              retryDelayMs = retryDelayMs === null ? retryDelay : Math.min(retryDelayMs, retryDelay);
+            }
           }
         }
       }
@@ -3515,6 +3568,8 @@
       if (state.syncAgain && state.session?.token && navigator.onLine) {
         state.syncAgain = false;
         setTimeout(() => syncQueue({ silent: true }).catch(() => undefined), 0);
+      } else if (retryDelayMs !== null && state.session?.token && navigator.onLine) {
+        scheduleSync(retryDelayMs);
       }
     }
   }
@@ -3860,6 +3915,7 @@
     byId('smartBinOverrideBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('MANUAL_OVERRIDE', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
     byId('smartBinCancelBtn')?.addEventListener('click', () => resolveSmartBinSuggestionAction('ABORT', state.smartBinPromptPayload || {}).catch((error) => toast(error.message, 'error')));
     window.addEventListener('online', () => {
+      state.backendReachable = null;
       renderConnectionBadge();
       renderUrlState();
       if (state.session?.token) {
@@ -3870,6 +3926,7 @@
       }
     });
     window.addEventListener('offline', () => {
+      state.backendReachable = false;
       renderConnectionBadge();
     });
     document.addEventListener('visibilitychange', () => {

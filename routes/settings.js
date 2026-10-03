@@ -10,6 +10,8 @@ const DEFAULT_SETTINGS = {
   requireReason: true,
   maxAllowedLocationsPerPart: 3
 };
+let smartBinSettingsCache = null;
+let smartBinSettingsRead = null;
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -43,9 +45,25 @@ function normalizeSettings(input = {}) {
 }
 
 async function readSettings() {
-  const record = await Setting.findOne({ key: SMART_BIN_KEY }).lean().catch(() => null);
-  if (!record) return { ...DEFAULT_SETTINGS };
-  return { ...DEFAULT_SETTINGS, ...normalizeSettings(record) };
+  if (smartBinSettingsCache) return { ...smartBinSettingsCache };
+  if (smartBinSettingsRead) return { ...(await smartBinSettingsRead) };
+  smartBinSettingsRead = (async () => {
+    let record;
+    try {
+      record = await Setting.findOne({ key: SMART_BIN_KEY }).lean();
+    } catch (_) {
+      return { ...DEFAULT_SETTINGS };
+    }
+    smartBinSettingsCache = record
+      ? { ...DEFAULT_SETTINGS, ...normalizeSettings(record) }
+      : { ...DEFAULT_SETTINGS };
+    return smartBinSettingsCache;
+  })();
+  try {
+    return { ...(await smartBinSettingsRead) };
+  } finally {
+    smartBinSettingsRead = null;
+  }
 }
 
 router.get('/smart-bin-suggestion', auth.requireAuth, async (req, res) => {
@@ -86,6 +104,7 @@ router.post('/smart-bin-suggestion', auth.requireAuth, auth.requireAdmin, async 
     ).lean();
 
     const settings = normalizeSettings(updated || payload);
+    smartBinSettingsCache = { ...settings };
     return res.json({
       success: true,
       key: SMART_BIN_KEY,

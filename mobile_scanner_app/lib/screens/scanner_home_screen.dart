@@ -610,6 +610,23 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         return;
       }
 
+      final currentBin = _upper(draft.binLocation);
+      final api = ApiClient(_settings);
+      Future<Map<String, dynamic>?>? smartBinFuture;
+      if (_isSmartBinEligible(_scanType) && _online && _activeAuditId.isNotEmpty) {
+        // The read-only preflight can run alongside the local duplicate check.
+        // Previously these two independent waits happened one after the other.
+        smartBinFuture = api.smartBinCheck(
+          dealerCode: _dealerCode,
+          auditId: _activeAuditId,
+          partNumber: draft.partNumber,
+          partDescription: draft.partDescription,
+          binLocation: currentBin,
+          scanType: _scanType,
+          qty: draft.quantity,
+        ).then<Map<String, dynamic>?>((value) => value).catchError((_) => null);
+      }
+
       final duplicateRecord = await _database.latestMatchingScan(
         rawValue: draft.rawValue,
         scanType: _scanType,
@@ -635,26 +652,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       }
 
       final localId = 'MOB-${const Uuid().v4()}';
-      final currentBin = _upper(draft.binLocation);
-      final api = ApiClient(_settings);
       Map<String, dynamic>? smartBinSuggestion;
-      if (_isSmartBinEligible(_scanType) &&
-          _online &&
-          _activeAuditId.isNotEmpty) {
-        try {
-          smartBinSuggestion = await api.smartBinCheck(
-            dealerCode: _dealerCode,
-            auditId: _activeAuditId,
-            partNumber: draft.partNumber,
-            partDescription: draft.partDescription,
-            binLocation: currentBin,
-            scanType: _scanType,
-            qty: draft.quantity,
-          );
-        } catch (_) {
-          smartBinSuggestion = null;
-        }
-      }
+      if (smartBinFuture != null) smartBinSuggestion = await smartBinFuture;
 
       var resolvedBin = currentBin;
       var metadata = <String, dynamic>{};

@@ -16,7 +16,7 @@ class LocalDatabase {
     final path = p.join(await getDatabasesPath(), 'daksh_mobile_scanner.db');
     _database = await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE scans (
@@ -43,6 +43,8 @@ class LocalDatabase {
             'CREATE INDEX idx_scans_status_created ON scans(status, createdAt)');
         await db.execute(
             'CREATE INDEX idx_scans_duplicate ON scans(rawValue, scanType, dealerCode, userId, createdAt)');
+        await db.execute(
+            'CREATE INDEX idx_scans_duplicate_audit ON scans(rawValue, scanType, dealerCode, auditId, userId, status, createdAt)');
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -56,6 +58,10 @@ class LocalDatabase {
         if (oldVersion < 4) {
           await db.execute(
               "ALTER TABLE scans ADD COLUMN auditId TEXT NOT NULL DEFAULT ''");
+        }
+        if (oldVersion < 5) {
+          await db.execute(
+              'CREATE INDEX idx_scans_duplicate_audit ON scans(rawValue, scanType, dealerCode, auditId, userId, status, createdAt)');
         }
       },
     );
