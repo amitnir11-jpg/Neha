@@ -600,10 +600,9 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     }
 
     try {
-      // The active audit can change while the app remains open. Refresh it
-      // before every online scan so the queued record captures the current
-      // dealer/audit context instead of a stale session from app launch.
-      if (_online) await _refreshAuditContext();
+      // Use the cached audit context on the capture path. The server validates
+      // the active audit on every save, and the user can explicitly refresh
+      // connection context if the audit changes while this screen is open.
       if (_online && _activeAuditId.isEmpty) {
         _setStatus(
             'No active audit context available. Refresh the server before scanning.',

@@ -152,6 +152,7 @@
     lastRealtimeAt: 0,
     dashboardFallbackBusy: false,
     recentRealtimeScanIds: new Set(),
+    dealerStockUploadId: '',
     dashboardProductGroupRows: [],
     dashboardProductGroupLoadPromise: null,
     dashboardProductGroupLoadRequestId: 0,
@@ -491,6 +492,10 @@
   }
 
   function playScanTone(type = 'success') {
+    if (type === 'warning') {
+      playTone(620, 0.12);
+      return;
+    }
     if (type === 'duplicate') {
       playTone(880, 0.08);
       playTone(880, 0.08, 0.14);
@@ -1050,7 +1055,9 @@
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(url);
+    // Browsers consume the blob URL asynchronously after the click. Revoking it
+    // synchronously can cancel the save, especially for large workbooks.
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   function formObject(form) {
@@ -1498,18 +1505,12 @@
     clearScopedLiveCaches({ clearReportCache: true });
     state.dashboardDealerCode = next;
     state.activeAudit = null;
-    state.dashboardLoaded = false;
-    state.dashboardStats = {};
-    updateDashboardCards({});
-    renderScanStream([]);
-    renderDashboardTopBins([]);
     syncScanDealerScope(next);
     state.selectedProductGroupSummary = null;
     state.productGroupDetailRows = [];
     state.productGroupDetailTotals = null;
     renderProductGroupDetails({ rows: [], totals: {} });
     const jobs = [];
-    if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
     if ($('#scan')?.classList.contains('active')) jobs.push(loadScanHistory());
     if ($('#localPartEntry')?.classList.contains('active')) {
       syncLocalPartFormIdentity();
@@ -2920,13 +2921,20 @@
     markReportsStale(reason);
   }
 
-  function markReportsStale(reason = 'scan update') {
+  function markReportsStale(reason = 'scan update', options = {}) {
     localStorage.removeItem('dakshReportPreviewCache');
     state.reportCache.clear();
     if (!state.reportHasRun || !activeReportType()) return;
     clearTimeout(state.reportRealtimeTimer);
     const message = $('#reportMessage');
     const reportType = activeReportType();
+    if (options.autoRefresh === false) {
+      if (message) {
+        message.className = 'form-message warning';
+        message.textContent = `Report data changed after ${reason}. Click Refresh Now when ready.`;
+      }
+      return;
+    }
     if (state.auditPackInProgress || HEAVY_REPORT_TYPES.has(reportType)) {
       if (message) {
         message.className = 'form-message warning';
@@ -4235,11 +4243,6 @@
     await downloadGet(`/api/scans/dashboard/product-group-summary/details?${query.toString()}`, `Daksh_${selected.productGroup.replace(/[^a-z0-9]+/gi, '_')}_Parts.xlsx`);
   }
 
-  function addScanToStream(scan = {}) {
-    state.scanStreamRecords = mergeScanStreamRecords([scan].concat(state.scanStreamRecords || []));
-    renderScanStream(state.scanStreamRecords);
-  }
-
   async function handleNewScan(scan = {}, options = {}) {
     if (String(scan.scanType || scan.type || '').trim().toUpperCase() === 'VERIFICATION') return;
     if (!activeAuditMatchesScan(scan)) {
@@ -4253,14 +4256,8 @@
     }
     state.lastRealtimeAt = Date.now();
     if (options.showSuccess === true) showScanPopup(scan);
-    addScanToStream(scan);
     prependScanHistory(scan);
-    setDashboardKpiValue('dashLastScanTime', compactDateTime(scan.timestamp || new Date()), { time: true });
-    setDashboardKpiValue('dashLastScannedPart', scan.partNumber || scan.part || '-');
-    setStatusPill('topRealtimeStatus', 'Realtime: Scan Received', 'blue');
-    setDashboardKpiValue('dashRealtimeActivity', compactDateTime(scan.timestamp || new Date()), { time: true });
-    // The save response and realtime payload update the visible counters/rows.
-    // Do not reload the full dashboard after every individual scan.
+    // Keep the dashboard snapshot stable until the user explicitly refreshes it.
   }
 
   function setDashboardLoading(loading) {
@@ -4938,7 +4935,8 @@
         handleNewScan(updateData.scan, { showSuccess: true }).catch(() => undefined);
       }
       loadScanHistory().catch(() => undefined);
-      queueRealtimeReportRefresh('manual quantity update');
+      queueReconciliationRefresh('manual quantity update');
+      markReportsStale('manual quantity update', { autoRefresh: false });
     } catch (updateError) {
       playScanTone('error');
       toast(updateError.message || 'Manual quantity update failed', 'error');
@@ -5061,9 +5059,29 @@
       normalized.uniqueScanId = normalized.uniqueScanId || requestId;
       normalized.scanId = normalized.scanId || requestId;
     }
+    // Persist a physical scanner capture before starting its online request.
+    // The same scan ID is used for retries, so a page close or lost response
+    // cannot turn the retry into a second inventory row.
+    if (isBarcodeForm) {
+      try {
+        enqueueScan(normalized, 'Awaiting server confirmation');
+      } catch (queueError) {
+        console.warn('[SCAN] local barcode queue write failed', queueError.message);
+      }
+    }
 
     try {
+      const requestStartedAt = performance.now();
       const data = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 });
+      if (window.SCAN_PERF_LOGS === true) {
+        console.info('[SCAN_PERF_BROWSER]', JSON.stringify({
+          scanId: clean(normalized.scanId || normalized.uniqueScanId || ''),
+          scanType: normalized.scanType,
+          requestMs: Math.round(performance.now() - requestStartedAt),
+          status: clean(data.status || (data.duplicate ? 'duplicate' : 'synced')),
+          apiCalls: 1
+        }));
+      }
       if (data && data.scan) {
         // Handle successful save
         const savedScan = data.scan || {};
@@ -5077,6 +5095,7 @@
         rememberLastSyncTime(data.completedAt || data.lastSyncTime || data.lastSync || new Date().toISOString());
         handleNewScan(data.scan, { showSuccess: !data.duplicate }).catch((error) => console.warn('[SCAN] latest row update failed', error));
       }
+      if (isBarcodeForm) removeQueuedBarcodeScan(normalized);
       playScanTone(data.duplicate ? 'duplicate' : 'success');
       if (isBarcodeForm) {
         localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
@@ -5091,7 +5110,7 @@
       } else {
         resetManualScanFields(form);
       }
-      queueRealtimeReportRefresh(isBarcodeForm ? 'barcode scan' : 'manual scan');
+      markReportsStale(isBarcodeForm ? 'barcode scan' : 'manual scan', { autoRefresh: false });
     } catch (error) {
       if (error.status === 409 && error.data?.smartBinWarning) {
         // Handle the smart bin warning returned from the server
@@ -5103,6 +5122,7 @@
           requireReason: false
         });
         if (!decision) {
+          if (isBarcodeForm) removeQueuedBarcodeScan(normalized);
           if (isBarcodeForm) {
             resetBarcodeScanFields(form, normalized, options.expectedRaw);
             setTimeout(focusNextBarcodeField, 700);
@@ -5159,7 +5179,18 @@
         }
         let retryData;
         try {
+          const retryStartedAt = performance.now();
           retryData = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 });
+          if (window.SCAN_PERF_LOGS === true) {
+            console.info('[SCAN_PERF_BROWSER]', JSON.stringify({
+              scanId: clean(normalized.scanId || normalized.uniqueScanId || ''),
+              scanType: normalized.scanType,
+              requestMs: Math.round(performance.now() - retryStartedAt),
+              status: clean(retryData.status || (retryData.duplicate ? 'duplicate' : 'synced')),
+              apiCalls: 1,
+              retry: true
+            }));
+          }
         } catch (retryError) {
           if (!isBarcodeForm && retryError.status === 409 && retryError.data?.manualDuplicate) {
             await confirmManualDuplicateAndAddQuantity(form, normalized, retryError);
@@ -5179,6 +5210,7 @@
           rememberLastSyncTime(retryData.completedAt || retryData.lastSyncTime || retryData.lastSync || new Date().toISOString());
           handleNewScan(retryData.scan, { showSuccess: !retryData.duplicate }).catch((error) => console.warn('[SCAN] latest row update failed', error));
         }
+        if (isBarcodeForm) removeQueuedBarcodeScan(normalized);
         playScanTone(retryData.duplicate ? 'duplicate' : 'success');
         if (isBarcodeForm) {
           localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
@@ -5193,7 +5225,7 @@
         } else {
           resetManualScanFields(form);
         }
-        queueRealtimeReportRefresh(isBarcodeForm ? 'barcode scan' : 'manual scan');
+        markReportsStale(isBarcodeForm ? 'barcode scan' : 'manual scan', { autoRefresh: false });
         return;
       }
       if (
@@ -5202,6 +5234,7 @@
         && !error.data?.fittedDuplicate
         && !(!isBarcodeForm && error.data?.manualDuplicate)
       ) {
+        if (isBarcodeForm) removeQueuedBarcodeScan(normalized);
         playScanTone('duplicate');
         const duplicateScan = error.data?.scan || error.data?.existing || normalized;
         addSyncLog({
@@ -5267,17 +5300,18 @@
           state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
           state.barcodeLastAt = Date.now();
           resetBarcodeScanFields(form, normalized, options.expectedRaw);
-          setLivePill('barcodeReadyStatus', 'Saved locally', true);
+          setStatusPill('barcodeReadyStatus', 'Pending - saved locally', 'yellow');
           setTimeout(focusNextBarcodeField, 900);
         } else {
           resetManualScanFields(form);
         }
-        playScanTone('success');
+        playScanTone('warning');
         toast('Server unavailable. Scan saved locally and will retry automatically.', 'warning');
         updateSyncBadges();
         schedulePendingSync(350);
         return;
       }
+      if (isBarcodeForm) removeQueuedBarcodeScan(normalized);
       playScanTone('error');
       toast(error.message, 'error');
       if (isBarcodeForm) {
@@ -6410,14 +6444,10 @@
     }
   }
 
-  function queueDashboardRefresh(delay = 1200) {
-    state.dashboardLastLoadedAt = 0;
-    state.dashboardProductGroupLoadedAt = 0;
+  function queueDashboardRefresh() {
+    // Dashboard data is refreshed on initial open and by the explicit Refresh button only.
     clearTimeout(state.dashboardRefreshTimer);
-    state.dashboardRefreshTimer = setTimeout(() => {
-      if (document.hidden || !document.body.classList.contains('view-active-dashboard')) return;
-      loadDashboard({ force: true }).catch((error) => console.warn('[DASHBOARD] queued refresh failed', error.message));
-    }, delay);
+    state.dashboardRefreshTimer = null;
   }
 
   function setScanFormSubmitting(form, submitting) {
@@ -6804,7 +6834,10 @@
       { at: 650, percent: 22, activeStep: 0, message: 'Validating selection and filters...' },
       { at: 1600, percent: 44, activeStep: 1, message: 'Fetching report data...' },
       { at: 2900, percent: 70, activeStep: 2, message: 'Building workbook sheets...' },
-      { at: 4300, percent: 88, activeStep: 3, message: 'Finalizing download...' }
+      { at: 8000, percent: 84, activeStep: 2, message: 'Building workbook sheets...' },
+      { at: 20_000, percent: 88, activeStep: 3, message: 'Finalizing download...' },
+      { at: 45_000, percent: 91, activeStep: 3, message: 'Still generating the workbook. Larger audits can take a little longer...' },
+      { at: 90_000, percent: 93, activeStep: 3, message: 'The workbook is taking longer than usual. Please keep this window open...' }
     ];
     let stage = stages[0];
     stages.forEach((candidate) => {
@@ -8161,25 +8194,39 @@
   }
 
   async function uploadDealerStock(form, messageSelector = '#dealerStockUploadMessage') {
+    if (form.dataset.uploading === 'true') return null;
+    form.dataset.uploading = 'true';
+    const submitButton = form.querySelector('[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
     const dealerCode = cleanDealerCode($('[name="dealerCode"]', form)?.value || '');
-    if (!dealerCode) throw new Error('Select Dealer Code first');
     const message = $(messageSelector);
-    if (message) {
-      message.className = 'form-message loading';
-      message.textContent = 'Uploading and validating dealer DMS stock...';
+    try {
+      if (!dealerCode) throw new Error('Select Dealer Code first');
+      if (message) {
+        message.className = 'form-message loading';
+        message.textContent = 'Uploading Dealer Stock...';
+      }
+      const uploadId = window.crypto?.randomUUID ? window.crypto.randomUUID() : `stock-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      state.dealerStockUploadId = uploadId;
+      const uploadBody = new FormData(form);
+      uploadBody.set('progressId', uploadId);
+      const data = await api('/api/reconciliation/upload-stock', { method: 'POST', body: uploadBody });
+      syncReconDealer(data.dealerCode || dealerCode);
+      renderDealerStockPreview(data.preview || [], data.savedCount || 0, data.summary || {});
+      renderDealerStockErrors(data.errorRows || [], data.skippedCount || 0, data.errorRowsTruncated);
+      if (message) {
+        message.className = 'form-message success';
+        const lineRange = data.summary?.lineRange?.text || dealerStockLineRangeText(data.savedCount || 0);
+        message.textContent = data.message || `Saved ${data.savedCount || 0} DMS stock row(s). Line range ${lineRange}.`;
+      }
+      loadReconciliation({ silent: true }).catch(() => undefined);
+      toast('Dealer DMS stock saved');
+      return data;
+    } finally {
+      state.dealerStockUploadId = '';
+      form.dataset.uploading = 'false';
+      if (submitButton) submitButton.disabled = false;
     }
-    const data = await api('/api/reconciliation/upload-stock', { method: 'POST', body: new FormData(form) });
-    syncReconDealer(data.dealerCode || dealerCode);
-    renderDealerStockPreview(data.preview || [], data.savedCount || 0, data.summary || {});
-    renderDealerStockErrors(data.errorRows || [], data.skippedCount || 0, data.errorRowsTruncated);
-    if (message) {
-      message.className = 'form-message success';
-      const lineRange = data.summary?.lineRange?.text || dealerStockLineRangeText(data.savedCount || 0);
-      message.textContent = data.message || `Saved ${data.savedCount || 0} DMS stock row(s). Line range ${lineRange}.`;
-    }
-    loadReconciliation({ silent: true }).catch(() => undefined);
-    toast('Dealer DMS stock saved');
-    return data;
   }
 
   function syncReconDealer(dealerCode) {
@@ -9827,7 +9874,18 @@
     const data = await api(`/api/bin-transfer/source-bins?dealerCode=${encodeURIComponent(dealerCode)}`);
     const bins = data.bins || data.fromBins || [];
     renderBinLabelBins(bins);
-    clearBinLabelSelection(bins.length ? 'Select one or multiple bins, then click Show Parts.' : 'No bins found for selected dealer.');
+    clearBinLabelSelection(bins.length
+      ? 'Select bin(s), then print bin labels directly or click Show Parts to select part labels.'
+      : 'No bins found for selected dealer.');
+    return bins;
+  }
+
+  async function refreshBinLabelBinsAndSelect(dealerCode, binCodes = []) {
+    const bins = await loadBinLabelBins(dealerCode);
+    const wanted = new Set(binCodes.map(binOptionKey));
+    $$('.bin-label-bin-option').forEach((box) => { box.checked = wanted.has(binOptionKey(box.value)); });
+    syncBinLabelBinsSelectAllState();
+    updateBinLabelBinsButton();
     return bins;
   }
 
@@ -9894,7 +9952,7 @@
     const shrinkClass = partCount > 8 ? ' dense' : partCount > 4 ? ' compact' : '';
     const continuation = Number(item.totalChunks || 1) > 1 ? `<span class="bin-label-continuation">Part list ${escapeHtml(item.chunkNo)} / ${escapeHtml(item.totalChunks)}</span>` : '';
     return `
-      <div class="bin-label-card">
+      <div class="bin-label-card${item.binOnly || !parts.length ? ' bin-only' : ''}">
         <div class="bin-label-left">
           <img src="${escapeHtml(item.dataUrl || '')}" alt="">
           <strong>${escapeHtml(item.binNumber)}</strong>
@@ -9928,7 +9986,6 @@
     const selectedItems = selectedBinLabelParts();
     if (!dealerCode) throw new Error('Dealer required');
     if (!bins.length) throw new Error('Select at least one bin');
-    if (!selectedItems.length) throw new Error('Select at least one part number');
     const settings = binLabelSettingsFromForm();
     setBinLabelMessage('Preparing label preview...');
     const data = await api('/api/bin-transfer/labels/preview', {
@@ -9936,7 +9993,7 @@
       body: { dealerCode, bins, selectedItems, ...settings }
     });
     renderBinLabelPreview(data.items || [], data.settings || settings);
-    setBinLabelMessage(`${data.count || (data.items || []).length} label(s) ready for print.`, 'success');
+    setBinLabelMessage(`${data.count || (data.items || []).length} ${selectedItems.length ? 'label(s)' : 'bin label(s)'} ready for print.`, 'success');
     return data;
   }
 
@@ -9976,7 +10033,7 @@
           border-radius: 1.5mm !important;
           box-shadow: none !important;
         }
-        body.print-bin-labels #binLabelPrintSheet .bin-label-left strong,
+        body.print-bin-labels #binLabelPrintSheet .bin-label-card:not(.bin-only) .bin-label-left strong,
         body.print-bin-labels #binLabelPrintSheet .bin-label-continuation {
           display: none !important;
         }
@@ -10665,8 +10722,8 @@
   }
 
   async function refreshAfterDelete() {
-    queueRealtimeReportRefresh('delete');
-    queueDashboardRefresh(250);
+    queueReconciliationRefresh('delete');
+    markReportsStale('delete', { autoRefresh: false });
     await Promise.allSettled([loadScanHistory(), loadDealers(), loadCategories(), loadSyncStatus()]);
   }
 
@@ -10714,14 +10771,11 @@
     closeScanEditModal();
     toast(data.message || 'Part details updated');
     if (data.scan) {
-      addScanToStream(data.scan);
-      queueRealtimeReportRefresh('scan details update');
+      prependScanHistory(data.scan);
+      markReportsStale('scan details update', { autoRefresh: false });
     }
     queueDashboardRefresh(250);
     await loadScanHistory();
-    if (state.reportHasRun && activeReportType()) {
-      await loadReport({ forceRefresh: true, showLoading: false });
-    }
   }
 
   async function deleteSingleScan(scanId) {
@@ -11563,20 +11617,7 @@
 
   function startDashboardFallbackRefresh() {
     if (state.dashboardFallbackTimer) clearInterval(state.dashboardFallbackTimer);
-    state.dashboardFallbackTimer = setInterval(async () => {
-      if (document.hidden || state.dashboardFallbackBusy) return;
-      if (!document.body.classList.contains('view-active-dashboard')) return;
-      const realtimeQuietMs = Date.now() - Number(state.lastRealtimeAt || 0);
-      if (realtimeQuietMs < 300000) return;
-      state.dashboardFallbackBusy = true;
-      try {
-        await loadDashboard({ force: true });
-      } catch (error) {
-        console.warn('[DASHBOARD] fallback refresh failed', error.message);
-      } finally {
-        state.dashboardFallbackBusy = false;
-      }
-    }, 300000);
+    state.dashboardFallbackTimer = null;
   }
 
   function expandCodeRange(startValue, endValue) {
@@ -12041,7 +12082,7 @@
       state.barcodeAutoSaving = true;
       state.barcodeLastRaw = normalizedRaw;
       state.barcodeLastAt = Date.now();
-      setLivePill('barcodeReadyStatus', 'Saving...', true);
+      setStatusPill('barcodeReadyStatus', 'Saving...', 'yellow');
       fillBarcodePartFromRaw();
       try {
         await submitScan(form, { backgroundRefresh: true, expectedRaw: raw });
@@ -12135,8 +12176,8 @@
     $('#viewTitle').textContent = viewTitle;
     document.title = `DAKSH INVENTORY SYSTEM - ${viewTitle}`;
     updateSystemSubline();
-    if (viewId === 'dashboard' && state.dashboardLoaded) {
-      loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
+    if (viewId === 'dashboard' && !state.dashboardLoaded) {
+      loadDashboard().catch((error) => toast(error.message, 'error'));
     } else if (viewId !== 'dashboard') {
       document.body.classList.remove('app-booting');
     }
@@ -12471,7 +12512,7 @@
       }
       syncBinLabelBinsSelectAllState();
       updateBinLabelBinsButton();
-      clearBinLabelSelection('Click Show Parts to load available parts for selected bins.');
+      clearBinLabelSelection('Click Print Selected Labels for bin-only labels, or Show Parts to choose part labels.');
       updateBinLabelBinsButton();
     });
     document.addEventListener('click', () => {
@@ -12665,8 +12706,7 @@
       loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
     });
     $('#dashboardDateRange')?.addEventListener('change', () => {
-      state.dashboardLoaded = false;
-      loadDashboard({ force: true }).catch((error) => toast(error.message, 'error'));
+      updateDashboardScopeSummary();
     });
     $('#dashboardViewBins')?.addEventListener('click', () => openView('reports'));
     $('#quickActionViewReports')?.addEventListener('click', () => openView('reports'));
@@ -12703,21 +12743,10 @@
           });
           if (select.id === 'dashboardDealerSelect') syncScanDealerScope(state.dashboardDealerCode, select);
           state.activeAudit = null;
-          state.dashboardLoaded = false;
-          state.dashboardStats = {};
-          updateDashboardCards({});
-          renderScanStream([]);
-          renderDashboardTopBins([]);
           updateDashboardScopeSummary();
-          state.reportCache.clear();
-          state.selectedProductGroupSummary = null;
-          state.productGroupDetailRows = [];
-          state.productGroupDetailTotals = null;
-          renderProductGroupDetails({ rows: [], totals: {} });
           state.reportCache.clear();
           const jobs = [];
           if (state.dashboardDealerCode) jobs.push(loadActiveAudit({ dealerCode: state.dashboardDealerCode, silent: true, allowMissing: true }));
-          if ($('#dashboard')?.classList.contains('active')) jobs.push(loadDashboard({ force: true }));
           if ($('#reports')?.classList.contains('active') && isProductGroupSummaryReport()) jobs.push(loadReport({ forceRefresh: true }));
           Promise.all(jobs.map((job) => job.catch((error) => toast(error.message, 'error'))));
           return;
@@ -13500,13 +13529,14 @@
     $('#binMasterForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       const dealerCode = cleanDealerCode($('[name="dealerCode"]', event.currentTarget)?.value || '');
-      await api('/api/bin-master/create', { method: 'POST', body: formObject(event.currentTarget) });
+      const saved = await api('/api/bin-master/create', { method: 'POST', body: formObject(event.currentTarget) });
       toast('Bin saved');
       event.currentTarget.reset();
       $('[name="dealerCode"]', event.currentTarget).value = dealerCode;
       if ($('#binManagementDealer')) $('#binManagementDealer').value = dealerCode;
       await loadBins();
       await loadBinTransferDestinationBins(dealerCode, $('.bin-transfer-from')?.value || '').catch(() => null);
+      await refreshBinLabelBinsAndSelect(dealerCode, [saved.bin?.binCode || '']);
     });
     $('#bulkBinForm').addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -13521,6 +13551,7 @@
       if ($('#binManagementDealer')) $('#binManagementDealer').value = dealerCode;
       await loadBins();
       await loadBinTransferDestinationBins(dealerCode, $('.bin-transfer-from')?.value || '').catch(() => null);
+      await refreshBinLabelBinsAndSelect(dealerCode, (data.bins || []).map((bin) => bin.binCode));
     });
 
     $('#plainLoadBinsBtn')?.addEventListener('click', () => loadPlainBinOptions().catch((error) => toast(error.message, 'error')));
@@ -13691,6 +13722,18 @@
     const socketOptions = { transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 1000, reconnectionDelayMax: 5000, auth: { token: state.token } };
     const socket = apiBaseUrl() ? window.io(apiBaseUrl(), socketOptions) : window.io(socketOptions);
     state.dashboardSocket = socket;
+    socket.on('dealer-stock:upload:progress', (progress = {}) => {
+      if (!state.dealerStockUploadId || progress.progressId !== state.dealerStockUploadId) return;
+      const message = $('#dealerStockUploadMessage');
+      if (!message) return;
+      if (progress.stage === 'parsing') {
+        message.textContent = 'Validating Dealer Stock...';
+      } else if (progress.stage === 'validating') {
+        message.textContent = `Validating ${progress.processed || 0} / ${progress.total || 0}`;
+      } else if (progress.stage === 'processing') {
+        message.textContent = `Processing ${progress.processed || 0} / ${progress.total || 0}`;
+      }
+    });
     socket.on('connect', () => {
       state.lastRealtimeAt = Date.now();
       socket.emit('device:hello', { deviceId: ensureDeviceId(), deviceName: 'Dashboard Browser', deviceType: 'web' });
@@ -13715,18 +13758,12 @@
       console.warn('[DASHBOARD] socket connect error', error.message);
       addConnectionLog(`Socket reconnecting: ${error.message}`, 'warning');
     });
-    socket.on('scan:new', (scan) => {
-      handleNewScan(scan).catch(console.warn);
-    });
-    socket.on('scanData', (scan) => {
-      handleNewScan(scan).catch(console.warn);
-    });
     socket.on('scan:saved', (scan = {}) => {
       state.lastRealtimeAt = Date.now();
       if (scan && (scan.partNumber || scan.part || scan.scanId || scan.uniqueScanId)) {
         handleNewScan(scan).catch(console.warn);
       }
-      queueRealtimeReportRefresh('scan saved');
+      markReportsStale('scan saved', { autoRefresh: false });
       // handleNewScan already inserts the committed scan into the visible list;
       // reloading full scan history after every save slows continuous scanning.
       if ($('#binTransfer')?.classList.contains('active')) {
@@ -13739,46 +13776,33 @@
     });
     socket.on('scan:deleted', () => {
       queueReconciliationRefresh('scan deleted');
-      queueDashboardRefresh(500);
       if ($('#scan')?.classList.contains('active')) queueScanRefresh(500);
       if ($('#binTransfer')?.classList.contains('active')) loadBinTransferParts(activeBinTransferForm()).catch(console.warn);
     });
     socket.on('scan:count:update', (payload = {}) => {
-      const stats = payload.stats || payload;
-      if (stats && dashboardStatsMatchesActiveAudit(stats)) {
-        updateDashboardCards(stats);
-      }
+      state.lastRealtimeAt = Date.now();
     });
     socket.on('dashboard:update', (payload = {}) => {
       state.lastRealtimeAt = Date.now();
-      queueRealtimeReportRefresh('dashboard update');
-      if (!dashboardPayloadMatchesActiveAudit(payload)) return;
-      if (selectedDashboardRange() !== 'audit') {
-        queueDashboardRefresh(350);
-      } else {
-        if (payload.stats && dashboardStatsMatchesActiveAudit(payload.stats)) updateDashboardCards(payload.stats);
-        if (Array.isArray(payload.recent)) renderScanStream(payload.recent, { skipActiveAuditFilter: true });
-      }
+      markReportsStale('dashboard update', { autoRefresh: false });
+      // Keep the displayed dashboard snapshot stable until the user refreshes it.
       updateScannerStatusBar({ at: new Date() });
     });
     socket.on('inventory:update', (payload = {}) => {
       state.lastRealtimeAt = Date.now();
-      queueRealtimeReportRefresh('inventory update');
-      if (!dashboardPayloadMatchesActiveAudit(payload)) return;
-      if (selectedDashboardRange() !== 'audit') {
-        queueDashboardRefresh(350);
-      } else {
-        if (payload.stats && dashboardStatsMatchesActiveAudit(payload.stats)) updateDashboardCards(payload.stats);
-        if (Array.isArray(payload.recent)) renderScanStream(payload.recent, { skipActiveAuditFilter: true });
-      }
+      markReportsStale('inventory update', { autoRefresh: false });
+      // Inventory events invalidate the server snapshot, but do not reload it.
     });
     socket.on('reports:update', () => {
       state.lastRealtimeAt = Date.now();
-      queueRealtimeReportRefresh('report broadcast');
+      markReportsStale('report broadcast', { autoRefresh: false });
     });
     socket.on('dealer-stock:update', (payload = {}) => {
       state.lastRealtimeAt = Date.now();
-      markReportsStale('dealer stock update');
+      markReportsStale('dealer stock update', { autoRefresh: false });
+      // The upload response already carries the bounded preview, and the
+      // submitting tab refreshes reconciliation exactly once after commit.
+      if (payload.reason === 'dealer-stock-uploaded') return;
       if (activeReconDealer() && (!payload.dealerCode || cleanDealerCode(payload.dealerCode) === activeReconDealer())) {
         loadDealerStockPreview().catch(() => undefined);
         queueReconciliationRefresh('dealer stock update');
@@ -13800,26 +13824,17 @@
     socket.on('mrp:updated', (scan = {}) => {
       state.lastRealtimeAt = Date.now();
       prependScanHistory(scan);
-      queueRealtimeReportRefresh('scan pricing update');
+      markReportsStale('scan pricing update', { autoRefresh: false });
     });
     socket.on('scanner:activity', (activity = {}) => {
       state.lastRealtimeAt = Date.now();
-      setStatusPill('topRealtimeStatus', 'Realtime: Active Scan', 'blue');
-      setDashboardKpiValue('dashRealtimeActivity', compactDateTime(activity.timestamp || new Date()), { time: true });
       queueDeviceRefresh();
     });
     socket.on('scanner:status', (device = {}) => {
       updateScannerStatusBar({ connectedDevices: state.activeDeviceCount, activeScannerCount: state.activeDeviceCount, lastActivityAt: device.lastActivity || device.lastSeen || new Date() });
     });
-    socket.on('scan:last10:update', (payload = []) => {
-      state.lastRealtimeAt = Date.now();
-      const scans = Array.isArray(payload) ? payload : (Array.isArray(payload.recent) ? payload.recent : []);
-      if (scans.length) renderScanStream(scans, { skipActiveAuditFilter: true });
-    });
     socket.on('stats:update', (payload = {}) => {
-      const stats = payload.stats || payload;
-      if (stats && dashboardStatsMatchesActiveAudit(stats)) updateDashboardCards(stats);
-      else queueDashboardRefresh(1200);
+      state.lastRealtimeAt = Date.now();
     });
     socket.on('devices:update', () => queueDeviceRefresh(1200));
     socket.on('device:connected', () => {
@@ -13865,6 +13880,10 @@
     });
     socket.on('syncData', (payload = {}) => {
       state.lastRealtimeAt = Date.now();
+      // The single-scan realtime event already updated the visible row. The
+      // scan acknowledgement is not a sync completion and must not trigger
+      // full sync status, device, and dashboard reloads for every barcode.
+      if (payload.source === 'sync-api') return;
       updateSyncBadges(payload || {});
       refreshAfterSync(payload || {}).catch(console.warn);
     });

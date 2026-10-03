@@ -441,9 +441,8 @@ router.get('/source-bins', auth.requireAuth, async (req, res) => {
     const dealerCode = upper(req.query.dealerCode);
     if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer required' });
     const { fromBins, toBins } = await dealerBins(dealerCode);
-    const bins = fromBins.length ? fromBins : toBins;
-    const message = fromBins.length ? '' : 'No scanned stock bins found. Showing Bin Master locations.';
-    return res.json({ success: true, bins, fromBins: bins, sourceBins: bins, source: fromBins.length ? 'current_stock' : 'bin_master_fallback', message });
+    const bins = compactBins([...toBins, ...fromBins]);
+    return res.json({ success: true, bins, fromBins: bins, sourceBins: bins, source: 'bin_master_and_current_stock' });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -551,10 +550,19 @@ router.post('/labels/preview', auth.requireAuth, async (req, res) => {
     if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer required' });
     if (!bins.length) return res.status(400).json({ success: false, message: 'Select at least one bin' });
     const settings = labelSettings(req.body);
-    const parts = await labelPartsForBins(dealerCode, bins, partNumbers, selectedItems);
-    if (!parts.length) return res.status(404).json({ success: false, message: 'No available parts found for selected bins' });
+    let groupedItems;
+    if (selectedItems.length || partNumbers.length) {
+      const parts = await labelPartsForBins(dealerCode, bins, partNumbers, selectedItems);
+      if (!parts.length) return res.status(404).json({ success: false, message: 'No available parts found for selected bins' });
+      groupedItems = groupedBinLabelItems(parts, settings);
+    } else {
+      const { fromBins, toBins } = await dealerBins(dealerCode);
+      const validBins = new Map(compactBins([...toBins, ...fromBins]).map((bin) => [upper(bin.binCode), bin.binCode]));
+      const selectedBins = Array.from(new Set(bins.map(upper))).map((bin) => validBins.get(bin)).filter(Boolean);
+      if (!selectedBins.length) return res.status(404).json({ success: false, message: 'No valid bins found for selected dealer' });
+      groupedItems = selectedBins.map((binNumber) => ({ dealerCode, binNumber, parts: [], partNumbers: [], binOnly: true }));
+    }
     const items = [];
-    const groupedItems = groupedBinLabelItems(parts, settings);
     for (const label of groupedItems) {
       const qrValue = label.qrValue || binLabelQrValue(label);
       const dataUrl = await QRCode.toDataURL(qrValue, { margin: 1, width: 360 });
@@ -578,9 +586,11 @@ router.post('/labels/log', auth.requireAuth, async (req, res) => {
     const printedBy = userName(req);
     const printedAt = new Date();
     const rows = items.flatMap((item) => {
-      const partNumbers = Array.isArray(item.partNumbers) && item.partNumbers.length
-        ? item.partNumbers
-        : (Array.isArray(item.parts) ? item.parts.map((part) => part.partNumber) : [item.partNumber]);
+      const partNumbers = item.binOnly || (Array.isArray(item.parts) && item.parts.length === 0 && !item.partNumber)
+        ? ['']
+        : (Array.isArray(item.partNumbers) && item.partNumbers.length
+          ? item.partNumbers
+          : (Array.isArray(item.parts) ? item.parts.map((part) => part.partNumber) : [item.partNumber]));
       return partNumbers.map((partNumber) => ({
         dealerCode,
         binNumber: upper(item.binNumber || item.bin),
@@ -594,7 +604,7 @@ router.post('/labels/log', auth.requireAuth, async (req, res) => {
         qrSizeMm: settings.qrSizeMm,
         printArea: settings.printArea
       }));
-    }).filter((row) => row.binNumber && row.partNumber);
+    }).filter((row) => row.binNumber);
     if (!rows.length) return res.status(400).json({ success: false, message: 'No valid labels to log' });
     await BinLabelPrintLog.insertMany(rows);
     return res.json({ success: true, loggedCount: rows.length, printedAt });

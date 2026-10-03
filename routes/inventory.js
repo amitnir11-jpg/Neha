@@ -273,6 +273,22 @@ async function refreshInventoryUpiState(scan = {}) {
   return recomputeUpiInventoryState(Inventory, scope);
 }
 
+function schedulePostSaveScanMaintenance(scan, req, { incrementalBinHistory = true } = {}) {
+  const response = req && req.res;
+  const run = () => setImmediate(() => {
+    Promise.all([
+      refreshInventoryUpiState(scan).catch((error) => {
+        console.warn('[SCAN] inventory state refresh failed', error.message);
+      }),
+      recordPartBinLocationFromScan(scan, incrementalBinHistory ? { incremental: true } : {}).catch((error) => {
+        console.warn('[SCAN] bin history update failed', error.message);
+      })
+    ]).catch(() => undefined);
+  });
+  if (response && !response.writableEnded) response.once('finish', run);
+  else run();
+}
+
 async function refreshInventoryUpiScopes(rows = []) {
   const scopes = new Map();
   rows.forEach((row) => {
@@ -2938,8 +2954,7 @@ async function saveScanRequest(req, res) {
           masterPrice,
           qty,
         });
-        await refreshInventoryUpiState(duplicate).catch(() => undefined);
-        await recordPartBinLocationFromScan(duplicate).catch(() => undefined);
+        schedulePostSaveScanMaintenance(duplicate, req, { incrementalBinHistory: false });
         emitScanUpdate(req, duplicate).catch((emitError) => console.warn('[MANUAL SCAN] duplicate replay realtime failed', emitError.message));
         return res.json({
           success: true,
@@ -3024,8 +3039,7 @@ async function saveScanRequest(req, res) {
     scanDebug('SAVED_VALID_SCAN', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode });
     scanDebug("Matched category:", scan.category || '');
     scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
-    await refreshInventoryUpiState(scan).catch(() => undefined);
-    await recordPartBinLocationFromScan(scan, { incremental: true }).catch(() => undefined);
+    schedulePostSaveScanMaintenance(scan, req);
     emitScanUpdate(req, scan).catch((error) => console.warn('[MANUAL SCAN] realtime refresh failed', error.message));
     res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
   } catch (error) {
@@ -3773,8 +3787,7 @@ async function saveScanRequest(req, res) {
     scanDebug('SAVED_VALID_SCAN', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode });
     scanDebug("Matched category:", scan.category || '');
     scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
-    await refreshInventoryUpiState(scan).catch(() => undefined);
-    await recordPartBinLocationFromScan(scan).catch(() => undefined);
+    schedulePostSaveScanMaintenance(scan, req, { incrementalBinHistory: false });
     emitScanUpdate(req, scan).catch((error) => console.warn('[MANUAL SCAN] realtime refresh failed', error.message));
     res.status(201).json({ success: true, scan, warnings, message: type === 'FITTED' ? 'Fitted part saved successfully' : 'Scan saved successfully' });
   } catch (error) {

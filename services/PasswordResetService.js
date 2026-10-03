@@ -68,12 +68,12 @@ function allowAttempt(req, identifier) {
   return true;
 }
 function transporter() {
-  // SMTP_* aliases support deployments that already have the same official Gmail
-  // account configured for report mail. Secrets remain environment-only.
-  const user = String(process.env.EMAIL_USER || process.env.SMTP_USER || '').trim();
-  const pass = String(process.env.EMAIL_APP_PASSWORD || process.env.SMTP_PASS || '').replace(/\s/g, '');
-  if (!user) throw new Error('EMAIL_USER (or SMTP_USER) is not configured');
-  if (!pass) throw new Error('EMAIL_APP_PASSWORD (or SMTP_PASS) is not configured');
+  // Accept the Railway GMAIL_* names as well as the documented EMAIL_* and
+  // legacy SMTP_* names. Secrets remain environment-only.
+  const user = String(process.env.EMAIL_USER || process.env.GMAIL_USER || process.env.SMTP_USER || '').trim();
+  const pass = String(process.env.EMAIL_APP_PASSWORD || process.env.GMAIL_PASS || process.env.SMTP_PASS || '').replace(/\s/g, '');
+  if (!user) throw new Error('EMAIL_USER (or GMAIL_USER / SMTP_USER) is not configured');
+  if (!pass) throw new Error('EMAIL_APP_PASSWORD (or GMAIL_PASS / SMTP_PASS) is not configured');
   if (user.toLowerCase() !== 'dakshinventory@gmail.com') throw new Error('Password reset sender must be dakshinventory@gmail.com');
   return { user, transport: nodemailer.createTransport({
     host: 'smtp.gmail.com', port: 465, secure: true, connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,

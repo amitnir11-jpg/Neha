@@ -194,6 +194,40 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _forgotPassword() async {
+    final identifierController = TextEditingController(text: _userController.text.trim());
+    final identifier = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Forgot password?'),
+        content: TextField(
+          controller: identifierController,
+          autofocus: true,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(labelText: 'User ID or registered email'),
+          onSubmitted: (value) => Navigator.of(dialogContext).pop(value.trim()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.of(dialogContext).pop(identifierController.text.trim()), child: const Text('Send link')),
+        ],
+      ),
+    );
+    identifierController.dispose();
+    if (!mounted || identifier == null || identifier.isEmpty) return;
+    setState(() { _busy = true; _message = ''; });
+    try {
+      await _settings.saveServerUrl(_serverController.text);
+      _serverController.text = await _settings.serverUrl;
+      final message = await ApiClient(_settings).requestPasswordReset(identifier);
+      if (mounted) setState(() => _message = message);
+    } catch (error) {
+      if (mounted) setState(() => _message = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -334,6 +368,13 @@ class _LoginScreenState extends State<LoginScreen> {
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.login),
                   label: const Text('Login and Start Scanning'),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _busy ? null : _forgotPassword,
+                    child: const Text('Forgot Password?'),
+                  ),
                 ),
                 if (_message.isNotEmpty) ...[
                   const SizedBox(height: 14),

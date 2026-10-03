@@ -132,7 +132,7 @@ const PORT = Number(process.env.PORT || process.env.APP_PORT || 3000);
 const HOST = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
 const RELEASE_BUILD = require('./utils/buildInfo').readBuildInfo();
 const APP_VERSION = RELEASE_BUILD.appVersion || RELEASE_BUILD.version;
-const WEB_SCANNER_BUILD = '20261002-mobile-camera-focus-v1';
+const WEB_SCANNER_BUILD = '20261003-scan-fast-save-v1';
 const MOBILE_APP_VERSION = 'Daksh Scan Lite v1.2.13';
 const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();
 const DEFAULT_ADMIN_PASSWORD = String(process.env.DEFAULT_ADMIN_PASSWORD || 'admin');
@@ -176,12 +176,6 @@ const MOBILE_DISCOVERY_PORT = Number(process.env.MOBILE_DISCOVERY_PORT || connec
 const MOBILE_DISCOVERY_REQUEST = 'DAKSH_DISCOVER_V1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const PROTECTED_BROWSER_PAGES = new Set([
-  '/dashboard',
-  '/dashboard/',
-  '/daksh.html',
-  '/report',
-  '/report/',
-  '/report.html',
   '/audit-dashboard',
   '/audit-dashboard/',
   '/audit-dashboard.html',

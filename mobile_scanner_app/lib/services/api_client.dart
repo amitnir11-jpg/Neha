@@ -263,6 +263,18 @@ class ApiClient {
     return UserSession.fromLogin(data);
   }
 
+  Future<String> requestPasswordReset(String identifier) async {
+    final data = await _request(
+      '/api/auth/forgot-password',
+      method: 'POST',
+      auth: false,
+      body: {'identifier': identifier.trim()},
+    );
+    return (data['message'] ??
+            'If the account exists and has a registered email address, a password reset link has been sent.')
+        .toString();
+  }
+
   Future<List<Dealer>> dealers() async {
     final data = await _request('/api/mobile/dealers');
     final rows = (data['dealers'] ?? data['data'] ?? []) as List<dynamic>;

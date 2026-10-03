@@ -343,7 +343,7 @@ function mergeRecord(target, item) {
   return target;
 }
 
-function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
+async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, onProgress = () => {}) {
   if (!rows.length) return { records: [], errorRows: [{ rowNumber: 0, message: 'File is empty' }], columns: [], duplicateRowsMerged: 0, skippedCount: 1 };
 
   const headerInfo = findHeaderRow(rows);
@@ -378,8 +378,16 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
   let duplicateRowsMerged = 0;
   let skippedCount = 0;
 
-  rows.slice(headerInfo.index + 1).forEach((values, offset) => {
-    if (!values || !values.some((value) => clean(value))) return;
+  const sourceRows = rows.slice(headerInfo.index + 1);
+  for (let offset = 0; offset < sourceRows.length; offset += 1) {
+    const values = sourceRows[offset];
+    if (!values || !values.some((value) => clean(value))) {
+      if ((offset + 1) % 1000 === 0) {
+        onProgress(offset + 1, sourceRows.length);
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      continue;
+    }
     const rowNumber = headerInfo.index + offset + 2;
     const item = {};
     Object.entries(columnsByKey).forEach(([key, indexes]) => {
@@ -401,7 +409,7 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
       if (errorRows.length < UPLOAD_ERROR_LIMIT) {
         errorRows.push({ rowNumber, partNumber: clean(item.partNumber), dealerCode: fileDealerCode || dealerCode, message: errors.join('; ') });
       }
-      return;
+      continue;
     }
 
     const sourceSignature = [
@@ -412,7 +420,7 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
     ].join('|');
     if (seenSourceRows.has(sourceSignature)) {
       duplicateRowsMerged += 1;
-      return;
+      continue;
     }
     seenSourceRows.add(sourceSignature);
 
@@ -466,7 +474,12 @@ function rowsToStockRecords(rows, selectedDealerCode, auditId, userName) {
     } else {
       byPart.set(partNumber, record);
     }
-  });
+    if ((offset + 1) % 1000 === 0) {
+      onProgress(offset + 1, sourceRows.length);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+  onProgress(sourceRows.length, sourceRows.length);
 
   return {
     records: Array.from(byPart.values()),
@@ -634,41 +647,23 @@ async function emitReconciliationChanged(req, reason, payload = {}) {
   io.emit('reports:update', { reason, ...payload, at: new Date() });
 }
 
-async function saveDealerStockRecords(records = []) {
-  const operations = [];
+async function saveDealerStockRecords(records = [], onProgress = () => {}) {
   const now = new Date();
-  records.forEach((record) => {
-    operations.push({
-      updateOne: {
-        filter: {
-          dealerCode: record.dealerCode,
-          auditId: record.auditId,
-          normalizedPartNumber: record.normalizedPartNumber
-        },
-        update: {
-          $set: {
-            ...record,
-            updatedAt: now
-          },
-          $setOnInsert: {
-            createdAt: now
-          }
-        },
-        upsert: true
-      }
-    });
-  });
-  let result = { upsertedCount: 0, modifiedCount: 0, matchedCount: 0 };
-  for (let index = 0; index < operations.length; index += 1000) {
-    const chunk = operations.slice(index, index + 1000);
-    const chunkResult = await DealerStock.bulkWrite(chunk, { ordered: false });
-    result = {
-      upsertedCount: Number(result.upsertedCount || 0) + Number(chunkResult.upsertedCount || 0),
-      modifiedCount: Number(result.modifiedCount || 0) + Number(chunkResult.modifiedCount || 0),
-      matchedCount: Number(result.matchedCount || 0) + Number(chunkResult.matchedCount || 0)
-    };
+  let insertedCount = 0;
+  let updatedCount = 0;
+  for (let index = 0; index < records.length; index += 1000) {
+    const chunk = records.slice(index, index + 1000).map((record) => ({
+      ...record,
+      updatedAt: now
+    }));
+    const result = await DealerStock.bulkUpsertBy(chunk,
+      ['dealerCode', 'auditId', 'normalizedPartNumber'],
+      { lockKey: `dealer-stock:${chunk[0].dealerCode}:${chunk[0].auditId}` });
+    insertedCount += Number(result.insertedCount || 0);
+    updatedCount += Number(result.updatedCount || 0);
+    onProgress(Math.min(index + chunk.length, records.length), records.length);
   }
-  return result;
+  return { upsertedCount: insertedCount, modifiedCount: updatedCount, matchedCount: updatedCount };
 }
 
 function scanMatch(scope, filters = {}) {
@@ -1606,14 +1601,32 @@ async function reportHandler(req, res) {
 }
 
 async function uploadDealerStockHandler(req, res) {
+  const perfStartedAt = performance.now();
+  const perf = {};
+  let perfMarkAt = perfStartedAt;
+  const markPerf = (stage) => {
+    const now = performance.now();
+    perf[stage] = Math.round(now - perfMarkAt);
+    perfMarkAt = now;
+  };
   try {
     if (!req.file) return res.status(400).json({ success: false, message: 'Upload DMS stock Excel/CSV file' });
     const scope = await resolveScope(req);
     if (!requireScope(scope, res)) return null;
     const uploadBatchId = randomUUID();
+    const progressId = clean(req.body && req.body.progressId);
+    const sendProgress = (stage, processed = 0, total = 0) => {
+      const io = req.io || req.app.get('io');
+      if (io && progressId) io.emit('dealer-stock:upload:progress', { progressId, stage, processed, total });
+    };
+    sendProgress('parsing');
     const userName = (req.user && (req.user.name || req.user.username || req.user.email)) || 'System';
     const rows = await readUploadedRows(req.file);
-    const parsed = rowsToStockRecords(rows, scope.dealerCode, scope.auditId, userName);
+    markPerf('fileParseMs');
+    const parsed = await rowsToStockRecords(rows, scope.dealerCode, scope.auditId, userName,
+      (processed, total) => sendProgress('validating', processed, total));
+    markPerf('validationAndMergeMs');
+    sendProgress('processing', 0, parsed.records.length);
     if (!parsed.records.length) {
       return res.status(400).json({
         success: false,
@@ -1633,17 +1646,31 @@ async function uploadDealerStockHandler(req, res) {
       auditId: scope.auditId,
       uploadBatchId
     }));
-    const writeResult = await saveDealerStockRecords(records);
+    const writeResult = await saveDealerStockRecords(records, (processed, total) => sendProgress('processing', processed, total));
+    markPerf('bulkSaveMs');
     const previewPrices = await getPricesFromPartMaster(records.map((record) => record.partNumber), scope.dealerCode);
     const pricedStock = pricedDealerStockRows(records, previewPrices);
     const preview = pricedStock.slice(0, 100);
     const summary = dealerStockSummaryFromPublicRows(pricedStock, records.length, preview.length);
+    markPerf('pricingAndSummaryMs');
     await emitReconciliationChanged(req, 'dealer-stock-uploaded', {
       dealerCode: scope.dealerCode,
       auditId: scope.auditId,
       uploadBatchId,
       savedCount: records.length
     });
+    sendProgress('complete', records.length, records.length);
+    if (process.env.PERFORMANCE_LOGS === 'true') {
+      console.info('[DEALER_STOCK_UPLOAD_PERF]', JSON.stringify({
+        totalMs: Math.round(performance.now() - perfStartedAt),
+        stagesMs: perf,
+        inputRows: rows.length,
+        acceptedRows: records.length,
+        skippedRows: parsed.skippedCount || 0,
+        batchSize: 1000,
+        batches: Math.ceil(records.length / 1000)
+      }));
+    }
     return res.json({
       success: true,
       dealerCode: scope.dealerCode,

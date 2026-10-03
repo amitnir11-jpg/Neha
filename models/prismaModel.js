@@ -1202,6 +1202,63 @@ function createModel(config) {
       return { insertedCount, modifiedCount, deletedCount, upsertedCount, matchedCount: modifiedCount };
     }
 
+    // Bulk upsert rows by an existing business key without the read/write
+    // transaction per row used by the compatibility bulkWrite implementation.
+    // Callers choose a small batch size so parameter counts stay bounded.
+    static async bulkUpsertBy(records = [], keyFields = [], options = {}) {
+      if (!inDatabaseTransaction()) {
+        return withDatabaseTransaction(() => this.bulkUpsertBy(records, keyFields, options), {
+          timeout: options.timeout || 60000
+        });
+      }
+      if (!records.length) return { insertedCount: 0, updatedCount: 0 };
+      const keys = keyFields.filter((field) => resolvedMirrorFields.includes(field));
+      if (!keys.length) throw new Error('Bulk upsert requires mirrored business key fields.');
+
+      if (options.lockKey) {
+        await getPrismaClient().$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${String(options.lockKey)}))`);
+      }
+
+      const tuples = records.map((record) => Prisma.sql`(${Prisma.join(keys.map((field) => String(record[field] ?? '')))})`);
+      const keyColumns = Prisma.join(keys.map((field) => Prisma.raw(quoteIdent(field))));
+      const existingRows = await getPrismaClient().$queryRaw(Prisma.sql`
+        SELECT id, data, "createdAt", "updatedAt"
+        FROM ${Prisma.raw(quoteIdent(tableName))}
+        WHERE (${keyColumns}) IN (${Prisma.join(tuples)})
+      `);
+      const keyOf = (record) => keys.map((field) => String(record[field] ?? '')).join('\u0000');
+      const existingByKey = new Map();
+      existingRows.forEach((row) => {
+        const data = isPlainObject(row.data) ? row.data : {};
+        const hydrated = { ...data, _id: row.id, id: row.id, createdAt: row.createdAt, updatedAt: row.updatedAt };
+        existingByKey.set(keyOf(hydrated), hydrated);
+      });
+
+      const preparedRows = [];
+      let insertedCount = 0;
+      for (const record of records) {
+        const existing = existingByKey.get(keyOf(record));
+        const id = existing ? String(existing._id) : randomUUID();
+        if (!existing) insertedCount += 1;
+        const prepared = await this.__prepare({ ...(existing || {}), ...record, id, _id: id }, { upsert: true });
+        preparedRows.push(buildRow({ ...prepared, id, _id: id }, id, resolvedMirrorFields, resolvedMirrorFieldTypes));
+      }
+
+      const columns = Object.keys(preparedRows[0]);
+      const values = preparedRows.map((row) => Prisma.sql`(${Prisma.join(columns.map((column) => (
+        column === 'data'
+          ? Prisma.sql`${JSON.stringify(row.data)}::jsonb`
+          : Prisma.sql`${row[column]}`
+      )))})`);
+      const updateColumns = columns.filter((column) => column !== 'id');
+      await getPrismaClient().$executeRaw(Prisma.sql`
+        INSERT INTO ${Prisma.raw(quoteIdent(tableName))} (${Prisma.join(columns.map((column) => Prisma.raw(quoteIdent(column))))})
+        VALUES ${Prisma.join(values)}
+        ON CONFLICT (id) DO UPDATE SET ${Prisma.join(updateColumns.map((column) => Prisma.sql`${Prisma.raw(quoteIdent(column))} = EXCLUDED.${Prisma.raw(quoteIdent(column))}`))}
+      `);
+      return { insertedCount, updatedCount: records.length - insertedCount };
+    }
+
     static aggregate(pipeline = []) {
       return new AggregateQuery(this, pipeline);
     }

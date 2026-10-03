@@ -453,6 +453,7 @@ model DealerStock {
   @@index([auditId])
   @@index([partNumber])
   @@index([normalizedPartNumber])
+  @@index([dealerCode, auditId, normalizedPartNumber], map: "dealer_stock_scope_part_idx")
   @@map("dealer_stock_master")
 }
 

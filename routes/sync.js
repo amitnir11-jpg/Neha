@@ -40,6 +40,60 @@ const {
 const { isDatabaseReady, withDatabaseTransaction } = require('../services/prisma');
 const { invalidateCache } = require('../utils/safeCache');
 const scanModification = require('../services/ScanModificationService');
+
+const pendingUpiStateRefreshes = new Map();
+let activeUpiStateRefreshes = 0;
+const MAX_PARALLEL_UPI_REFRESHES = 2;
+
+function scheduleUpiStateRefreshAfterResponse(scan, req) {
+  const upiCode = upiCodeValue(scan);
+  if (!upiCode) return;
+  const key = [upper(scan.dealerCode), clean(scan.auditId), upiCode].join('|');
+  const response = req && req.res;
+  const startQueued = () => {
+    for (const [pendingKey, entry] of pendingUpiStateRefreshes) {
+      if (activeUpiStateRefreshes >= MAX_PARALLEL_UPI_REFRESHES) break;
+      if (entry.running || !entry.dirty) continue;
+      entry.running = true;
+      activeUpiStateRefreshes += 1;
+      void (async () => {
+        try {
+          while (entry.dirty) {
+            entry.dirty = false;
+            const refreshStartedAt = performance.now();
+            await recomputeUpiInventoryState(Inventory, entry.scan);
+            if (process.env.SCAN_PERF_LOGS === 'true') {
+              console.info('[SCAN_PERF_BACKGROUND]', JSON.stringify({
+                stage: 'upiInventoryState',
+                durationMs: Math.round(performance.now() - refreshStartedAt)
+              }));
+            }
+          }
+        } catch (error) {
+          console.warn('[SCAN PERF] UPI inventory state refresh failed:', error.message);
+        } finally {
+          entry.running = false;
+          activeUpiStateRefreshes -= 1;
+          if (!entry.dirty) pendingUpiStateRefreshes.delete(pendingKey);
+          startQueued();
+        }
+      })();
+    }
+  };
+  const schedule = () => setImmediate(() => {
+    let entry = pendingUpiStateRefreshes.get(key);
+    if (!entry) {
+      entry = { scan, dirty: true, running: false };
+      pendingUpiStateRefreshes.set(key, entry);
+    } else {
+      entry.scan = scan;
+      entry.dirty = true;
+    }
+    startQueued();
+  });
+  if (response && !response.writableEnded) response.once('finish', schedule);
+  else schedule();
+}
 const {
   MISSING_PART_MASTER_PRICE_MESSAGE,
   getPriceFromPartMaster,
@@ -1479,70 +1533,18 @@ async function logDuplicateScan(scan = {}, existing = {}, reason = 'Duplicate sc
 async function emitEnterpriseRealtime(io, scans = []) {
   if (!io) return;
   const publicScans = scans.map((scan) => inventory.publicScan ? inventory.publicScan(scan) : scan);
-  publicScans.forEach((scan) => {
-    io.emit('scan:new', scan);
+  publicScans.slice(-20).forEach((scan) => {
     io.emit('scan:saved', scan);
-    io.emit('scanData', scan);
   });
-  const firstScan = publicScans[0] || {};
-  const dashboardFilter = {};
-  if (firstScan.dealerCode) dashboardFilter.dealerCode = upper(firstScan.dealerCode);
-  if (firstScan.auditId) dashboardFilter.auditId = clean(firstScan.auditId);
   const realtimePayload = {
     source: 'sync-api',
-    scans: publicScans,
     count: publicScans.length,
-    at: new Date(),
-    dealerCode: dashboardFilter.dealerCode || '',
-    auditId: dashboardFilter.auditId || ''
+    at: new Date()
   };
   io.emit('reports:update', realtimePayload);
   io.emit('warehouse:feed', realtimePayload);
   io.emit('syncData', realtimePayload);
-  // Hydrate dashboard aggregates after the scan response path has completed.
-  setImmediate(async () => {
-    const refreshStartedAt = performance.now();
-    try {
-    const recentFilter = { ...dashboardFilter };
-    if (inventory.nonVerificationScanClause) {
-      recentFilter.$and = (recentFilter.$and || []).concat([inventory.nonVerificationScanClause()]);
-    }
-    const [statsResult, recentRows] = await Promise.all([
-      dashboardFilter.dealerCode && inventory.dashboardStats ? inventory.dashboardStats(dashboardFilter) : null,
-      inventory.dashboardRecentRows ? inventory.dashboardRecentRows(recentFilter, 10) : Inventory.find(recentFilter).sort({ timestamp: -1, createdAt: -1 }).limit(10).lean()
-    ]);
-    const stats = statsResult ? {
-      ...statsResult,
-      dealerCode: dashboardFilter.dealerCode || statsResult.dealerCode || '',
-      auditId: dashboardFilter.auditId || statsResult.auditId || ''
-    } : null;
-    const recent = inventory.dashboardRecentRows ? recentRows : recentRows.map((scan) => inventory.publicScan ? inventory.publicScan(scan) : scan);
-    const updatePayload = {
-      ...realtimePayload,
-      stats,
-      recent,
-      totalScannedCount: stats ? stats.totalScanRecords : undefined
-    };
-    if (stats) {
-      io.emit('stats:update', updatePayload);
-      io.emit('scan:count:update', updatePayload);
-    }
-    io.emit('scan:last10:update', updatePayload);
-    io.emit('dashboard:update', updatePayload);
-    io.emit('inventory:update', updatePayload);
-    if (process.env.SCAN_PERF_LOGS === 'true') {
-      console.info('[SCAN_PERF_REALTIME]', JSON.stringify({
-        dashboardRefreshMs: Math.round(performance.now() - refreshStartedAt),
-        count: publicScans.length,
-        dealerCode: dashboardFilter.dealerCode || '',
-        auditId: dashboardFilter.auditId || ''
-      }));
-    }
-    } catch (error) {
-      logSync('realtime dashboard payload failed', { message: error.message });
-    }
-  });
-  logSync('socket broadcast success', { count: publicScans.length, events: ['scan:new', 'scan:saved', 'scanData', 'reports:update', 'syncData', 'dashboard:update'] });
+  logSync('socket broadcast success', { count: Math.min(publicScans.length, 20), events: ['scan:saved', 'reports:update', 'warehouse:feed', 'syncData'] });
 }
 
 async function findManualPartBinDuplicate(scan = {}) {
@@ -1653,7 +1655,6 @@ async function saveNormalizedScan(scan, req) {
   };
   logSync('server scan received', {
     deviceId: scan.deviceId,
-    rawScanReceived: scan.rawScanString,
     extractedPartNumber: scan.partNumber,
     partNumber: scan.partNumber,
     dealerCode: scan.dealerCode,
@@ -2108,8 +2109,8 @@ async function saveNormalizedScan(scan, req) {
 
   logSync('DB insert success', { id: doc._id, deviceId: doc.deviceId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, syncKey: doc.syncKey });
   logSync('saved valid scan', { id: doc._id, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'mobile' });
-  await recomputeUpiInventoryState(Inventory, doc).catch(() => undefined);
-  markPerf('inventoryState');
+  scheduleUpiStateRefreshAfterResponse(doc, req);
+  markPerf('inventoryStateQueued');
   await recordPartBinLocationFromScan(doc, { incremental: true }).catch(() => undefined);
   markPerf('binHistory');
   invalidateScanCaches(doc);
@@ -2618,7 +2619,6 @@ async function pushHandler(req, res) {
       const manualEntry = isManualEntry(scan);
       const masterPrice = master ? await getMasterPrice(scan.partNumber, scan.dealerCode, master, scan.auditId) : null;
       logSync('row normalized', {
-        rawScanReceived: scan.rawScanString || scan.partNumber || '',
         extractedPartNumber: scan.partNumber || '',
         masterMatch: Boolean(master)
       });
@@ -2675,7 +2675,6 @@ async function pushHandler(req, res) {
         ));
         logSync('row validation failed', {
           row: index + 1,
-          rawScanReceived: scan.rawScanString,
           extractedPartNumber: scan.partNumber,
           scanId: scan.uniqueScanId,
           partNumber: scan.partNumber,
@@ -2683,7 +2682,6 @@ async function pushHandler(req, res) {
           scanType: scan.scanType,
           masterMatch: Boolean(master),
           qty: scan.quantity,
-          rawScanString: scan.rawScanString,
           errors: rowErrors
         });
         continue;

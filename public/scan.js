@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20261002-mobile-camera-focus-v1';
+  const APP_VERSION = '20261003-scan-fast-save-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -2921,6 +2921,7 @@
   }
 
   async function saveRecordToServer(record = {}, options = {}) {
+    const requestStartedAt = performance.now();
     const response = await api('/api/scans/process', {
       method: 'POST',
       body: convertToSyncPayload(record),
@@ -2937,8 +2938,13 @@
     await removeStoredQueueRecord(record);
     applyRecordToUi(saved);
     void enrichStoredRecord(saved).catch(() => undefined);
-    if (options.refreshRecent !== false) {
-      await refreshLiveRecentScans({ force: true, reason: 'server-save' }).catch(() => undefined);
+    if (window.SCAN_PERF_LOGS === true) {
+      console.info('[SCAN_PERF_BROWSER]', JSON.stringify({
+        scanId: clean(record.scanId || record.uniqueScanId || ''),
+        requestMs: Math.round(performance.now() - requestStartedAt),
+        queueAgeMs: Math.max(0, Date.now() - new Date(record.timestamp || record.createdAt || Date.now()).getTime()),
+        status: 'synced'
+      }));
     }
     return { response, saved };
   }
@@ -3362,10 +3368,10 @@
       state.pendingSourcePart = '';
       renderBinPanel();
       byId('manualRawPreview').hidden = true;
-      cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
+      cameraState(navigator.onLine && state.session?.token ? 'Saving' : 'Network pending');
       beep('ok');
       vibrate(40);
-      if (navigator.onLine && state.session?.token) scheduleSync(120);
+      if (navigator.onLine && state.session?.token) scheduleSync(0);
     } catch (error) {
       if (authExpired(error)) {
         handleAuthExpired(error);
@@ -3387,7 +3393,6 @@
     if (!state.session?.token || !navigator.onLine) return;
     const rows = sessionRows().filter((row) => rowStatus(row) === 'pending');
     if (!rows.length) {
-      await refreshLiveRecentScans({ force: true, reason: 'sync-empty' }).catch(() => undefined);
       renderQueueBadgeCounts();
       renderHistoryRows();
       return;
@@ -3505,7 +3510,6 @@
       sendHeartbeat().catch(() => undefined);
     } finally {
       state.syncRunning = false;
-      await refreshLiveRecentScans({ force: true, reason: 'sync' }).catch(() => undefined);
       renderQueueBadgeCounts();
       renderHistoryRows();
       if (state.syncAgain && state.session?.token && navigator.onLine) {
@@ -3729,11 +3733,11 @@
       state.pendingSourcePart = '';
       renderBinPanel();
       closeManualDialog();
-      cameraState(navigator.onLine && state.session?.token ? 'Queued' : 'Network pending');
+      cameraState(navigator.onLine && state.session?.token ? 'Saving' : 'Network pending');
       toast(navigator.onLine ? 'Queued' : 'Network pending', navigator.onLine ? 'success' : 'warning');
       beep('ok');
       vibrate(40);
-      if (navigator.onLine && state.session?.token) scheduleSync(120);
+      if (navigator.onLine && state.session?.token) scheduleSync(0);
     } catch (error) {
       if (authExpired(error)) {
         handleAuthExpired(error);
