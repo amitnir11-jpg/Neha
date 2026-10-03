@@ -1,6 +1,6 @@
 {
   "product": "Daksh Inventory Solution",
-  "version": "2.0.42",
-  "build": 43,
-  "databaseSchema": 12
+  "version": "2.0.43",
+  "build": 44,
+  "databaseSchema": 13
 }

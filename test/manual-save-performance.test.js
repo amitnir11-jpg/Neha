@@ -62,7 +62,7 @@ test('authenticated manual saves do not query device identity', async () => {
     clean: value => String(value || '').trim(),
     applyUserContext: (target, user) => Object.assign(target, user),
     auth: { normalizeRole: value => value },
-    isManualEntry: scan => scan.source === 'manual',
+    normalizeSource: value => value,
     Device: { findOne: () => { deviceReads++; return { lean: async () => null }; } },
     userByContext: () => assert.fail('Authenticated identity must remain complete')
   });
@@ -70,6 +70,8 @@ test('authenticated manual saves do not query device identity', async () => {
   assert.equal(deviceReads, 0);
   assert.equal(result.userId, 'USER1');
   assert.equal(result.role, 'audit_user');
+  await context.resolveScanUserContext({ user: { id: 'USER1', name: 'Auditor', username: 'auditor', role: 'audit_user' } }, { source: 'barcode', deviceId: 'WEB1' });
+  assert.equal(deviceReads, 0, 'keyboard barcode scanners use the authenticated browser identity');
   await context.resolveScanUserContext({ user: { id: 'USER1', name: 'Auditor', username: 'auditor', role: 'audit_user' } }, { source: 'mobile', deviceId: 'PHONE1' });
   assert.equal(deviceReads, 1, 'mobile device enrichment must remain');
 });

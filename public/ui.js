@@ -4867,8 +4867,10 @@
   }
 
   function queueDeviceRefresh(delay = 2500) {
+    if (!isAdmin()) return;
     clearTimeout(state.deviceRefreshTimer);
     state.deviceRefreshTimer = setTimeout(() => {
+      if (!isAdmin() || document.hidden) return;
       loadDevices().catch((error) => console.warn('[DEVICES] queued refresh failed', error));
     }, delay);
   }
@@ -5177,9 +5179,7 @@
         state.barcodeLastAt = Date.now();
         resetBarcodeScanFields(form, normalized, options.expectedRaw);
         setLivePill('barcodeReadyStatus', data.duplicate ? 'Duplicate skipped' : 'Saved', true);
-        setTimeout(() => {
-          focusNextBarcodeField();
-        }, 900);
+        focusNextBarcodeField();
       } else {
         if (normalized.binLocation) storageSet(manualBinStorageKey(form), normalized.binLocation);
         resetManualScanFields(form);
@@ -5293,9 +5293,7 @@
           state.barcodeLastAt = Date.now();
           resetBarcodeScanFields(form, normalized, options.expectedRaw);
           setLivePill('barcodeReadyStatus', retryData.duplicate ? 'Duplicate skipped' : 'Saved', true);
-          setTimeout(() => {
-            focusNextBarcodeField();
-          }, 900);
+          focusNextBarcodeField();
         } else {
           resetManualScanFields(form);
         }
@@ -12081,7 +12079,7 @@
   function focusNextBarcodeField() {
     const form = $('#barcodeScanForm');
     const scanType = String(form?.elements.type.value || '').toUpperCase();
-    if (['OUTWARD', 'FITTED'].includes(scanType)) {
+    if (['OUTWARD', 'FITTED'].includes(scanType) && !String($('#barcodeRaw')?.value || '').trim()) {
       form.elements.part.value = '';
       form.elements.binLocation.value = '';
       localStorage.removeItem(BARCODE_LAST_BIN_KEY);
@@ -12115,10 +12113,8 @@
         setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
         playScanTone('duplicate');
       }
-      setTimeout(() => {
-        $('#barcodeRaw').value = '';
-        focusNextBarcodeField();
-      }, 850);
+      $('#barcodeRaw').value = '';
+      focusNextBarcodeField();
       return;
     }
     clearTimeout($('#barcodeRaw').autoSaveTimer);
@@ -12144,7 +12140,7 @@
       } finally {
         state.barcodeAutoSaving = false;
         const nextRaw = String($('#barcodeRaw')?.value || '').trim();
-        if (nextRaw && normalizePartText(nextRaw) !== normalizedRaw) scheduleBarcodeAutosave(20);
+        if (nextRaw && normalizePartText(nextRaw) !== normalizedRaw) scheduleBarcodeAutosave(200);
       }
     }, delay);
   }
@@ -12702,9 +12698,7 @@
     $('#localPartNextPage')?.addEventListener('click', () => loadLocalPartHistory({ page: Math.min(state.localPartTotalPages, state.localPartPage + 1) }).catch((error) => toast(error.message, 'error')));
     $('#barcodeScanForm').addEventListener('submit', (event) => {
       event.preventDefault();
-      const raw = String($('#barcodeRaw')?.value || '').trim();
-      fillBarcodePartFromRaw();
-      submitScan(event.currentTarget, { backgroundRefresh: true, expectedRaw: raw });
+      scheduleBarcodeAutosave(0);
     });
     $('#focusScanner').addEventListener('click', () => {
       const rawInput = $('#barcodeRaw');
@@ -12712,9 +12706,10 @@
     });
     $('#barcodeRaw').addEventListener('input', () => {
       fillBarcodePartFromRaw();
+      scheduleBarcodeAutosave(200);
     });
     $('#barcodeRaw').addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && !event.shiftKey) {
+      if (['Enter', 'Tab'].includes(event.key) && !event.shiftKey) {
         event.preventDefault();
         scheduleBarcodeAutosave(20);
       }

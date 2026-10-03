@@ -1104,10 +1104,10 @@ async function verifyApplicationSchema() {
     SELECT table_name
     FROM information_schema.tables
     WHERE table_schema = 'public'
-      AND table_name IN ('users', 'inventories', 'license_records')
+      AND table_name IN ('users', 'inventories', 'part_bin_locations', 'license_records')
   `;
   const names = new Set(rows.map((row) => row.table_name));
-  const required = ['users', 'inventories'];
+  const required = ['users', 'inventories', 'part_bin_locations'];
   if (licenseService.isRequired()) required.push('license_records');
   const missing = required.filter((name) => !names.has(name));
   if (missing.length) throw new Error(`Required PostgreSQL tables are missing: ${missing.join(', ')}.`);

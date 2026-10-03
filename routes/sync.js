@@ -263,9 +263,11 @@ async function resolveScanUserContext(req = {}, scan = {}) {
   }
 
   const deviceId = clean(scan.deviceId || body.deviceId);
-  // Manual browser saves use the authenticated identity, which is applied
-  // again before persistence. They do not need scanner-device enrichment.
-  if (deviceId && !(req.user && isManualEntry(scan))) {
+  // Browser saves already have a complete authenticated identity. Physical
+  // keyboard scanners use the barcode form and need no device enrichment.
+  const browserSource = normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, 'mobile');
+  const authenticatedBrowser = req.user && ['manual', 'barcode'].includes(browserSource);
+  if (deviceId && !authenticatedBrowser) {
     const device = await Device.findOne({ deviceId }).lean().catch(() => null);
     if (device) applyUserContext(context, device);
   }
