@@ -1593,6 +1593,7 @@
     }
     updateDashboardScopeSummary();
     syncLocalPartFormIdentity();
+    restoreManualScanBin();
     updateAuditPriceRefreshUi();
   }
 
@@ -4682,6 +4683,7 @@
     const partInput = $('.partSuggestInput', form);
     if (partInput) partInput.value = part.partNumber || part.partNo || '';
     ['partName', 'bin', 'mrp', 'dlc', 'category'].forEach((key) => {
+      if (form.id === 'manualScanForm' && key === 'bin') return;
       const node = `[data-fill="${key}"]`;
       const input = $(node, form) || $(`[name="${key}"]`, form);
       if (input) {
@@ -4863,11 +4865,30 @@
       .catch((error) => console.warn('[SCAN] refresh failed', error));
   }
 
-  function resetManualScanFields(form) {
+  function manualBinStorageKey(form) {
+    const dealerCode = cleanDealerCode($('[name="dealerCode"]', form)?.value || activeDealerId() || '');
+    const dealer = (state.dealers || []).find((item) => cleanDealerCode(item.dealerCode) === dealerCode);
+    const auditId = cleanDealerCode(state.activeAudit?.dealerCode) === dealerCode
+      ? state.activeAudit?.auditId : dealer?.currentAuditId;
+    return `dakshManualLastBin:${state.user?.id || state.user?.username || ''}:${dealerCode}:${auditId || 'active'}`;
+  }
+
+  function restoreManualScanBin(form = $('#manualScanForm')) {
+    if (!form) return;
+    const key = manualBinStorageKey(form);
+    if (form.dataset.binScope === key) return;
+    form.dataset.binScope = key;
+    const binInput = $('[name="bin"]', form);
+    if (binInput) binInput.value = storageGet(key) || '';
+    updateScanTypeFields(form);
+  }
+
+  function resetManualScanFields(form, options = {}) {
     if (!form) return;
     const dealerCode = $('[name="dealerCode"]', form)?.value || selectedScanDealerCode() || '';
     const staffName = $('[name="staffName"]', form)?.value || (state.user ? state.user.name || state.user.username || '' : '');
     const scanType = $('[name="type"]', form)?.value || 'INWARD';
+    const bin = options.keepBin === false ? '' : $('[name="bin"]', form)?.value || '';
     form.reset();
     if (dealerCode) setDealerSelectValue($('[name="dealerCode"]', form), dealerCode);
     const typeInput = $('[name="type"]', form);
@@ -4880,11 +4901,14 @@
       const input = $(`[name="${name}"]`, form);
       if (input) input.value = '';
     });
+    const binInput = $('[name="bin"]', form);
+    if (binInput) binInput.value = bin;
     $$('.suggest-menu', form).forEach((menu) => {
       menu.innerHTML = '';
       menu.style.display = 'none';
     });
     updateScanTypeFields(form);
+    (bin ? $('[name="part"]', form) : binInput)?.focus();
   }
 
   function updateScanTypeFields(form) {
@@ -4903,9 +4927,11 @@
     const binLabel = binInput?.closest('label');
     const needsSourceBinFirst = ['OUTWARD', 'FITTED'].includes(scanType);
     const upiFirstBarcode = form.id === 'barcodeScanForm' && needsSourceBinFirst;
+    const manualBinFirst = form.id === 'manualScanForm' && scanType !== 'VERIFICATION';
+    const manualBinMissing = manualBinFirst && !String(binInput?.value || '').trim();
     const showPartLookupBin = !upiFirstBarcode;
     if (binInput) {
-      binInput.required = (!upiFirstBarcode && needsSourceBinFirst) || (form.id === 'barcodeScanForm' && ['INWARD', 'DAMAGE'].includes(scanType));
+      binInput.required = manualBinFirst || (!upiFirstBarcode && needsSourceBinFirst) || (form.id === 'barcodeScanForm' && ['INWARD', 'DAMAGE'].includes(scanType));
       binInput.disabled = form.id === 'barcodeScanForm' && scanType === 'VERIFICATION';
     }
     if (binLabel && form.id === 'barcodeScanForm') {
@@ -4920,12 +4946,13 @@
     const partInput = $('[name="part"]', form);
     const rawInput = $('[name="rawScan"]', form);
     if (partInput) {
-      partInput.disabled = false;
+      partInput.disabled = manualBinMissing;
+      if (form.id === 'manualScanForm') partInput.placeholder = manualBinMissing ? 'Enter bin first' : 'Enter part number';
       partInput.required = !upiFirstBarcode;
       partInput.readOnly = upiFirstBarcode;
       partInput.closest('label')?.classList.toggle('hidden', upiFirstBarcode);
     }
-    if (rawInput) rawInput.disabled = false;
+    if (rawInput) rawInput.disabled = manualBinMissing;
     if (form.id === 'barcodeScanForm') {
       const ready = upiFirstBarcode || !needsSourceBinFirst || Boolean(String(binInput?.value || '').trim());
       setLivePill('barcodeReadyStatus', ready ? (upiFirstBarcode ? 'Ready for UPI / QR Scan' : 'Ready for Scan') : 'Enter Bin Location', ready);
@@ -4965,6 +4992,12 @@
   }
 
   async function submitScan(form, options = {}) {
+    if (form.id === 'manualScanForm' && $('[name="type"]', form)?.value !== 'VERIFICATION'
+      && !String($('[name="bin"]', form)?.value || '').trim()) {
+      toast('Enter Source Bin Location first.', 'error');
+      $('[name="bin"]', form)?.focus();
+      return;
+    }
     const payload = formObject(form);
     const isBarcodeForm = form.id === 'barcodeScanForm';
     payload.deviceId = payload.deviceId || ensureDeviceId();
@@ -5129,6 +5162,7 @@
           focusNextBarcodeField();
         }, 900);
       } else {
+        if (normalized.binLocation) storageSet(manualBinStorageKey(form), normalized.binLocation);
         resetManualScanFields(form);
       }
       markReportsStale(isBarcodeForm ? 'barcode scan' : 'manual scan', { autoRefresh: false });
@@ -12448,6 +12482,18 @@
       event.target.value = cleanDealerCode(event.target.value);
       updateScanTypeFields(event.target.closest('form'));
     });
+    $('#manualScanForm [name="bin"]')?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      const form = event.target.closest('form');
+      updateScanTypeFields(form);
+      if (event.target.value.trim()) $('[name="part"]', form)?.focus();
+    });
+    $('#clearManualScan')?.addEventListener('click', () => {
+      const form = $('#manualScanForm');
+      localStorage.removeItem(manualBinStorageKey(form));
+      resetManualScanFields(form, { keepBin: false });
+    });
     $('#clearBarcodeBin')?.addEventListener('click', () => {
       $('#barcodeBinLocation').value = '';
       localStorage.removeItem(BARCODE_LAST_BIN_KEY);
@@ -12775,6 +12821,7 @@
         if (select.closest('#scan')) {
           const dealerCode = cleanDealerCode(select.value || '');
           syncScanDealerScope(dealerCode, select);
+          restoreManualScanBin();
           // History filter selects have their own refresh listener below.
           if (!select.closest('#scanHistoryFilters')) {
             loadScanHistory().catch((error) => toast(error.message, 'error'));
