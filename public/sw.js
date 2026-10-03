@@ -68,10 +68,8 @@
     if (request.method !== 'GET') return;
 
     const url = new URL(request.url);
-    if (!isStaticAsset(request, url)) {
-      event.respondWith(fetch(request));
-      return;
-    }
+    // Leave API, navigation and cross-origin requests to the browser directly.
+    if (!isStaticAsset(request, url)) return;
 
     event.respondWith((async () => {
       const cache = await caches.open(CACHE_NAME);

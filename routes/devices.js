@@ -304,11 +304,11 @@ async function listDevices(req, res) {
   try {
     const manager = req.app.get('scannerManager');
     if (manager) {
-      const [listed, summary, activeAudit] = await Promise.all([
+      const [listed, activeAudit] = await Promise.all([
         manager.list(),
-        manager.summary(),
         getActiveAudit()
       ]);
+      const summary = await manager.summary(listed);
       return res.json({
         success: true,
         activeCount: summary.connectedDevices,

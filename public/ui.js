@@ -904,8 +904,24 @@
     return next;
   }
 
-  async function api(path, options = {}) {
-    const { timeoutMs = 0, ...fetchOptions } = options;
+  const pendingStatusRequests = new Map();
+
+  function api(path, options = {}) {
+    const statusRead = (options.method || 'GET').toUpperCase() === 'GET'
+      && /^\/api\/(?:health|devices|scans\/history|sync\/status)(?:\?|$)/.test(path);
+    // Include dealer scope and credentials; never share independently cancelled reads.
+    if (!statusRead || options.signal) return apiRequest(path, options);
+    const key = `${state.token || ''}:${apiUrl(withActiveDealerQuery(path))}`;
+    if (pendingStatusRequests.has(key)) return pendingStatusRequests.get(key);
+    const request = apiRequest(path, options).finally(() => pendingStatusRequests.delete(key));
+    pendingStatusRequests.set(key, request);
+    return request;
+  }
+
+  async function apiRequest(path, options = {}) {
+    const statusRead = (options.method || 'GET').toUpperCase() === 'GET'
+      && /^\/api\/(?:health|devices|scans\/history|sync\/status)(?:\?|$)/.test(path);
+    const { timeoutMs = statusRead ? 15000 : 0, ...fetchOptions } = options;
     const headers = fetchOptions.headers ? { ...fetchOptions.headers } : {};
     const requestPath = apiUrl(withActiveDealerQuery(path));
     const requestBody = fetchOptions.body ? withActiveDealerBody(fetchOptions.body) : fetchOptions.body;
@@ -939,36 +955,36 @@
         headers,
         body: isFormData ? requestBody : requestBody ? JSON.stringify(requestBody) : undefined
       });
+      const data = await parseApiResponse(response);
+      if (data && data.invalidJson) {
+        const error = new Error(data.message);
+        error.status = response.status;
+        error.data = data;
+        throw error;
+      }
+      if (!response.ok) {
+        if (response.status === 401) logout();
+        const error = new Error(apiErrorMessage(data, response.statusText));
+        error.status = response.status;
+        error.data = data;
+        throw error;
+      }
+      if (isMobileSyncRequest) {
+        if (data && data.success === false) {
+          const error = new Error(data.message || 'Mobile sync failed');
+          error.status = response.status;
+          error.data = data;
+          throw error;
+        }
+      }
+      return data;
     } catch (error) {
-      if (error && error.name === 'AbortError' && timeoutTriggered) throw new Error('Request timed out. Check network and retry.');
+      if (timeoutTriggered) throw new Error('Server response delayed — retry.');
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
       if (externalSignal && externalAbortHandler) externalSignal.removeEventListener('abort', externalAbortHandler);
     }
-    const data = await parseApiResponse(response);
-    if (data && data.invalidJson) {
-      const error = new Error(data.message);
-      error.status = response.status;
-      error.data = data;
-      throw error;
-    }
-    if (!response.ok) {
-      if (response.status === 401) logout();
-      const error = new Error(apiErrorMessage(data, response.statusText));
-      error.status = response.status;
-      error.data = data;
-      throw error;
-    }
-    if (isMobileSyncRequest) {
-      if (data && data.success === false) {
-        const error = new Error(data.message || 'Mobile sync failed');
-        error.status = response.status;
-        error.data = data;
-        throw error;
-      }
-    }
-    return data;
   }
 
   function sanitizeDownloadFileName(value, fallback = 'download.bin') {
@@ -4283,7 +4299,7 @@
     state.dashboardLoadPromise = (async () => {
       try {
         const query = dashboardQueryString({ forceRefresh: force });
-        const healthPromise = api('/api/health', { signal: controller.signal })
+        const healthPromise = loadHealth()
           .then((health) => {
             applyServerInfo(health);
             updateSyncBadges(health);

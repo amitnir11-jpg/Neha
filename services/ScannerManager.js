@@ -275,11 +275,11 @@ class ScannerManager {
     };
   }
 
-  async summary() {
-    await this.markExpiredOffline();
+  async summary(listed = null) {
+    if (!listed) await this.markExpiredOffline();
     const cutoff = new Date(Date.now() - LIVE_WINDOW_MS);
     const [onlineDevices, offlineDevices, lowBatteryDevices] = await Promise.all([
-      Device.find({ removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).lean(),
+      listed ? listed.online : Device.find({ removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).lean(),
       Device.countDocuments({ removedAt: null, $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }] }),
       Device.find({ removedAt: null, status: 'online', batteryPercent: { $lte: 15 } }).lean()
     ]);

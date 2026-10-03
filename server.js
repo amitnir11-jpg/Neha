@@ -606,28 +606,15 @@ app.get('/api/version', (req, res) => {
   });
 });
 
-app.get('/api/health', async (req, res) => {
+app.get('/api/health', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   const activePort = req.app.locals.activePort || PORT;
   const info = serverInfo(activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '');
-  const dbReady = isDatabaseReady();
   const ready = applicationReady();
   const dbStatus = currentDatabaseStatus();
   const databaseDetails = currentDatabasePayload();
-  const [connectedDevices, pending, failed, lastSyncDoc, lastSyncLog, lastSyncDevice] = await Promise.all([
-    dbReady ? Device.countDocuments({ status: 'online' }).catch(() => 0) : 0,
-    dbReady ? Inventory.countDocuments({ $or: [{ syncStatus: 'pending' }, { isSynced: false }] }).catch(() => 0) : 0,
-    dbReady ? Inventory.countDocuments({ syncStatus: 'failed' }).catch(() => 0) : 0,
-    dbReady ? Inventory.findOne({ $or: [{ syncStatus: 'synced' }, { isSynced: true }, { synced: true }] }).sort({ updatedAt: -1, timestamp: -1 }).select('updatedAt timestamp').lean().catch(() => null) : null,
-    dbReady ? SyncLog.findOne({ status: { $in: ['success', 'partial'] } }).sort({ updatedAt: -1, createdAt: -1 }).select('updatedAt createdAt').lean().catch(() => null) : null,
-    dbReady ? Device.findOne({ lastSyncTime: { $exists: true, $ne: null } }).sort({ lastSyncTime: -1 }).select('lastSyncTime').lean().catch(() => null) : null
-  ]);
-  const lastSyncTimes = [
-    lastSyncLog && (lastSyncLog.updatedAt || lastSyncLog.createdAt),
-    lastSyncDevice && lastSyncDevice.lastSyncTime,
-    lastSyncDoc && (lastSyncDoc.updatedAt || lastSyncDoc.timestamp)
-  ].map((value) => (value ? new Date(value) : null)).filter((date) => date && !Number.isNaN(date.getTime()));
-  const lastSyncAt = lastSyncTimes.sort((a, b) => b.getTime() - a.getTime())[0] || null;
-  const lastSync = lastSyncAt ? lastSyncAt.toISOString() : '';
+  // Liveness/readiness must not queue behind inventory queries. Operational
+  // counts and last-sync timestamps are provided by /api/sync/status.
   res.status(ready ? 200 : 503).json({
     databaseType: 'postgresql',
     buildInfo: RELEASE_BUILD,
@@ -645,14 +632,6 @@ app.get('/api/health', async (req, res) => {
     ...runtimePayload(activePort, info),
     ...databaseDetails,
     ...currentStoragePayload(),
-    connectedDevices,
-    mobileConnectedDevices: connectedDevices,
-    lastSync,
-    lastSyncTime: lastSync,
-    lastSuccessfulSyncAt: lastSync,
-    hasSyncData: Boolean(lastSync),
-    pending,
-    failed,
     db: dbStatus,
     ip: info.ip,
     lanIp: info.lanIp,
