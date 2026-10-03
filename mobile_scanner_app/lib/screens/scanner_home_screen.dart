@@ -247,11 +247,12 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       final auditId = activeAudit is Map
           ? (activeAudit['auditId'] ?? activeAudit['_id'] ?? '')
           : (data['auditId'] ?? '');
+      final refreshedAuditId = auditId.toString().trim();
       if (!mounted) return;
       setState(() {
-        _activeAuditId = auditId.toString().trim();
+        _activeAuditId = refreshedAuditId;
       });
-      await _settings.saveAuditContext(_dealerCode, _activeAuditId);
+      await _settings.saveAuditContext(_dealerCode, refreshedAuditId);
     } catch (_) {}
   }
 
@@ -599,6 +600,17 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     }
 
     try {
+      // The active audit can change while the app remains open. Refresh it
+      // before every online scan so the queued record captures the current
+      // dealer/audit context instead of a stale session from app launch.
+      if (_online) await _refreshAuditContext();
+      if (_online && _activeAuditId.isEmpty) {
+        _setStatus(
+            'No active audit context available. Refresh the server before scanning.',
+            Colors.red);
+        return;
+      }
+
       final duplicateRecord = await _database.latestMatchingScan(
         rawValue: draft.rawValue,
         scanType: _scanType,
@@ -616,9 +628,6 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         return;
       }
 
-      if (_online && _activeAuditId.isEmpty) {
-        await _refreshAuditContext();
-      }
       if (_activeAuditId.isEmpty) {
         _setStatus(
             'No audit context available. Connect to the server and refresh before scanning.',

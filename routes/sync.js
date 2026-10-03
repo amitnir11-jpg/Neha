@@ -2303,12 +2303,17 @@ async function pushHandler(req, res) {
     const activeAuditIdForSync = clean(activeAudit.auditId || activeAudit._id);
     const blockedContextRows = incomingRaw.flatMap((item, index) => {
       const itemDealer = upper(item.activeDealerId || item.dealerId || item.dealerCode || item.dealer || requestedDealerCode);
-      const itemAudit = clean(item.auditId || item.auditSessionId);
+      let itemAudit = clean(item.auditId || item.auditSessionId);
       if (itemDealer !== upper(activeAudit.dealerCode)) {
         return [{ row: index + 1, scanId: clean(item.scanId || item.uniqueScanId || item.localId), status: 'SYNC_BLOCKED_DEALER_MISMATCH', errorMessage: 'SYNC_BLOCKED_DEALER_MISMATCH', reason: 'Offline scan dealer does not match the authenticated dealer.' }];
       }
       if (!itemAudit) {
-        return [{ row: index + 1, scanId: clean(item.scanId || item.uniqueScanId || item.localId), status: 'SYNC_BLOCKED_MISSING_AUDIT_CONTEXT', errorMessage: 'SYNC_BLOCKED_MISSING_AUDIT_CONTEXT', reason: 'Offline scan has no audit session saved at scan time.' }];
+        // Older APK builds did not persist auditId on every offline row. The
+        // authenticated batch dealer scopes this recovery to its active audit;
+        // rows with an explicit, different audit below remain blocked.
+        itemAudit = activeAuditIdForSync;
+        item.auditId = itemAudit;
+        item.auditSessionId = itemAudit;
       }
       if (itemAudit !== activeAuditIdForSync) {
         return [{ row: index + 1, scanId: clean(item.scanId || item.uniqueScanId || item.localId), status: 'SYNC_BLOCKED_AUDIT_MISMATCH', errorMessage: 'SYNC_BLOCKED_AUDIT_MISMATCH', reason: 'Offline scan audit does not match the active audit.' }];
