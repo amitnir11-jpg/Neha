@@ -126,7 +126,9 @@ const CATEGORY_ALLOCATION_SCAN_SELECT = [
 ].join(' ');
 
 async function cachedReport(namespace, query, builder) {
-  const result = await getCachedReport(namespace, query, builder);
+  // Cache callbacks receive metadata as their second argument. Report builders
+  // use that argument for optional preloaded rows, so pass only the filters.
+  const result = await getCachedReport(namespace, query, (filters) => builder(filters));
   return result.data;
 }
 

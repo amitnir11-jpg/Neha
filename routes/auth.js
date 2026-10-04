@@ -8,6 +8,7 @@ const UserDealerMapping = require('../models/UserDealerMapping');
 const Audit = require('../models/Audit');
 const passwordReset = require('../services/PasswordResetService');
 const { getActiveAudit, publicAudit } = require('../utils/audit');
+const { isDatabaseConnectionError } = require('../utils/databaseErrors');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
@@ -661,7 +662,7 @@ function normalizePermissions(payload = {}) {
   return defaults;
 }
 
-router.post('/login', async (req, res) => {
+router.post('/login', async (req, res, next) => {
   try {
     const username = cleanUsername(req.body.username || req.body.userId || req.body.login || req.body.email);
     const password = String(req.body.password || req.body.passwordOrPin || '');
@@ -705,11 +706,12 @@ router.post('/login', async (req, res) => {
       activeDealerId: !isAdminRole(role) && assignedDealers.length === 1 ? assignedDealers[0].dealerCode : ''
     });
   } catch (error) {
+    if (isDatabaseConnectionError(error)) return next(error);
     return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
-async function mobileLoginHandler(req, res) {
+async function mobileLoginHandler(req, res, next) {
   try {
     debugMobileLogin('MOBILE_LOGIN_PAYLOAD', redactMobileLoginBody(req.body));
     const dealerCode = normalizeAccessCode(req.body.dealerCode || req.body.activeDealerId || req.body.dealer || req.body.selectedDealerCode);
@@ -774,13 +776,14 @@ async function mobileLoginHandler(req, res) {
       activeDealers: assignedDealers
     });
   } catch (error) {
+    if (isDatabaseConnectionError(error)) return next(error);
     return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 }
 
 router.post('/mobile-login', mobileLoginHandler);
 
-router.post('/pin-login', async (req, res) => {
+router.post('/pin-login', async (req, res, next) => {
   try {
     const pin = String(req.body.pin || '').trim();
     const dealerCode = normalizeAccessCode(req.body.dealerCode);
@@ -824,6 +827,7 @@ router.post('/pin-login', async (req, res) => {
 
     return res.status(401).json({ success: false, message: 'Invalid staff PIN' });
   } catch (error) {
+    if (isDatabaseConnectionError(error)) return next(error);
     return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });

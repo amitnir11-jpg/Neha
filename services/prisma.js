@@ -89,6 +89,11 @@ async function disconnectDatabase() {
   await prisma.$disconnect();
 }
 
+function markDatabaseUnavailable(error) {
+  ready = false;
+  lastError = error.message || String(error);
+}
+
 function isDatabaseReady() {
   return ready;
 }
@@ -113,6 +118,7 @@ module.exports = {
   withDatabaseTransaction,
   connectDatabase,
   disconnectDatabase,
+  markDatabaseUnavailable,
   isDatabaseReady,
   databaseHealthDetails,
   databaseUrlSource,

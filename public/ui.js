@@ -921,7 +921,9 @@
   async function apiRequest(path, options = {}) {
     const statusRead = (options.method || 'GET').toUpperCase() === 'GET'
       && /^\/api\/(?:health|devices|scans\/history|sync\/status)(?:\?|$)/.test(path);
-    const { timeoutMs = statusRead ? 15000 : 0, ...fetchOptions } = options;
+    const dashboardRead = (options.method || 'GET').toUpperCase() === 'GET'
+      && /^\/api\/scans\/(?:dashboard(?:\/product-group-summary(?:\/details)?)?|live|recent)(?:\?|$)/.test(path);
+    const { timeoutMs = dashboardRead ? 30000 : statusRead ? 15000 : 0, ...fetchOptions } = options;
     const headers = fetchOptions.headers ? { ...fetchOptions.headers } : {};
     const requestPath = apiUrl(withActiveDealerQuery(path));
     const requestBody = fetchOptions.body ? withActiveDealerBody(fetchOptions.body) : fetchOptions.body;
@@ -979,7 +981,9 @@
       }
       return data;
     } catch (error) {
-      if (timeoutTriggered) throw new Error('Server response delayed — retry.');
+      if (timeoutTriggered) throw new Error(dashboardRead
+        ? `Server response delayed — retry. (${path})`
+        : 'Server response delayed — retry.');
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -1063,23 +1067,45 @@
   }
 
   async function downloadPost(path, body, fileName, options = {}) {
-    const { headers: optionHeaders, ...fetchOptions } = options || {};
-    const response = await fetch(apiUrl(withActiveDealerQuery(path)), {
-      ...fetchOptions,
-      method: 'POST',
-      cache: fetchOptions.cache || 'no-store',
-      headers: {
-        ...(optionHeaders || {}),
-        'Content-Type': 'application/json',
-        ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
-      },
-      body: JSON.stringify(withActiveDealerBody(body))
-    });
-    if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
-    const blob = await response.blob();
-    const finalName = resolveDownloadFileName(response, path, fileName);
-    triggerDownload(blob, finalName);
-    return finalName;
+    const { headers: optionHeaders, timeoutMs = 0, ...fetchOptions } = options || {};
+    const externalSignal = fetchOptions.signal;
+    const controller = Number(timeoutMs) > 0 ? new AbortController() : null;
+    const abort = () => controller?.abort(externalSignal.reason);
+    let timedOut = false;
+    let timer = null;
+    if (controller) {
+      fetchOptions.signal = controller.signal;
+      if (externalSignal?.aborted) abort();
+      else externalSignal?.addEventListener('abort', abort, { once: true });
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+    }
+    try {
+      const response = await fetch(apiUrl(withActiveDealerQuery(path)), {
+        ...fetchOptions,
+        method: 'POST',
+        cache: fetchOptions.cache || 'no-store',
+        headers: {
+          ...(optionHeaders || {}),
+          'Content-Type': 'application/json',
+          ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
+        },
+        body: JSON.stringify(withActiveDealerBody(body))
+      });
+      if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
+      const blob = await response.blob();
+      const finalName = resolveDownloadFileName(response, path, fileName);
+      triggerDownload(blob, finalName);
+      return finalName;
+    } catch (error) {
+      if (timedOut) throw new Error('Report download timed out. Please retry.');
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (controller) externalSignal?.removeEventListener('abort', abort);
+    }
   }
 
   function triggerDownload(blob, fileName) {
@@ -4321,12 +4347,14 @@
         const query = dashboardQueryString({ forceRefresh: force });
         const healthPromise = loadHealth()
           .then((health) => {
+            if (state.dashboardLoadRequestId !== requestId) return null;
             applyServerInfo(health);
             updateSyncBadges(health);
             updateDashboardHealth(health);
             return health;
           })
           .catch((error) => {
+            if (state.dashboardLoadRequestId !== requestId) return null;
             if (error && error.name !== 'AbortError') {
               updateDashboardHealth({ server: 'offline', db: 'disconnected', storageStatus: 'unavailable' });
               console.warn('[DASHBOARD] health load failed', error.message);
@@ -4335,6 +4363,7 @@
           });
         const topBinsPromise = api(`/api/scans/live?limit=200${query ? `&${query}` : ''}`, { signal: controller.signal })
           .catch((error) => {
+            if (state.dashboardLoadRequestId !== requestId || controller.signal.aborted) return null;
             if (error && error.name !== 'AbortError') {
               console.warn('[DASHBOARD] top bins load failed', error.message);
             }
@@ -4342,6 +4371,9 @@
           });
         const data = await api(`/api/scans/dashboard${query ? `?${query}` : ''}`, { signal: controller.signal });
         if (state.dashboardLoadRequestId !== requestId) return null;
+        if (data.success === false || !data.stats || typeof data.stats !== 'object') {
+          throw new Error(data.message || 'Dashboard response is missing summary data.');
+        }
         if (data.activeAudit && data.activeAudit.dealerCode) {
           state.activeAudit = data.activeAudit;
           updateActiveAuditUi();
@@ -4355,9 +4387,11 @@
           if ((!Array.isArray(recent) || !recent.length) && Number(stats.totalScanRecords || stats.totalScannedQuantity || stats.totalScannedValue || 0) > 0) {
             try {
               const fallback = await api(`/api/scans/live?limit=12${query ? `&${query}` : ''}`, { signal: controller.signal });
+              if (state.dashboardLoadRequestId !== requestId) return null;
               recent = fallback.records || fallback.scans || recent;
               if (!Array.isArray(recent) || !recent.length) {
                 const secondFallback = await api(`/api/scans/recent?limit=12${query ? `&${query}` : ''}`, { signal: controller.signal });
+                if (state.dashboardLoadRequestId !== requestId) return null;
                 recent = secondFallback.records || secondFallback.scans || recent;
               }
             } catch (fallbackError) {
@@ -4366,8 +4400,10 @@
               }
             }
           }
+          if (state.dashboardLoadRequestId !== requestId) return null;
           const rows = renderScanStream(Array.isArray(recent) ? recent : [], { skipActiveAuditFilter: true });
           const liveData = await topBinsPromise;
+          if (state.dashboardLoadRequestId !== requestId) return null;
           const liveRows = liveData && (liveData.records || liveData.scans);
           renderDashboardTopBins(Array.isArray(liveRows) ? liveRows : rows);
           if (!rows.length && Array.isArray(recent) && recent.length) {
@@ -4378,16 +4414,19 @@
             });
           }
         } catch (error) {
+          if (state.dashboardLoadRequestId !== requestId) return null;
           if (error && error.name !== 'AbortError') {
             console.warn('[DASHBOARD] recent stream load failed', error.message);
             renderScanStream([]);
           }
         }
         await healthPromise;
+        if (state.dashboardLoadRequestId !== requestId) return null;
         state.dashboardLoaded = true;
         state.dashboardLastLoadedAt = Date.now();
         return data;
       } catch (error) {
+        if (controller.signal.aborted || state.dashboardLoadRequestId !== requestId) return null;
         if (error && error.name === 'AbortError') return null;
         throw error;
       }
@@ -4395,6 +4434,7 @@
     try {
       return await state.dashboardLoadPromise;
     } finally {
+      controller.abort();
       if (state.dashboardLoadRequestId === requestId) {
         state.dashboardLoadPromise = null;
         state.dashboardAbortController = null;
@@ -6956,7 +6996,10 @@
     }, 250);
 
     try {
-      const downloadOptions = state.auditPackAbortController ? { signal: state.auditPackAbortController.signal } : {};
+      const downloadOptions = {
+        timeoutMs: 120000,
+        ...(state.auditPackAbortController ? { signal: state.auditPackAbortController.signal } : {})
+      };
       const fileName = await downloadPost('/api/reports/download-complete-audit-pack', payload, undefined, downloadOptions);
       if (requestId !== state.auditPackRequestId) return;
       clearAuditPackTimers();
@@ -6995,14 +7038,15 @@
         }, 250);
         return;
       }
+      const message = error.message || 'Audit Pack generation failed. Please try again.';
       setAuditPackProgress({
         stage: 'error',
         percent: Math.max(0, Number(state.auditPackProgress.percent || 0)),
-        message: 'Audit Pack generation failed. Please try again.',
+        message,
         activeStep: Number(state.auditPackProgress.activeStep || 0),
         status: 'error'
       });
-      toast('Audit Pack generation failed. Please try again.', 'error');
+      toast(message, 'error');
     }
   }
 

@@ -98,12 +98,14 @@ const LoggerService = require('./services/LoggerService');
 const MdnsDiscoveryService = require('./services/MdnsDiscoveryService');
 const {
   connectDatabase,
+  markDatabaseUnavailable,
   isDatabaseReady,
   prisma,
   databaseHealthDetails,
   databaseUrlSource,
   acceptedDatabaseEnvVars
 } = require('./services/prisma');
+const { isDatabaseConnectionError, DATABASE_UNAVAILABLE_MESSAGE } = require('./utils/databaseErrors');
 const {
   applyResolvedDatabaseUrl,
   maskDatabaseUrl
@@ -234,19 +236,8 @@ app.use(cors({ origin: (origin, callback) => callback(null, corsOriginAllowed(or
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-function databaseEnvLocation() {
-  if (IS_RAILWAY) return 'Railway Variables';
-  if (IS_RENDER) return 'Render Environment Variables';
-  if (!IS_OFFLINE) return 'your hosting environment variables';
-  return 'your .env file or environment variables';
-}
-
 function databaseUnavailableMessage() {
-  if (connectionConfig.isLocal) return 'PostgreSQL is unavailable. Start the configured PostgreSQL Windows service and retry; Daksh will continue automatic readiness retries.';
-  if (databaseStartupState.lastError) {
-    return `PostgreSQL startup failed: ${databaseStartupState.lastError}. Check the Railway deployment logs for the database migration details.`;
-  }
-  return `PostgreSQL is unavailable. Set Railway PostgreSQL connection variables in ${databaseEnvLocation()} (${acceptedDatabaseEnvVars().join(', ')}) and redeploy.`;
+  return DATABASE_UNAVAILABLE_MESSAGE;
 }
 
 function currentDatabaseStatus() {
@@ -719,12 +710,12 @@ app.use('/api/license', licenseRoutes);
 app.use('/api/auth', licenseService.middleware());
 
 app.use('/api/auth', (req, res, next) => {
-  if (isDatabaseReady()) return next();
+  if (applicationReady()) return next();
+  res.setHeader('Retry-After', '15');
   return res.status(503).json({
     success: false,
     message: databaseUnavailableMessage(),
     serverStatus: 'online',
-    ...currentDatabasePayload(),
     deploymentTarget: DEPLOYMENT_NAME,
     render: IS_RENDER,
     railway: IS_RAILWAY
@@ -733,6 +724,17 @@ app.use('/api/auth', (req, res, next) => {
 
 app.use('/api/auth', authRoutes);
 
+app.use('/api/auth', (error, req, res, next) => {
+  if (!isDatabaseConnectionError(error)) return next(error);
+  markDatabaseUnavailable(error);
+  applicationInitializationState.status = 'failed';
+  databaseStartupState.status = 'retrying';
+  console.error('Authentication database connection failed:', error.message);
+  scheduleDatabaseInitialization(DATABASE_INIT_RETRY_MS);
+  res.setHeader('Retry-After', '15');
+  return res.status(503).json({ success: false, message: DATABASE_UNAVAILABLE_MESSAGE });
+});
+
 app.use('/api', (req, res, next) => {
   if (req.path === '/mobile/version') return next();
   return licenseService.middleware()(req, res, next);
@@ -740,7 +742,7 @@ app.use('/api', (req, res, next) => {
 
 app.use('/api', (req, res, next) => {
   if (req.path === '/mobile/version') return next();
-  if (isDatabaseReady()) return next();
+  if (applicationReady()) return next();
   return res.status(503).json({
     success: false,
     message: databaseUnavailableMessage(),
@@ -1192,7 +1194,7 @@ function setStaticAssetHeaders(res, filePath) {
 }
 
 function scheduleDatabaseInitialization(delayMs = 0) {
-  if (isDatabaseReady() || databaseStartupState.initializing) return;
+  if (applicationReady() || databaseStartupState.initializing) return;
   if (databaseInitTimer) clearTimeout(databaseInitTimer);
   const waitMs = Math.max(0, Number(delayMs) || 0);
   databaseInitTimer = setTimeout(() => {
@@ -1206,7 +1208,7 @@ function scheduleDatabaseInitialization(delayMs = 0) {
 }
 
 async function initializeDatabaseInBackground() {
-  if (isDatabaseReady()) return true;
+  if (applicationReady()) return true;
   if (databaseStartupPromise) return databaseStartupPromise;
 
   databaseStartupState.initializing = true;
@@ -1233,6 +1235,7 @@ async function initializeDatabaseInBackground() {
       applicationInitializationState.lastError = '';
       return true;
     } catch (error) {
+      markDatabaseUnavailable(error);
       databaseStartupState.status = 'retrying';
       databaseStartupState.lastError = error.message || String(error);
       applicationInitializationState.status = 'failed';
