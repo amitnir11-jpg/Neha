@@ -141,7 +141,7 @@ function requireDealerSelection(res) {
 }
 
 async function duplicateReportRows(query = {}) {
-  const rows = await DuplicateScanLog.find(duplicateReportFilter(query)).sort({ timestamp: -1, createdAt: -1 }).limit(5000).lean();
+  const rows = await DuplicateScanLog.find(duplicateReportFilter(query)).sort({ timestamp: -1, createdAt: -1 }).lean();
   const grouped = new Map();
   rows.forEach((row) => {
     const upiCode = clean(row.upiCode || row.upiNo || row.rawBarcode || row.rawQR || row.rawUpi || row.rawScan || row.rawScanString);
@@ -229,7 +229,7 @@ function rejectedReportFilter(query = {}) {
 }
 
 async function rejectedReportRows(query = {}) {
-  const rows = await VerificationLog.find(rejectedReportFilter(query)).sort({ time: -1, createdAt: -1 }).limit(5000).lean();
+  const rows = await VerificationLog.find(rejectedReportFilter(query)).sort({ time: -1, createdAt: -1 }).lean();
   return rows.map((row) => ({
     time: row.time || row.dateTime || row.createdAt,
     rawScanValue: row.rawScannedValue || row.rawScan || row.rawQR || row.rawUpi || '',
@@ -3394,8 +3394,8 @@ function highlightTotalDealerStockQty(sheet, columns, headerRowNumber = 3) {
 
 function sendPdf(res, title, rows, type, query = {}) {
   const doc = new jsPDF({ orientation: 'landscape' });
-  const columns = selectedColumns(columnsForReport(type, rows), query).slice(0, 12);
-  const bodyRows = (rows.length ? rows : [{ message: 'No data found' }]).slice(0, 200);
+  const columns = selectedColumns(columnsForReport(type, rows), query);
+  const bodyRows = rows.length ? rows : [{ message: 'No data found' }];
   doc.addImage(DAKSH_REPORT_LOGO_BUFFER, 'PNG', 14, 8, 72, 18);
   doc.setFontSize(14);
   doc.text(`DAKSH INVENTORY SYSTEM - ${title}`, 92, 16);
@@ -3406,6 +3406,7 @@ function sendPdf(res, title, rows, type, query = {}) {
       const formatted = formatDateLikeFields(row);
       return columns.length ? columns.map((column) => String(formatted[column.key] ?? '')) : ['No data found'];
     }),
+    horizontalPageBreak: true,
     styles: { fontSize: 7, cellPadding: 2 },
     headStyles: { fillColor: [21, 58, 91] }
   });
@@ -3417,8 +3418,8 @@ function sendPdf(res, title, rows, type, query = {}) {
 
 function buildPdfBuffer(title, rows, type, query = {}) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-  const columns = selectedColumns(columnsForReport(type, rows), query).slice(0, 12);
-  const bodyRows = (rows.length ? rows : [{ message: 'No data found' }]).slice(0, 500);
+  const columns = selectedColumns(columnsForReport(type, rows), query);
+  const bodyRows = rows.length ? rows : [{ message: 'No data found' }];
   doc.addImage(DAKSH_REPORT_LOGO_BUFFER, 'PNG', 24, 12, 104, 26);
   doc.setFontSize(14);
   doc.text(`DAKSH INVENTORY SYSTEM - ${title}`, 142, 28);
@@ -3429,6 +3430,7 @@ function buildPdfBuffer(title, rows, type, query = {}) {
       const formatted = formatDateLikeFields(row);
       return columns.length ? columns.map((column) => String(formatted[column.key] ?? '')) : ['No data found'];
     }),
+    horizontalPageBreak: true,
     styles: { fontSize: 7, cellPadding: 2 },
     headStyles: { fillColor: [21, 58, 91] }
   });

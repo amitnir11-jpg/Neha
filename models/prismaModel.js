@@ -1,5 +1,6 @@
 const { randomUUID } = require('crypto');
 const { Prisma, getPrismaClient, inDatabaseTransaction, withDatabaseTransaction } = require('../services/prisma');
+const comparisonCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 const MIRROR_FIELDS = [
   'dealerCode',
@@ -307,7 +308,7 @@ function compareValues(left, right) {
   const rightDate = asDate(right);
   if (leftDate && rightDate) return leftDate.getTime() - rightDate.getTime();
   if (typeof left === 'number' || typeof right === 'number') return Number(left || 0) - Number(right || 0);
-  return textValue(left).localeCompare(textValue(right), undefined, { numeric: true, sensitivity: 'base' });
+  return comparisonCollator.compare(textValue(left), textValue(right));
 }
 
 function regexMatches(value, regex) {
@@ -315,15 +316,28 @@ function regexMatches(value, regex) {
   return new RegExp(String(regex || ''), 'i').test(textValue(value));
 }
 
-function matchesOperator(actual, operators = {}) {
+function matchesMembership(actual, expected, membershipCache) {
+  const items = Array.isArray(expected) ? expected : [expected];
+  if (membershipCache && typeof actual === 'string') {
+    let exactStrings = membershipCache.get(items);
+    if (exactStrings === undefined) {
+      exactStrings = items.every(item => typeof item === 'string') ? new Set(items) : null;
+      membershipCache.set(items, exactStrings);
+    }
+    // Exact matches are already equal under the existing date/string comparator.
+    // Preserve collation and regex behavior for every non-exact or mixed lookup.
+    if (exactStrings && exactStrings.has(actual)) return true;
+  }
+  return items.some(item => item instanceof RegExp ? regexMatches(actual, item) : compareValues(actual, item) === 0);
+}
+
+function matchesOperator(actual, operators = {}, membershipCache) {
   for (const [operator, expected] of Object.entries(operators)) {
     if (operator === '$options') continue;
     if (operator === '$in') {
-      const items = Array.isArray(expected) ? expected : [expected];
-      if (!items.some((item) => item instanceof RegExp ? regexMatches(actual, item) : compareValues(actual, item) === 0)) return false;
+      if (!matchesMembership(actual, expected, membershipCache)) return false;
     } else if (operator === '$nin') {
-      const items = Array.isArray(expected) ? expected : [expected];
-      if (items.some((item) => item instanceof RegExp ? regexMatches(actual, item) : compareValues(actual, item) === 0)) return false;
+      if (matchesMembership(actual, expected, membershipCache)) return false;
     } else if (operator === '$ne') {
       if (compareValues(actual, expected) === 0) return false;
     } else if (operator === '$exists') {
@@ -343,7 +357,7 @@ function matchesOperator(actual, operators = {}) {
     } else if (operator === '$not') {
       if (expected instanceof RegExp) {
         if (regexMatches(actual, expected)) return false;
-      } else if (matchesOperator(actual, expected)) {
+      } else if (matchesOperator(actual, expected, membershipCache)) {
         return false;
       }
     } else if (operator === '$type') {
@@ -354,26 +368,26 @@ function matchesOperator(actual, operators = {}) {
   return true;
 }
 
-function matchesFilter(row = {}, filter = {}) {
+function matchesFilter(row = {}, filter = {}, membershipCache) {
   if (!filter || !Object.keys(filter).length) return true;
   for (const [key, expected] of Object.entries(filter)) {
     if (key === '$or') {
-      if (!Array.isArray(expected) || !expected.some((item) => matchesFilter(row, item))) return false;
+      if (!Array.isArray(expected) || !expected.some((item) => matchesFilter(row, item, membershipCache))) return false;
       continue;
     }
     if (key === '$and') {
-      if (!Array.isArray(expected) || !expected.every((item) => matchesFilter(row, item))) return false;
+      if (!Array.isArray(expected) || !expected.every((item) => matchesFilter(row, item, membershipCache))) return false;
       continue;
     }
     if (key === '$nor') {
-      if (Array.isArray(expected) && expected.some((item) => matchesFilter(row, item))) return false;
+      if (Array.isArray(expected) && expected.some((item) => matchesFilter(row, item, membershipCache))) return false;
       continue;
     }
     const actual = key === '_id' ? row._id : getPath(row, key);
     if (expected instanceof RegExp) {
       if (!regexMatches(actual, expected)) return false;
     } else if (isPlainObject(expected) && Object.keys(expected).some((item) => item.startsWith('$'))) {
-      if (!matchesOperator(actual, expected)) return false;
+      if (!matchesOperator(actual, expected, membershipCache)) return false;
     } else if (expected === null) {
       if (actual !== null && actual !== undefined) return false;
     } else if (compareValues(actual, expected) !== 0) {
@@ -1010,7 +1024,8 @@ function createModel(config) {
       const offsetSql = where.supported && skip ? Prisma.sql` OFFSET ${skip}` : Prisma.empty;
       const sql = Prisma.sql`SELECT * FROM ${Prisma.raw(quoteIdent(tableName))} WHERE ${where.sql}${order}${limitSql}${offsetSql}`;
       let records = await getPrismaClient().$queryRaw(sql);
-      let rows = records.map((record) => publicRow(record, resolvedMirrorFields)).filter((row) => matchesFilter(row, filter));
+      const membershipCache = new WeakMap();
+      let rows = records.map((record) => publicRow(record, resolvedMirrorFields)).filter((row) => matchesFilter(row, filter, membershipCache));
       if (!where.supported) {
         rows = sortRows(rows, options.sort || {});
         if (skip) rows = rows.slice(skip);

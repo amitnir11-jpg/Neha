@@ -128,7 +128,9 @@ const CATEGORY_ALLOCATION_SCAN_SELECT = [
 async function cachedReport(namespace, query, builder) {
   // Cache callbacks receive metadata as their second argument. Report builders
   // use that argument for optional preloaded rows, so pass only the filters.
-  const result = await getCachedReport(namespace, query, (filters) => builder(filters));
+  const result = await getCachedReport(namespace, query, (filters) => builder(filters), {
+    ignoreKeys: ['page', 'limit', 'format', 'columns', 'fields']
+  });
   return result.data;
 }
 
@@ -3020,7 +3022,7 @@ function buildPartwiseInventoryAuditPdfBuffer(data) {
   autoTable(doc, {
     startY: 58,
     head: [columns.map((column) => column.header)],
-    body: data.rows.slice(0, 1000).map((row) => columns.map((column) => {
+    body: data.rows.map((row) => columns.map((column) => {
       const value = row[column.key];
       return typeof value === 'number' ? value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(value ?? '');
     })),
@@ -4131,6 +4133,29 @@ async function sendMovementWiseStockAnalysisWorkbook(res, data = {}, query = {})
   });
 }
 
+function buildMovementWiseStockAnalysisPdfBuffer(data, query) {
+  const columns = selectedReportColumns(movementWiseStockAnalysisColumns(), query);
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a3' });
+  doc.setFontSize(14);
+  doc.text('MOVEMENT WISE STOCK ANALYSIS REPORT', 24, 28);
+  autoTable(doc, {
+    startY: 44,
+    head: [['Metric', 'Value']],
+    body: movementWiseStockAnalysisSummaryRows(data.summary || {}),
+    styles: { fontSize: 8 },
+    margin: { left: 12, right: 12 }
+  });
+  autoTable(doc, {
+    startY: doc.lastAutoTable.finalY + 12,
+    head: [columns.map(column => column.header)],
+    body: (data.rows || []).map(row => columns.map(column => String(row[column.key] ?? ''))),
+    styles: { fontSize: 5, cellPadding: 1.5, overflow: 'linebreak' },
+    headStyles: { fillColor: [21, 58, 91] },
+    margin: { left: 12, right: 12 }
+  });
+  return Buffer.from(doc.output('arraybuffer'));
+}
+
 router.get('/movement_wise_stock_analysis', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = await movementWiseStockAnalysisQuery(req.query);
@@ -4138,6 +4163,12 @@ router.get('/movement_wise_stock_analysis', auth.requireAuth, async (req, res) =
     const reconciliation = await validateValuationReports(reportQuery);
     const columns = movementWiseStockAnalysisColumns();
     if (req.query.format === 'excel') return sendMovementWiseStockAnalysisWorkbook(res, data, reportQuery);
+    if (req.query.format === 'pdf') return sendCachedDownload(res, 'report-download', {
+      ...reportQuery, reportType: 'movement_wise_stock_analysis', downloadType: 'pdf'
+    }, async () => buildMovementWiseStockAnalysisPdfBuffer(data, req.query), {
+      contentType: 'application/pdf',
+      contentDisposition: 'attachment; filename="Movement_Wise_Stock_Analysis_Report.pdf"'
+    });
     return res.json({
       success: true,
       type: 'movement_wise_stock_analysis',
@@ -4168,6 +4199,7 @@ router.get('/stock-summary', auth.requireAuth, async (req, res) => {
     });
     if (req.query.format === 'excel') {
       return sendCachedDownload(res, 'report-download', {
+        ...reportQuery,
         reportType: 'stock-summary',
         downloadType: 'excel'
       }, async () => {
@@ -4209,6 +4241,7 @@ router.get('/category-wise-variance-summary', auth.requireAuth, async (req, res)
         return sendSelectedColumnsWorkbook(res, 'Category_Wise_Variance_Summary.xlsx', 'Category Wise Variance Summary', categoryVarianceColumns(), exportRows, reportQuery);
       }
       return sendCachedDownload(res, 'report-download', {
+        ...reportQuery,
         reportType: 'category-wise-variance-summary',
         downloadType: 'excel'
       }, async () => {
@@ -4224,6 +4257,7 @@ router.get('/category-wise-variance-summary', auth.requireAuth, async (req, res)
     }
     if (req.query.format === 'pdf') {
       return sendCachedDownload(res, 'report-download', {
+        ...reportQuery,
         reportType: 'category-wise-variance-summary',
         downloadType: 'pdf'
       }, async () => buildCategoryWiseVariancePdfBuffer(data), {
@@ -4497,6 +4531,7 @@ router.get('/full', auth.requireAuth, async (req, res) => {
   try {
     const reportQuery = requireDealerForReport(req.query);
     return sendCachedDownload(res, 'report-download', {
+      ...reportQuery,
       reportType: 'full',
       downloadType: 'excel'
     }, async () => {
@@ -4516,6 +4551,7 @@ router.get('/full.csv', auth.requireAuth, async (req, res) => {
     const reportQuery = requireDealerForReport(req.query);
     const data = await cachedBuildReportData(reportQuery);
     return sendCachedDownload(res, 'report-download', {
+      ...reportQuery,
       reportType: 'full',
       downloadType: 'csv'
     }, async () => finalReportCsv(data.finalRows || []), {
@@ -4532,6 +4568,7 @@ router.get('/pdf', auth.requireAuth, async (req, res) => {
     const reportQuery = requireDealerForReport(req.query);
     const data = await cachedBuildReportData(reportQuery);
     return sendCachedDownload(res, 'report-download', {
+      ...reportQuery,
       reportType: 'full',
       downloadType: 'pdf'
     }, async () => {
@@ -4541,7 +4578,7 @@ router.get('/pdf', auth.requireAuth, async (req, res) => {
       doc.text('Daksh Inventory v2 - Inventory Audit Report', 92, 16);
       doc.setFontSize(9);
       doc.text(`Generated: ${formatIstDateTime(new Date())}`, 92, 23);
-      const body = data.finalRows.slice(0, 80).map((row) => [
+      const body = data.finalRows.map((row) => [
         row.partNumber || row.partNo,
         row.partDescription || row.partName,
         displayCategory(row.productCategory || ''),

@@ -47,3 +47,15 @@ No report formulas, selected-report behavior, stock movement rules, API payloads
 ## Remaining live work
 
 The user authorized publication with the existing validation gap disclosed. Verify backend initialization reaches ready after deployment, then use an authenticated session to check dealer 11688's actual current audit, report previews, individual downloads and the complete workbook. Inspect Railway logs and actual report responses if an error persists. No authenticated session or Railway management access was available during diagnosis.
+
+## Follow-up: report performance and export completeness (2.0.45)
+
+The screenshot shows a stalled Partwise preview and a delayed-response toast. A public health probe also exceeded 15 seconds, but no authenticated production trace was available to attribute that timeout conclusively.
+
+A reproduced adapter bottleneck rechecked every database row against the full part-number list, using a new locale comparison on every pair. Eight hundred parts took about 1.6 seconds for filtering alone. The adapter now reuses an Intl.Collator and a query-local exact-string membership set, retaining the original date, numeric, collation and regex comparisons for other cases. The regression fixture reduces membership-list rescans from 801 to one.
+
+Preview pagination, output format and selected columns no longer split the complete-data calculation cache. Dealer, audit and business filters remain part of the cache. Stock/category/full downloads also retain dealer/audit filters in their binary cache keys.
+
+Movement PDF now returns a real PDF. Partwise, generic and legacy full PDFs include every row; generic PDFs include all selected columns, with horizontal pagination for wide tables. Duplicate/rejected report builders no longer stop at 5,000 log records. The UI and valuation/movement formulas are unchanged.
+
+Validation: 59 report checks pass, including all 47 menu preview/download combinations, real Excel/PDF renderers, complete audit assembly, cache scope, membership compatibility and 1,201-row/15-column PDF completeness. Fifteen scanner/request tests pass (one database migration test skipped), and fifteen dashboard/authentication/recovery tests pass. Pricing, stock valuation, category alignment, movement, cache safety and mirror checks pass. The full npm test still stops on the previously recorded fitted quantity assertion at scripts/report-scan-quantity-check.js:48; this is not a newly introduced failure. Production dealer data and authenticated downloads require a session to verify after deployment.
