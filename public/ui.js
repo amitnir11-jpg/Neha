@@ -4757,18 +4757,22 @@
   function bindSuggestions() {
     $$('.partSuggestInput').forEach((input) => {
       let timer;
+      let requestSequence = 0;
       input.addEventListener('input', () => {
         clearTimeout(timer);
+        const sequence = ++requestSequence;
+        const q = input.value.trim();
+        const wrap = input.closest('.suggest-wrap');
+        const menu = $('.suggest-menu', wrap);
+        if (q.length < 3) {
+          menu.style.display = 'none';
+          menu.innerHTML = '';
+          return;
+        }
         timer = setTimeout(async () => {
-          const q = input.value.trim();
-          const wrap = input.closest('.suggest-wrap');
-          const menu = $('.suggest-menu', wrap);
-          if (!q) {
-            menu.style.display = 'none';
-            return;
-          }
           try {
-            const data = await api(`/api/master/parts/suggest?q=${encodeURIComponent(q)}`);
+            const data = await api(`/api/master/parts/suggest?q=${encodeURIComponent(q)}&limit=8`);
+            if (sequence !== requestSequence || input.value.trim() !== q) return;
             const parts = data.suggestions || data.parts || [];
             menu.innerHTML = parts.map((part) => `
               <div class="suggest-item" data-part="${escapeHtml(JSON.stringify(part))}">
@@ -4784,7 +4788,7 @@
               });
             });
           } catch (error) {
-            toast(error.message, 'error');
+            if (sequence === requestSequence) toast(error.message, 'error');
           }
         }, 180);
       });
@@ -9694,21 +9698,14 @@
       return;
     }
     setBinTransferLoading('Loading bin locations...');
-    const [sourceData, toData] = await Promise.all([
-      api(`/api/bin-transfer/source-bins?dealerCode=${encodeURIComponent(dealerCode)}`),
-      api(`/api/bin-transfer/destination-bins?dealerCode=${encodeURIComponent(dealerCode)}`)
-    ]);
-    const fromOptions = sourceBinOptionList(sourceData.bins || sourceData.fromBins || []);
+    const data = await api(`/api/bin-transfer/bins?dealerCode=${encodeURIComponent(dealerCode)}`);
+    const fromOptions = sourceBinOptionList(data.bins || data.sourceBins || []);
     $$('.bin-transfer-from').forEach((select) => {
       select.innerHTML = fromOptions;
       select.value = 'ALL';
     });
-    applyDestinationBinOptions(toData, '');
-    renderBinTransferParts([], sourceData.message || 'Source Bin All selected. Loading all available scanned parts...');
-    await loadBinTransferParts(activeBinTransferForm()).catch((error) => {
-      console.warn('BIN_TRANSFER_AUTO_LOAD_FAILED', error);
-      renderBinTransferParts([], 'Click Show Parts to load available scanned parts.');
-    });
+    applyDestinationBinOptions({ bins: data.destinationBins || [] }, '');
+    renderBinTransferParts([], 'Parts are not loaded automatically. Choose a specific source bin for a faster search, or click Show Parts to load all bins.');
   }
 
   function filterRenderedBinTransferParts() {
@@ -12278,8 +12275,7 @@
     }
     if (viewId === 'binTransfer') {
       const dealerCode = binTransferCriteria().dealerCode;
-      if (dealerCode) loadBinTransferBins(dealerCode).then(() => loadBinTransferHistory()).catch((error) => toast(error.message, 'error'));
-      else loadBinTransferHistory().catch((error) => toast(error.message, 'error'));
+      if (dealerCode) loadBinTransferBins(dealerCode).catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'scan') {
       const scanJobs = [loadScanHistory(), loadBarcodeBins(), loadPairingQr()];
@@ -12416,8 +12412,6 @@
         } else if (target === 'binTransferHistoryTab') {
           loadBinTransferHistory().catch((error) => toast(error.message, 'error'));
         } else {
-          const { dealerCode, fromBin, toBin } = binTransferCriteria(activeBinTransferForm());
-          loadBinTransferDestinationBins(dealerCode, fromBin, toBin).catch((error) => toast(error.message, 'error'));
           renderBinTransferParts(state.binTransferParts, state.binTransferParts.length ? '' : 'Click Show Parts to load available scanned parts.');
         }
       });
@@ -12872,7 +12866,9 @@
           });
           setBinTransferLoading(dealerCode ? 'Loading bin locations...' : 'Select Dealer Code');
           loadBinTransferBins(dealerCode)
-            .then(() => loadBinTransferHistory())
+            .then(() => {
+              if ($('#binTransferHistoryTab')?.classList.contains('active')) return loadBinTransferHistory();
+            })
             .catch((error) => toast(error.message, 'error'));
           return;
         }
@@ -12907,6 +12903,10 @@
           if (fromSelect !== select) fromSelect.value = select.value;
         });
         const { dealerCode, fromBin, toBin } = binTransferCriteria(activeBinTransferForm());
+        if (String(fromBin).toUpperCase() === 'ALL') {
+          loadBinTransferBins(dealerCode).catch((error) => toast(error.message, 'error'));
+          return;
+        }
         loadBinTransferDestinationBins(dealerCode, fromBin, toBin)
           .then(() => loadBinTransferParts(activeBinTransferForm()))
           .catch((error) => toast(error.message, 'error'));
@@ -12991,19 +12991,21 @@
       }
       const dealerCode = binTransferCriteria().dealerCode;
       loadBinTransferBins(dealerCode)
-        .then(() => loadBinTransferHistory())
         .then(() => toast('Bin Transfer refreshed'))
         .catch((error) => toast(error.message, 'error'));
     });
     $('#binTransferSubmitSelectedBtn')?.addEventListener('click', () => submitUnifiedBinTransfer().catch((error) => toast(error.message, 'error')));
-    $('#scanHistorySearchBtn').addEventListener('click', () => loadScanHistory().catch((error) => toast(error.message, 'error')));
     let scanHistoryFilterTimer = null;
+    $('#scanHistorySearchBtn').addEventListener('click', () => {
+      clearTimeout(scanHistoryFilterTimer);
+      loadScanHistory().catch((error) => toast(error.message, 'error'));
+    });
     $$('#scanHistoryFilters input, #scanHistoryFilters select').forEach((field) => {
       field.addEventListener(field.tagName === 'SELECT' ? 'change' : 'input', () => {
         clearTimeout(scanHistoryFilterTimer);
         scanHistoryFilterTimer = setTimeout(() => {
           loadScanHistory().catch((error) => toast(error.message, 'error'));
-        }, field.tagName === 'SELECT' ? 0 : 250);
+        }, field.tagName === 'SELECT' ? 0 : 400);
       });
     });
     $('#scanHistorySelectAll')?.addEventListener('change', (event) => {

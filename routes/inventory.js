@@ -2013,6 +2013,32 @@ function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function scanHistoryPartClause(value, { exactPart = true } = {}) {
+  const text = upper(value);
+  const normalizedPart = normalizePartNumber(text);
+  const partNumberLookup = /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(text) && normalizedPart.length >= 6;
+  if (partNumberLookup && exactPart) {
+    return {
+      $or: [
+        { normalizedPartNumber: normalizedPart },
+        { partNumber: normalizedPart },
+        { part: normalizedPart }
+      ]
+    };
+  }
+  const partRegex = { $regex: escapeRegex(text), $options: 'i' };
+  return {
+    $or: [
+      { part: partRegex },
+      { partNumber: partRegex },
+      { normalizedPartNumber: partRegex },
+      { rawScan: partRegex },
+      { rawScanString: partRegex },
+      { rawUpi: partRegex }
+    ]
+  };
+}
+
 function applyScanVisibility(req, filter = {}) {
   // Dealer authorization is enforced by requireAuth before this handler.
   // An Audit User may review the complete history for assigned dealers.
@@ -4590,18 +4616,17 @@ router.get('/history', auth.requireAuth, async (req, res) => {
     const page = Math.max(1, Number.parseInt(req.query.page || '1', 10) || 1);
     const limit = Math.min(500, Math.max(25, Number.parseInt(req.query.limit || '100', 10) || 100));
     const skip = (page - 1) * limit;
+    let partSearchValue = '';
+    let exactPartSearch = false;
+    let partSearchClauseIndex = -1;
     if (req.query.part || req.query.partNo || req.query.partNumber) {
-      const partRegex = { $regex: escapeRegex(upper(req.query.part || req.query.partNo || req.query.partNumber)), $options: 'i' };
-      filter.$and = (filter.$and || []).concat([{
-        $or: [
-          { part: partRegex },
-          { partNumber: partRegex },
-          { normalizedPartNumber: partRegex },
-          { rawScan: partRegex },
-          { rawScanString: partRegex },
-          { rawUpi: partRegex }
-        ]
-      }]);
+      partSearchValue = req.query.part || req.query.partNo || req.query.partNumber;
+      const partText = upper(partSearchValue);
+      exactPartSearch = /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(partText)
+        && normalizePartNumber(partText).length >= 6;
+      filter.$and = filter.$and || [];
+      partSearchClauseIndex = filter.$and.length;
+      filter.$and.push(scanHistoryPartClause(partSearchValue));
     }
     if (req.query.bin) {
       const binRegex = { $regex: escapeRegex(String(req.query.bin).trim()), $options: 'i' };
@@ -4621,7 +4646,7 @@ router.get('/history', auth.requireAuth, async (req, res) => {
     if (req.query.type) duplicateFilter.scanType = upper(req.query.type);
     if (req.query.part || req.query.partNo || req.query.partNumber) duplicateFilter.partNumber = { $regex: escapeRegex(upper(req.query.part || req.query.partNo || req.query.partNumber)), $options: 'i' };
     if (req.query.bin) duplicateFilter.$or = [{ binLocation: { $regex: escapeRegex(String(req.query.bin).trim()), $options: 'i' } }, { duplicateBin: { $regex: escapeRegex(String(req.query.bin).trim()), $options: 'i' } }];
-    const [records, totalRecords, duplicateCount, totals] = await Promise.all([
+    const loadHistoryResults = () => Promise.all([
       Inventory.find(filter).sort({ timestamp: -1, createdAt: -1 }).skip(skip).limit(limit).lean(),
       Inventory.countDocuments(filter),
       DuplicateScanLog.countDocuments(duplicateFilter),
@@ -4654,6 +4679,11 @@ router.get('/history', auth.requireAuth, async (req, res) => {
         }
       ])
     ]);
+    let [records, totalRecords, duplicateCount, totals] = await loadHistoryResults();
+    if (exactPartSearch && totalRecords === 0) {
+      filter.$and[partSearchClauseIndex] = scanHistoryPartClause(partSearchValue, { exactPart: false });
+      [records, totalRecords, duplicateCount, totals] = await loadHistoryResults();
+    }
     if (req.query.repair === '1' || req.query.repair === 'true') await repairParsedFields(records);
     const masterLookup = await masterLookupForScans(records);
     const publicRecords = records.map((record) => publicScanWithMaster(record, masterLookup));
