@@ -246,6 +246,9 @@
     plainBinSelectedBins: new Set(),
     binMasterRows: [],
     barcodeAutoSaving: false,
+    barcodeCaptureQueue: [],
+    barcodeLastCaptureKey: '',
+    scanHistoryPage: 1,
     barcodeLastRaw: '',
     barcodeLastAt: 0,
     barcodeScanLocks: new Map(),
@@ -493,6 +496,7 @@
   }
 
   function playScanTone(type = 'success') {
+    if ($('#scan')?.classList.contains('active') && $('#barcodeEntry')?.classList.contains('active') && $('#barcodeBeep')?.checked === false) return;
     if (type === 'warning') {
       playTone(620, 0.12);
       return;
@@ -2062,8 +2066,9 @@
   function extractUpiIdFromText(payload) {
     const raw = String(payload.rawScan || payload.rawScanString || payload.rawBarcode || payload.rawQR || payload.rawUpi || payload.scanText || '');
     if (raw) {
-      const slashParts = raw.split('/');
-      if (slashParts.length >= 6 && String(slashParts[1] || '').trim()) return String(slashParts[1]).trim().toUpperCase().split('::')[0];
+      const parser = window && window.DakshScanParser ? window.DakshScanParser : null;
+      const parsed = parser ? parser.parseScanValue(raw) : null;
+      if (parsed && parsed.type === 'UPI' && parsed.upiId) return normalizePartText(parsed.upiId).split('::')[0];
       const match = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
       if (match) return match[1].trim().toUpperCase().split('::')[0];
     }
@@ -2455,25 +2460,10 @@
     const parsed = parser ? parser.parseScanValue(raw) : null;
     if (parsed && parsed.type === 'UPI' && parsed.partNumber) {
       return {
-        upiId: normalizePartText(parsed.fields[1] || ''),
+        upiId: normalizePartText(parsed.upiId || ''),
         partNumber: normalizePartText(parsed.partNumber),
         qty: parsed.quantity || 1,
         qtyProvided: Boolean(parsed.rawQuantity),
-        mrp: undefined,
-        mrpProvided: false,
-        rawScan: raw
-      };
-    }
-    const parts = raw.split('/');
-    const partIndex = parts.findIndex((part) => part && !/^D$/i.test(part));
-    if (partIndex >= 0 && parts[partIndex + 1]) {
-      const slashQty = optionalScanNumber(parts[partIndex + 1]);
-      const candidatePart = parts[partIndex];
-      return {
-        upiId: normalizePartText(parts[1] || ''),
-        partNumber: normalizePartText(candidatePart),
-        qty: slashQty !== undefined ? slashQty : 1,
-        qtyProvided: slashQty !== undefined,
         mrp: undefined,
         mrpProvided: false,
         rawScan: raw
@@ -3283,7 +3273,7 @@
     enhanceDataTable($('#streamRows')?.closest('table'), 'daksh_table_realtime_stream');
     enhanceDataTable($('#productGroupSummaryRows')?.closest('table'), 'daksh_table_product_group_summary');
     const scanHistoryTable = $('#scanHistoryRows')?.closest('table');
-    enhanceDataTable(scanHistoryTable, 'daksh_table_scan_history');
+    if (!isBarcodeWorkspaceActive()) enhanceDataTable(scanHistoryTable, 'daksh_table_scan_history');
     initScanHistorySorting(scanHistoryTable);
     enhanceDataTable($('#dealerStockPreviewTable'), 'daksh_table_dealer_stock_preview');
     enhanceDataTable($('#localPartHistoryTable'), 'daksh_table_local_part_history');
@@ -3825,11 +3815,49 @@
     });
   }
 
+  function isBarcodeWorkspaceActive() {
+    return Boolean($('#barcodeEntry')?.classList.contains('active'));
+  }
+
+  function configureScanHistoryLayout() {
+    const table = $('#scanHistoryRows')?.closest('table');
+    if (!table?.tHead) return;
+    const compact = isBarcodeWorkspaceActive();
+    if (!state.scanHistoryFullHeader) state.scanHistoryFullHeader = table.tHead.innerHTML;
+    const mode = compact ? 'barcode' : 'full';
+    if (table.dataset.workspaceMode !== mode) {
+      table.dataset.workspaceMode = mode;
+      if (compact) {
+        table.querySelector('colgroup')?.remove();
+        const columns = [['select', ''], ['row', '#'], ['time', 'Date & Time'], ['type', 'Type'], ['partNumber', 'Part Number'], ['partDescription', 'Description'], ['bin', 'Bin'], ['qty', 'Qty'], ['mrp', 'MRP (₹)'], ['dlc', 'DLC (₹)'], ['regdNo', 'Regd No'], ['jobCardNo', 'Job Card No'], ['device', 'Device'], ['action', 'Action']];
+        table.tHead.innerHTML = `<tr>${columns.map(([key, title]) => `<th data-col-key="${key}"${['time', 'type', 'partNumber', 'partDescription', 'bin', 'qty', 'mrp', 'dlc', 'device'].includes(key) ? ` data-sort-key="${key}"` : ''}>${key === 'select' ? '<input id="scanHistorySelectAll" type="checkbox" aria-label="Select all visible scans">' : title}</th>`).join('')}</tr>`;
+      } else {
+        table.tHead.innerHTML = state.scanHistoryFullHeader;
+      }
+      table.tHead.querySelector('#scanHistorySelectAll')?.removeAttribute('data-workspace-bound');
+    }
+    setText('scanHistoryTitle', compact ? 'Recent Scan History' : 'Scan History');
+    const filters = $('#scanHistoryFilters');
+    const searching = Boolean(filters?.elements.part.value || filters?.elements.bin.value || filters?.elements.type.value);
+    setText('scanHistoryScopeBadge', searching || (state.scanHistoryPage || 1) > 1 ? 'Search Results' : 'Last 10 Scans');
+    bindScanHistorySelection();
+  }
+
+  function bindScanHistorySelection() {
+    const checkbox = $('#scanHistorySelectAll');
+    if (!checkbox || checkbox.dataset.workspaceBound === 'true') return;
+    checkbox.dataset.workspaceBound = 'true';
+    checkbox.addEventListener('change', (event) => {
+      $$('.scan-history-checkbox').forEach((box) => { box.checked = event.target.checked; });
+    });
+  }
+
   function renderScanHistoryRecords(records = state.scanHistoryRecords || [], summary = state.scanHistorySummary || {}) {
     const body = $('#scanHistoryRows');
     if (!body) return;
-    const rows = Array.isArray(records) ? records : [];
-    body.innerHTML = rows.length ? rows.map(scanHistoryRow).join('') : '<tr><td colspan="18" class="muted">No scan history found</td></tr>';
+    configureScanHistoryLayout();
+    const rows = (Array.isArray(records) ? records : []).slice(0, isBarcodeWorkspaceActive() ? 10 : 500);
+    body.innerHTML = rows.length ? rows.map((scan, index) => scanHistoryRow(scan, index)).join('') : `<tr><td colspan="${isBarcodeWorkspaceActive() ? 14 : 18}" class="muted">No scan history found</td></tr>`;
     updateScanHistorySummary(rows, summary);
     bindScanHistoryActions();
     renderScanHistorySortHeaders();
@@ -3921,15 +3949,17 @@
 
   function scanHistoryQueryParams() {
     const params = new URLSearchParams(queryFromForm($('#scanHistoryFilters')));
-    const dealerCode = cleanDealerCode(params.get('dealerCode') || selectedScanDealerCode());
+    const allDealers = isBarcodeWorkspaceActive() && isAdminUser() && $('#scanHistoryFilters')?.elements.dealerCode.value === '';
+    const dealerCode = allDealers ? 'ALL' : cleanDealerCode(params.get('dealerCode') || selectedScanDealerCode());
     if (dealerCode && dealerCode !== 'ALL') {
       params.set('dealerCode', dealerCode);
       params.delete('dealer');
     } else {
       params.delete('dealerCode');
     }
-    if (!params.has('page')) params.set('page', '1');
-    if (!params.has('limit')) params.set('limit', '100');
+    if (!params.has('page')) params.set('page', String(state.scanHistoryPage || 1));
+    if (!params.has('limit')) params.set('limit', isBarcodeWorkspaceActive() ? '10' : '100');
+    if (isBarcodeWorkspaceActive()) params.set('partMatch', 'partial');
     return params;
   }
 
@@ -4511,6 +4541,10 @@
     if (state.scanHistoryLoadRequestId !== requestId) return;
     const records = sortScanHistoryRecords(mergeScanHistoryRecords(data.records || []));
     state.scanHistoryRecords = records;
+    state.scanHistoryPagination = data.pagination || {};
+    setText('scanHistoryPageInfo', `Page ${state.scanHistoryPage || 1} of ${data.pagination?.totalPages || 1}`);
+    if ($('#scanHistoryPrev')) $('#scanHistoryPrev').disabled = (state.scanHistoryPage || 1) <= 1;
+    if ($('#scanHistoryNext')) $('#scanHistoryNext').disabled = (state.scanHistoryPage || 1) >= (data.pagination?.totalPages || 1);
     const summary = scanHistorySummary(records, {});
     state.scanHistorySummary = { ...(data.summary || {}), ...summary };
     renderScanHistoryRecords(records, state.scanHistorySummary);
@@ -4667,7 +4701,7 @@
       ? Math.max(0, Number(scan.remainingQty) || 0) : scanQuantity(scan, 0);
   }
 
-  function scanHistoryRow(scan = {}) {
+  function scanHistoryRow(scan = {}, index = 0) {
     const id = scanHistoryRecordId(scan);
     const partNumber = scan.partNumber || scan.part || scan.normalizedPartNumber || '';
     const partDescription = scan.partDescription || scan.partName || scan.description || partNumber || '-';
@@ -4696,6 +4730,20 @@
     const actionDropdown = editOption || fittedOptions || deleteOption
       ? `<select class="app-action-dropdown scan-row-action" data-id="${escapeHtml(id)}" data-details-edit="${canEditDetails ? 'true' : 'false'}" data-return-bin="${escapeHtml(scan.stockDeductedFromBin || scan.binLocation || scan.bin || '')}" aria-label="Scan row action"><option value="">Edit / Delete</option>${editOption}${fittedOptions}${deleteOption}</select>`
       : '<span class="muted">No action</span>';
+    if (isBarcodeWorkspaceActive()) {
+      return `<tr>
+        <td><input class="scan-history-checkbox" type="checkbox" value="${escapeHtml(id)}" aria-label="Select ${escapeHtml(partNumber)}"></td>
+        <td>${((state.scanHistoryPage || 1) - 1) * 10 + index + 1}</td>
+        <td>${escapeHtml(dateTime(scan.timestamp))}</td>
+        <td><span class="scan-type-badge ${escapeHtml(scanType.toLowerCase())}">${escapeHtml(scanType)}</span></td>
+        <td>${partLink(partNumber, 'table-link', { scanId: id, dealerCode: scan.dealerCode || '', auditId: scan.auditId || '', copyLabel: 'Part number' })}</td>
+        <td title="${escapeHtml(partDescription)}">${escapeHtml(partDescription)}</td>
+        <td>${escapeHtml(scan.binLocation || scan.bin || '')}</td><td>${escapeHtml(displayQty)}</td>
+        <td>${escapeHtml(money(rowMrp))}</td><td>${escapeHtml(money(rowDlc))}</td>
+        <td>${escapeHtml(scan.regdNo || '-')}</td><td>${escapeHtml(scan.jobCardNo || '-')}</td>
+        <td title="${escapeHtml(scan.deviceId || '')}">${escapeHtml(String(scan.deviceId || '').startsWith('WEB-') ? 'WEB' : scan.deviceName || scan.deviceId || '-')}</td>
+        <td>${actionDropdown}</td></tr>`;
+    }
     return `
       <tr>
         <td class="select-cell"><input class="scan-history-checkbox" type="checkbox" value="${escapeHtml(id)}"></td>
@@ -4816,10 +4864,11 @@
     if (!scanMatchesScanHistoryFilters(scan)) return;
     if (body.querySelector('.muted')) body.innerHTML = '';
     const recordKey = scanHistoryRecordKey(scan);
-    const nextRecords = recordKey
+    const alreadyVisible = recordKey && (state.scanHistoryRecords || []).some((item) => scanHistoryRecordKey(item) === recordKey);
+    const nextRecords = alreadyVisible
       ? (state.scanHistoryRecords || []).map((item) => scanHistoryRecordKey(item) === recordKey ? scan : item)
       : [scan].concat(state.scanHistoryRecords || []);
-    state.scanHistoryRecords = sortScanHistoryRecords(mergeScanHistoryRecords(nextRecords)).slice(0, 500);
+    state.scanHistoryRecords = sortScanHistoryRecords(mergeScanHistoryRecords(nextRecords)).slice(0, isBarcodeWorkspaceActive() ? 10 : 500);
     const summary = scanHistorySummary(state.scanHistoryRecords, {});
     state.scanHistorySummary = summary;
     renderScanHistoryRecords(state.scanHistoryRecords, state.scanHistorySummary);
@@ -5077,6 +5126,10 @@
 
   function updateScanTypeFields(form) {
     if (!form) return;
+    if (form.id === 'barcodeScanForm') {
+      updateBarcodeWorkspace(form);
+      return;
+    }
     const scanType = String($('[name="type"]', form)?.value || 'INWARD').trim().toUpperCase();
     const isFitted = scanType === 'FITTED';
     $$('.fitted-only', form).forEach((label) => {
@@ -5156,13 +5209,18 @@
   }
 
   async function submitScan(form, options = {}) {
+    if (form.id === 'barcodeScanForm' && !String((options.payload || formObject(form)).binLocation || '').trim()) {
+      toast('Please select or scan Source Bin Location first.', 'error');
+      $('#barcodeBinLocation')?.focus();
+      return;
+    }
     if (form.id === 'manualScanForm' && $('[name="type"]', form)?.value !== 'VERIFICATION'
       && !String($('[name="bin"]', form)?.value || '').trim()) {
       toast('Enter Source Bin Location first.', 'error');
       $('[name="bin"]', form)?.focus();
       return;
     }
-    const payload = formObject(form);
+    const payload = options.payload || formObject(form);
     const isBarcodeForm = form.id === 'barcodeScanForm';
     payload.deviceId = payload.deviceId || ensureDeviceId();
     if (!payload.staffName && state.user) payload.staffName = state.user.name || state.user.username;
@@ -5316,7 +5374,12 @@
       if (isBarcodeForm) removeQueuedBarcodeScan(normalized);
       playScanTone(data.duplicate ? 'duplicate' : 'success');
       if (isBarcodeForm) {
-        localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
+        if (data.scan && !String($('#barcodeRaw')?.value || '').trim() && !form.elements.part.value) fillPart(form, {
+          ...data.scan,
+          partName: data.scan.partName || data.scan.partDescription,
+          category: data.scan.category || data.scan.productCategory
+        });
+        localStorage.setItem(BARCODE_LAST_BIN_KEY, form.elements.binLocation.value);
         lockBarcodeScan(data.scan || normalized, 1800);
         state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
         state.barcodeLastAt = Date.now();
@@ -5328,6 +5391,7 @@
         resetManualScanFields(form);
       }
       markReportsStale(isBarcodeForm ? 'barcode scan' : 'manual scan', { autoRefresh: false });
+      return data;
     } catch (error) {
       if (error.status === 409 && error.data?.smartBinWarning) {
         // Handle the smart bin warning returned from the server
@@ -5430,7 +5494,7 @@
         if (isBarcodeForm) removeQueuedBarcodeScan(normalized);
         playScanTone(retryData.duplicate ? 'duplicate' : 'success');
         if (isBarcodeForm) {
-          localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
+          localStorage.setItem(BARCODE_LAST_BIN_KEY, form.elements.binLocation.value);
           lockBarcodeScan(retryData.scan || normalized, 1800);
           state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
           state.barcodeLastAt = Date.now();
@@ -5510,7 +5574,7 @@
       if (isRetryableTransportError(error)) {
         const queued = enqueueScan(normalized, error.message || 'Server unavailable; scan saved locally');
         if (isBarcodeForm) {
-          localStorage.setItem(BARCODE_LAST_BIN_KEY, normalized.binLocation);
+          localStorage.setItem(BARCODE_LAST_BIN_KEY, form.elements.binLocation.value);
           lockBarcodeScan(queued, 900);
           state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
           state.barcodeLastAt = Date.now();
@@ -12169,6 +12233,100 @@
     }
   }
 
+  function updateBarcodeWorkspace(form = $('#barcodeScanForm')) {
+    if (!form) return;
+    const bin = cleanDealerCode(form.elements.binLocation.value || '');
+    const fitted = form.elements.type.value === 'FITTED';
+    form.elements.binLocation.required = true;
+    form.elements.binLocation.disabled = false;
+    form.elements.part.disabled = !bin;
+    form.elements.part.readOnly = false;
+    form.elements.part.required = false;
+    form.elements.part.placeholder = bin ? 'Enter part number' : 'Select source bin first';
+    form.elements.regdNo.required = fitted;
+    form.elements.jobCardNo.required = fitted;
+    $('#barcodeBinLabel')?.classList.toggle('source-bin-missing', !bin);
+    $('#barcodeBinStep')?.classList.toggle('missing', !bin);
+    const status = $('#barcodeBinReady');
+    if (status) {
+      status.textContent = bin ? `Bin ${bin} selected. Ready to scan or enter part.` : 'Please select or scan Source Bin Location first.';
+      status.classList.toggle('ready', Boolean(bin));
+    }
+    setText('barcodeCurrentBin', bin || '—');
+  }
+
+  function acceptBarcodeBinQr(raw, target = $('#barcodeRaw')) {
+    if (!/^BIN\s*[:=]/i.test(String(raw || '').trim())) return false;
+    const parsed = parseRawScanText(raw);
+    const bin = cleanDealerCode(parsed.binLocation || '');
+    if (!bin) return false;
+    const form = $('#barcodeScanForm');
+    form.elements.binLocation.value = bin;
+    localStorage.setItem(BARCODE_LAST_BIN_KEY, bin);
+    if (target === $('#barcodeRaw')) target.value = '';
+    updateScanTypeFields(form);
+    playScanTone('success');
+    form.elements.rawScan.focus();
+    return true;
+  }
+
+  async function refreshBarcodePartDetails(partNumber = '') {
+    const form = $('#barcodeScanForm');
+    const part = normalizePartText(partNumber || form?.elements.part.value || '');
+    if (!form || !validPartText(part)) return;
+    const dealer = form.elements.dealerCode.value;
+    try {
+      const master = await validatePartAgainstMaster(part, dealer);
+      if (normalizePartText(form.elements.part.value) !== part || form.elements.dealerCode.value !== dealer) return;
+      if (master) fillPart(form, master);
+      else ['partName', 'category', 'mrp', 'dlc'].forEach((name) => { form.elements[name].value = ''; });
+    } catch (error) {
+      console.warn('[SCAN] Part details lookup failed', error.message);
+    }
+  }
+
+  async function saveBarcodeManualScan() {
+    const form = $('#barcodeScanForm');
+    if (!form || state.barcodeAutoSaving) return;
+    if (!form.elements.binLocation.value.trim()) {
+      toast('Please select or scan Source Bin Location first.', 'error');
+      form.elements.binLocation.focus();
+      return;
+    }
+    if (!form.elements.dealerCode.value || !form.elements.part.value.trim() || !(Number(form.elements.qty.value) > 0)) {
+      toast('Dealer, part number and a quantity greater than zero are required.', 'error');
+      return;
+    }
+    // Adapt the screen to the proven manual-save path, including its duplicate
+    // confirmation, master validation and permission checks. The clone is detached.
+    const manualForm = $('#manualScanForm').cloneNode(true);
+    ['dealerCode', 'type', 'part', 'qty', 'regdNo', 'jobCardNo', 'partName', 'category', 'mrp', 'dlc'].forEach((name) => {
+      manualForm.elements[name].value = form.elements[name].value;
+    });
+    manualForm.elements.bin.value = form.elements.binLocation.value;
+    manualForm.elements.rawScan.value = '';
+    manualForm.elements.part.disabled = false;
+    manualForm.elements.regdNo.disabled = false;
+    manualForm.elements.jobCardNo.disabled = false;
+    clearTimeout(form.elements.rawScan.autoSaveTimer);
+    state.barcodeAutoSaving = true;
+    $('#saveBarcodeManualScan').disabled = true;
+    try {
+      const result = await submitScan(manualForm, { confirmBeforeSave: false });
+      if (result?.scan) fillPart(form, {
+        ...result.scan,
+        partName: result.scan.partName || result.scan.partDescription,
+        category: result.scan.category || result.scan.productCategory
+      });
+      if (!manualForm.elements.part.value) resetBarcodeScanFields(form);
+    } finally {
+      state.barcodeAutoSaving = false;
+      $('#saveBarcodeManualScan').disabled = false;
+      focusNextBarcodeField();
+      drainBarcodeCaptures();
+    }
+  }
+
   function restoreBarcodeScanDefaults() {
     const form = $('#barcodeScanForm');
     if (!form) return;
@@ -12191,26 +12349,23 @@
 
   function resetBarcodeScanFields(form, normalized = {}, expectedRaw = '') {
     const rawInput = $('textarea[name="rawScan"]', form);
-    const rawStillCurrent = !expectedRaw || normalizePartText(rawInput?.value || '') === normalizePartText(expectedRaw);
+    const rawStillCurrent = !expectedRaw || !normalizePartText(rawInput?.value || '') || normalizePartText(rawInput?.value || '') === normalizePartText(expectedRaw);
     if (rawStillCurrent) {
       if (rawInput) rawInput.value = '';
       $('[name="part"]', form).value = '';
       $('[name="qty"]', form).value = 1;
+      $$('.suggest-menu', form).forEach((menu) => { menu.innerHTML = ''; menu.style.display = 'none'; });
     } else {
       fillBarcodePartFromRaw();
     }
     const scanType = String($('[name="type"]', form)?.value || normalized.scanType || normalized.type || '').toUpperCase();
     if (['OUTWARD', 'FITTED'].includes(scanType)) {
-      $('[name="binLocation"]', form).value = '';
-      localStorage.removeItem(BARCODE_LAST_BIN_KEY);
       const status = $('#barcodePartLocationStatus');
       if (status) {
         status.dataset.lookupDone = 'false';
         status.dataset.lookupPart = '';
         status.textContent = '';
       }
-    } else if (['INWARD', 'DAMAGE'].includes(scanType)) {
-      $('[name="binLocation"]', form).value = normalized.binLocation || $('[name="binLocation"]', form).value || '';
     }
     $('#barcodeDeviceId').value = ensureDeviceId();
     updateScanTypeFields(form);
@@ -12218,72 +12373,65 @@
   }
 
   function focusNextBarcodeField() {
-    const form = $('#barcodeScanForm');
-    const scanType = String(form?.elements.type.value || '').toUpperCase();
-    if (['OUTWARD', 'FITTED'].includes(scanType) && !String($('#barcodeRaw')?.value || '').trim()) {
-      form.elements.part.value = '';
-      form.elements.binLocation.value = '';
-      localStorage.removeItem(BARCODE_LAST_BIN_KEY);
-      const status = $('#barcodePartLocationStatus');
-      if (status) {
-        status.dataset.lookupDone = 'false';
-        status.dataset.lookupPart = '';
-        status.textContent = '';
-      }
-      updateScanTypeFields(form);
-      setLivePill('barcodeReadyStatus', 'Ready for UPI / QR Scan', true);
-      $('#barcodeRaw')?.focus();
-      return;
-    }
     $('#barcodeRaw')?.focus();
   }
 
   function scheduleBarcodeAutosave(delay = 35) {
     const form = $('#barcodeScanForm');
-    const raw = String($('#barcodeRaw')?.value || '').trim();
-    if (!form || !raw || state.barcodeAutoSaving) return;
-    const normalizedRaw = normalizePartText(raw);
-    const now = Date.now();
-    if (state.barcodeLastRaw === normalizedRaw && now - state.barcodeLastAt < 3000) {
-      if (!lockBarcodeDuplicateNotice({
-        rawScan: raw,
-        rawScanString: raw,
-        dealerCode: currentDealerCode(),
-        auditId: activeAuditIdForScope()
-      }, 3000)) {
-        setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
-        playScanTone('duplicate');
-      }
-      $('#barcodeRaw').value = '';
-      focusNextBarcodeField();
-      return;
-    }
-    clearTimeout($('#barcodeRaw').autoSaveTimer);
-    $('#barcodeRaw').autoSaveTimer = setTimeout(async () => {
-      if (state.barcodeAutoSaving) return;
-      const scanType = String($('[name="type"]', form)?.value || 'INWARD').toUpperCase();
-      const bin = normalizePartText($('[name="binLocation"]', form)?.value || '');
-      const upiFirstBarcode = ['OUTWARD', 'FITTED'].includes(scanType);
-      if (['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType) && !bin && !upiFirstBarcode) {
+    const input = $('#barcodeRaw');
+    const raw = String(input?.value || '').trim();
+    if (!form || !raw) return;
+    clearTimeout(input.autoSaveTimer);
+    input.autoSaveTimer = setTimeout(() => {
+      const capturedRaw = String(input.value || '').trim();
+      if (!capturedRaw || acceptBarcodeBinQr(capturedRaw)) return;
+      const bin = normalizePartText(form.elements.binLocation.value || '');
+      if (!bin) {
         playScanTone('error');
-        toast('Please enter/select bin location before scanning.', 'error');
+        toast('Please select or scan Source Bin Location first.', 'error');
         setLivePill('barcodeReadyStatus', 'Enter Bin Location', false);
-        $('#barcodeBinLocation')?.focus();
+        form.elements.binLocation.focus();
         return;
       }
-      state.barcodeAutoSaving = true;
+      fillBarcodePartFromRaw();
+      const payload = formObject(form);
+      const normalizedRaw = normalizePartText(capturedRaw);
+      const key = [payload.dealerCode, bin, payload.type, normalizedRaw].join('|');
+      if (state.barcodeLastCaptureKey === key && Date.now() - state.barcodeLastAt < 3000) {
+        setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
+        playScanTone('duplicate');
+        resetBarcodeScanFields(form);
+        return;
+      }
+      state.barcodeLastCaptureKey = key;
       state.barcodeLastRaw = normalizedRaw;
       state.barcodeLastAt = Date.now();
-      setStatusPill('barcodeReadyStatus', 'Saving...', 'yellow');
-      fillBarcodePartFromRaw();
-      try {
-        await submitScan(form, { backgroundRefresh: true, expectedRaw: raw });
-      } finally {
-        state.barcodeAutoSaving = false;
-        const nextRaw = String($('#barcodeRaw')?.value || '').trim();
-        if (nextRaw && normalizePartText(nextRaw) !== normalizedRaw) scheduleBarcodeAutosave(200);
-      }
+      state.barcodeCaptureQueue.push({ payload, raw: capturedRaw });
+      // Free the physical input immediately, so the next USB capture cannot be
+      // appended to an in-flight scan. Each snapshot still uses submitScan.
+      input.value = '';
+      form.elements.part.value = '';
+      form.elements.qty.value = 1;
+      drainBarcodeCaptures();
     }, delay);
+  }
+
+  async function drainBarcodeCaptures() {
+    if (state.barcodeAutoSaving) return;
+    const form = $('#barcodeScanForm');
+    state.barcodeAutoSaving = true;
+    try {
+      while (state.barcodeCaptureQueue.length) {
+        const capture = state.barcodeCaptureQueue.shift();
+        setStatusPill('barcodeReadyStatus', 'Saving...', 'yellow');
+        await submitScan(form, { backgroundRefresh: true, expectedRaw: capture.raw, payload: capture.payload });
+      }
+    } catch (error) {
+      playScanTone('error');
+      toast(error.message || 'Scan could not be saved', 'error');
+    } finally {
+      state.barcodeAutoSaving = false;
+    }
   }
 
   function labelEndpoint() {
@@ -12465,6 +12613,14 @@
         $$('.subview').forEach((view) => view.classList.remove('active'));
         const target = $(`#${button.dataset.subview}`);
         target.classList.add('active');
+        state.scanHistoryPage = 1;
+        renderScanHistoryRecords();
+        loadScanHistory().catch((error) => toast(error.message, 'error'));
+        if (button.dataset.subview === 'barcodeEntry') {
+          restoreBarcodeScanDefaults();
+          loadBarcodeBins().catch((error) => toast(error.message, 'error'));
+          focusNextBarcodeField();
+        }
         if (button.dataset.subview === 'localPartEntry') {
           syncLocalPartFormIdentity();
           if (!state.localPartHistoryLoaded) loadLocalPartHistory({ page: 1 }).catch((error) => toast(error.message, 'error'));
@@ -12616,28 +12772,32 @@
       updateScanTypeFields(event.target.closest('form'));
     });
     $('#barcodePartNumber')?.addEventListener('input', (event) => {
-      const form = event.target.closest('form');
-      const status = $('#barcodePartLocationStatus');
-      const scanType = String(form?.elements.type.value || '').toUpperCase();
-      if (!['OUTWARD', 'FITTED'].includes(scanType)) return;
       clearTimeout(event.target.lookupTimer);
-      const partNumber = normalizePartText(event.target.value);
-      if (status) {
-        status.dataset.lookupDone = 'false';
-        status.dataset.lookupPart = '';
-        status.textContent = '';
-      }
-      $('#barcodeBinLocation').value = '';
-      $('#barcodeBinOptions').innerHTML = '';
-      localStorage.removeItem(BARCODE_LAST_BIN_KEY);
-      updateScanTypeFields(form);
-      if (partNumber) event.target.lookupTimer = setTimeout(() => lookupBarcodePartLocation(), 250);
+      event.target.lookupTimer = setTimeout(() => refreshBarcodePartDetails(), 400);
     });
     $('#barcodePartNumber')?.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;
       event.preventDefault();
-      clearTimeout(event.target.lookupTimer);
-      lookupBarcodePartLocation();
+      saveBarcodeManualScan().catch((error) => toast(error.message, 'error'));
+    });
+    $('#barcodeBinLocation')?.addEventListener('keydown', (event) => {
+      if (!['Enter', 'Tab'].includes(event.key)) return;
+      event.preventDefault();
+      acceptBarcodeBinQr(event.target.value, event.target);
+      updateScanTypeFields(event.target.closest('form'));
+      if (event.target.value.trim()) focusNextBarcodeField();
+    });
+    $('#barcodeBinLocation')?.addEventListener('change', (event) => {
+      acceptBarcodeBinQr(event.target.value, event.target);
+      updateScanTypeFields(event.target.closest('form'));
+    });
+    $('#barcodeBeep')?.addEventListener('change', (event) => setText('barcodeBeepLabel', event.target.checked ? 'Beep: ON' : 'Beep: OFF'));
+    $('#saveBarcodeManualScan')?.addEventListener('click', () => saveBarcodeManualScan().catch((error) => toast(error.message, 'error')));
+    $('#clearBarcodeScan')?.addEventListener('click', () => {
+      clearTimeout($('#barcodeRaw').autoSaveTimer);
+      resetBarcodeScanFields($('#barcodeScanForm'));
+      setLivePill('barcodeReadyStatus', $('#barcodeBinLocation').value ? 'Ready for Scan' : 'Enter Bin Location', Boolean($('#barcodeBinLocation').value));
+      focusNextBarcodeField();
     });
     $('#manualScanForm [name="bin"]')?.addEventListener('input', (event) => {
       event.target.value = cleanDealerCode(event.target.value);
@@ -12836,9 +12996,10 @@
     $('#localPartNextPage')?.addEventListener('click', () => loadLocalPartHistory({ page: Math.min(state.localPartTotalPages, state.localPartPage + 1) }).catch((error) => toast(error.message, 'error')));
     $('#barcodeScanForm').addEventListener('submit', (event) => {
       event.preventDefault();
-      scheduleBarcodeAutosave(0);
+      if (String($('#barcodeRaw').value || '').trim()) scheduleBarcodeAutosave(0);
+      else saveBarcodeManualScan().catch((error) => toast(error.message, 'error'));
     });
-    $('#focusScanner').addEventListener('click', () => {
+    $('#focusScanner')?.addEventListener('click', () => {
       const rawInput = $('#barcodeRaw');
       (rawInput?.disabled ? $('#barcodeBinLocation') : rawInput)?.focus();
     });
@@ -12856,17 +13017,6 @@
     $$('#manualScanForm [name="type"], #barcodeScanForm [name="type"]').forEach((select) => {
       updateScanTypeFields(select.closest('form'));
       select.addEventListener('change', () => {
-        if (select.closest('#barcodeScanForm') && ['OUTWARD', 'FITTED'].includes(String(select.value || '').toUpperCase())) {
-          $('#barcodeBinLocation').value = '';
-          $('#barcodeBinOptions').innerHTML = '';
-          localStorage.removeItem(BARCODE_LAST_BIN_KEY);
-          const status = $('#barcodePartLocationStatus');
-          if (status) {
-            status.dataset.lookupDone = 'false';
-            status.dataset.lookupPart = '';
-            status.textContent = '';
-          }
-        }
         updateScanTypeFields(select.closest('form'));
         if (['OUTWARD', 'FITTED'].includes(String(select.value || '').toUpperCase())) {
           const form = select.closest('form');
@@ -12928,6 +13078,7 @@
     $$('.dealerSelect').forEach((select) => {
       select.addEventListener('change', () => {
         syncDealerSelectDisplay(select);
+        if (select.closest('#scanHistoryFilters')) return;
         if (select.id === 'activeDealerSwitch') {
           switchActiveDealer(select.value).catch((error) => toast(error.message, 'error'));
           return;
@@ -12990,6 +13141,9 @@
           }
         }
         if (select.closest('#barcodeScanForm')) {
+          $('#barcodeBinLocation').value = '';
+          localStorage.removeItem(BARCODE_LAST_BIN_KEY);
+          state.scanHistoryPage = 1;
           loadBarcodeBins().catch((error) => toast(error.message, 'error'));
           restoreBarcodeScanDefaults();
         }
@@ -13096,21 +13250,39 @@
     });
     $('#binTransferSubmitSelectedBtn')?.addEventListener('click', () => submitUnifiedBinTransfer().catch((error) => toast(error.message, 'error')));
     let scanHistoryFilterTimer = null;
-    $('#scanHistorySearchBtn').addEventListener('click', () => {
+    $('#scanHistoryFilters').addEventListener('submit', (event) => {
+      event.preventDefault();
       clearTimeout(scanHistoryFilterTimer);
+      state.scanHistoryPage = 1;
+      loadScanHistory().catch((error) => toast(error.message, 'error'));
+    });
+    $('#scanHistoryClearBtn')?.addEventListener('click', () => {
+      clearTimeout(scanHistoryFilterTimer);
+      const form = $('#scanHistoryFilters');
+      form.reset();
+      if (isAdminUser()) setDealerSelectValue(form.elements.dealerCode, 'ALL');
+      syncDealerSelectDisplay(form.elements.dealerCode);
+      state.scanHistoryPage = 1;
+      loadScanHistory().catch((error) => toast(error.message, 'error'));
+    });
+    $('#scanHistoryPrev')?.addEventListener('click', () => {
+      state.scanHistoryPage = Math.max(1, (state.scanHistoryPage || 1) - 1);
+      loadScanHistory().catch((error) => toast(error.message, 'error'));
+    });
+    $('#scanHistoryNext')?.addEventListener('click', () => {
+      state.scanHistoryPage = Math.min(state.scanHistoryPagination?.totalPages || 1, (state.scanHistoryPage || 1) + 1);
       loadScanHistory().catch((error) => toast(error.message, 'error'));
     });
     $$('#scanHistoryFilters input, #scanHistoryFilters select').forEach((field) => {
       field.addEventListener(field.tagName === 'SELECT' ? 'change' : 'input', () => {
         clearTimeout(scanHistoryFilterTimer);
         scanHistoryFilterTimer = setTimeout(() => {
+          state.scanHistoryPage = 1;
           loadScanHistory().catch((error) => toast(error.message, 'error'));
         }, field.tagName === 'SELECT' ? 0 : 400);
       });
     });
-    $('#scanHistorySelectAll')?.addEventListener('change', (event) => {
-      $$('.scan-history-checkbox').forEach((box) => { box.checked = event.target.checked; });
-    });
+    bindScanHistorySelection();
     $('#scanHistoryDeleteSelectedBtn')?.addEventListener('click', () => deleteSelectedScans().catch((error) => toast(error.message, 'error')));
     $('#scanHistoryDeleteUnknownBtn')?.addEventListener('click', () => cleanUnknownParts({}).catch((error) => toast(error.message, 'error')));
     $('#scanHistoryDeleteDealerBtn')?.addEventListener('click', () => deleteByDealerCode().catch((error) => toast(error.message, 'error')));

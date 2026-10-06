@@ -1,7 +1,7 @@
 (function (global) {
   function clean(value) {
     return String(value === undefined || value === null ? '' : value)
-      .replace(/[\r\n\t\f\v\u0000]/g, '')
+      .replace(/[\u0000-\u001F\u007F]/g, '')
       .trim();
   }
 
@@ -26,22 +26,14 @@
     const masterSet = new Set((Array.isArray(masterLookup) ? masterLookup : [])
       .map((entry) => normalizePartToken(entry))
       .filter(Boolean));
+    const candidates = [];
 
-    for (let index = 0; index < tokens.length; index += 1) {
+    for (let index = 1; index < tokens.length - 1; index += 1) {
       const token = normalizePartToken(tokens[index]);
-      if (!token) continue;
-      if (masterSet.has(token)) return index;
+      if (isLikelyPartToken(token) && isQuantityToken(tokens[index + 1])) candidates.push(index);
     }
 
-    for (let index = 0; index < tokens.length; index += 1) {
-      const token = normalizePartToken(tokens[index]);
-      if (!token) continue;
-      if (isLikelyPartToken(token) && index + 1 < tokens.length && isQuantityToken(tokens[index + 1])) {
-        return index;
-      }
-    }
-
-    return -1;
+    return candidates.find((index) => masterSet.has(normalizePartToken(tokens[index]))) ?? candidates[0] ?? -1;
   }
 
   function parseScanValue(rawValue, masterLookup = []) {
@@ -62,15 +54,18 @@
       };
     }
 
-    const rawFields = raw.split('/').map((field) => clean(field));
-    const tokens = rawFields.filter(Boolean);
-    const looksLikeHeroQr = tokens.length >= 5 && tokens[0].toUpperCase() === 'D';
+    const tokens = raw.split('/').map((field) => clean(field));
+    const looksLikeHeroQr = tokens.length >= 5
+      && (tokens[0].toUpperCase() === 'D' || resolveHeroPartIndex(tokens, masterLookup) >= 0);
 
     if (looksLikeHeroQr) {
       const partIndex = resolveHeroPartIndex(tokens, masterLookup);
       if (partIndex > -1 && partIndex + 1 < tokens.length) {
         const partNumber = normalizePartToken(tokens[partIndex]);
         const rawQuantity = clean(tokens[partIndex + 1]);
+        const uniqueId = tokens[0].toUpperCase() === 'D'
+          ? (partIndex > 0 ? normalizePartToken(tokens[partIndex - 1]) : '')
+          : normalizePartToken(tokens[1] || '');
         if (!isQuantityToken(rawQuantity)) {
           return {
             success: false,
@@ -80,6 +75,8 @@
             rawQr: raw,
             normalizedQr: tokens.map((segment) => normalizePartToken(segment)).join('/'),
             partNumber,
+            upiId: uniqueId,
+            uniqueId,
             rawScan: raw,
             fields: tokens,
             quantity: 0,
@@ -97,7 +94,8 @@
           fields: tokens,
           quantity: Number.parseInt(rawQuantity, 10),
           rawQuantity,
-          upiId: tokens[1] ? normalizePartToken(tokens[1]) : ''
+          upiId: uniqueId,
+          uniqueId
         };
       }
     }

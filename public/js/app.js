@@ -79,6 +79,7 @@
     pendingDealerLogin: null,
     dealers: [],
     audits: [],
+    recentScans: [],
     deleteAction: null,
     lastReportRows: [],
     reportFilterSettings: {},
@@ -965,11 +966,8 @@
     return `<span class="status-ok">${scan.synced ? 'Synced' : 'OK'}</span>`;
   }
 
-  function renderRecentScans(records) {
-    const body = $('#recentScanBody');
-    if (!body) return;
-    $('#scanCountLabel').textContent = `${records.length} records`;
-    body.innerHTML = records.map((scan) => `
+  function recentScanRow(scan) {
+    return `
       <tr>
         <td><input class="scan-checkbox" type="checkbox" value="${escapeHtml(scan._id)}"></td>
         <td>${escapeHtml(dateTime(scan.timestamp))}</td>
@@ -991,9 +989,13 @@
           <button class="danger-light-button single-delete-button" data-id="${escapeHtml(scan._id)}" type="button">Delete</button>
         </td>
       </tr>
-    `).join('');
+    `;
+  }
 
-    $$('.single-delete-button').forEach((button) => {
+  function bindRecentScanDeleteButtons(root = document) {
+    $$('.single-delete-button', root).forEach((button) => {
+      if (button.dataset.deleteBound === 'true') return;
+      button.dataset.deleteBound = 'true';
       button.addEventListener('click', () => openDeleteModal('Delete Record', 'Type DELETE to delete this scan.', async (confirmText) => {
         const details = deleteReasonDetails();
         if (!details) return;
@@ -1002,6 +1004,34 @@
         await loadInventory();
       }));
     });
+  }
+
+  function renderRecentScans(records) {
+    const body = $('#recentScanBody');
+    if (!body) return;
+    state.recentScans = records.slice(0, 300);
+    $('#scanCountLabel').textContent = `${state.recentScans.length} records`;
+    body.innerHTML = state.recentScans.map(recentScanRow).join('');
+    bindRecentScanDeleteButtons(body);
+  }
+
+  function prependRecentScan(scan = {}) {
+    const id = clean(scan._id || scan.scanId || scan.uniqueScanId);
+    if (!id || state.recentScans.some((record) => clean(record._id || record.scanId || record.uniqueScanId) === id)) return;
+
+    const selectedDealer = clean($('#dashboardDealerFilter')?.value);
+    const selectedAudit = clean($('#dashboardAuditFilter')?.value);
+    if (selectedDealer && clean(scan.dealerCode).toUpperCase() !== selectedDealer.toUpperCase()) return;
+    if (selectedAudit && clean(scan.auditId) !== selectedAudit) return;
+
+    const body = $('#recentScanBody');
+    if (!body) return;
+    if (body.querySelector('.muted')) body.innerHTML = '';
+    body.insertAdjacentHTML('afterbegin', recentScanRow({ ...scan, _id: id }));
+    state.recentScans = [{ ...scan, _id: id }, ...state.recentScans].slice(0, 300);
+    while (body.children.length > 300) body.removeChild(body.lastElementChild);
+    $('#scanCountLabel').textContent = `${state.recentScans.length} records`;
+    bindRecentScanDeleteButtons(body.firstElementChild || body);
   }
 
   function deleteScanById(scanId) {
@@ -1772,7 +1802,8 @@
       const socketOptions = { auth: { token: state.token } };
       const socket = apiBaseUrl() ? window.io(apiBaseUrl(), socketOptions) : window.io(socketOptions);
       socket.on('connect', () => socket.emit('device:hello', { deviceId: clientDeviceId(), deviceName: 'Dashboard Browser' }));
-      socket.on('scan:new', () => loadInventory().catch(console.warn));
+      socket.on('scan:new', (scan = {}) => prependRecentScan(scan));
+      socket.on('scan:saved', (scan = {}) => prependRecentScan(scan));
       socket.on('scan:deleted', () => loadInventory().catch(console.warn));
       socket.on('stats:update', () => loadInventory().catch(console.warn));
       socket.on('devices:update', () => loadDevices().catch(console.warn));

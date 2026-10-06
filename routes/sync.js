@@ -1068,6 +1068,8 @@ function normalizeScan(item = {}) {
   const parsedPart = normalizePartNumber(parsed.part);
   const partNumber = scanSource === 'manual'
     ? normalizePartNumber(explicitPart || parsedPart)
+    : parsed.qrParsed && parsedPart
+      ? parsedPart
     : normalizePartNumber(
       (explicitPart && isValidPartNumber(explicitPart) ? explicitPart : '') ||
       (parsedPart && isValidPartNumber(parsedPart) ? parsedPart : '') ||

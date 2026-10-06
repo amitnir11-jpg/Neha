@@ -444,8 +444,9 @@
   function extractUpiIdFromText(payload = {}) {
     const raw = clean(payload.rawScanString || payload.rawScan || payload.rawBarcode || payload.rawQR || payload.rawUpi || payload.scanText || payload.raw);
     if (raw) {
-      const slashParts = raw.split('/');
-      if (slashParts.length >= 6 && clean(slashParts[1])) return upper(slashParts[1]).split('::')[0];
+      const parser = window && window.DakshScanParser ? window.DakshScanParser : null;
+      const parsed = parser ? parser.parseScanValue(raw) : null;
+      if (parsed && parsed.type === 'UPI' && parsed.upiId) return upper(parsed.upiId).split('::')[0];
       const keyed = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
       if (keyed) return upper(keyed[1]).split('::')[0];
     }
@@ -486,10 +487,6 @@
     const parsed = parser ? parser.parseScanValue(text) : null;
     if (parsed && parsed.type === 'UPI' && parsed.partNumber) {
       return normalizePartCandidateValue(parsed.partNumber);
-    }
-    const slashParts = text.split('/');
-    if (slashParts.length >= 6 && slashParts[3] && slashParts[4] && slashParts[5]) {
-      return normalizePartCandidateValue(slashParts[3]);
     }
 
     const data = { ...parseQueryLikeScan(text), ...parseKeyValueScan(text) };

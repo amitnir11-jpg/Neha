@@ -128,13 +128,14 @@ function parseSlashDelimitedUpi(rawValue) {
   const parsed = parseScanValue(raw);
   if (parsed.type === 'UPI' && parsed.partNumber) {
     return {
-      upiNo: cleanText(parsed.fields[1] || '').toUpperCase(),
-      upiId: cleanText(parsed.fields[1] || '').toUpperCase(),
+      upiNo: cleanText(parsed.upiId || '').toUpperCase(),
+      upiId: cleanText(parsed.upiId || '').toUpperCase(),
       partNumber: normalizePartNumber(parsed.partNumber),
       qty: Number.isInteger(parsed.quantity) && parsed.quantity > 0 ? parsed.quantity : 1,
       mrp: undefined
     };
   }
+  if (raw.split('/')[0]?.trim().toUpperCase() === 'D') return {};
   const parts = raw.split('/').map((part) => part.trim());
   if (parts.length < 6 || !parts[3]) return {};
   const partNumber = normalizePartNumber(parts[3]);

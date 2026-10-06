@@ -42,6 +42,7 @@ function responseStatusFor(result = {}) {
 }
 
 function scanProcessLog(level, stage, details = {}) {
+  if (process.env.SCAN_DEBUG_LOGS !== 'true') return;
   const logger = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info;
   logger(`[SCAN_PROCESS] ${stage}`, details);
 }

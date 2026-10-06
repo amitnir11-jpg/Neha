@@ -15,6 +15,7 @@ import '../services/local_database.dart';
 import '../services/server_discovery.dart';
 import '../services/settings_store.dart';
 import '../services/sync_service.dart';
+import '../utils/scan_parser.dart';
 import '../widgets/status_chip.dart';
 import 'pending_sync_screen.dart';
 import 'settings_screen.dart';
@@ -1931,18 +1932,10 @@ class _ScanDraft {
               upperText, r'(?:QTY|QUANTITY)[:=#\-\s]+([0-9]{1,5})')) ??
           qty;
       if (part.isEmpty) {
-        final slashParts = upperText
-            .split('/')
-            .map((value) => value.trim())
-            .where((value) => value.isNotEmpty)
-            .toList();
-        if (slashParts.length >= 8 && slashParts[0] == 'D' && slashParts[4].isNotEmpty) {
-          part = slashParts[4];
-        } else if (slashParts.length >= 5 && slashParts[0] != 'D' && slashParts[3].isNotEmpty) {
-          part = slashParts[3];
-        }
-        if (slashParts.length >= 7 && slashParts[5].isNotEmpty && slashParts[0] == 'D') {
-          qty = int.tryParse(slashParts[5]) ?? qty;
+        final parsedSlash = parseSlashScan(text);
+        if (parsedSlash != null) {
+          part = parsedSlash.partNumber;
+          qty = parsedSlash.quantity;
         }
       }
       if (part.isEmpty &&

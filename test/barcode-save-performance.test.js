@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
 
-function scannerHarness() {
+function scannerHarness(options = {}) {
   const source = fs.readFileSync('public/ui.js', 'utf8');
   const timers = new Map();
   const nodes = new Map();
@@ -19,8 +19,12 @@ function scannerHarness() {
   };
   node('[name="type"]').value = 'INWARD';
   node('[name="binLocation"]').value = 'A1';
+  node('#barcodeScanForm').elements = {
+    type: node('[name="type"]'), binLocation: node('[name="binLocation"]'),
+    part: node('[name="part"]'), qty: node('[name="qty"]')
+  };
   const context = {
-    $: node, state: { barcodeAutoSaving: false, barcodeLastRaw: '', barcodeLastAt: 0 },
+    $: node, state: { barcodeCaptureQueue: [], barcodeAutoSaving: false, barcodeLastRaw: '', barcodeLastAt: 0 },
     normalizePartText: value => String(value).trim().toUpperCase(),
     Date: { now: () => clock },
     setTimeout(callback, delay) { const id = ++timerId; timers.set(id, { callback, at: clock + delay }); return id; },
@@ -28,7 +32,9 @@ function scannerHarness() {
     currentDealerCode: () => '11646', activeAuditIdForScope: () => 'AUD1',
     lockBarcodeDuplicateNotice: () => false, setLivePill: () => {}, setStatusPill: () => {},
     playScanTone: () => {}, toast: () => {}, fillBarcodePartFromRaw: () => {}, focusNextBarcodeField: () => {},
-    submitScan: async (_form, options) => { saves.push(options.expectedRaw); node('#barcodeRaw').value = ''; }
+    acceptBarcodeBinQr: () => false,
+    formObject: () => ({ dealerCode: '11646', binLocation: node('[name="binLocation"]').value, type: node('[name="type"]').value, rawScan: node('#barcodeRaw').value }),
+    submitScan: async (_form, saveOptions) => { saves.push(saveOptions.expectedRaw); if (options.waitForSave) await options.waitForSave(); }
   };
   vm.createContext(context);
   const start = source.indexOf('  function scheduleBarcodeAutosave(');
@@ -46,6 +52,7 @@ function scannerHarness() {
         timers.delete(id);
         await timer.callback();
       }
+      await new Promise(resolve => setImmediate(resolve));
     },
     input(value) { node('#barcodeRaw').value = value; node('#barcodeRaw').listeners.input(); }
   };
@@ -84,6 +91,29 @@ test('Save Web Scan uses the same autosave guard as scanner events', async () =>
   await h.advance(0);
   await h.advance(200);
   assert.deepEqual(h.saves, ['35010ACK00099S']);
+});
+
+test('consecutive scanner captures are preserved while a prior save is in flight', async () => {
+  let release;
+  let first = true;
+  const h = scannerHarness({ waitForSave: () => {
+    if (!first) return Promise.resolve();
+    first = false;
+    return new Promise(resolve => { release = resolve; });
+  } });
+  h.input('PART111');
+  await h.advance(200);
+  assert.equal(h.node('#barcodeRaw').value, '', 'next physical scan starts with an empty input');
+  h.input('PART222');
+  await h.advance(200);
+  h.input('PART333');
+  await h.advance(200);
+  assert.deepEqual(h.saves, ['PART111']);
+  assert.equal(h.context.state.barcodeCaptureQueue.length, 2);
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.saves, ['PART111', 'PART222', 'PART333']);
+  assert.equal(h.context.state.barcodeAutoSaving, false);
 });
 
 test('audit users do not poll the admin-only devices endpoint', async () => {

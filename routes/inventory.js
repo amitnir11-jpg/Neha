@@ -216,7 +216,7 @@ function extractUpiId(input, parsed) {
   const raw = String(firstValue(input, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText']) || (parsed && parsed.rawScan) || '');
   const parsedScan = parseScanValue(raw);
   if (parsedScan.success && parsedScan.type === 'UPI') {
-    return parsedScan.upiId || parsedScan.fields[1] || '';
+    return parsedScan.upiId || '';
   }
   const match = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
   return match ? match[1].trim() : '';
@@ -600,8 +600,8 @@ function parseRawScan(rawScan) {
   const parsedScan = parseScanValue(raw);
   if (parsedScan.type === 'UPI') {
     return {
-      upiNo: upper(parsedScan.fields[1] || ''),
-      upiId: upper(parsedScan.fields[1] || ''),
+      upiNo: upper(parsedScan.upiId || ''),
+      upiId: upper(parsedScan.upiId || ''),
       part: normalizePartNumber(parsedScan.partNumber),
       qty: parsedScan.quantity || 1,
       mrp: undefined,
@@ -614,6 +614,7 @@ function parseRawScan(rawScan) {
       staffName: '',
       userName: '',
       type: '',
+      qrParsed: true,
       rawScan: raw
     };
   }
@@ -4716,7 +4717,7 @@ router.get('/history', auth.requireAuth, async (req, res) => {
   try {
     const filter = applyScanVisibility(req, applyTestScanMode(buildListQuery(req.query), req.query.testScanMode || 'real'));
     const page = Math.max(1, Number.parseInt(req.query.page || '1', 10) || 1);
-    const limit = Math.min(500, Math.max(25, Number.parseInt(req.query.limit || '100', 10) || 100));
+    const limit = Math.min(500, Math.max(10, Number.parseInt(req.query.limit || '100', 10) || 100));
     const skip = (page - 1) * limit;
     let partSearchValue = '';
     let exactPartSearch = false;
@@ -4725,10 +4726,10 @@ router.get('/history', auth.requireAuth, async (req, res) => {
       partSearchValue = req.query.part || req.query.partNo || req.query.partNumber;
       const partText = upper(partSearchValue);
       exactPartSearch = /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(partText)
-        && normalizePartNumber(partText).length >= 6;
+        && normalizePartNumber(partText).length >= 6 && req.query.partMatch !== 'partial';
       filter.$and = filter.$and || [];
       partSearchClauseIndex = filter.$and.length;
-      filter.$and.push(scanHistoryPartClause(partSearchValue));
+      filter.$and.push(scanHistoryPartClause(partSearchValue, { exactPart: req.query.partMatch !== 'partial' }));
     }
     if (req.query.bin) {
       const binRegex = { $regex: escapeRegex(String(req.query.bin).trim()), $options: 'i' };

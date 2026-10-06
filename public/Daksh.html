@@ -29,6 +29,7 @@
   <link rel="stylesheet" href="/css/app-controls.css?v=20260908-enterprise-controls-v2">
   <link rel="stylesheet" href="/dashboard-layout.css?v=20260928-dashboard-dealer-picker-v2">
   <link rel="stylesheet" href="/compact-layout.css?v=20260921-global-density-v2">
+  <link rel="stylesheet" href="/barcode-workspace.css?v=20261006-barcode-workspace-v1">
 </head>
 <body class="app-booting">
   <script>
@@ -392,21 +393,48 @@
           </div>
 
           <div id="barcodeEntry" class="subview">
-            <form id="barcodeScanForm" class="grid-form">
-              <label>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
-              <label>Part Number<div class="suggest-wrap"><input name="part" id="barcodePartNumber" class="partSuggestInput" autocomplete="off" required><div class="suggest-menu"></div></div><small id="barcodePartLocationStatus" class="muted" aria-live="polite"></small></label>
-              <label id="barcodeBinLabel" class="hidden">Source Bin Location *<div class="inline-field"><input name="binLocation" id="barcodeBinLocation" list="barcodeBinOptions" autocomplete="off"><button class="btn light icon-btn" id="clearBarcodeBin" type="button" title="Clear Bin Location">X</button></div><datalist id="barcodeBinOptions"></datalist></label>
-              <label class="span-3">Barcode / QR Raw Scan<textarea name="rawScan" id="barcodeRaw" rows="3" required></textarea></label>
-              <label>Quantity<input name="qty" type="number" min="0" value="1"></label>
-              <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>VERIFICATION</option><option>FITTED</option><option>DAMAGE</option></select></label>
-              <label class="fitted-only hidden">Regd No<input name="regdNo" autocomplete="off"></label>
-              <label class="fitted-only hidden">Job Card No<input name="jobCardNo" autocomplete="off"></label>
-              <label>Device ID<input name="deviceId" id="barcodeDeviceId" readonly></label>
-              <div class="actions span-3">
-                <span id="barcodeAutoSaveStatus" class="live-pill green-dot">Auto Save: ON</span>
-                <span id="barcodeReadyStatus" class="live-pill green-dot">Ready for Scan</span>
-                <button class="btn primary" type="submit">Save Web Scan</button>
-                <button class="btn light" type="button" id="focusScanner">Focus Scanner</button>
+            <div class="barcode-workspace-head">
+              <h2>Scan Parts - Barcode / QR</h2>
+              <div class="barcode-bin-state"><span id="barcodeBinReady" role="status" aria-live="polite">Select or scan Source Bin Location first.</span><span class="barcode-current-bin">Current Bin<strong id="barcodeCurrentBin">—</strong></span></div>
+            </div>
+            <ol class="barcode-workflow" aria-label="Scan workflow">
+              <li><b>1</b><span><strong>Select Dealer</strong><small>Choose dealer for scan</small></span></li>
+              <li id="barcodeBinStep"><b>2</b><span><strong>Select / Scan Source Bin Location</strong><small>Enter / Scan bin first <em>(Mandatory)</em></small></span></li>
+              <li><b>3</b><span><strong>Scan Barcode / QR or Use Manual Entry</strong><small>Scan a part or enter details manually</small></span></li>
+            </ol>
+            <form id="barcodeScanForm" class="barcode-workspace-form" novalidate>
+              <div class="barcode-context-row">
+                <label>Dealer <span class="required-mark">*</span><select name="dealerCode" class="dealerSelect" required></select></label>
+                <label id="barcodeBinLabel">Source Bin Location <span class="required-mark">*</span><div class="inline-field"><input name="binLocation" id="barcodeBinLocation" list="barcodeBinOptions" autocomplete="off" placeholder="Select, type or scan bin" required><button class="btn light icon-btn" id="clearBarcodeBin" type="button" title="Clear Bin Location" aria-label="Clear Bin Location">×</button></div><datalist id="barcodeBinOptions"></datalist><small>Enter / Scan bin first <b>(Mandatory)</b></small></label>
+                <label>Scan Type <span class="required-mark">*</span><select name="type"><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
+                <label>Device ID<input name="deviceId" id="barcodeDeviceId" readonly></label>
+                <label class="barcode-beep"><span aria-hidden="true">◖))</span><span id="barcodeBeepLabel">Beep: ON</span><input id="barcodeBeep" type="checkbox" role="switch" aria-label="Scan beep" checked></label>
+              </div>
+              <div class="barcode-entry-panels">
+                <section class="barcode-input-panel" aria-labelledby="barcodeInputTitle">
+                  <div class="barcode-panel-title"><span aria-hidden="true">▥</span><div><h3 id="barcodeInputTitle">Scan Barcode / QR</h3><p>Scan part barcode or QR code after selecting bin location</p></div></div>
+                  <label class="barcode-raw-label"><span class="sr-only">Barcode or QR code</span><textarea name="rawScan" id="barcodeRaw" rows="1" autocomplete="off" placeholder="Scan barcode or QR here..."></textarea></label>
+                  <div class="actions"><button class="btn primary barcode-save" type="submit">Save Scan (Enter)</button><button class="btn light" type="button" id="clearBarcodeScan">↻ &nbsp; Clear</button></div>
+                  <div class="barcode-scan-feedback"><span id="barcodeAutoSaveStatus" class="live-pill green-dot">Auto Save: ON</span><span id="barcodeReadyStatus" class="live-pill green-dot" aria-live="polite">Ready for Scan</span></div>
+                </section>
+                <section class="barcode-manual-panel" aria-labelledby="barcodeManualTitle">
+                  <div class="barcode-panel-title"><span aria-hidden="true">✎</span><div><h3 id="barcodeManualTitle">Manual Entry (Enter Part Details)</h3><p>Use manual entry if barcode is not available</p></div></div>
+                  <div class="barcode-manual-fields">
+                    <label>Part Number <span class="required-mark">*</span><div class="suggest-wrap"><input name="part" id="barcodePartNumber" class="partSuggestInput" autocomplete="off" placeholder="Enter part number"><div class="suggest-menu"></div></div></label>
+                    <label>Quantity <span class="required-mark">*</span><input name="qty" type="number" min="0.001" step="any" value="1" required></label>
+                    <label>Regd No<input name="regdNo" autocomplete="off" placeholder="Enter Regd No"></label>
+                    <label>Job Card No<input name="jobCardNo" autocomplete="off" placeholder="Enter Job Card No"></label>
+                    <button id="saveBarcodeManualScan" class="btn primary" type="button">Save Manual Scan</button>
+                  </div>
+                  <small id="barcodePartLocationStatus" class="muted" aria-live="polite"></small>
+                  <div class="barcode-details-title"><strong>Part Details</strong> <span>(Auto-filled after scan or part entry)</span></div>
+                  <div class="barcode-part-details">
+                    <label>Part Description<input name="partName" data-fill="partName" readonly placeholder="Auto filled from scan"></label>
+                    <label>Category<input name="category" data-fill="category" readonly placeholder="Auto filled"></label>
+                    <label>MRP (₹)<input name="mrp" data-fill="mrp" readonly placeholder="0.00"></label>
+                    <label>DLC (₹)<input name="dlc" data-fill="dlc" readonly placeholder="0.00"></label>
+                  </div>
+                </section>
               </div>
             </form>
           </div>
@@ -427,14 +455,15 @@
           </div>
         </div>
 
-        <section class="card">
-          <div class="card-head"><h2>Scan History</h2><div class="actions"><button id="scanHistorySearchBtn" class="btn light" type="button">Search</button><button id="scanHistoryDeleteSelectedBtn" class="btn danger-soft admin-only" type="button">Delete Selected</button><button id="scanHistoryDeleteUnknownBtn" class="btn danger-soft admin-only" type="button">Delete Unknown Parts</button><button id="scanHistoryDeleteDealerBtn" class="btn danger-soft admin-only" type="button">Delete by Dealer Code</button></div></div>
+        <section class="card scan-history-card">
+          <div class="card-head scan-history-head"><div class="scan-history-heading"><h2 id="scanHistoryTitle">Scan History</h2><span id="scanHistoryScopeBadge">Last 10 Scans</span></div><div class="actions"><button id="scanHistoryDeleteSelectedBtn" class="btn danger-soft admin-only" type="button">Delete Selected</button><button id="scanHistoryDeleteUnknownBtn" class="btn danger-soft admin-only" type="button">Delete Unknown Parts</button><button id="scanHistoryDeleteDealerBtn" class="btn danger-soft admin-only" type="button">Delete by Dealer Code</button></div></div>
           <form id="scanHistoryFilters" class="filter-grid">
-            <input name="part" placeholder="Part">
-            <input name="bin" placeholder="Bin">
-            <select name="dealerCode" id="scanHistoryDealer" class="dealerSelect scan-history-dealer"></select>
-            <select name="type"><option value="">All Types</option><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select>
-            <select name="testScanMode"><option value="real" selected>Show Real Scans Only</option><option value="test">Show Test Scans</option><option value="all">Show All</option></select>
+            <label>Search Part Number<input name="part" placeholder="Enter part number to search..." autocomplete="off"></label>
+            <label>Search Bin<input name="bin" placeholder="Enter bin location..." autocomplete="off"></label>
+            <label>Dealer<select name="dealerCode" id="scanHistoryDealer" class="dealerSelect scan-history-dealer"></select></label>
+            <label>Scan Type<select name="type"><option value="">All Types</option><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option></select></label>
+            <label class="scan-history-test-mode">Scan visibility<select name="testScanMode"><option value="real" selected>Show Real Scans Only</option><option value="test">Show Test Scans</option><option value="all">Show All</option></select></label>
+            <div class="actions scan-history-filter-actions"><button id="scanHistorySearchBtn" class="btn primary" type="submit">Search</button><button id="scanHistoryClearBtn" class="btn light" type="button">Clear</button></div>
           </form>
           <div class="metric-grid four scan-history-summary">
             <div class="metric mini"><span>Net available quantity</span><strong id="scanHistoryTotalQty">0</strong></div>
@@ -448,6 +477,7 @@
               <tbody id="scanHistoryRows"></tbody>
             </table>
           </div>
+          <div id="scanHistoryPagination" class="pagination"><button id="scanHistoryPrev" class="btn light" type="button">Previous</button><span id="scanHistoryPageInfo">Page 1</span><button id="scanHistoryNext" class="btn light" type="button">Next</button></div>
         </section>
       </section>
 
@@ -1718,10 +1748,10 @@
   <div id="toast" class="toast"></div>
 
   <script src="/config.js"></script>
-  <script src="/js/scan-parser.js?v=20261006-qr-qty-7digits"></script>
+  <script src="/js/scan-parser.js?v=20261006-qr-field-mapping-v2"></script>
   <script src="/js/runtime.js?v=20261004-report-cache-v2"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20261006-minimal-bin-label-v1"></script>
+  <script src="/ui.js?v=20261006-barcode-workspace-qr-field-v2"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

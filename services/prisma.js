@@ -8,9 +8,32 @@ const {
 
 let resolvedDatabaseUrl = applyResolvedDatabaseUrl();
 
+const slowQueryThresholdMs = Number(process.env.PRISMA_SLOW_QUERY_MS || 0);
+const prismaLogLevels = process.env.PRISMA_LOG_QUERIES === 'true'
+  ? ['query', 'warn', 'error']
+  : ['warn', 'error'];
+if (Number.isFinite(slowQueryThresholdMs) && slowQueryThresholdMs > 0) {
+  prismaLogLevels.push({ emit: 'event', level: 'query' });
+}
+
 const prisma = new PrismaClient({
-  log: process.env.PRISMA_LOG_QUERIES === 'true' ? ['query', 'warn', 'error'] : ['warn', 'error']
+  log: prismaLogLevels
 });
+
+if (Number.isFinite(slowQueryThresholdMs) && slowQueryThresholdMs > 0) {
+  prisma.$on('query', (event) => {
+    if (event.duration < slowQueryThresholdMs) return;
+    const query = String(event.query || '')
+      .replace(/'(?:''|[^'])*'/g, "'?'")
+      .slice(0, 1500);
+    console.warn('[SLOW QUERY]', JSON.stringify({
+      durationMs: event.duration,
+      thresholdMs: slowQueryThresholdMs,
+      target: event.target,
+      query
+    }));
+  });
+}
 
 // A transaction client follows adapter calls across awaits without changing the
 // public Prisma client used by existing direct-query services.
