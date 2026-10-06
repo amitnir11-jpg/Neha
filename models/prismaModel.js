@@ -1231,7 +1231,7 @@ function createModel(config) {
       if (!keys.length) throw new Error('Bulk upsert requires mirrored business key fields.');
 
       if (options.lockKey) {
-        await getPrismaClient().$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${String(options.lockKey)}))`);
+        await getPrismaClient().$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${String(options.lockKey)})) IS NULL AS locked`);
       }
 
       const tuples = records.map((record) => Prisma.sql`(${Prisma.join(keys.map((field) => String(record[field] ?? '')))})`);

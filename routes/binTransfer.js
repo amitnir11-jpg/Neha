@@ -474,15 +474,20 @@ router.get('/bins', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = upper(req.query.dealerCode);
     if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer required' });
-    const bins = await dealerBins(dealerCode);
-    const sourceBin = req.query.sourceBin || req.query.fromBin;
-    const destination = await destinationBinsForDealer(dealerCode, sourceBin);
-    const message = destination.bins.length ? '' : 'No destination bins found. Please create bins in Bin Master / Sequence Creation or scan stock into another bin.';
+    const binData = await dealerBins(dealerCode);
+    const bins = compactBins([...binData.toBins, ...binData.fromBins]);
+    const sourceKey = upper(req.query.sourceBin || req.query.fromBin);
+    const destinationBins = binData.toBins.length
+      ? binData.toBins.filter((bin) => upper(bin.binCode) !== sourceKey).map((bin) => bin.binCode)
+      : binData.fromBins.filter((bin) => upper(bin.binCode) !== sourceKey).map((bin) => bin.binCode);
+    const message = destinationBins.length ? '' : 'No destination bins found. Please create bins in Bin Master / Sequence Creation or scan stock into another bin.';
     return res.json({
       success: true,
-      ...bins,
-      destinationBins: destination.bins,
-      destinationSource: destination.source,
+      ...binData,
+      bins,
+      sourceBins: bins,
+      destinationBins,
+      destinationSource: binData.toBins.length ? 'bin_master' : 'fallback_from_current_stock',
       message
     });
   } catch (error) {

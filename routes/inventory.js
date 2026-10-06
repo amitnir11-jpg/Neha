@@ -19,6 +19,7 @@ const auth = require('./auth');
 const scanModification = require('../services/ScanModificationService');
 const { withDatabaseTransaction } = require('../services/prisma');
 const { normalizePartNumber } = require('../utils/normalize');
+const { parseScanValue } = require('../utils/scanParser');
 const { findCataloguePart, cataloguePayload } = require('../utils/catalogue');
 const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentity');
 const masterValidation = require('../utils/masterValidation');
@@ -213,6 +214,10 @@ function extractUpiId(input, parsed) {
   const direct = input.upiId || input.upiID || input.upiScanId || input.uniqueUpiId || input.transactionId || input.txnId;
   if (direct) return String(direct).trim();
   const raw = String(firstValue(input, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText']) || (parsed && parsed.rawScan) || '');
+  const parsedScan = parseScanValue(raw);
+  if (parsedScan.success && parsedScan.type === 'UPI') {
+    return parsedScan.upiId || parsedScan.fields[1] || '';
+  }
   const match = raw.match(/(?:upi|upid|upiid|txn|txnid|transaction|scanid)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
   return match ? match[1].trim() : '';
 }
@@ -495,40 +500,6 @@ async function backfillDuplicateMrp(existing = {}, { partNumber = '', masterPric
   return existing;
 }
 
-const DASHBOARD_BLANK_MARKERS = ['', 'NULL', 'UNDEFINED', 'N/A', 'NA', '-'];
-
-function firstNonBlankExpression(fields = [], fallback = '') {
-  return fields.reduceRight((next, field) => ({
-    $let: {
-      vars: {
-        value: {
-          $trim: {
-            input: { $toString: { $ifNull: [`$${field}`, ''] } }
-          }
-        }
-      },
-      in: {
-        $cond: [
-          { $in: [{ $toUpper: '$$value' }, DASHBOARD_BLANK_MARKERS] },
-          next,
-          '$$value'
-        ]
-      }
-    }
-  }), fallback);
-}
-
-function numberExpression(fields = []) {
-  return {
-    $convert: {
-      input: firstNonBlankExpression(fields, '0'),
-      to: 'double',
-      onError: 0,
-      onNull: 0
-    }
-  };
-}
-
 function scanRawText(scan = {}) {
   return String(scan.rawScan || scan.rawScanString || scan.rawUpi || '').trim();
 }
@@ -625,17 +596,16 @@ function parseRawScan(rawScan) {
   } catch (error) {
     // Not JSON; continue with UPI/barcode text parsing.
   }
-  const slashParts = raw.split('/');
-  if (slashParts.length >= 4 && slashParts[3]) {
-    const slashQty = optionalNumber(slashParts[4]);
-    const slashMrp = optionalNumber(slashParts[5]);
+
+  const parsedScan = parseScanValue(raw);
+  if (parsedScan.type === 'UPI') {
     return {
-      upiNo: upper(slashParts[1]),
-      upiId: upper(slashParts[1]),
-      part: upper(slashParts[3]).replace(/\s+/g, ''),
-      qty: slashQty !== undefined && slashQty > 0 ? slashQty : undefined,
-      mrp: slashMrp,
-      mrpProvided: slashMrp !== undefined,
+      upiNo: upper(parsedScan.fields[1] || ''),
+      upiId: upper(parsedScan.fields[1] || ''),
+      part: normalizePartNumber(parsedScan.partNumber),
+      qty: parsedScan.quantity || 1,
+      mrp: undefined,
+      mrpProvided: false,
       dlc: undefined,
       dlcProvided: false,
       bin: '',
@@ -877,117 +847,144 @@ function stampDashboardScope(stats = {}, filter = {}) {
   return stats;
 }
 
-function dashboardUpperExpression(fields, fallback = '') {
-  return { $toUpper: firstNonBlankExpression(fields, fallback) };
+const DASHBOARD_BLANK_MARKERS = new Set(['', 'NULL', 'UNDEFINED', 'N/A', 'NA', '-']);
+const dashboardSortCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+function dashboardFirstNonBlank(scan = {}, fields = [], fallback = '') {
+  for (const field of fields) {
+    const value = String(scan[field] === undefined || scan[field] === null ? '' : scan[field]).trim();
+    if (!DASHBOARD_BLANK_MARKERS.has(value.toUpperCase())) return value;
+  }
+  return fallback;
 }
 
-function dashboardIdentityExpression() {
-  const raw = dashboardUpperExpression(['rawUpi', 'rawScan', 'rawScanString', 'rawBarcode', 'rawQR', 'upiNo', 'upiId']);
-  const qrFingerprint = firstNonBlankExpression(['qrFingerprint']);
-  const syncKey = firstNonBlankExpression(['syncKey']);
-  const source = dashboardUpperExpression(['source', 'scanMode', 'entryMode']);
-  const scope = {
-    $concat: [
-      dashboardUpperExpression(['dealerCode']),
-      '|',
-      firstNonBlankExpression(['auditId']),
-      '|',
-      dashboardUpperExpression(['scanType', 'type'], 'INWARD')
-    ]
-  };
+function dashboardUpperValue(scan = {}, fields = [], fallback = '') {
+  return dashboardFirstNonBlank(scan, fields, fallback).toUpperCase();
+}
+
+function dashboardEventAt(scan = {}) {
+  return scan.timestamp !== undefined && scan.timestamp !== null
+    ? scan.timestamp
+    : scan.scanTime !== undefined && scan.scanTime !== null
+      ? scan.scanTime
+      : scan.createdAt;
+}
+
+function dashboardComparable(value) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.getTime();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.getTime();
+}
+
+function compareDashboardValues(left, right) {
+  const leftDate = dashboardComparable(left);
+  const rightDate = dashboardComparable(right);
+  if (leftDate !== null && rightDate !== null) return leftDate - rightDate;
+  if (typeof left === 'number' || typeof right === 'number') return Number(left || 0) - Number(right || 0);
+  const leftText = left instanceof Date ? left.toISOString() : left === undefined || left === null ? '' : String(left);
+  const rightText = right instanceof Date ? right.toISOString() : right === undefined || right === null ? '' : String(right);
+  return dashboardSortCollator.compare(leftText, rightText);
+}
+
+function compareDashboardEvent(left, right) {
+  const eventOrder = compareDashboardValues(dashboardEventAt(left), dashboardEventAt(right));
+  return eventOrder || dashboardSortCollator.compare(String(left._id || ''), String(right._id || ''));
+}
+
+function dashboardScanIdentity(scan = {}) {
+  const raw = dashboardUpperValue(scan, ['rawUpi', 'rawScan', 'rawScanString', 'rawBarcode', 'rawQR', 'upiNo', 'upiId']);
+  const qrFingerprint = dashboardFirstNonBlank(scan, ['qrFingerprint']);
+  const syncKey = dashboardFirstNonBlank(scan, ['syncKey']);
+  const source = dashboardUpperValue(scan, ['source', 'scanMode', 'entryMode']);
+  const scope = [
+    dashboardUpperValue(scan, ['dealerCode']),
+    dashboardFirstNonBlank(scan, ['auditId']),
+    dashboardUpperValue(scan, ['scanType', 'type'], 'INWARD')
+  ].join('|');
+  if (raw) return `${scope}|RAW|${raw}`;
+  if (qrFingerprint) return `${scope}|QR|${qrFingerprint}`;
+  if (syncKey && !/MANUAL/i.test(source)) return `${scope}|SYNC|${syncKey}`;
+  return `${scope}|ROW|${String(scan._id || '')}`;
+}
+
+function dashboardNumber(scan = {}, fields = []) {
+  const value = dashboardFirstNonBlank(scan, fields, '0');
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function dashboardAggregateSummary(rows = [], now = new Date()) {
+  const uniqueByIdentity = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((scan) => {
+    const identity = dashboardScanIdentity(scan);
+    const current = uniqueByIdentity.get(identity);
+    if (!current || compareDashboardEvent(scan, current) < 0) uniqueByIdentity.set(identity, scan);
+  });
+
+  const uniqueScans = Array.from(uniqueByIdentity.values());
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const liveCutoff = now.getTime() - 30 * 1000;
+  const activeUsers = new Set();
+  const distribution = new Map();
+  const binQuantitiesByPart = new Map();
+  let latestScan = null;
+  let todayCount = 0;
+
+  uniqueScans.forEach((scan) => {
+    const eventAt = dashboardComparable(dashboardEventAt(scan));
+    if (eventAt !== null && eventAt >= today.getTime()) {
+      todayCount += 1;
+    }
+    const quantity = Math.abs(dashboardNumber(scan, ['qty', 'quantity']));
+    const type = dashboardUpperValue(scan, ['scanType', 'type'], 'INWARD');
+    const source = dashboardUpperValue(scan, ['source', 'scanSource', 'entryMode', 'entryChannel', 'scanMode']);
+    const category = /MANUAL/i.test(source)
+      ? 'MANUAL'
+      : type === 'DAMAGE'
+        ? 'DAMAGE'
+        : ['FITTED', 'FITTED_RETURN'].includes(type)
+          ? 'FITTED'
+          : type === 'OUTWARD'
+            ? 'OUTWARD'
+            : 'INWARD';
+    distribution.set(category, (distribution.get(category) || 0) + quantity);
+    if (eventAt !== null && eventAt >= liveCutoff && scan.userId !== undefined && scan.userId !== null && scan.userId !== '') {
+      activeUsers.add(String(scan.userId));
+    }
+    if (!latestScan || compareDashboardEvent(scan, latestScan) > 0) latestScan = scan;
+
+    const part = dashboardUpperValue(scan, ['normalizedPartNumber', 'partNumber', 'part']);
+    const bin = scan.binLocation !== undefined && scan.binLocation !== null
+      ? scan.binLocation
+      : scan.bin !== undefined && scan.bin !== null
+        ? scan.bin
+        : '';
+    if (!part || bin === '') return;
+    const signedQuantity = ['OUTWARD', 'FITTED', 'DAMAGE'].includes(type) ? -quantity : quantity;
+    let bins = binQuantitiesByPart.get(part);
+    if (!bins) {
+      bins = new Map();
+      binQuantitiesByPart.set(part, bins);
+    }
+    bins.set(bin, (bins.get(bin) || 0) + signedQuantity);
+  });
+
+  const multipleBinPartCount = Array.from(binQuantitiesByPart.values())
+    .filter((bins) => Array.from(bins.values()).filter((quantity) => quantity > 0).length > 1)
+    .length;
+
   return {
-    $concat: [
-      scope,
-      '|',
-      {
-        $switch: {
-          branches: [
-            { case: { $ne: [raw, ''] }, then: { $concat: ['RAW|', raw] } },
-            { case: { $ne: [qrFingerprint, ''] }, then: { $concat: ['QR|', qrFingerprint] } },
-            {
-              case: {
-                $and: [
-                  { $ne: [syncKey, ''] },
-                  { $not: [{ $regexMatch: { input: source, regex: /MANUAL/i } }] }
-                ]
-              },
-              then: { $concat: ['SYNC|', syncKey] }
-            }
-          ],
-          default: { $concat: ['ROW|', { $toString: '$_id' }] }
-        }
-      }
-    ]
+    todayCount,
+    latestScan: latestScan ? {
+      time: dashboardEventAt(latestScan),
+      part: dashboardUpperValue(latestScan, ['normalizedPartNumber', 'partNumber', 'part'])
+    } : null,
+    activeUserCount: activeUsers.size,
+    distribution,
+    multipleBinPartCount
   };
-}
-
-function dashboardUniqueScanStages(filter = {}) {
-  return [
-    { $match: applyTestScanMode({ ...(filter || {}) }, 'real') },
-    {
-      $addFields: {
-        __dashboardIdentity: dashboardIdentityExpression(),
-        __dashboardEventAt: { $ifNull: ['$timestamp', { $ifNull: ['$scanTime', '$createdAt'] }] },
-        __dashboardType: dashboardUpperExpression(['scanType', 'type'], 'INWARD'),
-        __dashboardSource: dashboardUpperExpression(['source', 'scanSource', 'entryMode', 'entryChannel', 'scanMode']),
-        __dashboardPart: dashboardUpperExpression(['normalizedPartNumber', 'partNumber', 'part']),
-        __dashboardQty: numberExpression(['qty', 'quantity']),
-        __dashboardMrp: numberExpression(['valuationMRP', 'currentCatalogueMRP', 'finalMRP']),
-        __dashboardStoredValue: numberExpression(['finalInventoryValue']),
-        __dashboardDlc: numberExpression(['dlc']),
-        __dashboardGroup: dashboardUpperExpression(['productGroup', 'partGroup', 'productCategory', 'category'], 'OTHERS'),
-        __dashboardSubGroup: dashboardUpperExpression(['partSubGroup', 'productSubGroup', 'productType'], 'GENERAL')
-      }
-    },
-    {
-      $addFields: {
-        __dashboardValue: {
-          $cond: [
-            { $gt: ['$__dashboardStoredValue', 0] },
-            '$__dashboardStoredValue',
-            { $multiply: ['$__dashboardQty', '$__dashboardMrp'] }
-          ]
-        }
-      }
-    },
-    { $sort: { __dashboardEventAt: 1, _id: 1 } },
-    { $group: { _id: '$__dashboardIdentity', scan: { $first: '$$ROOT' } } },
-    { $replaceRoot: { newRoot: '$scan' } }
-  ];
-}
-
-function dashboardRecentUniqueStages(filter = {}, mode = 'real') {
-  return [
-    { $match: applyRecentScanMode({ ...(filter || {}) }, mode) },
-    {
-      $addFields: {
-        __dashboardIdentity: dashboardIdentityExpression(),
-        __dashboardEventAt: { $ifNull: ['$timestamp', { $ifNull: ['$scanTime', '$createdAt'] }] },
-        __dashboardType: dashboardUpperExpression(['scanType', 'type'], 'INWARD'),
-        __dashboardPart: dashboardUpperExpression(['normalizedPartNumber', 'partNumber', 'part']),
-        __dashboardQty: numberExpression(['qty', 'quantity']),
-        __dashboardMrp: numberExpression(['valuationMRP', 'currentCatalogueMRP', 'finalMRP', 'mrp']),
-        __dashboardStoredValue: numberExpression(['finalInventoryValue']),
-        __dashboardDlc: numberExpression(['dlc', 'currentCatalogueDLC']),
-        __dashboardGroup: dashboardUpperExpression(['productGroup', 'partGroup', 'productCategory', 'category'], 'OTHERS'),
-        __dashboardSubGroup: dashboardUpperExpression(['partSubGroup', 'productSubGroup', 'productType'], 'GENERAL')
-      }
-    },
-    {
-      $addFields: {
-        __dashboardValue: {
-          $cond: [
-            { $gt: ['$__dashboardStoredValue', 0] },
-            '$__dashboardStoredValue',
-            { $multiply: ['$__dashboardQty', '$__dashboardMrp'] }
-          ]
-        }
-      }
-    },
-    { $sort: { __dashboardEventAt: 1, _id: 1 } },
-    { $group: { _id: '$__dashboardIdentity', scan: { $first: '$$ROOT' } } },
-    { $replaceRoot: { newRoot: '$scan' } }
-  ];
 }
 
 async function dashboardRecentRows(filter = {}, limit = 12) {
@@ -1051,9 +1048,8 @@ async function dashboardDealerStockSummary(filter = {}) {
 }
 
 async function dashboardStats(filter, reportQuery = filter) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const liveCutoff = new Date(Date.now() - 30 * 1000);
+  const dashboardNow = new Date();
+  const liveCutoff = new Date(dashboardNow.getTime() - 30 * 1000);
   const duplicateFilter = {};
   if (filter && filter.dealerCode) duplicateFilter.dealerCode = filter.dealerCode;
   if (filter && filter.auditId) duplicateFilter.auditId = filter.auditId;
@@ -1079,68 +1075,11 @@ async function dashboardStats(filter, reportQuery = filter) {
   if (filter && filter.auditId) failedFilter.auditId = filter.auditId;
   if (filter && filter.timestamp) failedFilter.timestamp = filter.timestamp;
 
-  const [reportData, aggregateRows, activeDevices, allDevices, duplicateCount, failedCount, cataloguePartCount, dealerStockSummary] = await Promise.all([
+  const [reportData, dashboardSummary, activeDevices, allDevices, duplicateCount, failedCount, cataloguePartCount, dealerStockSummary] = await Promise.all([
     require('./report').buildReportData(reportQuery),
-    Inventory.aggregate([
-      ...dashboardUniqueScanStages(filter),
-      {
-        $facet: {
-          today: [{ $match: { __dashboardEventAt: { $gte: today } } }, { $count: 'count' }],
-          last: [{ $sort: { __dashboardEventAt: -1, _id: -1 } }, { $limit: 1 }, { $project: { _id: 0, time: '$__dashboardEventAt', part: '$__dashboardPart' } }],
-          activeUsers: [
-            { $match: { __dashboardEventAt: { $gte: liveCutoff }, userId: { $nin: [null, ''] } } },
-            { $group: { _id: '$userId' } },
-            { $count: 'count' }
-          ],
-          distribution: [
-            {
-              $group: {
-                _id: {
-                  $switch: {
-                    branches: [
-                      { case: { $regexMatch: { input: '$__dashboardSource', regex: /MANUAL/i } }, then: 'MANUAL' },
-                      { case: { $eq: ['$__dashboardType', 'DAMAGE'] }, then: 'DAMAGE' },
-                      { case: { $eq: ['$__dashboardType', 'FITTED'] }, then: 'FITTED' },
-                      { case: { $eq: ['$__dashboardType', 'FITTED_RETURN'] }, then: 'FITTED' },
-                      { case: { $eq: ['$__dashboardType', 'OUTWARD'] }, then: 'OUTWARD' },
-                      { case: { $in: ['$__dashboardType', ['INWARD', 'AUDIT']] }, then: 'INWARD' }
-                    ],
-                    default: 'INWARD'
-                  }
-                },
-                quantity: { $sum: { $abs: '$__dashboardQty' } }
-              }
-            }
-          ],
-          multipleBinParts: [
-            {
-              $group: {
-                _id: {
-                  part: '$__dashboardPart',
-                  bin: { $ifNull: ['$binLocation', { $ifNull: ['$bin', ''] }] }
-                },
-                qty: {
-                  $sum: {
-                    $switch: {
-                      branches: [
-                        { case: { $in: ['$__dashboardType', ['INWARD', 'AUDIT']] }, then: { $abs: '$__dashboardQty' } },
-                        { case: { $in: ['$__dashboardType', ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: '$__dashboardQty' }, -1] } },
-                        { case: { $eq: ['$__dashboardType', 'VERIFICATION'] }, then: 0 }
-                      ],
-                      default: { $abs: '$__dashboardQty' }
-                    }
-                  }
-                }
-              }
-            },
-            { $match: { '_id.part': { $nin: [null, ''] }, '_id.bin': { $nin: [null, ''] }, qty: { $gt: 0 } } },
-            { $group: { _id: '$_id.part', binCount: { $sum: 1 } } },
-            { $match: { binCount: { $gt: 1 } } },
-            { $count: 'count' }
-          ]
-        }
-      }
-    ]).allowDiskUse(true),
+    Inventory.find(applyTestScanMode({ ...(filter || {}) }, 'real'))
+      .lean()
+      .then((rows) => dashboardAggregateSummary(rows, dashboardNow)),
     Device.countDocuments({ ...deviceScope, status: 'online', lastSeen: { $gte: liveCutoff } }),
     Device.countDocuments(deviceScope),
     DuplicateScanLog.countDocuments(duplicateFilter),
@@ -1149,13 +1088,12 @@ async function dashboardStats(filter, reportQuery = filter) {
     dashboardDealerStockSummary(filter)
   ]);
 
-  const aggregate = aggregateRows[0] || {};
   const summary = Array.isArray(reportData.summary) && reportData.summary.length ? reportData.summary[0] : {};
-  const lastScan = (aggregate.last && aggregate.last[0]) || {};
-  const multipleBinPartCount = Number((aggregate.multipleBinParts && aggregate.multipleBinParts[0] ? aggregate.multipleBinParts[0].count : 0) || 0);
-  const todayCount = Number(aggregate.today && aggregate.today[0] ? aggregate.today[0].count : 0);
-  const activeUserCount = Number(aggregate.activeUsers && aggregate.activeUsers[0] ? aggregate.activeUsers[0].count : 0);
-  const distribution = Object.fromEntries((aggregate.distribution || []).map((row) => [String(row._id || '').toUpperCase(), Number(row.quantity || 0)]));
+  const lastScan = dashboardSummary.latestScan || {};
+  const multipleBinPartCount = dashboardSummary.multipleBinPartCount;
+  const todayCount = dashboardSummary.todayCount;
+  const activeUserCount = dashboardSummary.activeUserCount;
+  const distribution = Object.fromEntries(dashboardSummary.distribution);
   const inwardCount = Number(distribution.INWARD || 0);
   const outwardCount = Number(distribution.OUTWARD || 0);
   const manualCount = Number(distribution.MANUAL || 0);
@@ -2011,6 +1949,32 @@ async function autoDetectOutwardBin({ dealerCode, auditId, partNumber, binLocati
 
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function scanHistoryPartClause(value, { exactPart = true } = {}) {
+  const text = upper(value);
+  const normalizedPart = normalizePartNumber(text);
+  const partNumberLookup = /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(text) && normalizedPart.length >= 6;
+  if (partNumberLookup && exactPart) {
+    return {
+      $or: [
+        { normalizedPartNumber: normalizedPart },
+        { partNumber: normalizedPart },
+        { part: normalizedPart }
+      ]
+    };
+  }
+  const partRegex = { $regex: escapeRegex(text), $options: 'i' };
+  return {
+    $or: [
+      { part: partRegex },
+      { partNumber: partRegex },
+      { normalizedPartNumber: partRegex },
+      { rawScan: partRegex },
+      { rawScanString: partRegex },
+      { rawUpi: partRegex }
+    ]
+  };
 }
 
 function applyScanVisibility(req, filter = {}) {
@@ -4590,18 +4554,17 @@ router.get('/history', auth.requireAuth, async (req, res) => {
     const page = Math.max(1, Number.parseInt(req.query.page || '1', 10) || 1);
     const limit = Math.min(500, Math.max(25, Number.parseInt(req.query.limit || '100', 10) || 100));
     const skip = (page - 1) * limit;
+    let partSearchValue = '';
+    let exactPartSearch = false;
+    let partSearchClauseIndex = -1;
     if (req.query.part || req.query.partNo || req.query.partNumber) {
-      const partRegex = { $regex: escapeRegex(upper(req.query.part || req.query.partNo || req.query.partNumber)), $options: 'i' };
-      filter.$and = (filter.$and || []).concat([{
-        $or: [
-          { part: partRegex },
-          { partNumber: partRegex },
-          { normalizedPartNumber: partRegex },
-          { rawScan: partRegex },
-          { rawScanString: partRegex },
-          { rawUpi: partRegex }
-        ]
-      }]);
+      partSearchValue = req.query.part || req.query.partNo || req.query.partNumber;
+      const partText = upper(partSearchValue);
+      exactPartSearch = /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(partText)
+        && normalizePartNumber(partText).length >= 6;
+      filter.$and = filter.$and || [];
+      partSearchClauseIndex = filter.$and.length;
+      filter.$and.push(scanHistoryPartClause(partSearchValue));
     }
     if (req.query.bin) {
       const binRegex = { $regex: escapeRegex(String(req.query.bin).trim()), $options: 'i' };
@@ -4621,7 +4584,7 @@ router.get('/history', auth.requireAuth, async (req, res) => {
     if (req.query.type) duplicateFilter.scanType = upper(req.query.type);
     if (req.query.part || req.query.partNo || req.query.partNumber) duplicateFilter.partNumber = { $regex: escapeRegex(upper(req.query.part || req.query.partNo || req.query.partNumber)), $options: 'i' };
     if (req.query.bin) duplicateFilter.$or = [{ binLocation: { $regex: escapeRegex(String(req.query.bin).trim()), $options: 'i' } }, { duplicateBin: { $regex: escapeRegex(String(req.query.bin).trim()), $options: 'i' } }];
-    const [records, totalRecords, duplicateCount, totals] = await Promise.all([
+    const loadHistoryResults = () => Promise.all([
       Inventory.find(filter).sort({ timestamp: -1, createdAt: -1 }).skip(skip).limit(limit).lean(),
       Inventory.countDocuments(filter),
       DuplicateScanLog.countDocuments(duplicateFilter),
@@ -4654,6 +4617,11 @@ router.get('/history', auth.requireAuth, async (req, res) => {
         }
       ])
     ]);
+    let [records, totalRecords, duplicateCount, totals] = await loadHistoryResults();
+    if (exactPartSearch && totalRecords === 0) {
+      filter.$and[partSearchClauseIndex] = scanHistoryPartClause(partSearchValue, { exactPart: false });
+      [records, totalRecords, duplicateCount, totals] = await loadHistoryResults();
+    }
     if (req.query.repair === '1' || req.query.repair === 'true') await repairParsedFields(records);
     const masterLookup = await masterLookupForScans(records);
     const publicRecords = records.map((record) => publicScanWithMaster(record, masterLookup));
@@ -4801,7 +4769,6 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
       stats.actualStockValueDLC = reconciliation.totals.dashboard;
       stats.valuationBasis = 'DLC';
     }
-    const recentMasterLookup = await masterLookupForScans(recent);
     stampDashboardScope(stats, filter);
     stats.dashboardRange = range || 'audit';
 
@@ -4813,7 +4780,7 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
       auditId: filter.auditId || '',
       stats,
       reconciliation,
-      recent: recent.map((record) => publicScanWithMaster(record, recentMasterLookup))
+      recent
     };
     });
   } catch (error) {
@@ -5129,6 +5096,7 @@ module.exports.normalizeDealerCode = normalizeDealerCode;
 module.exports.findMasterPart = findMasterPart;
 module.exports.numberValue = numberValue;
 module.exports.dashboardStats = dashboardStats;
+module.exports.dashboardAggregateSummary = dashboardAggregateSummary;
 module.exports.dashboardRecentRows = dashboardRecentRows;
 module.exports.publicScan = publicScan;
 module.exports.manualDuplicatePayload = manualDuplicatePayload;

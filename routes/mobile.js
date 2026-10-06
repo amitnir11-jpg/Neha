@@ -258,8 +258,10 @@ function reportRow(scan) {
 }
 
 function partFromVerificationValue(value) {
-  const raw = clean(value).toUpperCase();
-  const slashParts = raw.split('/');
+  const raw = clean(value);
+  const parsed = require('../utils/scanParser').parseScanValue(raw);
+  if (parsed.type === 'UPI' && parsed.partNumber) return normalizePartNumber(parsed.partNumber);
+  const slashParts = raw.toUpperCase().split('/');
   if (slashParts.length >= 4 && slashParts[3].trim()) {
     return normalizePartNumber(slashParts[3]);
   }
@@ -636,7 +638,7 @@ router.get('/validate-part', auth.requireAuth, async (req, res) => {
       const partNumber = normalizePartNumber(normalizedQuery.partNumber || normalizedQuery.part || '');
       const dealerCode = clean(normalizedQuery.dealerCode || '').toUpperCase();
       if (!partNumber) return { success: false, found: false, message: 'Part number is required' };
-      const price = await getPriceFromPartMaster(partNumber, dealerCode).catch(() => null);
+      const price = await getPriceFromPartMaster(partNumber, dealerCode);
       const master = price && (price.masterRecord || price.sourceRecord) ? price : null;
       return {
         success: true,

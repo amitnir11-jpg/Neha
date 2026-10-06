@@ -75,6 +75,7 @@
  */
 
 const { cleanText, normalizePartNumber, numberValue } = require('./normalize');
+const { parseScanValue } = require('./scanParser');
 const { MASTER_PRICE_SOURCE } = require('./partMasterPrice');
 const { movementTypeValue } = require('./inventoryMovementState');
 const { fittedPhysicalMovement, fittedWorkshopQuantity } = require('./fittedStock');
@@ -124,6 +125,16 @@ function parseRawMrp(rawValue) {
 
 function parseSlashDelimitedUpi(rawValue) {
   const raw = String(rawValue || '').trim();
+  const parsed = parseScanValue(raw);
+  if (parsed.type === 'UPI' && parsed.partNumber) {
+    return {
+      upiNo: cleanText(parsed.fields[1] || '').toUpperCase(),
+      upiId: cleanText(parsed.fields[1] || '').toUpperCase(),
+      partNumber: normalizePartNumber(parsed.partNumber),
+      qty: Number.isInteger(parsed.quantity) && parsed.quantity > 0 ? parsed.quantity : 1,
+      mrp: undefined
+    };
+  }
   const parts = raw.split('/').map((part) => part.trim());
   if (parts.length < 6 || !parts[3]) return {};
   const partNumber = normalizePartNumber(parts[3]);

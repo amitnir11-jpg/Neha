@@ -37,7 +37,7 @@ const {
   remainingQtyValue,
   upiCodeValue
 } = require('../utils/inventoryMovementState');
-const { isDatabaseReady, withDatabaseTransaction } = require('../services/prisma');
+const { getPrismaClient, isDatabaseReady, withDatabaseTransaction } = require('../services/prisma');
 const { invalidateCache } = require('../utils/safeCache');
 const scanModification = require('../services/ScanModificationService');
 
@@ -1617,7 +1617,12 @@ async function scanPolicyResult(scan = {}) {
     }
     return { ok: true };
   }
-  const manualDuplicate = await findManualPartBinDuplicate(scan);
+  scan.rawUpiHash = scan.rawUpiHash || duplicatePolicy.rawUpiHash(scan);
+  const identityFilter = duplicatePolicy.identityDuplicateFilter(scan);
+  const [manualDuplicate, identityDuplicate] = await Promise.all([
+    findManualPartBinDuplicate(scan),
+    identityFilter ? Inventory.findOne(identityFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null
+  ]);
   if (manualDuplicate) {
     const requestedQty = requestedQuantity(scan, 1);
     const payload = manualDuplicatePayload(manualDuplicate, requestedQty);
@@ -1630,13 +1635,18 @@ async function scanPolicyResult(scan = {}) {
       message: payload.message
     };
   }
-  scan.rawUpiHash = scan.rawUpiHash || duplicatePolicy.rawUpiHash(scan);
-  const identityFilter = duplicatePolicy.identityDuplicateFilter(scan);
-  const identityDuplicate = identityFilter ? await Inventory.findOne(identityFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null;
   if (identityDuplicate) {
     return { ok: false, status: 'duplicate', existing: identityDuplicate, reason: 'Duplicate exact scan request', message: 'Duplicate scan request already processed.' };
   }
   return { ok: true };
+}
+
+async function lockUpiIdentity(scan = {}) {
+  const globalUpiKey = clean(scan.globalUpiKey);
+  if (!globalUpiKey) return;
+  await getPrismaClient().$queryRaw`
+    SELECT pg_advisory_xact_lock(hashtextextended(${`daksh-upi:${globalUpiKey}`}, 0)) IS NULL AS locked
+  `;
 }
 
 async function saveNormalizedScan(scan, req) {
@@ -1714,8 +1724,20 @@ async function saveNormalizedScan(scan, req) {
     }
   }
   markPerf('binOwnership');
-  applyUserContext(scan, await resolveScanUserContext(req, scan));
-  markPerf('userContext');
+  const validationPromise = scan.scanType === 'VERIFICATION'
+    ? Promise.resolve(null)
+    : masterValidation.validatePartAgainstMaster({
+      partNumber: scan.normalizedPartNumber || scan.partNumber,
+      dealerCode: scan.dealerCode,
+      rawScannedValue: scan.rawScanString,
+      logger: console
+    });
+  const [userContext, validation] = await Promise.all([
+    resolveScanUserContext(req, scan),
+    validationPromise
+  ]);
+  applyUserContext(scan, userContext);
+  markPerf('userContextAndPartMaster');
   const trustedUser = req.user || {};
   if (trustedUser.id || trustedUser._id) {
     scan.userId = clean(trustedUser.id || trustedUser._id);
@@ -1737,13 +1759,6 @@ async function saveNormalizedScan(scan, req) {
     });
     return { status: 'verification', scan: result, error: result.message };
   }
-  const validation = await masterValidation.validatePartAgainstMaster({
-    partNumber: scan.normalizedPartNumber || scan.partNumber,
-    dealerCode: scan.dealerCode,
-    rawScannedValue: scan.rawScanString,
-    logger: console
-  });
-  markPerf('partMaster');
   const master = validation.master;
   
   if (!scan.dealerCode && master && master.dealerCode) {
@@ -1963,6 +1978,17 @@ async function saveNormalizedScan(scan, req) {
   let doc;
   try {
     doc = await withDatabaseTransaction(async () => {
+      await lockUpiIdentity(scan);
+      const activeUpiFilter = duplicatePolicy.activeUpiDuplicateFilter(scan);
+      const concurrentUpiDuplicate = activeUpiFilter
+        ? await Inventory.findOne(activeUpiFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
+        : null;
+      if (concurrentUpiDuplicate) {
+        const error = new Error(duplicatePolicy.duplicateUpiMessage(concurrentUpiDuplicate));
+        error.code = 'DUPLICATE_UPI_SCAN';
+        error.existing = concurrentUpiDuplicate;
+        throw error;
+      }
       if (upiCodeValue(scan) && ['OUTWARD', 'FITTED'].includes(scan.scanType) && scan._upiSourceRow) {
         const currentBin = upper(scan._upiCurrentLocation?.binLocation || '');
         const nextStatus = scan.scanType === 'FITTED' ? 'FITTED' : 'OUTWARD';
@@ -2088,6 +2114,17 @@ async function saveNormalizedScan(scan, req) {
     });
     markPerf('transactionSave');
     } catch (error) {
+      if (error.code === 'DUPLICATE_UPI_SCAN') {
+        const policy = {
+          status: 'duplicate',
+          existing: error.existing,
+          upiDuplicate: true,
+          reason: 'Duplicate QR/UPI already scanned',
+          message: error.message
+        };
+        await logDuplicateScan(scan, error.existing, policy.reason);
+        return duplicateResult(policy, scan);
+      }
       if (error.code === 'UPI_LOCATION_CHANGED') {
         return {
           status: 'failed',

@@ -29,10 +29,17 @@ function partLookup(partNumber) {
 }
 
 function legacyPartLookup(partNumber) {
+  const part = normalizePartNumber(partNumber);
+  const flexiblePattern = Array.from(part, (character) =>
+    character.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  ).join('[\\s-]*');
+  const flexiblePart = new RegExp(`^\\s*${flexiblePattern}\\s*$`, 'i');
   return {
     $or: [
-      { partNo: normalizePartNumber(partNumber) },
-      { part: normalizePartNumber(partNumber) }
+      { normalizedPartNumber: flexiblePart },
+      { partNumber: flexiblePart },
+      { partNo: flexiblePart },
+      { part: flexiblePart }
     ]
   };
 }
@@ -473,6 +480,7 @@ module.exports = {
   masterPriceError,
   masterPriceMissing,
   masterPriceScanFields,
+  legacyPartLookup,
   partListLookup,
   partLookup,
   pickBestPriceRecord,
