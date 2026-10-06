@@ -4243,12 +4243,18 @@ router.post('/:scanId/mark-outward', auth.requireAuth, auth.requireAdmin, async 
         throw error;
       }
 
-      const movement = await Inventory.create(buildScanHistoryOutwardMovement(
+      const { processScan } = require('../services/ScanProcessingService');
+      const processed = await processScan(buildScanHistoryOutwardMovement(
         sourceScan,
         requestedQty,
         req.user || {}
-      ));
-      return { movement, remainingQty: availableQty - requestedQty };
+      ), { req });
+      if (!processed.success || !processed.scan) {
+        const error = new Error(processed.message || 'Unable to record the outward movement.');
+        error.status = processed.httpStatus || 409;
+        throw error;
+      }
+      return { movement: processed.scan, remainingQty: availableQty - requestedQty };
     });
 
     invalidateInventoryCaches({

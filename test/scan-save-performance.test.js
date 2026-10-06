@@ -85,6 +85,9 @@ test('Scan History outward movements deduct the requested quantity without reusi
   assert.equal(movement.masterFound, true);
   assert.equal(movement.masterMatch, true);
   assert.equal(movement.isMasterMatched, true);
+  assert.equal(movement.deviceId, 'WEB-SCAN-HISTORY-OUTWARD');
+  assert.equal(movement.scanMode, 'Scan History Outward');
+  assert.equal(movement.source, 'manual');
   assert.equal(movement.upiCode, '');
   assert.equal(movement.rawScanString, '');
   assert.equal(movement.globalUpiKey, '');
