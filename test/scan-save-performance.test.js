@@ -81,6 +81,9 @@ test('Scan History outward movements deduct the requested quantity without reusi
   assert.equal(movement.scanStatus, 'OUTWARD_DONE');
   assert.equal(movement.syncStatus, 'synced');
   assert.equal(movement.activeInventory, false);
+  assert.equal(movement.masterFound, true);
+  assert.equal(movement.masterMatch, true);
+  assert.equal(movement.isMasterMatched, true);
   assert.equal(movement.upiCode, '');
   assert.equal(movement.rawScanString, '');
   assert.equal(movement.globalUpiKey, '');
@@ -123,6 +126,30 @@ test('Scan History outward movement reduces available stock in its bin', async (
   assert.equal(stock.availableQty, 5);
   assert.equal(stock.bins[0].binLocation, 'BIN-4');
   assert.equal(stock.bins[0].availableQty, 5);
+});
+
+test('Scan History summary displays net available quantity after outward movements', () => {
+  const context = evaluateFunction(
+    'public/ui.js',
+    'function scanHistorySummary(',
+    'function updateScanHistorySummary(',
+    {
+      scanHistoryQuantity: scan => Number(scan.qty || 0),
+      scanHistoryPartNumber: scan => String(scan.partNumber || ''),
+      scanQuantity: scan => scan.qty
+    }
+  );
+  const summary = context.scanHistorySummary([
+    { partNumber: 'PART-123', scanType: 'INWARD', qty: 10 },
+    { partNumber: 'PART-123', scanType: 'OUTWARD', qty: 1 }
+  ], {
+    partsScanned: 11,
+    netAvailableQuantity: 9,
+    scanRows: 2,
+    visibleRows: 2
+  });
+  assert.equal(summary.partsScanned, 9);
+  assert.equal(summary.scanRows, 2);
 });
 
 test('UPI advisory lock is scoped to the transaction and not used without a key', async () => {

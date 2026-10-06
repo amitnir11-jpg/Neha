@@ -3709,7 +3709,7 @@
     const visibleParts = new Set(records.map(scanHistoryPartNumber).filter(Boolean));
     return {
       scanRows: Number(summary.scanRows ?? summary.totalRecords ?? summary.totalRows ?? records.length),
-      partsScanned: Number(summary.partsScanned ?? summary.totalQuantity ?? visibleTotalQty),
+      partsScanned: Number(summary.netAvailableQuantity ?? summary.partsScanned ?? summary.totalQuantity ?? visibleTotalQty),
       uniqueParts: Number(summary.uniqueParts ?? summary.uniquePartCount ?? visibleParts.size),
       visibleRows: Number(summary.visibleRows ?? records.length)
     };
