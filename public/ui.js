@@ -9936,7 +9936,7 @@
       labelHeightMm: Number($('#binLabelHeight')?.value || 28),
       qrSizeMm: Number($('#binLabelQrSize')?.value || 20),
       partFontSize: Number($('#binLabelPartFont')?.value || 12),
-      binFontSize: Number($('#binLabelBinFont')?.value || 9),
+      binFontSize: Number($('#binLabelBinFont')?.value || 18),
       boldText: $('#binLabelBold')?.value !== 'false',
       printArea: $('#binLabelPrintAreaMode')?.value || 'full',
       copies: Number.isFinite(copies) ? Math.max(1, copies) : 1
@@ -10131,33 +10131,35 @@
     node.style.setProperty('--bin-label-height', `${settings.labelHeightMm || 28}mm`);
     node.style.setProperty('--bin-label-qr', `${settings.qrSizeMm || 20}mm`);
     node.style.setProperty('--bin-label-part-font', `${settings.partFontSize || 12}pt`);
-    node.style.setProperty('--bin-label-bin-font', `${settings.binFontSize || 9}pt`);
+    node.style.setProperty('--bin-label-bin-font', `${settings.binFontSize || 18}pt`);
     node.style.setProperty('--bin-label-weight', settings.boldText === false ? '700' : '900');
   }
 
   function binLabelCard(item = {}) {
-    const parts = Array.isArray(item.parts) && item.parts.length
-      ? item.parts
-      : (Array.isArray(item.partNumbers) && item.partNumbers.length
-        ? item.partNumbers.map((partNumber) => ({ partNumber }))
-        : (item.partNumber ? [{ partNumber: item.partNumber, partDescription: item.partDescription }] : []));
-    const partCount = parts.length;
-    const shrinkClass = partCount > 8 ? ' dense' : partCount > 4 ? ' compact' : '';
-    const continuation = Number(item.totalChunks || 1) > 1 ? `<span class="bin-label-continuation">Part list ${escapeHtml(item.chunkNo)} / ${escapeHtml(item.totalChunks)}</span>` : '';
     return `
-      <div class="bin-label-card${item.binOnly || !parts.length ? ' bin-only' : ''}">
-        <div class="bin-label-left">
-          <img src="${escapeHtml(item.dataUrl || '')}" alt="">
-          <strong>${escapeHtml(item.binNumber)}</strong>
-        </div>
-        <div class="bin-label-right${shrinkClass}">
-          <div class="bin-label-part-list">
-            ${parts.map((part) => `<strong>${partLink(part.partNumber)}</strong>`).join('')}
-          </div>
-          ${continuation}
-        </div>
+      <div class="bin-label-card">
+        <img class="bin-label-qr" src="${escapeHtml(item.dataUrl || '')}" alt="">
+        <strong class="bin-label-name">${escapeHtml(item.binNumber)}</strong>
       </div>
     `;
+  }
+
+  function fitBinLabelNames(node, settings = {}) {
+    if (!node) return;
+    const context = document.createElement('canvas').getContext('2d');
+    if (!context) return;
+    const pixelsPerMm = 96 / 25.4;
+    // Match the shared card's 2mm padding, 3mm gap and configured QR size.
+    const width = Math.max(1, (Number(settings.labelWidthMm || 70) - 4 - 3 - Number(settings.qrSizeMm || 20)) * pixelsPerMm);
+    const height = Math.max(1, (Number(settings.labelHeightMm || 28) - 4) * pixelsPerMm);
+    const fontSize = Number(settings.binFontSize || 18) * 96 / 72;
+    const weight = settings.boldText === false ? '700' : '900';
+    context.font = `${weight} ${fontSize}px Arial`;
+    node.querySelectorAll('.bin-label-name').forEach((name) => {
+      const textWidth = context.measureText(name.textContent).width;
+      const scale = Math.min(1, width / Math.max(1, textWidth), height / (fontSize * 1.05));
+      name.style.fontSize = `${Math.floor(fontSize * scale * 100) / 100}px`;
+    });
   }
 
   function renderBinLabelPreview(items = [], settings = {}) {
@@ -10170,6 +10172,8 @@
     const html = items.length ? items.map(binLabelCard).join('') : '<div class="muted">Preview will appear here after selecting parts.</div>';
     if (preview) preview.innerHTML = html;
     if (printArea) printArea.innerHTML = items.map(binLabelCard).join('');
+    fitBinLabelNames(preview, settings);
+    fitBinLabelNames(printArea, settings);
     setText('binLabelPreviewCount', `${items.length} labels`);
   }
 
@@ -10222,13 +10226,9 @@
           background: #fff !important;
         }
         body.print-bin-labels #binLabelPrintSheet .bin-label-card {
-          border: 1px solid #111827 !important;
-          border-radius: 1.5mm !important;
+          border: 0 !important;
+          border-radius: 0 !important;
           box-shadow: none !important;
-        }
-        body.print-bin-labels #binLabelPrintSheet .bin-label-card:not(.bin-only) .bin-label-left strong,
-        body.print-bin-labels #binLabelPrintSheet .bin-label-continuation {
-          display: none !important;
         }
         body.print-bin-labels #binLabelPrintSheet a,
         body.print-bin-labels #binLabelPrintSheet .enterprise-link,
@@ -10243,6 +10243,7 @@
     printSheet.className = 'bin-label-print-area';
     printSheet.innerHTML = items.map(binLabelCard).join('');
     applyBinLabelVariables(printSheet, settings);
+    fitBinLabelNames(printSheet, settings);
     document.head.appendChild(printStyle);
     document.body.appendChild(printSheet);
     const cleanupPrintSheet = () => {

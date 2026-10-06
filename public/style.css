@@ -4697,7 +4697,7 @@ td.numeric,
   --bin-label-height: 28mm;
   --bin-label-qr: 20mm;
   --bin-label-part-font: 12pt;
-  --bin-label-bin-font: 9pt;
+  --bin-label-bin-font: 18pt;
   --bin-label-weight: 900;
 }
 
@@ -4721,98 +4721,37 @@ td.numeric,
   width: var(--bin-label-width);
   height: var(--bin-label-height);
   overflow: hidden;
-  border: 1px solid #111827;
-  border-radius: 2mm;
+  border: 0;
+  border-radius: 0;
   background: #fff;
-  color: #020617;
+  color: #000;
   padding: 2mm;
   box-sizing: border-box;
   break-inside: avoid;
   page-break-inside: avoid;
 }
 
-.bin-label-left {
-  display: grid;
-  justify-items: center;
-  align-content: center;
-  gap: 1mm;
-  min-width: 0;
-  color: #020617;
-  font-weight: var(--bin-label-weight);
-}
-
-.bin-label-left img {
+.bin-label-card .bin-label-qr {
+  display: block;
   width: var(--bin-label-qr);
   height: var(--bin-label-qr);
   object-fit: contain;
   image-rendering: crisp-edges;
 }
 
-.bin-label-left strong {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: #020617;
+.bin-label-card .bin-label-name {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: #000;
+  font-family: Arial, sans-serif;
   font-size: var(--bin-label-bin-font);
-  line-height: 1.05;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.bin-label-right {
-  display: grid;
-  gap: 0.8mm;
-  align-content: center;
-  min-width: 0;
-  max-height: 100%;
-  overflow: hidden;
-  color: #020617;
   font-weight: var(--bin-label-weight);
-}
-
-.bin-label-part-list {
-  display: grid;
-  gap: 0.55mm;
-  align-content: center;
-  min-width: 0;
-}
-
-.bin-label-right strong,
-.bin-label-part-list strong {
-  overflow-wrap: anywhere;
-  color: #020617;
-  font-size: var(--bin-label-part-font);
-  line-height: 1.08;
-}
-
-.bin-label-right.compact strong,
-.bin-label-right.compact .bin-label-part-list strong {
-  font-size: max(7pt, calc(var(--bin-label-part-font) * 0.86));
-  line-height: 1.02;
-}
-
-.bin-label-right.dense strong,
-.bin-label-right.dense .bin-label-part-list strong {
-  font-size: max(6pt, calc(var(--bin-label-part-font) * 0.74));
-  line-height: 0.98;
-}
-
-.bin-label-right span,
-.bin-label-right small {
-  overflow: hidden;
-  color: #111827;
-  font-size: max(7pt, calc(var(--bin-label-bin-font) * 0.9));
-  font-weight: 800;
-  line-height: 1.1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.bin-label-continuation {
-  color: #334155;
-  font-size: max(6pt, calc(var(--bin-label-bin-font) * 0.8));
-  font-weight: 800;
-  line-height: 1;
+  line-height: 1.05;
+  text-align: left;
+  text-decoration: none;
   white-space: nowrap;
 }
 
@@ -4922,14 +4861,9 @@ td.numeric,
   }
 
   body.print-bin-labels #binLabelPrintSheet .bin-label-card {
-    border: 1px solid #111827;
-    border-radius: 1.5mm;
+    border: 0;
+    border-radius: 0;
     box-shadow: none;
-  }
-
-  body.print-bin-labels #binLabelPrintSheet .bin-label-left strong,
-  body.print-bin-labels #binLabelPrintSheet .bin-label-continuation {
-    display: none !important;
   }
 
   body.print-bin-labels #binLabelPrintSheet a,

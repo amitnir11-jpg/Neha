@@ -139,7 +139,7 @@ function labelSettings(input = {}) {
     labelHeightMm: numberSetting(input.labelHeightMm || input.labelHeight, 28, 12, 140),
     qrSizeMm: numberSetting(input.qrSizeMm || input.qrSize, 20, 8, 90),
     partFontSize: numberSetting(input.partFontSize, 12, 6, 32),
-    binFontSize: numberSetting(input.binFontSize, 9, 6, 24),
+    binFontSize: numberSetting(input.binFontSize, 18, 6, 24),
     boldText: input.boldText !== false && String(input.boldText || 'true').toLowerCase() !== 'false',
     printArea: ['full', 'custom'].includes(String(input.printArea || '').toLowerCase()) ? String(input.printArea).toLowerCase() : 'full',
     copies: numberSetting(input.copies, 1, 1, 100)
