@@ -12526,6 +12526,14 @@
       if (dealerCode) loadBinTransferBins(dealerCode).catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'scan') {
+      // Opening Scan must expose the redesigned operator workspace immediately.
+      // The other three tabs remain available through their existing handlers.
+      $$('#scan .subtab').forEach((tab) => tab.classList.toggle('active', tab.dataset.subview === 'barcodeEntry'));
+      $$('#scan .subview').forEach((panel) => panel.classList.toggle('active', panel.id === 'barcodeEntry'));
+      state.scanHistoryPage = 1;
+      restoreBarcodeScanDefaults();
+      renderScanHistoryRecords();
+      focusNextBarcodeField();
       const scanJobs = [loadScanHistory(), loadBarcodeBins(), loadPairingQr()];
       if (isAdmin()) scanJobs.push(loadBins());
       Promise.all(scanJobs).catch((error) => toast(error.message, 'error'));

@@ -67,4 +67,12 @@ Reverification: admin/audit-user Chrome fixture sessions pass with zero unexpect
 
 Physical scanner/audible-beep checks and authenticated production-audit comparisons still require an operator/test session. Public health and served asset verification after deployment do not substitute for those checks. No production stock transaction was performed.
 
+## Default workspace correction — 2026-10-07
+
+The user's live screenshot exposed a missed navigation path: opening Scan still selected the original Manual Entry tab. The redesign existed under Barcode/Web Scan, but the previous browser check clicked that tab before checking the page.
+
+Scan now defaults to Barcode/Web Scan in the initial HTML and whenever the Scan navigation is opened. All four tabs and their existing handlers remain available. The desktop UI cache tag is advanced to `20261007-barcode-default-v4`.
+
+The browser regression now checks the default tab before any subtab click, verifies that startup history requests use limit 10, and checks that returning from Dashboard opens the redesigned workspace after Manual Entry was selected. Admin/audit-user fixture checks and all three desktop viewport checks pass with zero unexpected JavaScript console errors. No scan API, pricing, inventory calculation or database change was made for this correction.
+
 If you are unsure whether any code is used by another module, do not delete or change it. Trace its references first and report to me before modifying it.

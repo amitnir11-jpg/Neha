@@ -313,13 +313,13 @@
       <section id="scan" class="view">
         <div class="card">
           <div class="subtabs">
-            <button class="subtab active" data-subview="manualEntry">Manual Entry</button>
+            <button class="subtab" data-subview="manualEntry">Manual Entry</button>
             <button class="subtab" data-subview="localPartEntry">Local Part</button>
-            <button class="subtab" data-subview="barcodeEntry">Barcode/Web Scan</button>
+            <button class="subtab active" data-subview="barcodeEntry">Barcode/Web Scan</button>
             <button class="subtab" data-subview="mobileSync">Mobile Sync</button>
           </div>
 
-          <div id="manualEntry" class="subview active">
+          <div id="manualEntry" class="subview">
             <form id="manualScanForm" class="grid-form">
               <label>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
               <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>VERIFICATION</option><option>FITTED</option><option>DAMAGE</option></select></label>
@@ -392,7 +392,7 @@
             </section>
           </div>
 
-          <div id="barcodeEntry" class="subview">
+          <div id="barcodeEntry" class="subview active">
             <div class="barcode-workspace-head">
               <h2>Scan Parts - Barcode / QR</h2>
               <div class="barcode-bin-state"><span id="barcodeBinReady" role="status" aria-live="polite">Select or scan Source Bin Location first.</span><span class="barcode-current-bin">Current Bin<strong id="barcodeCurrentBin">—</strong></span></div>
@@ -1751,7 +1751,7 @@
   <script src="/js/scan-parser.js?v=20261006-qr-field-mapping-v2"></script>
   <script src="/js/runtime.js?v=20261004-report-cache-v2"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20261007-barcode-workspace-verified-v3"></script>
+  <script src="/ui.js?v=20261007-barcode-default-v4"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>
