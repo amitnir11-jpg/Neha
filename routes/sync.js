@@ -497,8 +497,11 @@ async function resolveUpiCurrentLocation(scan = {}) {
   return null;
 }
 
-async function prepareUpiSourceLocation(scan = {}) {
+async function prepareUpiSourceLocation(scan = {}, options = {}) {
   if (!['OUTWARD', 'FITTED'].includes(scan.scanType)) return null;
+  // Only the server's stock-checked Scan History action may sell by part/bin.
+  // This option is never read from a submitted scan or request body.
+  if (scan.scanType === 'OUTWARD' && options.scanHistoryOutward === true && !upiCodeValue(scan)) return null;
   // OUTWARD always requires a barcode/UPI that resolves to this dealer's valid
   // physical scan history. Part master/DMS stock is not sufficient evidence.
   if (scan.scanType === 'OUTWARD' && !upiCodeValue(scan)) return OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE;
@@ -1649,7 +1652,7 @@ async function lockUpiIdentity(scan = {}) {
   `;
 }
 
-async function saveNormalizedScan(scan, req) {
+async function saveNormalizedScan(scan, req, options = {}) {
   const perfEnabled = process.env.SCAN_PERF_LOGS === 'true';
   const perfStart = performance.now();
   let perfLast = perfStart;
@@ -1710,7 +1713,7 @@ async function saveNormalizedScan(scan, req) {
       return { status: 'synced', scan: existingTransaction, error: '', alreadyApplied: true };
     }
   }
-  const upiLocationError = await prepareUpiSourceLocation(scan);
+  const upiLocationError = await prepareUpiSourceLocation(scan, options);
   markPerf('upiLocation');
   if (upiLocationError) return { status: 'failed', scan, error: upiLocationError };
   if (scan.binLocation) {

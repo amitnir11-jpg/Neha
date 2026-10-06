@@ -4661,13 +4661,21 @@
     setTimeout(() => form.elements[focusField]?.focus(), 0);
   }
 
+  function scanHistoryDisplayQuantity(scan = {}) {
+    return String(scan.scanType || scan.type || '').toUpperCase() === 'INWARD'
+      && scan.remainingQty !== undefined && scan.remainingQty !== null
+      ? Math.max(0, Number(scan.remainingQty) || 0) : scanQuantity(scan, 0);
+  }
+
   function scanHistoryRow(scan = {}) {
     const id = scanHistoryRecordId(scan);
     const partNumber = scan.partNumber || scan.part || scan.normalizedPartNumber || '';
     const partDescription = scan.partDescription || scan.partName || scan.description || partNumber || '-';
     const rowMrp = scan.displayMRP ?? scan.currentCatalogueMRP ?? scan.valuationMRP ?? scan.mrp ?? 0;
     const rowDlc = scan.currentCatalogueDLC ?? scan.dlc ?? 0;
-    const totalQty = scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1);
+    const displayQty = scanHistoryDisplayQuantity(scan);
+    const totalQty = String(scan.scanType || scan.type || '').toUpperCase() === 'INWARD'
+      ? displayQty : scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1);
     const canEditDetails = canEditScanDetails(scan);
     const scanType = String(scan.scanType || scan.type || '').toUpperCase();
     const editBinOption = canEditDetails && ['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType)
@@ -4706,7 +4714,7 @@
         <td>${escapeHtml(scan.productGroup || '')}</td>
         <td>${escapeHtml(scan.model || '')}</td>
         <td>${escapeHtml(scan.manufacturingYear || scan.year || '')}</td>
-        <td>${escapeHtml(scanQuantity(scan, 0))}</td>
+        <td>${escapeHtml(displayQty)}</td>
         <td>${escapeHtml(totalQty)}</td>
         <td>${escapeHtml(scan.type)}</td>
         <td>${escapeHtml(scan.bin)}</td>
@@ -4769,7 +4777,7 @@
     if (!scan) throw new Error('Scan record not found');
     const partNumber = normalizePartText(scan.partNumber || scan.part || scan.normalizedPartNumber || '');
     const binLocation = cleanDealerCode(scan.binLocation || scan.bin || '');
-    const defaultQty = scanQuantity(scan, 1);
+    const defaultQty = scanHistoryDisplayQuantity(scan);
     const answer = window.prompt(
       `Enter the quantity sold for ${partNumber} from bin ${binLocation}. The remaining stock will be updated.`,
       String(defaultQty)

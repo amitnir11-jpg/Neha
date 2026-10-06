@@ -4236,7 +4236,7 @@ router.post('/:scanId/mark-outward', auth.requireAuth, auth.requireAdmin, async 
         partNumber
       });
       const binStock = stock.bins.find((bin) => bin.binLocation === binLocation);
-      const availableQty = Number(binStock?.availableQty || 0);
+      const availableQty = Math.min(Number(binStock?.availableQty || 0), remainingQtyValue(sourceScan));
       if (requestedQty > availableQty) {
         const error = new Error(`Only ${availableQty} unit(s) of ${partNumber} are available in bin ${binLocation}.`);
         error.status = 409;
@@ -4248,13 +4248,18 @@ router.post('/:scanId/mark-outward', auth.requireAuth, auth.requireAdmin, async 
         sourceScan,
         requestedQty,
         req.user || {}
-      ), { req });
+      ), { req, scanHistoryOutward: true });
       if (!processed.success || !processed.scan) {
         const error = new Error(processed.message || 'Unable to record the outward movement.');
         error.status = processed.httpStatus || 409;
         throw error;
       }
-      return { movement: processed.scan, remainingQty: availableQty - requestedQty };
+      const remainingQty = availableQty - requestedQty;
+      await Inventory.updateOne({ _id: sourceScan._id }, { $set: {
+        remainingQty,
+        activeInventory: remainingQty > 0
+      } });
+      return { movement: processed.scan, remainingQty };
     });
 
     invalidateInventoryCaches({

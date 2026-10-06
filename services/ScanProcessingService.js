@@ -64,7 +64,9 @@ async function processScan(input = {}, options = {}) {
     syncKey: clean(normalized.syncKey || ''),
     scanId: clean(normalized.scanId || normalized.uniqueScanId || '')
   });
-  const result = await sync.saveNormalizedScan(normalized, req);
+  const result = await sync.saveNormalizedScan(normalized, req, {
+    scanHistoryOutward: options.scanHistoryOutward === true
+  });
   const savedAt = performance.now();
   const status = clean(result.status).toLowerCase();
   const success = status === 'synced' || status === 'verification';
