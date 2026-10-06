@@ -65,7 +65,7 @@ test('UPI advisory lock is scoped to the transaction and not used without a key'
   assert.equal(calls.length, 0);
   await context.lockUpiIdentity({ globalUpiKey: 'identity-key' });
   assert.equal(calls.length, 1);
-  assert.match(calls[0].sql, /pg_advisory_xact_lock\(hashtextextended\(\?, 0\)\)/);
+  assert.match(calls[0].sql, /pg_advisory_xact_lock\(hashtextextended\(\?, 0\)\) IS NULL AS locked/);
   assert.deepEqual(calls[0].values, ['daksh-upi:identity-key']);
 });
 

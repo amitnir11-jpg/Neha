@@ -1645,7 +1645,7 @@ async function lockUpiIdentity(scan = {}) {
   const globalUpiKey = clean(scan.globalUpiKey);
   if (!globalUpiKey) return;
   await getPrismaClient().$queryRaw`
-    SELECT pg_advisory_xact_lock(hashtextextended(${`daksh-upi:${globalUpiKey}`}, 0))
+    SELECT pg_advisory_xact_lock(hashtextextended(${`daksh-upi:${globalUpiKey}`}, 0)) IS NULL AS locked
   `;
 }
 
