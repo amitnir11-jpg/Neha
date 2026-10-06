@@ -10,7 +10,7 @@ function normalizePartToken(value) {
 
 function isQuantityToken(value) {
   const token = clean(value);
-  if (!/^\d+$/.test(token)) return false;
+  if (!/^\d{1,7}$/.test(token)) return false;
   const qty = Number.parseInt(token, 10);
   return Number.isInteger(qty) && qty >= 1 && qty <= 999999;
 }
