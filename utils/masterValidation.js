@@ -49,6 +49,13 @@ function validScanClause() {
           { isMasterMatched: true },
           {
             $and: [
+              { scanType: 'OUTWARD' },
+              { deviceId: 'WEB-SCAN-HISTORY-OUTWARD' },
+              { scanMode: 'Scan History Outward' }
+            ]
+          },
+          {
+            $and: [
               { masterFound: { $ne: false } },
               { masterMatch: { $ne: false } },
               { isMasterMatched: { $ne: false } }

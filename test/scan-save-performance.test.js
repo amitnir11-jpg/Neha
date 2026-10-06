@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
 const { normalizePartNumber } = require('../utils/normalize');
+const { validScanClause } = require('../utils/masterValidation');
 
 function evaluateFunction(sourcePath, startMarker, endMarker, context) {
   const source = fs.readFileSync(sourcePath, 'utf8');
@@ -150,6 +151,15 @@ test('Scan History summary displays net available quantity after outward movemen
   });
   assert.equal(summary.partsScanned, 9);
   assert.equal(summary.scanRows, 2);
+});
+
+test('previous Scan History outward entries remain valid after metadata normalization', () => {
+  const allowedConditions = validScanClause().$and[0].$or;
+  assert.ok(allowedConditions.some(condition =>
+    condition.$and?.some(clause => clause.deviceId === 'WEB-SCAN-HISTORY-OUTWARD')
+      && condition.$and.some(clause => clause.scanMode === 'Scan History Outward')
+      && condition.$and.some(clause => clause.scanType === 'OUTWARD')
+  ));
 });
 
 test('UPI advisory lock is scoped to the transaction and not used without a key', async () => {
