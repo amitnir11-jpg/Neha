@@ -638,7 +638,7 @@ router.get('/validate-part', auth.requireAuth, async (req, res) => {
       const partNumber = normalizePartNumber(normalizedQuery.partNumber || normalizedQuery.part || '');
       const dealerCode = clean(normalizedQuery.dealerCode || '').toUpperCase();
       if (!partNumber) return { success: false, found: false, message: 'Part number is required' };
-      const price = await getPriceFromPartMaster(partNumber, dealerCode).catch(() => null);
+      const price = await getPriceFromPartMaster(partNumber, dealerCode);
       const master = price && (price.masterRecord || price.sourceRecord) ? price : null;
       return {
         success: true,
