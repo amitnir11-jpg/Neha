@@ -258,8 +258,10 @@ function reportRow(scan) {
 }
 
 function partFromVerificationValue(value) {
-  const raw = clean(value).toUpperCase();
-  const slashParts = raw.split('/');
+  const raw = clean(value);
+  const parsed = require('../utils/scanParser').parseScanValue(raw);
+  if (parsed.type === 'UPI' && parsed.partNumber) return normalizePartNumber(parsed.partNumber);
+  const slashParts = raw.toUpperCase().split('/');
   if (slashParts.length >= 4 && slashParts[3].trim()) {
     return normalizePartNumber(slashParts[3]);
   }

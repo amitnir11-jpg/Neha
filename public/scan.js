@@ -482,6 +482,11 @@
       }
     } catch (_) {}
 
+    const parser = window && window.DakshScanParser ? window.DakshScanParser : null;
+    const parsed = parser ? parser.parseScanValue(text) : null;
+    if (parsed && parsed.type === 'UPI' && parsed.partNumber) {
+      return normalizePartCandidateValue(parsed.partNumber);
+    }
     const slashParts = text.split('/');
     if (slashParts.length >= 6 && slashParts[3] && slashParts[4] && slashParts[5]) {
       return normalizePartCandidateValue(slashParts[3]);

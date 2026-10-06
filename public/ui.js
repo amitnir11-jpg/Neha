@@ -142,6 +142,7 @@
     dashboardLoadPromise: null,
     dashboardLoadRequestId: 0,
     dashboardAbortController: null,
+    dashboardTopBinsAbortController: null,
     dashboardLoaded: false,
     dashboardLastLoadedAt: 0,
     dashboardStats: {},
@@ -2450,17 +2451,31 @@
 
   function parseRawScanText(rawScan) {
     const raw = String(rawScan || '').trim();
-    const parts = raw.split('/');
-    if (parts.length >= 6 && parts[3] && parts[4] && parts[5]) {
-      const slashQty = optionalScanNumber(parts[4]);
-      const slashMrp = optionalScanNumber(parts[5]);
+    const parser = window && window.DakshScanParser ? window.DakshScanParser : null;
+    const parsed = parser ? parser.parseScanValue(raw) : null;
+    if (parsed && parsed.type === 'UPI' && parsed.partNumber) {
       return {
-        upiId: normalizePartText(parts[1]),
-        partNumber: normalizePartText(parts[3]),
+        upiId: normalizePartText(parsed.fields[1] || ''),
+        partNumber: normalizePartText(parsed.partNumber),
+        qty: parsed.quantity || 1,
+        qtyProvided: Boolean(parsed.rawQuantity),
+        mrp: undefined,
+        mrpProvided: false,
+        rawScan: raw
+      };
+    }
+    const parts = raw.split('/');
+    const partIndex = parts.findIndex((part) => part && !/^D$/i.test(part));
+    if (partIndex >= 0 && parts[partIndex + 1]) {
+      const slashQty = optionalScanNumber(parts[partIndex + 1]);
+      const candidatePart = parts[partIndex];
+      return {
+        upiId: normalizePartText(parts[1] || ''),
+        partNumber: normalizePartText(candidatePart),
         qty: slashQty !== undefined ? slashQty : 1,
         qtyProvided: slashQty !== undefined,
-        mrp: slashMrp,
-        mrpProvided: slashMrp !== undefined,
+        mrp: undefined,
+        mrpProvided: false,
         rawScan: raw
       };
     }
@@ -4335,17 +4350,21 @@
     clearTimeout(state.dashboardRefreshTimer);
     state.dashboardRefreshTimer = null;
     if (state.dashboardAbortController) state.dashboardAbortController.abort();
+    if (state.dashboardTopBinsAbortController) state.dashboardTopBinsAbortController.abort();
     const requestId = (state.dashboardLoadRequestId || 0) + 1;
     state.dashboardLoadRequestId = requestId;
     const controller = new AbortController();
+    const topBinsController = new AbortController();
     state.dashboardAbortController = controller;
+    state.dashboardTopBinsAbortController = topBinsController;
+    let dashboardSucceeded = false;
     setDashboardRefreshState(true);
     updateDashboardScopeSummary();
     if (!state.dashboardLoaded) setDashboardLoading(true);
     state.dashboardLoadPromise = (async () => {
       try {
         const query = dashboardQueryString({ forceRefresh: force });
-        const healthPromise = loadHealth()
+        loadHealth()
           .then((health) => {
             if (state.dashboardLoadRequestId !== requestId) return null;
             applyServerInfo(health);
@@ -4361,9 +4380,12 @@
             }
             return null;
           });
-        const topBinsPromise = api(`/api/scans/live?limit=200${query ? `&${query}` : ''}`, { signal: controller.signal })
+        const topBinsPromise = api(`/api/scans/live?limit=200${query ? `&${query}` : ''}`, {
+          signal: topBinsController.signal,
+          timeoutMs: 7000
+        })
           .catch((error) => {
-            if (state.dashboardLoadRequestId !== requestId || controller.signal.aborted) return null;
+            if (state.dashboardLoadRequestId !== requestId || topBinsController.signal.aborted) return null;
             if (error && error.name !== 'AbortError') {
               console.warn('[DASHBOARD] top bins load failed', error.message);
             }
@@ -4402,10 +4424,22 @@
           }
           if (state.dashboardLoadRequestId !== requestId) return null;
           const rows = renderScanStream(Array.isArray(recent) ? recent : [], { skipActiveAuditFilter: true });
-          const liveData = await topBinsPromise;
-          if (state.dashboardLoadRequestId !== requestId) return null;
-          const liveRows = liveData && (liveData.records || liveData.scans);
-          renderDashboardTopBins(Array.isArray(liveRows) ? liveRows : rows);
+          renderDashboardTopBins(rows);
+          topBinsPromise.then((liveData) => {
+            if (state.dashboardLoadRequestId !== requestId || topBinsController.signal.aborted) return;
+            const liveRows = liveData && (liveData.records || liveData.scans);
+            if (Array.isArray(liveRows)) {
+              try {
+                renderDashboardTopBins(liveRows);
+              } catch (error) {
+                console.warn('[DASHBOARD] top bins render failed', error.message);
+              }
+            }
+          }).finally(() => {
+            if (state.dashboardTopBinsAbortController === topBinsController) {
+              state.dashboardTopBinsAbortController = null;
+            }
+          });
           if (!rows.length && Array.isArray(recent) && recent.length) {
             console.warn('[DASHBOARD] server returned recent scans but none rendered', {
               dealerCode: data.dealerCode || '',
@@ -4420,10 +4454,10 @@
             renderScanStream([]);
           }
         }
-        await healthPromise;
         if (state.dashboardLoadRequestId !== requestId) return null;
         state.dashboardLoaded = true;
         state.dashboardLastLoadedAt = Date.now();
+        dashboardSucceeded = true;
         return data;
       } catch (error) {
         if (controller.signal.aborted || state.dashboardLoadRequestId !== requestId) return null;
@@ -4435,9 +4469,13 @@
       return await state.dashboardLoadPromise;
     } finally {
       controller.abort();
+      if (!dashboardSucceeded) topBinsController.abort();
       if (state.dashboardLoadRequestId === requestId) {
         state.dashboardLoadPromise = null;
         state.dashboardAbortController = null;
+        if (!dashboardSucceeded && state.dashboardTopBinsAbortController === topBinsController) {
+          state.dashboardTopBinsAbortController = null;
+        }
         setDashboardLoading(false);
         setDashboardRefreshState(false);
       }

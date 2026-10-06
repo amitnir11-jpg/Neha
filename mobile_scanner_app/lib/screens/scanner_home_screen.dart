@@ -1936,9 +1936,13 @@ class _ScanDraft {
             .map((value) => value.trim())
             .where((value) => value.isNotEmpty)
             .toList();
-        if (slashParts.length >= 4) part = slashParts[3];
-        if (slashParts.length >= 5) {
-          qty = int.tryParse(slashParts[4]) ?? qty;
+        if (slashParts.length >= 8 && slashParts[0] == 'D' && slashParts[4].isNotEmpty) {
+          part = slashParts[4];
+        } else if (slashParts.length >= 5 && slashParts[0] != 'D' && slashParts[3].isNotEmpty) {
+          part = slashParts[3];
+        }
+        if (slashParts.length >= 7 && slashParts[5].isNotEmpty && slashParts[0] == 'D') {
+          qty = int.tryParse(slashParts[5]) ?? qty;
         }
       }
       if (part.isEmpty &&

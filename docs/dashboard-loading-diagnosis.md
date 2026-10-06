@@ -92,3 +92,11 @@ The Prisma schema contains dealer, audit, part and several compound indexes. Act
 ## Required production follow-up
 
 The dashboard URL is available and public probes are recorded above. Obtain Railway startup logs and an authenticated inspection session or read-only runtime access. Capture authenticated request URLs, selected dealer/audit, role, status, timings and sanitized errors; correlate them with Railway/Prisma logs. Inspect the two queue error messages before retrying. Confirm dealer 11688's current audit, reconcile summary values with Scan Report, Reconciliation, Bin Inventory and fitted/dealer stock, and perform the requested interactive permissions/device/scanner regressions. No commit, push or deployment was performed because authenticated validation remains incomplete and the existing quantity regression still fails.
+
+## Follow-up: slow dashboard refresh (2026-10-06)
+
+The dashboard summary used a multi-stage Mongo-style `$addFields`/`$sort`/`$group`/`$facet` pipeline. The Prisma compatibility adapter executes those pipeline stages in JavaScript, so refresh repeatedly materialized and sorted the matched inventory rows in process. The dashboard now computes the same deduped scan counts, distribution, recent activity and multiple-bin count in a single pass instead. Recent scans are no longer enriched with master-price lookups twice.
+
+The top-bin request is an optional widget read: the dashboard renders its recent-scan fallback immediately, then replaces it when the bounded live-bin request completes. A slow live-bin read no longer holds the dashboard Refreshing state. Focused aggregation and refresh regressions are in `test/dashboard-aggregation.test.js` and `test/dashboard-loading.test.js`. These local changes have not been deployed or measured against the production dealer dataset.
+
+`public/Daksh.html` also advances the `/ui.js` cache-busting version so deployed browsers do not continue using the prior script.

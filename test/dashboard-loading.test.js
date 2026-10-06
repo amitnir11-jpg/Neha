@@ -7,6 +7,7 @@ function dashboardHarness(stalledPath) {
   const source = fs.readFileSync('public/ui.js', 'utf8');
   const timers = new Map();
   const rendered = [];
+  const bins = [];
   const requests = [];
   let nextTimer = 0;
   const context = {
@@ -23,7 +24,7 @@ function dashboardHarness(stalledPath) {
     loadHealth: async () => ({}), applyServerInfo: () => {},
     updateSyncBadges: () => {}, updateDashboardHealth: () => {},
     updateDashboardCards: stats => rendered.push(stats),
-    renderScanStream: rows => rows, renderDashboardTopBins: () => {},
+    renderScanStream: rows => rows, renderDashboardTopBins: rows => bins.push(rows),
     fetch: async (path, options) => {
       requests.push(path);
       if (path.startsWith(stalledPath)) {
@@ -41,7 +42,7 @@ function dashboardHarness(stalledPath) {
   vm.runInContext(source.slice(apiStart, source.indexOf('  function sanitizeDownloadFileName', apiStart)), context);
   const loadStart = source.indexOf('  async function loadDashboard(options = {})');
   vm.runInContext(source.slice(loadStart, source.indexOf('  function syncScanDealerScope', loadStart)), context);
-  return { context, timers, rendered, requests };
+  return { context, timers, rendered, bins, requests };
 }
 
 test('a stalled dashboard summary times out, releases Refreshing and preserves existing values', async () => {
@@ -62,16 +63,19 @@ test('a stalled dashboard summary times out, releases Refreshing and preserves e
 });
 
 test('a stalled live-bin widget cannot hold a successful dashboard in Refreshing', async () => {
-  const { context, timers, rendered, requests } = dashboardHarness('/api/scans/live');
+  const { context, timers, rendered, bins, requests } = dashboardHarness('/api/scans/live');
   const request = context.loadDashboard();
   await new Promise(setImmediate);
   assert.equal(rendered[0].totalScannedQuantity, 7);
-  assert.ok(timers.size > 0, 'live bins must have a timeout');
-  for (const { callback } of [...timers.values()]) callback();
   await request;
   assert.equal(context.refreshing, false);
   assert.equal(context.state.dashboardLoaded, true);
+  assert.deepEqual(bins, [[{ qty: 7 }]], 'recent scans should populate the widget while live bins are loading');
   assert.equal(requests.length, 2);
+  assert.ok([...timers.values()].some(timer => timer.delay === 7000), 'the optional live-bin request must have a bounded timeout');
+  for (const { callback } of [...timers.values()]) callback();
+  await new Promise(setImmediate);
+  assert.equal(context.refreshing, false);
 });
 
 test('late live-bin data from a previous dealer cannot overwrite a newer dashboard', async () => {
@@ -91,10 +95,11 @@ test('late live-bin data from a previous dealer cannot overwrite a newer dashboa
   context.dashboardQueryString = () => 'dealerCode=22222&range=audit';
   await context.loadDashboard({ force: true });
   const loadedAt = context.state.dashboardLastLoadedAt;
-  assert.equal(bins.length, 1);
+  assert.equal(bins.length, 2);
+  assert.equal(bins[1][0].qty, 9);
   finishOldBins({ records: [{ qty: 999 }] });
   await old;
-  assert.equal(bins.length, 1);
+  assert.equal(bins.length, 2);
   assert.equal(context.state.dashboardLastLoadedAt, loadedAt);
   assert.equal(context.refreshing, false);
 });
