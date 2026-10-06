@@ -4639,12 +4639,19 @@
     form.elements.dlc.value = scan.currentCatalogueDLC ?? 0;
     form.elements.binLocation.value = scan.binLocation || scan.bin || '';
     form.elements.scanType.value = ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType) ? scanType : 'INWARD';
-    if (form.elements.reason) form.elements.reason.value = '';
+    if (form.elements.reason) form.elements.reason.value = focusField === 'binLocation' ? 'Wrong bin' : '';
     if (form.elements.remarks) form.elements.remarks.value = '';
+    ['partNumber', 'quantity', 'mrp', 'dlc', 'scanType'].forEach((name) => {
+      form.elements[name].disabled = focusField === 'binLocation';
+    });
     form.elements.binLocation.disabled = false;
     form.elements.binLocation.required = ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType);
     const title = $('#scanEditTitle');
-    if (title) title.textContent = focusField === 'quantity' ? 'Edit Part Quantity' : 'Edit Scanned Part';
+    if (title) {
+      title.textContent = focusField === 'binLocation'
+        ? 'Edit Bin Location'
+        : focusField === 'quantity' ? 'Edit Part Quantity' : 'Edit Scanned Part';
+    }
     const message = $('#scanEditMessage');
     if (message) {
       message.className = 'form-message';
@@ -4662,7 +4669,16 @@
     const rowDlc = scan.currentCatalogueDLC ?? scan.dlc ?? 0;
     const totalQty = scan.totalQty ?? scan.totalQuantity ?? scanHistoryQuantity(scan, 1);
     const canEditDetails = canEditScanDetails(scan);
-    const editOption = canEditDetails ? '<option value="edit-qty">Edit Quantity</option><option value="edit">Edit Part Details</option>' : '';
+    const scanType = String(scan.scanType || scan.type || '').toUpperCase();
+    const editBinOption = canEditDetails && ['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType)
+      ? '<option value="edit-bin">Edit Bin Location</option>'
+      : '';
+    const outwardOption = canEditDetails && scanType === 'INWARD'
+      ? '<option value="mark-outward">Mark Outward</option>'
+      : '';
+    const editOption = canEditDetails
+      ? `${editBinOption}${outwardOption}<option value="edit-qty">Edit Quantity</option><option value="edit">Edit Part Details</option>`
+      : '';
     const fittedPending = String(scan.scanType || scan.type || '').toUpperCase() === 'FITTED'
       && !['BILLED', 'RETURNED_TO_BIN', 'CANCELLED'].includes(String(scan.fittedStatus || scan.status || '').toUpperCase().replace(/[\s-]+/g, '_'));
     const fittedOptions = isAdminUser() && fittedPending
@@ -4723,6 +4739,16 @@
             toast(error.message, 'error');
           }
         }
+        if (action === 'edit-bin') {
+          try {
+            openScanEditModal(select.dataset.id, 'binLocation');
+          } catch (error) {
+            toast(error.message, 'error');
+          }
+        }
+        if (action === 'mark-outward') {
+          markScanOutward(select.dataset.id).catch((error) => toast(error.message, 'error'));
+        }
         if (action === 'delete') {
           deleteSingleScan(select.dataset.id).catch((error) => toast(error.message, 'error'));
         }
@@ -4736,6 +4762,33 @@
         }
       });
     });
+  }
+
+  async function markScanOutward(scanId) {
+    const scan = scanHistoryRecord(scanId);
+    if (!scan) throw new Error('Scan record not found');
+    const partNumber = normalizePartText(scan.partNumber || scan.part || scan.normalizedPartNumber || '');
+    const binLocation = cleanDealerCode(scan.binLocation || scan.bin || '');
+    const defaultQty = scanQuantity(scan, 1);
+    const answer = window.prompt(
+      `Enter the quantity sold for ${partNumber} from bin ${binLocation}. The remaining stock will be updated.`,
+      String(defaultQty)
+    );
+    if (answer === null) return;
+    const quantity = Number(answer);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error('Outward quantity must be greater than zero.');
+    }
+    if (!window.confirm(`Mark ${quantity} unit(s) of ${partNumber} in bin ${binLocation} as outward?`)) return;
+
+    const result = await api(`/api/scans/${encodeURIComponent(scanId)}/mark-outward`, {
+      method: 'POST',
+      body: { quantity }
+    });
+    toast(`${result.message || 'Stock marked outward'} Remaining in ${binLocation}: ${result.remainingQty}.`, 'success');
+    markReportsStale('scan marked outward', { autoRefresh: false });
+    queueDashboardRefresh(250);
+    await loadScanHistory();
   }
 
   async function updateFittedStatus(scanId, status, returnedToBin = '') {

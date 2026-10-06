@@ -1782,6 +1782,83 @@ async function availableInwardStock(input = {}) {
   };
 }
 
+function buildScanHistoryOutwardMovement(scan, quantity, actor = {}, now = new Date()) {
+  const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part || '');
+  const binLocation = upper(scan.binLocation || scan.bin || '');
+  const uniqueScanId = randomUUID();
+  const unitMrp = numberValue(scan.valuationMRP ?? scan.currentCatalogueMRP ?? scan.mrp, 0);
+  const unitDlc = numberValue(scan.currentCatalogueDLC ?? scan.dlc, 0);
+  const actorName = clean(actor.name || actor.username || actor.email || actor.id || '');
+  return {
+    uniqueScanId,
+    scanId: uniqueScanId,
+    syncKey: randomUUID(),
+    part: partNumber,
+    partNumber,
+    normalizedPartNumber: partNumber,
+    partName: scan.partName || scan.partDescription || '',
+    partDescription: scan.partDescription || scan.partName || '',
+    category: scan.category || scan.productCategory || '',
+    productCategory: scan.productCategory || scan.category || '',
+    productGroup: scan.productGroup || '',
+    partSubGroup: scan.partSubGroup || '',
+    qty: quantity,
+    quantity,
+    mrp: unitMrp,
+    valuationMRP: unitMrp,
+    currentCatalogueMRP: unitMrp,
+    dlc: unitDlc,
+    currentCatalogueDLC: unitDlc,
+    finalInventoryValue: quantity * unitMrp,
+    scanType: 'OUTWARD',
+    type: 'OUTWARD',
+    movementType: 'OUTWARD',
+    dealerCode: normalizeDealerCode(scan.dealerCode),
+    dealerName: scan.dealerName || '',
+    auditId: clean(scan.auditId),
+    bin: binLocation,
+    binLocation,
+    sourceBin: binLocation,
+    stockDeductedFromBin: binLocation,
+    sourceLocationType: 'BIN',
+    currentBin: '',
+    currentLocationType: 'OUTWARD',
+    upiId: '',
+    upiCode: '',
+    upiNo: '',
+    rawScan: '',
+    rawScanString: '',
+    rawBarcode: '',
+    rawQR: '',
+    rawUpi: '',
+    rawUpiHash: '',
+    globalUpiKey: '',
+    activeInventory: false,
+    remainingQty: 0,
+    scanStatus: 'OUTWARD_DONE',
+    syncStatus: 'synced',
+    synced: true,
+    isSynced: true,
+    source: 'manual',
+    scanMode: 'Scan History Outward',
+    deviceId: 'WEB-SCAN-HISTORY-OUTWARD',
+    deviceName: 'Scan History',
+    userId: String(actor.id || actor._id || ''),
+    userName: actorName,
+    staffName: actorName,
+    role: String(actor.role || 'admin'),
+    sourceScanId: String(scan._id || scan.uniqueScanId || scan.scanId || ''),
+    remarks: 'Part sold; marked outward from Scan History.',
+    timestamp: now,
+    scanTime: now,
+    createdAt: now,
+    createdBy: String(actor.id || actor._id || actor.username || actor.email || ''),
+    createdByUsername: String(actor.username || actor.loginId || '').toLowerCase(),
+    createdByName: actorName,
+    createdByRole: String(actor.role || 'admin')
+  };
+}
+
 async function verifyPartOnly({ rawScan = '', partNumber = '', dealerCode = '', auditId = '' } = {}) {
   const parsed = parseRawScan(rawScan || partNumber);
   const part = normalizePartNumber(partNumber || parsed.part || '');
@@ -4122,6 +4199,79 @@ router.post('/manual', auth.requireAuth, processScanRequest);
 router.post('/', auth.requireAuth, processScanRequest);
 router.patch('/:scanId/details', auth.requireAuth, auth.requireAdmin, updateScanDetails);
 router.patch('/:scanId/mrp', auth.requireAuth, auth.requireAdmin, updateManualMrp);
+router.post('/:scanId/mark-outward', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const requestedQty = Number(req.body.quantity);
+    if (!Number.isFinite(requestedQty) || requestedQty <= 0) {
+      return res.status(400).json({ success: false, message: 'Outward quantity must be greater than zero.' });
+    }
+
+    const result = await withDatabaseTransaction(async () => {
+      const sourceScan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+      if (!sourceScan) {
+        const error = new Error('Scan record not found');
+        error.status = 404;
+        throw error;
+      }
+      if (sourceScan.isDeleted === true || movementTypeValue(sourceScan) !== 'INWARD') {
+        const error = new Error('Only active inward scans can be marked outward.');
+        error.status = 409;
+        throw error;
+      }
+
+      const partNumber = normalizePartNumber(sourceScan.normalizedPartNumber || sourceScan.partNumber || sourceScan.part || '');
+      const binLocation = upper(sourceScan.binLocation || sourceScan.bin || '');
+      if (!partNumber || !binLocation || !sourceScan.dealerCode || !sourceScan.auditId) {
+        const error = new Error('Part, bin, dealer, and audit details are required to mark stock outward.');
+        error.status = 400;
+        throw error;
+      }
+
+      const stock = await availableInwardStock({
+        dealerCode: sourceScan.dealerCode,
+        auditId: sourceScan.auditId,
+        partNumber
+      });
+      const binStock = stock.bins.find((bin) => bin.binLocation === binLocation);
+      const availableQty = Number(binStock?.availableQty || 0);
+      if (requestedQty > availableQty) {
+        const error = new Error(`Only ${availableQty} unit(s) of ${partNumber} are available in bin ${binLocation}.`);
+        error.status = 409;
+        throw error;
+      }
+
+      const movement = await Inventory.create(buildScanHistoryOutwardMovement(
+        sourceScan,
+        requestedQty,
+        req.user || {}
+      ));
+      return { movement, remainingQty: availableQty - requestedQty };
+    });
+
+    invalidateInventoryCaches({
+      dealerCode: result.movement.dealerCode,
+      auditId: result.movement.auditId
+    }, ['stock', 'reconciliation']);
+    if (req.io && typeof req.io.emit === 'function') {
+      const event = {
+        reason: 'scan-history-outward',
+        dealerCode: result.movement.dealerCode,
+        auditId: result.movement.auditId
+      };
+      req.io.emit('stats:update');
+      req.io.emit('inventory:update', event);
+      req.io.emit('reports:update', event);
+    }
+    return res.json({
+      success: true,
+      scan: publicScan(result.movement),
+      remainingQty: result.remainingQty,
+      message: `${requestedQty} unit(s) of ${result.movement.partNumber} marked outward from bin ${result.movement.binLocation}.`
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({ success: false, message: error.message || 'Unable to mark stock outward.' });
+  }
+});
 router.post('/:scanId/fitted-status', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const result = await withDatabaseTransaction(async () => {
@@ -5107,4 +5257,5 @@ module.exports.findBackendDuplicate = findBackendDuplicate;
 module.exports.duplicateLookupPayload = duplicateLookupPayload;
 module.exports.prepareFittedScan = prepareFittedScan;
 module.exports.availableInwardStock = availableInwardStock;
+module.exports.buildScanHistoryOutwardMovement = buildScanHistoryOutwardMovement;
 module.exports.verifyPartOnly = verifyPartOnly;

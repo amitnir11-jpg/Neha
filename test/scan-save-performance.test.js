@@ -45,6 +45,86 @@ test('part-number history searches try exact normalized values before substring 
   assert.equal(textFilter.$or[0].part.$options, 'i');
 });
 
+test('Scan History outward movements deduct the requested quantity without reusing QR identity', () => {
+  let id = 0;
+  const context = evaluateFunction(
+    'routes/inventory.js',
+    'function buildScanHistoryOutwardMovement(',
+    'async function verifyPartOnly(',
+    {
+      clean: value => String(value || '').trim(),
+      normalizeDealerCode: value => String(value || '').trim().toUpperCase(),
+      normalizePartNumber,
+      numberValue: (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback,
+      randomUUID: () => `outward-${++id}`,
+      upper: value => String(value || '').trim().toUpperCase()
+    }
+  );
+  const timestamp = new Date('2026-01-02T03:04:05.000Z');
+  const movement = context.buildScanHistoryOutwardMovement({
+    _id: 'source-scan',
+    dealerCode: 'd01',
+    auditId: 'audit-1',
+    partNumber: 'PART-123',
+    binLocation: 'bin-4',
+    qty: 8,
+    upiCode: 'QR-IDENTITY',
+    rawScanString: 'QR-IDENTITY/PART-123',
+    valuationMRP: 12.5
+  }, 3, { id: 'admin-1', username: 'admin', role: 'admin' }, timestamp);
+
+  assert.equal(movement.scanType, 'OUTWARD');
+  assert.equal(movement.qty, 3);
+  assert.equal(movement.binLocation, 'BIN-4');
+  assert.equal(movement.dealerCode, 'D01');
+  assert.equal(movement.sourceScanId, 'source-scan');
+  assert.equal(movement.scanStatus, 'OUTWARD_DONE');
+  assert.equal(movement.syncStatus, 'synced');
+  assert.equal(movement.activeInventory, false);
+  assert.equal(movement.upiCode, '');
+  assert.equal(movement.rawScanString, '');
+  assert.equal(movement.globalUpiKey, '');
+  assert.equal(movement.finalInventoryValue, 37.5);
+  assert.equal(movement.timestamp, timestamp);
+});
+
+test('Scan History outward movement reduces available stock in its bin', async () => {
+  const inward = {
+    dealerCode: 'D01', auditId: 'AUD-1', partNumber: 'PART-123',
+    binLocation: 'BIN-4', scanType: 'INWARD', scanStatus: 'ACCEPTED',
+    syncStatus: 'synced', qty: 8
+  };
+  const outward = {
+    dealerCode: 'D01', auditId: 'AUD-1', partNumber: 'PART-123',
+    binLocation: 'BIN-4', scanType: 'OUTWARD', scanStatus: 'OUTWARD_DONE',
+    syncStatus: 'synced', qty: 3, uniqueScanId: 'outward-1'
+  };
+  const context = evaluateFunction(
+    'routes/inventory.js',
+    'async function availableInwardStock(',
+    'function buildScanHistoryOutwardMovement(',
+    {
+      Inventory: {
+        find: () => ({
+          sort: () => ({ lean: async () => [inward, outward] })
+        })
+      },
+      inwardQty: scan => scan.scanType === 'INWARD' ? Math.abs(Number(scan.qty || 0)) : 0,
+      partStockMatch: () => ({ $and: [{ $or: [] }] }),
+      stockQty: scan => scan.scanType === 'INWARD' ? Number(scan.qty || 0) : -Number(scan.qty || 0),
+      uniqueReportScans: rows => rows,
+      upper: value => String(value || '').trim().toUpperCase()
+    }
+  );
+
+  const stock = await context.availableInwardStock({
+    dealerCode: 'D01', auditId: 'AUD-1', partNumber: 'PART-123'
+  });
+  assert.equal(stock.availableQty, 5);
+  assert.equal(stock.bins[0].binLocation, 'BIN-4');
+  assert.equal(stock.bins[0].availableQty, 5);
+});
+
 test('UPI advisory lock is scoped to the transaction and not used without a key', async () => {
   const calls = [];
   const context = evaluateFunction(
