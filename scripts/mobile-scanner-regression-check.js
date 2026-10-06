@@ -10,7 +10,7 @@ const runtimeJs = fs.readFileSync(path.join(root, 'public', 'js', 'runtime.js'),
 const serviceWorkerJs = fs.readFileSync(path.join(root, 'public', 'sw.js'), 'utf8');
 const mobileRoute = fs.readFileSync(path.join(root, 'routes', 'mobile.js'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
-const nativeScannerHome = fs.readFileSync(path.join(root, 'mobile_scanner_app', 'lib', 'screens', 'scanner_home_screen.dart'), 'utf8');
+const nativeScannerHome = fs.readFileSync(path.join(root, 'mobile_scanner_app', 'lib', 'screens', 'scanner_home_screen.dart'), 'utf8').replace(/\r\n/g, '\n');
 const nativeLocalDatabase = fs.readFileSync(path.join(root, 'mobile_scanner_app', 'lib', 'services', 'local_database.dart'), 'utf8');
 
 const build = scanJs.match(/const APP_VERSION = '([^']+)'/)?.[1]

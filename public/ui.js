@@ -5376,7 +5376,7 @@
       if (isBarcodeForm) {
         if (data.scan && !String($('#barcodeRaw')?.value || '').trim() && !form.elements.part.value) fillPart(form, {
           ...data.scan,
-          partName: data.scan.partName || data.scan.partDescription,
+          partName: data.scan.partDescription || data.scan.partName,
           category: data.scan.category || data.scan.productCategory
         });
         localStorage.setItem(BARCODE_LAST_BIN_KEY, form.elements.binLocation.value);
@@ -12315,7 +12315,7 @@
       const result = await submitScan(manualForm, { confirmBeforeSave: false });
       if (result?.scan) fillPart(form, {
         ...result.scan,
-        partName: result.scan.partName || result.scan.partDescription,
+        partName: result.scan.partDescription || result.scan.partName,
         category: result.scan.category || result.scan.productCategory
       });
       if (!manualForm.elements.part.value) resetBarcodeScanFields(form);

@@ -57,4 +57,14 @@ API changes: only the optional history filter and supported page size above. Sca
 
 Required operator sign-off: physical USB scanner, audible beep, genuine UPI/stock validation for outward/fitted, offline recovery, and before/after report and reconciliation values for an authenticated test audit. A test-session question was raised; no test session was supplied during implementation.
 
+## Remaining-work follow-up — 2026-10-07
+
+The workspace and additional scanner work were already committed and pushed as `9ec5547` when this follow-up began. That existing commit was preserved. The final follow-up prefers the saved record's canonical `partDescription` over a stale `partName` alias in both barcode and manual Part Details. Browser checks now assert that description, category and price match after consecutive scans.
+
+The scanner regression detected an inconsistent cache/build version in that commit. Standalone scanner JavaScript, HTML, mobile route fallback and server scanner metadata now share `20261007-scan-qr-build-v3`; the desktop UI cache tag is also advanced. These are release metadata changes, with no scanner business-rule or database change. The native source assertion normalizes CRLF before checking its existing behavior; the mobile regression now passes.
+
+Reverification: admin/audit-user Chrome fixture sessions pass with zero unexpected JavaScript console errors, including all three requested desktop sizes and coherent Part Details. Scanner, history, outward and UPI parser regressions pass; build passes. All 59 report checks pass. Full `npm test` still fails at the untouched fitted-alias assertion in `scripts/report-scan-quantity-check.js:48`; inventory/report calculations were not changed to silence it. One database-dependent migration test remains skipped without a local `DATABASE_URL`.
+
+Physical scanner/audible-beep checks and authenticated production-audit comparisons still require an operator/test session. Public health and served asset verification after deployment do not substitute for those checks. No production stock transaction was performed.
+
 If you are unsure whether any code is used by another module, do not delete or change it. Trace its references first and report to me before modifying it.
