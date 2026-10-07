@@ -4713,6 +4713,19 @@ router.post('/sync', auth.requireAuth, async (req, res) => {
   }
 });
 
+router.get('/validate-bin', auth.requireAuth, async (req, res) => {
+  try {
+    const dealerCode = normalizeDealerCode(req.query.dealerCode);
+    const binLocation = upper(req.query.binLocation);
+    const bin = dealerCode && binLocation
+      ? await Bin.findOne({ dealerCode, binCode: binLocation, active: { $ne: false } }).lean() : null;
+    return res.status(bin ? 200 : 422).json({ success: Boolean(bin), valid: Boolean(bin), binLocation,
+      message: bin ? 'Bin ' + binLocation + ' ready' : 'Select a valid active bin for this dealer.' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/history', auth.requireAuth, async (req, res) => {
   try {
     const filter = applyScanVisibility(req, applyTestScanMode(buildListQuery(req.query), req.query.testScanMode || 'real'));
