@@ -18,7 +18,7 @@
       if (requestedView) document.documentElement.dataset.initialView = requestedView;
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20261006-minimal-bin-label-v1">
+  <link rel="stylesheet" href="/style.css?v=20261007-scan-stock-line-v1">
   <link rel="stylesheet" href="/variables.css?v=20260714-app-layout-v1">
   <link rel="stylesheet" href="/layout.css?v=20260714-app-layout-v1">
   <link rel="stylesheet" href="/components.css?v=20260714-app-layout-v1">
@@ -29,7 +29,7 @@
   <link rel="stylesheet" href="/css/app-controls.css?v=20260908-enterprise-controls-v2">
   <link rel="stylesheet" href="/dashboard-layout.css?v=20260928-dashboard-dealer-picker-v2">
   <link rel="stylesheet" href="/compact-layout.css?v=20260921-global-density-v2">
-  <link rel="stylesheet" href="/barcode-workspace.css?v=20261006-barcode-workspace-v1">
+  <link rel="stylesheet" href="/barcode-workspace.css?v=20261007-barcode-workspace-v2">
 </head>
 <body class="app-booting">
   <script>
@@ -400,7 +400,7 @@
             <ol class="barcode-workflow" aria-label="Scan workflow">
               <li><b>1</b><span><strong>Select Dealer</strong><small>Choose dealer for scan</small></span></li>
               <li id="barcodeBinStep"><b>2</b><span><strong>Select / Scan Source Bin Location</strong><small>Enter / Scan bin first <em>(Mandatory)</em></small></span></li>
-              <li><b>3</b><span><strong>Scan Barcode / QR or Use Manual Entry</strong><small>Scan a part or enter details manually</small></span></li>
+              <li id="barcodeScanStep"><b>3</b><span><strong>Scan Barcode / QR or Use Manual Entry</strong><small>Scan a part or enter details manually</small></span></li>
             </ol>
             <form id="barcodeScanForm" class="barcode-workspace-form" novalidate>
               <div class="barcode-context-row">
@@ -436,6 +436,7 @@
                   </div>
                 </section>
               </div>
+            <p id="scanPartSummary" class="scan-part-summary" role="status" hidden></p>
             </form>
           </div>
 
@@ -1751,7 +1752,7 @@
   <script src="/js/scan-parser.js?v=20261006-qr-field-mapping-v2"></script>
   <script src="/js/runtime.js?v=20261004-report-cache-v2"></script>
   <script src="/socket.io/socket.io.js"></script>
-  <script src="/ui.js?v=20261007-barcode-default-v4"></script>
+  <script src="/ui.js?v=20261007-scan-flow-stock-v6"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

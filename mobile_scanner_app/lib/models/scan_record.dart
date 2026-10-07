@@ -41,6 +41,8 @@ class ScanRecord {
 
   ScanRecord copyWith(
       {String? status,
+      String? partNumber,
+      int? quantity,
       String? serverSyncId,
       String? errorMessage,
       String? binLocation,
@@ -48,8 +50,8 @@ class ScanRecord {
     return ScanRecord(
       localId: localId,
       rawValue: rawValue,
-      partNumber: partNumber,
-      quantity: quantity,
+      partNumber: partNumber ?? this.partNumber,
+      quantity: quantity ?? this.quantity,
       binLocation: binLocation ?? this.binLocation,
       scanType: scanType,
       dealerCode: dealerCode,
@@ -141,12 +143,15 @@ class ScanRecord {
       dealerCode: _string(map['dealerCode'] ?? map['dealer'] ?? ''),
       auditId: _string(map['auditId'] ?? map['auditSessionId'] ?? ''),
       userId: _string(map['userId'] ?? map['loginId'] ?? ''),
-      userName: _string(map['userName'] ?? map['staffName'] ?? map['scannedBy'] ?? ''),
+      userName: _string(
+          map['userName'] ?? map['staffName'] ?? map['scannedBy'] ?? ''),
       deviceId: _string(map['deviceId'] ?? map['deviceName'] ?? ''),
       createdAt: timestamp,
       status: serverStatus,
-      source: _string(map['source'] ?? map['scanMode'] ?? map['entryMode'] ?? 'mobile'),
-      serverSyncId: _string(map['syncKey'] ?? map['scanId'] ?? map['uniqueScanId'] ?? ''),
+      source: _string(
+          map['source'] ?? map['scanMode'] ?? map['entryMode'] ?? 'mobile'),
+      serverSyncId:
+          _string(map['syncKey'] ?? map['scanId'] ?? map['uniqueScanId'] ?? ''),
       errorMessage: _string(map['reason'] ?? ''),
       metadata: _serverMetadata(map),
     );
@@ -192,7 +197,8 @@ class ScanRecord {
 
 String _string(Object? value) => value == null ? '' : value.toString().trim();
 
-int _int(Object? value, int fallback) => int.tryParse(_string(value)) ?? fallback;
+int _int(Object? value, int fallback) =>
+    int.tryParse(_string(value)) ?? fallback;
 
 DateTime _dateTime(Object? value) =>
     DateTime.tryParse(_string(value)) ?? DateTime.now();

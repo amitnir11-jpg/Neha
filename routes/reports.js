@@ -1,3 +1,4 @@
+const { stockQuantitySummary } = require('../utils/stockQuantity');
 const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
@@ -1029,10 +1030,10 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
 
 function selectRows(data, type) {
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') {
-    const binScans = data.scans.filter((scan) => String(scan.scanType || scan.type || '').toUpperCase() !== 'FITTED');
+    const binScans = data.scans;
     return groupRows(
       binScans,
-      (scan) => `${scan.dealerCode || 'UNKNOWN'}:${scan.binLocation || scan.bin || 'UNKNOWN'}:${scan.partNumber || scan.part || ''}:${scan.scanType || scan.type || ''}`,
+      (scan) => `${scan.dealerCode || 'UNKNOWN'}:${scan.binLocation || scan.bin || 'UNKNOWN'}:${scan.partNumber || scan.part || ''}`,
       (scan) => ({
         dealerCode: scan.dealerCode || '',
         bin: scan.binLocation || scan.bin || 'UNKNOWN',
@@ -1052,6 +1053,7 @@ function selectRows(data, type) {
         jobCardNo: '',
         autoDetectedBin: '',
         stockDeductedFromBin: '',
+        stockScans: [],
         qty: 0,
         physicalBinQty: 0,
         actualAuditQty: 0,
@@ -1059,6 +1061,7 @@ function selectRows(data, type) {
         deviceId: scan.deviceId || ''
       }),
       (target, scan) => {
+        target.stockScans.push(scan);
         const qty = scanQuantity(scan);
         const valueRow = scanValueRow(scan);
         if (!target.mrp) target.mrp = Number(scan.currentCatalogueMRP || valueRow.valuationMRP || 0);
@@ -1081,7 +1084,17 @@ function selectRows(data, type) {
         if (!target.stockDeductedFromBin) target.stockDeductedFromBin = scan.stockDeductedFromBin || '';
         if (new Date(scan.timestamp) > new Date(target.lastScanTime || 0)) target.lastScanTime = scan.timestamp;
       }
-    ).sort((a, b) => String(a.bin).localeCompare(String(b.bin)) || String(a.partNumber).localeCompare(String(b.partNumber)));
+    ).map(row => {
+      const totals = stockQuantitySummary(row.stockScans);
+      delete row.stockScans;
+      return { ...row, ...totals, qty: totals.availableQty, availableQty: totals.availableQty,
+        physicalBinQty: totals.storeQty, fittedWorkshopQty: totals.fittedQty,
+        totalDealerStockQty: totals.availableQty, actualAuditQty: totals.availableQty,
+        finalInventoryValue: money(totals.availableQty * Number(row.dlc || 0)),
+        totalDlcValue: money(totals.availableQty * Number(row.dlc || 0)),
+        mrpValueReference: money(totals.availableQty * Number(row.mrp || 0)),
+        totalMrpValue: money(totals.availableQty * Number(row.mrp || 0)) };
+    }).sort((a, b) => String(a.bin).localeCompare(String(b.bin)) || String(a.partNumber).localeCompare(String(b.partNumber)));
   }
 
   if (type === 'user-dealer-wise') {

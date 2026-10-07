@@ -107,9 +107,9 @@ const router = express.Router();
 const VALID_TYPES = ['AUDIT', 'INWARD', 'OUTWARD', 'VERIFICATION', 'FITTED', 'DAMAGE'];
 const BIN_REQUIRED_MESSAGE = 'Please enter/select the source bin location first.';
 const UPI_LOCATION_REQUIRED_MESSAGE = 'Unable to identify current location of this UPI. Please verify transaction history.';
-const OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE = 'Part not available in scanned inventory. Outward not allowed.';
-const UPI_ALREADY_OUTWARD_MESSAGE = 'This UPI is already outwarded.';
-const UPI_ALREADY_FITTED_MESSAGE = 'This UPI is already available in workshop/fitted status.';
+const OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE = 'Part/UPI is not available in current inventory. OUTWARD cannot be processed.';
+const UPI_ALREADY_OUTWARD_MESSAGE = 'This UPI is already OUTWARD or is no longer available in inventory.';
+const UPI_ALREADY_FITTED_MESSAGE = 'This UPI is already marked as fitted.';
 const INVALID_PART_MESSAGE = masterValidation.INVALID_PART_MESSAGE || 'Invalid part number - not found in master catalogue';
 const SYNC_VERBOSE_LOGS = process.env.SYNC_VERBOSE_LOGS === 'true';
 
@@ -429,16 +429,20 @@ async function autoDetectOutwardBin(scan = {}) {
 }
 
 async function resolveUpiCurrentLocation(scan = {}) {
-  const upiCode = upper(upiCodeValue(scan));
+  let upiCode = upper(upiCodeValue(scan));
+  const rawToken = /^[a-z0-9._-]+$/i.test(clean(scan.rawScanString || scan.rawScan)) ? upper(scan.rawScanString || scan.rawScan) : '';
+  const identities = Array.from(new Set([rawToken, upiCode].filter(Boolean)));
   const dealerCode = upper(scan.dealerCode);
-  if (!upiCode || !dealerCode) return null;
+  if (!identities.length || !dealerCode) return null;
   const rows = await Inventory.find({
     dealerCode,
     isDeleted: { $ne: true },
     deletedAt: null,
-    $or: [{ upiCode }, { upiNo: upiCode }, { upiId: upiCode }]
+    ...(scan.auditId ? { auditId: clean(scan.auditId) } : {}),
+    $or: identities.flatMap(identity => [{ upiCode: identity }, { upiNo: identity }, { upiId: identity }])
   }).lean();
-  const validRows = rows.filter((row) => (
+  const exactRawRows = rawToken ? rows.filter(row => [row.upiCode, row.upiNo, row.upiId].some(value => upper(value) === rawToken)) : [];
+  const validRows = (exactRawRows.length ? exactRawRows : rows).filter((row) => (
     !['FAILED', 'REJECTED', 'DUPLICATE'].includes(upper(row.syncStatus || ''))
     &&
     ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'].includes(upper(row.scanStatus || 'ACCEPTED'))
@@ -457,7 +461,9 @@ async function resolveUpiCurrentLocation(scan = {}) {
   if (!latest) return null;
   const requestedPart = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
   const historyPart = normalizePartNumber(latest.normalizedPartNumber || latest.partNumber || latest.part);
-  if (!historyPart || (requestedPart && requestedPart !== historyPart)) return null;
+  const inferredIdentityPart = rawToken && requestedPart === normalizePartNumber(rawToken);
+  if (!historyPart || (requestedPart && !inferredIdentityPart && requestedPart !== historyPart)) return null;
+  upiCode = upper(latest.upiCode || latest.upiNo || latest.upiId || upiCode);
 
   const explicitStatus = upper(latest.upiStatus || '');
   const explicitLocation = upper(latest.currentLocationType || '');
@@ -504,14 +510,14 @@ async function prepareUpiSourceLocation(scan = {}, options = {}) {
   if (scan.scanType === 'OUTWARD' && options.scanHistoryOutward === true && !upiCodeValue(scan)) return null;
   // OUTWARD always requires a barcode/UPI that resolves to this dealer's valid
   // physical scan history. Part master/DMS stock is not sufficient evidence.
-  if (scan.scanType === 'OUTWARD' && !upiCodeValue(scan)) return OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE;
-  if (!upiCodeValue(scan)) return null;
-  if (Number(scan.quantity || 1) !== 1) {
-    return 'A unique UPI scan must have quantity 1.';
-  }
+  if (!upiCodeValue(scan) && isManualEntry(scan)) return null;
   const location = await resolveUpiCurrentLocation(scan);
   if (!location) return scan.scanType === 'OUTWARD' ? OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE : UPI_LOCATION_REQUIRED_MESSAGE;
-  if (!scan.partNumber && location.partNumber) {
+  scan.upiNo = location.upiCode;
+  scan.upiId = location.upiCode;
+  scan.qty = 1;
+  scan.quantity = 1;
+  if (location.partNumber) {
     scan.partNumber = location.partNumber;
     scan.normalizedPartNumber = location.partNumber;
     scan.part = location.partNumber;
@@ -1082,7 +1088,9 @@ function normalizeScan(item = {}) {
   const upiId = clean(item.upiNo || item.upiId || item.upiID || item.upiSequence || item.upiScanId || item.transactionId || item.txnId || inventory.extractUpiId(item, parsed));
   const upiNo = upiId;
   const syncKey = clean(item.syncKey || inventory.buildSyncKey({ dealerCode, upiId, partNumber, scanType, timestamp }));
-  const quantity = inventory.numberValue(firstValue(item, ['quantity', 'qty', 'count']) || parsed.qty, 1);
+  const quantity = upiCodeValue({ partNumber, upiId, rawScanString: rawScan })
+    ? 1
+    : inventory.numberValue(firstValue(item, ['quantity', 'qty', 'count']) || parsed.qty, 1);
   const idSource = scanSource === 'manual'
     ? { deviceId: item.deviceId }
     : { ...item, deviceId: item.deviceId };
@@ -1703,14 +1711,6 @@ async function saveNormalizedScan(scan, req, options = {}) {
     return { status: 'failed', httpStatus: 409, scan, error: 'Scan audit does not match the active audit for this dealer.' };
   }
   applyActiveAudit(scan, activeAudit);
-  // A request may have committed successfully even if the response never
-  // reached the scanner. A retry with the same transaction ID must return the
-  // saved record as an acknowledgement, without applying stock movement again.
-  const transactionId = clean(scan.uniqueScanId || scan.scanId);
-  if (transactionId) {
-    const existingTransaction = await Inventory.findOne(scanIdentityScope({
-      $or: [{ uniqueScanId: transactionId }, { scanId: transactionId }]
-    }, scan)).lean();
   if (scan.source?.cameraDecoded === true) {
     const rawValue = scan.source.rawDecodedValue ?? scan.source.rawScanString ?? scan.rawScanString;
     const decoded = await require('../services/ScannedCodeService').resolveScannedCode(rawValue, scan.source.barcodeFormat, scan.dealerCode);
@@ -1727,6 +1727,14 @@ async function saveNormalizedScan(scan, req, options = {}) {
     scan._cameraPrice = decoded.price;
     if (process.env.SCAN_DEBUG_LOGS === 'true') console.debug('[SCAN_DECODE]', JSON.stringify({ rawValue, ...scan.parsedCode }));
   }
+  // A request may have committed successfully even if the response never
+  // reached the scanner. A retry with the same transaction ID must return the
+  // saved record as an acknowledgement, without applying stock movement again.
+  const transactionId = clean(scan.uniqueScanId || scan.scanId);
+  if (transactionId) {
+    const existingTransaction = await Inventory.findOne(scanIdentityScope({
+      $or: [{ uniqueScanId: transactionId }, { scanId: transactionId }]
+    }, scan)).lean();
     if (existingTransaction) {
       return { status: 'synced', scan: existingTransaction, error: '', alreadyApplied: true };
     }
@@ -1740,6 +1748,9 @@ async function saveNormalizedScan(scan, req, options = {}) {
       Bin.findOne({ dealerCode: scan.dealerCode, binCode, active: { $ne: false } }).lean(),
       Bin.findOne({ dealerCode: { $ne: scan.dealerCode }, binCode, active: { $ne: false } }).lean()
     ]);
+    if (scan.scanType === 'INWARD' && !ownedBin) {
+      return { status: 'failed', httpStatus: 422, scan, error: 'Select a valid active bin for this dealer.' };
+    }
     if (!ownedBin && conflictingBin) {
       return { status: 'failed', httpStatus: 403, scan, error: 'BIN_DOES_NOT_BELONG_TO_ACTIVE_DEALER' };
     }
@@ -1863,8 +1874,8 @@ async function saveNormalizedScan(scan, req, options = {}) {
     }
     scan.binLocation = detected.binLocation;
     scan._upiSourceLocationType = detected.sourceLocationType || 'BIN';
-    scan.autoDetectedBin = false;
-    scan.binSelectionMode = 'MANUAL';
+    scan.autoDetectedBin = Boolean(upiCodeValue(scan));
+    scan.binSelectionMode = upiCodeValue(scan) ? 'AUTO_UPI' : 'MANUAL';
     scan.stockDeductedFromBin = detected.binLocation;
   } else if (['INWARD', 'DAMAGE'].includes(scan.scanType)) {
     scan.binSelectionMode = 'MANUAL';
@@ -2000,6 +2011,28 @@ async function saveNormalizedScan(scan, req, options = {}) {
   try {
     doc = await withDatabaseTransaction(async () => {
       await lockUpiIdentity(scan);
+      if (['OUTWARD', 'FITTED'].includes(scan.scanType) && upiCodeValue(scan)) {
+        const locationError = await prepareUpiSourceLocation(scan, options);
+        if (locationError || scan.binLocation !== finalBin) {
+          const error = new Error(locationError || UPI_LOCATION_REQUIRED_MESSAGE);
+          error.code = 'UPI_LOCATION_CHANGED';
+          throw error;
+        }
+        const stock = await inventory.availableInwardStock({ dealerCode: scan.dealerCode, auditId: scan.auditId, partNumber: scan.partNumber, binLocation: finalBin });
+        if (Number(stock.bins.find((bin) => upper(bin.binLocation) === upper(finalBin))?.availableQty || 0) < finalQty) {
+          const error = new Error(OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE);
+          error.code = 'UPI_LOCATION_CHANGED';
+          throw error;
+        }
+      }
+      if (['OUTWARD', 'FITTED'].includes(scan.scanType) && !upiCodeValue(scan)) {
+        const stock = await inventory.availableInwardStock({ dealerCode: scan.dealerCode, auditId: scan.auditId, partNumber: scan.partNumber });
+        if (Number(stock.bins.find(bin => upper(bin.binLocation) === upper(finalBin))?.availableQty || 0) < finalQty) {
+          const error = new Error('Insufficient available stock in the selected source bin.');
+          error.code = 'UPI_LOCATION_CHANGED';
+          throw error;
+        }
+      }
       const activeUpiFilter = duplicatePolicy.activeUpiDuplicateFilter(scan);
       const concurrentUpiDuplicate = activeUpiFilter
         ? await Inventory.findOne(activeUpiFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
@@ -2098,6 +2131,9 @@ async function saveNormalizedScan(scan, req, options = {}) {
     dealerName: scan.dealerName || (dealer ? dealer.dealerName : ''),
     auditId: scan.auditId || (dealer ? dealer.currentAuditId : ''),
     rawScan: scan.rawScanString,
+    rawDecodedValue: scan.source?.rawDecodedValue ?? scan.rawScanString,
+    barcodeFormat: scan.source?.barcodeFormat || 'UNKNOWN',
+    parsedCode: scan.parsedCode,
     rawScanString: scan.rawScanString,
     rawBarcode: scan.rawScanString,
     rawQR: scan.rawScanString,
@@ -2151,7 +2187,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
           status: 'failed',
           httpStatus: 409,
           scan,
-          error: scan.scanType === 'OUTWARD' ? OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE : UPI_LOCATION_REQUIRED_MESSAGE
+          error: error.message || (scan.scanType === 'OUTWARD' ? OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE : UPI_LOCATION_REQUIRED_MESSAGE)
         };
       }
       if (!isDuplicateKeyError(error)) throw error;

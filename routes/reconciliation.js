@@ -1,3 +1,4 @@
+const { stockAvailableQuantity } = require('../utils/stockQuantity');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -684,13 +685,7 @@ function scanMatch(scope, filters = {}) {
 }
 
 function scanQty(scan = {}) {
-  if (scan._reportSignedQty !== undefined) return signedScanQuantity(scan, 0);
-  const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
-  const type = upper(scan.scanType || scan.type || 'INWARD');
-  if (POSITIVE_SCAN_TYPES.includes(type)) return Math.abs(qty);
-  if (NEGATIVE_SCAN_TYPES.includes(type)) return -Math.abs(qty);
-  if (type === 'VERIFICATION') return 0;
-  return Math.abs(qty);
+  return stockAvailableQuantity(scan);
 }
 
 async function physicalRows(scope, filters = {}) {

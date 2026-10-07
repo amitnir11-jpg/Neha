@@ -17,6 +17,8 @@ const VerificationLog = require('../models/VerificationLog');
 const AuditLog = require('../models/AuditLog');
 const auth = require('./auth');
 const scanModification = require('../services/ScanModificationService');
+const { stockMovementQuantity } = require('../utils/stockQuantity');
+const { loadPartStock } = require('../services/StockCalculationService');
 const { withDatabaseTransaction } = require('../services/prisma');
 const { normalizePartNumber } = require('../utils/normalize');
 const { parseScanValue } = require('../utils/scanParser');
@@ -963,7 +965,7 @@ function dashboardAggregateSummary(rows = [], now = new Date()) {
         ? scan.bin
         : '';
     if (!part || bin === '') return;
-    const signedQuantity = ['OUTWARD', 'FITTED', 'DAMAGE'].includes(type) ? -quantity : quantity;
+    const signedQuantity = stockMovementQuantity({ ...scan, qty: quantity });
     let bins = binQuantitiesByPart.get(part);
     if (!bins) {
       bins = new Map();
@@ -1557,14 +1559,7 @@ function inwardQtyExpression() {
 }
 
 function stockQty(scan = {}) {
-  const qty = Math.abs(numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0));
-  const type = upper(scan.scanType || scan.type);
-  if (type === 'INWARD') return qty;
-  if (type === 'FITTED') return fittedStock.fittedPhysicalMovement(scan) || 0;
-  if (type === 'FITTED_RETURN') return qty;
-  if (['OUTWARD', 'DAMAGE'].includes(type)) return -qty;
-  if (type === 'VERIFICATION') return 0;
-  return 0;
+  return stockMovementQuantity(scan);
 }
 
 function inwardQty(scan = {}) {
@@ -4713,6 +4708,31 @@ router.post('/sync', auth.requireAuth, async (req, res) => {
   }
 });
 
+async function scanInventorySummary(query = {}, req = {}) {
+  const scope = { dealerCode: query.dealerCode, auditId: query.auditId };
+  if (scope.dealerCode && !scope.auditId) {
+    const audit = await getActiveAudit({ dealerCode: scope.dealerCode });
+    if (!audit) return { scanRows: 0, uniqueParts: 0, netAvailableQuantity: 0 };
+    scope.auditId = clean(audit.auditId || audit._id);
+  }
+  const filter = applyScanVisibility(req, applyTestScanMode(buildListQuery(scope), query.testScanMode || 'real'));
+  const records = await Inventory.find(filter).select('partNumber normalizedPartNumber part qty quantity scanType type movementType fittedQty status fittedStatus isDeleted deletedAt isDuplicate masterFound masterMatch isMasterMatched scanStatus syncStatus timestamp uniqueScanId scanId upiNo upiId dealerCode auditId binLocation bin rawScanString').lean();
+  const totals = reportTotals(applyMovementCountRules(uniqueReportScans(records)));
+  return {
+    scanRows: totals.scanRows,
+    uniqueParts: totals.uniqueParts,
+    netAvailableQuantity: totals.totalDealerStockQty
+  };
+}
+
+router.get('/part-summary', auth.requireAuth, async (req, res) => {
+  try {
+    return res.json({ success: true, ...(await loadPartStock(req.query)) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/validate-bin', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = normalizeDealerCode(req.query.dealerCode);
@@ -4720,7 +4740,7 @@ router.get('/validate-bin', auth.requireAuth, async (req, res) => {
     const bin = dealerCode && binLocation
       ? await Bin.findOne({ dealerCode, binCode: binLocation, active: { $ne: false } }).lean() : null;
     return res.status(bin ? 200 : 422).json({ success: Boolean(bin), valid: Boolean(bin), binLocation,
-      message: bin ? 'Bin ' + binLocation + ' ready' : 'Select a valid active bin for this dealer.' });
+      message: bin ? `Bin ${binLocation} ready` : 'Select a valid active bin for this dealer.' });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -4728,7 +4748,12 @@ router.get('/validate-bin', auth.requireAuth, async (req, res) => {
 
 router.get('/history', auth.requireAuth, async (req, res) => {
   try {
-    const filter = applyScanVisibility(req, applyTestScanMode(buildListQuery(req.query), req.query.testScanMode || 'real'));
+    const historyQuery = { ...req.query };
+    if (historyQuery.dealerCode && !historyQuery.auditId) {
+      const audit = await getActiveAudit({ dealerCode: historyQuery.dealerCode });
+      historyQuery.auditId = audit ? clean(audit.auditId || audit._id) : '__NO_ACTIVE_AUDIT__';
+    }
+    const filter = applyScanVisibility(req, applyTestScanMode(buildListQuery(historyQuery), req.query.testScanMode || 'real'));
     const page = Math.max(1, Number.parseInt(req.query.page || '1', 10) || 1);
     const limit = Math.min(500, Math.max(10, Number.parseInt(req.query.limit || '100', 10) || 100));
     const skip = (page - 1) * limit;
@@ -4810,7 +4835,8 @@ router.get('/history', auth.requireAuth, async (req, res) => {
       visibleRows: normalizedRecords.length,
       duplicateCount
     });
-    const partsScanned = Number(visibleTotals.totalQuantity || 0);
+    const inventorySummary = await scanInventorySummary(historyQuery, req);
+    const partsScanned = Number(inventorySummary.netAvailableQuantity || 0);
     res.json({
       success: true,
       records: publicRecords,
@@ -4822,16 +4848,16 @@ router.get('/history', auth.requireAuth, async (req, res) => {
         totalPages: Math.max(1, Math.ceil(totalRecords / limit))
       },
       summary: {
-        scanRows: visibleTotals.scanRows,
+        scanRows: inventorySummary.scanRows,
         totalRows: totalRecords,
         totalRecords,
-        visibleRows: visibleTotals.visibleRows,
-        uniqueParts: visibleTotals.uniqueParts || new Set(uniqueParts).size,
+        visibleRows: publicRecords.length,
+        uniqueParts: inventorySummary.uniqueParts,
         visibleUniqueParts: visibleTotals.uniqueParts,
         partsScanned,
         visiblePartsScanned: visibleTotals.partsScanned,
         totalQuantity: partsScanned,
-        netAvailableQuantity: visibleTotals.netAvailableCount,
+        netAvailableQuantity: inventorySummary.netAvailableQuantity,
         databaseQuantity: Number(aggregateTotals.totalQuantity || 0),
         duplicateCount,
         unknownPartsCount: visibleTotals.unknownPartsCount,
@@ -5288,3 +5314,5 @@ module.exports.prepareFittedScan = prepareFittedScan;
 module.exports.availableInwardStock = availableInwardStock;
 module.exports.buildScanHistoryOutwardMovement = buildScanHistoryOutwardMovement;
 module.exports.verifyPartOnly = verifyPartOnly;
+
+module.exports.scanInventorySummary = scanInventorySummary;

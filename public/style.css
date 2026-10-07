@@ -12028,3 +12028,5 @@ tbody tr:hover td {
 .restricted-role .advanced-part-result-table td:last-child {
   display: none !important;
 }
+
+#scan .scan-part-summary { margin: 12px 0 0; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; font-size: 13px; font-weight: 600; }

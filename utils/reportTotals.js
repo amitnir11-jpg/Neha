@@ -3,6 +3,7 @@ const { uniqueReportScans } = require('./reportScanIdentity');
 const { summarizeMovementBucket } = require('./inventoryValueEngine');
 const { movementTypeValue } = require('./inventoryMovementState');
 const { fittedPhysicalMovement } = require('./fittedStock');
+const { stockMovementQuantity } = require('./stockQuantity');
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -34,12 +35,7 @@ function scanQuantity(scan = {}, fallback = 0) {
 
 function signedScanQuantity(scan = {}, fallback = 0) {
   if (scan._reportSignedQty !== undefined) return numberValue(scan._reportSignedQty, fallback);
-  const qty = scanQuantity(scan, fallback);
-  const type = scanType(scan);
-  if (type === 'VERIFICATION') return 0;
-  if (type === 'FITTED') return fittedPhysicalMovement(scan) || 0;
-  if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -qty;
-  return qty;
+  return stockMovementQuantity({ ...scan, qty: scanQuantity(scan, fallback) });
 }
 
 function isDuplicateScan(scan = {}) {
@@ -81,8 +77,8 @@ function reportTotals(scans = [], options = {}) {
   const totalQuantity = countedRows.reduce((sum, scan) => sum + scanQuantity(scan, 0), 0);
   const inwardCount = countedRows.reduce((sum, scan) => ['INWARD', 'AUDIT'].includes(scanType(scan)) ? sum + scanQuantity(scan, 0) : sum, 0);
   const outwardCount = countedRows.reduce((sum, scan) => ['OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType(scan)) ? sum + scanQuantity(scan, 0) : sum, 0);
-  const netAvailableCount = countedRows.reduce((sum, scan) => sum + signedScanQuantity(scan, 0), 0);
   const movementSummary = summarizeMovementBucket(countedRows);
+  const netAvailableCount = movementSummary.totalDealerStockQty;
   const duplicateCount = Number(options.duplicateCount || 0) + duplicateRows.length;
   const unknownParts = new Set(unknownRows.map(scanPartNumber).filter(Boolean));
   return {
@@ -137,7 +133,7 @@ function applyMovementCountRules(scans = [], options = {}) {
     } else if (['INWARD', 'AUDIT'].includes(type)) {
       reportSignedQty = qty;
     } else if (type === 'FITTED') {
-      reportSignedQty = fittedPhysicalMovement(scan) || 0;
+      reportSignedQty = stockMovementQuantity(scan);
     } else if (['OUTWARD', 'DAMAGE'].includes(type)) {
       // Reports account for persisted scan transactions as entered. Stock
       // availability is validated by the scan service; report aggregation must

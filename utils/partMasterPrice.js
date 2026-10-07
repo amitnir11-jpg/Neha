@@ -283,7 +283,7 @@ function pickBestPriceRecord(records = [], dealerCode = '') {
   return candidates[0] || null;
 }
 
-async function getPriceFromPartMaster(partNumber, dealerCode = '') {
+async function getPriceFromPartMaster(partNumber, dealerCode = '', options = {}) {
   const part = normalizePartNumber(partNumber);
   if (!part) return null;
   const lookup = partLookup(part);
@@ -292,7 +292,7 @@ async function getPriceFromPartMaster(partNumber, dealerCode = '') {
     MasterPart.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean()
   ]);
   const hasMatch = catalogueRows.length > 0 || masterRows.length > 0;
-  if (!hasMatch) {
+  if (!hasMatch && options.exact !== true) {
     [catalogueRows, masterRows] = await Promise.all([
       MasterCatalogue.find(legacyPartLookup(part)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean(),
       MasterPart.find(legacyPartLookup(part)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean()

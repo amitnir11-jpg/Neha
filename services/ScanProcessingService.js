@@ -118,7 +118,18 @@ async function processScan(input = {}, options = {}) {
     source: normalized.source
   }));
 
+  let partSummary;
+  if (success && status !== 'verification') {
+    try {
+      partSummary = await require('./StockCalculationService').loadPartStock({
+        dealerCode: scan.dealerCode, auditId: scan.auditId, partNumber: scan.partNumber || scan.part
+      });
+    } catch (error) {
+      scanProcessLog('warn', 'part-summary-unavailable', { message: error.message });
+    }
+  }
   return {
+    partSummary,
     success,
     status,
     httpStatus: responseStatusFor(result),

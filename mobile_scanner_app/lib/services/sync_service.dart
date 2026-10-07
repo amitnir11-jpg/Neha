@@ -136,6 +136,28 @@ class SyncService {
 
     try {
       final data = await ApiClient(settings).syncBulk(pending);
+      // Camera adapters queue raw input. The shared backend parser supplies the
+      // authoritative part, UPI, description and quantity after online/offline sync.
+      for (final item in (data['insertedRecords'] as List? ?? const [])) {
+        if (item is! Map) continue;
+        final saved = Map<String, dynamic>.from(item);
+        final keys = _logKeys(saved);
+        for (final record in pending) {
+          if (!_intersects(_recordKeys(record), keys)) continue;
+          await database.updateResolvedScan(record.copyWith(
+            partNumber: (saved['partNumber'] ?? '').toString(),
+            quantity:
+                int.tryParse('${saved['qty'] ?? saved['quantity'] ?? 1}') ?? 1,
+            binLocation:
+                (saved['binLocation'] ?? record.binLocation).toString(),
+            metadata: {
+              ...record.metadata,
+              ...saved,
+              'rawDecodedValue': record.rawValue
+            },
+          ));
+        }
+      }
       // Check for server-provided date diagnostics and warn if device clock is skewed
       var hasClockSkew = false;
       try {

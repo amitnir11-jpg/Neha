@@ -79,6 +79,7 @@ const { parseScanValue } = require('./scanParser');
 const { MASTER_PRICE_SOURCE } = require('./partMasterPrice');
 const { movementTypeValue } = require('./inventoryMovementState');
 const { fittedPhysicalMovement, fittedWorkshopQuantity } = require('./fittedStock');
+const { stockQuantitySummary } = require('./stockQuantity');
 
 const MASTER_VALUATION_SOURCES = new Set([
   MASTER_PRICE_SOURCE,
@@ -333,21 +334,12 @@ function summarizeMovementBucket(scans = [], options = {}) {
   const dates = rows.map((row) => row.timestamp).filter(Boolean).sort((a, b) => a - b);
   const firstScanDate = dates[0] || null;
   const lastScanDate = dates[dates.length - 1] || null;
-  const inwardQty = rows.filter((row) => movementType(row.scan) === 'INWARD').reduce((sum, row) => sum + row.qty, 0);
-  const outwardQty = rows.filter((row) => movementType(row.scan) === 'OUTWARD').reduce((sum, row) => sum + row.qty, 0);
-  const fittedQty = rows.reduce((sum, row) => sum + fittedWorkshopQuantity(row.scan), 0);
-  const damageQty = rows.filter((row) => movementType(row.scan) === 'DAMAGE').reduce((sum, row) => sum + row.qty, 0);
-  // FITTED is a transfer: it reduces physical stock but remains dealer stock.
-  const netQty = rows.reduce((sum, row) => {
-    const type = movementType(row.scan);
-    if (type === 'INWARD') return sum + row.qty;
-    if (type === 'OUTWARD' || type === 'DAMAGE') return sum - row.qty;
-    if (type === 'FITTED') return sum + (fittedPhysicalMovement(row.scan) || 0);
-    if (type === 'FITTED_RETURN') return sum + row.qty;
-    return sum;
-  }, 0);
+  const quantities = stockQuantitySummary(activeScans);
+  const { inwardQty, outwardQty, damageQty } = quantities;
+  const fittedQty = quantities.fittedQty;
+  const netQty = quantities.storeQty;
   const remainingQty = Math.max(netQty, 0);
-  const totalDealerStockQty = Math.max(netQty + fittedQty, 0);
+  const totalDealerStockQty = Math.max(quantities.availableQty, 0);
   const ageingDays = firstScanDate ? Math.max(0, Math.floor((referenceDate - firstScanDate) / 86400000)) : 0;
   return {
     ...value,

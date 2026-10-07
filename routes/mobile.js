@@ -28,7 +28,7 @@ const { applyCacheHeaders, getCachedResponse } = require('../utils/safeCache');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
-const MOBILE_APP_VERSION = 'Daksh Scan Lite v1.2.16';
+const MOBILE_APP_VERSION = 'Daksh Scan Lite v1.2.17';
 const WEB_SCANNER_BUILD = '20261007-camera-formats-v8';
 const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 const MOBILE_SCAN_SELECT = [
@@ -37,7 +37,7 @@ const MOBILE_SCAN_SELECT = [
   'qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue finalMRP currentCatalogueMRP currentCatalogueDLC dlc',
   'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin returnedToBin sourceBin sourceFittedScanId regdNo jobCardNo isFitted fittedQty fittedLocation fittedStatus billedAt returnedAt status type scanType movementType activeInventory remainingQty',
   'upiId upiNo upiCode dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi',
-  'deviceId deviceName userId loginId staffName userName role timestamp scanTime createdAt',
+  'deviceId deviceName entryChannel userId loginId staffName userName role timestamp scanTime createdAt',
   'syncStatus synced isSynced scanStatus source scanMode warnings remarks masterFound masterMatch isMasterMatched'
 ].join(' ');
 
@@ -175,12 +175,7 @@ function transactionFilter(query = {}) {
 
 function recentScanFilter(query = {}) {
   const filter = transactionFilter(query);
-  filter.activeInventory = { $ne: false };
-  filter.deletedAt = null;
-  filter.scanStatus = { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED'] };
-  filter.$and = (filter.$and || []).concat([
-    { $or: [{ movementType: 'INWARD' }, { scanType: 'INWARD' }, { type: 'INWARD' }] }
-  ]);
+  if (query.auditId) filter.auditId = clean(query.auditId);
   return filter;
 }
 
@@ -223,6 +218,11 @@ async function withCurrentMasterPrices(scans = [], dealerCode = '') {
 }
 
 async function buildRecentScans(query = {}) {
+  if (query.dealerCode && !query.auditId) {
+    const audit = await getActiveAudit({ dealerCode: query.dealerCode });
+    if (!audit) return [];
+    query = { ...query, auditId: clean(audit.auditId || audit._id) };
+  }
   const limit = Math.min(Math.max(Number(query.limit || 10), 1), 100);
   const fetchLimit = Math.min(Math.max(limit * 5, 50), 250);
   const records = await Inventory.find(recentScanFilter(query))
@@ -286,6 +286,13 @@ function mobileItem(scan) {
   const valued = decorateScanValue(scan);
   return {
     id: scan.rawScan || scan.rawScanString || scan.uniqueScanId || String(scan._id),
+    _id: clean(scan._id || scan.id),
+    uniqueScanId: clean(scan.uniqueScanId || scan.scanId),
+    scanId: clean(scan.scanId || scan.uniqueScanId),
+    auditId: clean(scan.auditId),
+    deviceId: clean(scan.deviceId),
+    deviceName: clean(scan.deviceName),
+    entryChannel: clean(scan.entryChannel),
     type: scan.type || scan.scanType || 'INWARD',
     upiSequence: scan.upiId || '',
     partNumber: scan.partNumber || scan.part || '',
@@ -798,8 +805,10 @@ router.get('/reports/summary', auth.requireAuth, async (req, res) => {
 
 router.get('/recent-scans', auth.requireAuth, async (req, res) => {
   try {
-    const records = await buildRecentScans(req.query);
-    return res.json({ success: true, count: records.length, records });
+    const [records, summary] = await Promise.all([
+      buildRecentScans(req.query), inventoryRoute.scanInventorySummary(req.query, req)
+    ]);
+    return res.json({ success: true, count: records.length, records, summary });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

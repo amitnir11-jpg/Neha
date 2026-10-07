@@ -18,6 +18,8 @@ function harness() {
   const rows = [source];
   const locationContext = vm.createContext({
     upiCodeValue,
+    isManualEntry: scan => scan.scanSource === 'manual',
+    resolveUpiCurrentLocation: async () => null,
     OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE: 'Part not available in scanned inventory. Outward not allowed.'
   });
   vm.runInContext(extract('routes/sync.js', 'async function prepareUpiSourceLocation(', 'function scanIdentityScope('), locationContext);
@@ -101,7 +103,7 @@ test('outward rejects insufficient or invalid quantities without changing stock'
 
 test('ordinary outward cannot bypass barcode validation using client fields', async () => {
   const h = harness();
-  const result = await h.processScan({ scanType: 'OUTWARD', quantity: 1, partNumber: 'PART123', scanHistoryOutward: true, source: 'manual', scanMode: 'Scan History Outward' }, { req: { body: { scanHistoryOutward: true } } });
+  const result = await h.processScan({ scanType: 'OUTWARD', quantity: 1, partNumber: 'PART123', scanHistoryOutward: true, source: 'barcode', scanMode: 'Scan History Outward' }, { req: { body: { scanHistoryOutward: true } } });
   assert.equal(result.success, false);
   assert.match(result.message, /Part not available in scanned inventory/);
   assert.equal(h.rows.length, 1);

@@ -1,4 +1,8 @@
 @layer app-controls {
+/* Keep automatic source-bin controls hidden despite the workspace display rules. */
+#barcodeEntry #barcodeBinLabel.hidden,
+#barcodeEntry #barcodeBinStep.hidden,
+#barcodeEntry #clearBarcodeBin.hidden { display: none !important; }
 /* Only the Barcode/Web Scan workspace uses this compact operator layout. */
 body.view-active-scan #scan:has(#barcodeEntry.active) { padding: 10px !important; gap: 10px !important; }
 body.view-active-scan #scan:has(#barcodeEntry.active) > .card { padding: 10px 14px !important; margin: 0 0 10px !important; }

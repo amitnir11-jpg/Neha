@@ -1,3 +1,4 @@
+const { stockMovementQuantity } = require('../utils/stockQuantity');
 const express = require('express');
 const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
@@ -665,15 +666,7 @@ function actionForScan(scan = {}) {
 }
 
 function physicalScanQty(scan = {}) {
-  const fittedMovement = fittedPhysicalMovement(scan);
-  if (fittedMovement !== null) return fittedMovement;
-  if (scan._reportSignedQty !== undefined) return signedScanQuantity(scan, 0);
-  const qty = numberValue(scan.qty !== undefined ? scan.qty : scan.quantity, 0);
-  const type = cleanText(scan.scanType || scan.type).toUpperCase();
-  if (type === 'INWARD' || type === 'AUDIT') return Math.abs(qty);
-  if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)) return -Math.abs(qty);
-  if (type === 'VERIFICATION') return 0;
-  return Math.abs(qty);
+  return stockMovementQuantity(scan);
 }
 
 function binPhysicalScanQty(scan = {}) {

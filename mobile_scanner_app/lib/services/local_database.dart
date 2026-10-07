@@ -89,6 +89,12 @@ class LocalDatabase {
     );
   }
 
+  Future<void> updateResolvedScan(ScanRecord record) async {
+    final db = await database;
+    await db.update('scans', record.toMap(),
+        where: 'localId = ?', whereArgs: [record.localId]);
+  }
+
   Future<List<ScanRecord>> pendingScans(
       {int limit = 200, bool includeFailed = false}) async {
     final db = await database;

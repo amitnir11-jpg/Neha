@@ -12,7 +12,7 @@ function scannerHarness(options = {}) {
   let timerId = 0;
   const node = (selector) => {
     if (!nodes.has(selector)) nodes.set(selector, {
-      value: '', listeners: {},
+      value: '', listeners: {}, focus() { this.focused = true; },
       addEventListener(name, callback) { this.listeners[name] = callback; }
     });
     return nodes.get(selector);
@@ -21,7 +21,8 @@ function scannerHarness(options = {}) {
   node('[name="binLocation"]').value = 'A1';
   node('#barcodeScanForm').elements = {
     type: node('[name="type"]'), binLocation: node('[name="binLocation"]'),
-    part: node('[name="part"]'), qty: node('[name="qty"]')
+    part: node('[name="part"]'), qty: node('[name="qty"]'),
+    regdNo: node('#barcodeScanForm [name="regdNo"]'), jobCardNo: node('#barcodeScanForm [name="jobCardNo"]')
   };
   const context = {
     $: node, state: { barcodeCaptureQueue: [], barcodeAutoSaving: false, barcodeLastRaw: '', barcodeLastAt: 0 },
@@ -184,3 +185,21 @@ test('repair migration creates the bin table and preserves rows when replayed',
       await db.$disconnect();
     }
   });
+
+test('FITTED keeps the captured QR until required vehicle and job card details are entered', async () => {
+  const h = scannerHarness();
+  h.node('[name="type"]').value = 'FITTED';
+  h.node('[name="binLocation"]').value = '';
+  h.input('UPI001');
+  await h.advance(200);
+  assert.equal(h.saves.length, 0);
+  assert.equal(h.node('#barcodeRaw').value, 'UPI001');
+  const reg = h.node('#barcodeScanForm [name="regdNo"]');
+  const job = h.node('#barcodeScanForm [name="jobCardNo"]');
+  assert.equal(reg.focused, true);
+  reg.value = 'CAR123';
+  job.value = 'JC1';
+  job.listeners.change();
+  await h.advance(35);
+  assert.deepEqual(h.saves, ['UPI001']);
+});

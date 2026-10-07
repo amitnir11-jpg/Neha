@@ -8,7 +8,7 @@ import '../models/scan_record.dart';
 import '../models/session.dart';
 import 'settings_store.dart';
 
-const mobileAppVersionName = 'Daksh Scan Lite v1.2.16';
+const mobileAppVersionName = 'Daksh Scan Lite v1.2.17';
 
 class ApiException implements Exception {
   ApiException(this.message,
@@ -21,7 +21,6 @@ class ApiException implements Exception {
   @override
   String toString() => message;
 }
-
 class ApiClient {
   ApiClient(this.settings, {http.Client? client})
       : _client = client ?? _defaultClient;

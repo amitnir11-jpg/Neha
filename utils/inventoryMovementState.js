@@ -14,17 +14,7 @@ function numberValue(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function movementTypeValue(input = {}) {
-  const type = upper(input.scanType || input.movementType || input.type || 'INWARD').replace(/[\s-]+/g, '_');
-  const aliases = {
-    VERIFY: 'VERIFICATION',
-    OUT: 'OUTWARD',
-    FIT: 'FITTED',
-    FITTED_ON_VEHICLE: 'FITTED',
-    DAMAGED: 'DAMAGE'
-  };
-  return aliases[type] || type;
-}
+const { stockMovementType: movementTypeValue, stockMovementQuantity } = require('./stockQuantity');
 
 function upiCodeValue(input = {}) {
   const canonical = duplicatePolicy.canonicalUpiValue(input);
@@ -81,13 +71,7 @@ function identityScopeFilter(input = {}) {
 }
 
 function movementQty(row = {}) {
-  const qty = Math.abs(numberValue(row.qty !== undefined ? row.qty : row.quantity, 0));
-  const movementType = movementTypeValue(row);
-  if (movementType === 'INWARD') return qty;
-  if (movementType === 'FITTED') return fittedPhysicalMovement(row);
-  if (movementType === 'FITTED_RETURN') return qty;
-  if (['OUTWARD', 'DAMAGE'].includes(movementType)) return -qty;
-  return 0;
+  return stockMovementQuantity(row);
 }
 
 async function recomputeUpiInventoryState(Inventory, input = {}) {

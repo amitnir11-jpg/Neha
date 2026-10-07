@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:uuid/uuid.dart';
@@ -53,7 +54,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     detectionTimeoutMs: 120,
     facing: CameraFacing.back,
     useNewCameraSelector: true,
+    // Empty format list means every ML Kit format, including QR and 1D.
+    formats: const <BarcodeFormat>[],
   );
+  final _cameraFrames = CameraFrameGuard();
+  static const _scanDebug = bool.fromEnvironment('SCAN_DECODE_LOGS');
 
   Timer? _foregroundSyncTimer;
   Timer? _qrIdleTimer;
@@ -67,7 +72,6 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   String _userName = '';
   String _role = '';
   String _activeAuditId = '';
-  String _lastScannedCode = '';
   String _currentlyVisibleCode = '';
   DateTime _lastHealthCheckAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastDiscoveryAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -548,33 +552,35 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _setStatus('Enter bin location before scanning', Colors.red);
       return;
     }
-    final raw = capture.barcodes
-        .map((barcode) => barcode.rawValue ?? barcode.displayValue)
-        .whereType<String>()
-        .map((value) => value.trim())
-        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
-    if (raw.isEmpty) return;
+    final decoded = capture.barcodes
+        .where((barcode) =>
+            (barcode.rawValue ?? barcode.displayValue ?? '').trim().isNotEmpty)
+        .firstOrNull;
+    if (decoded == null) return;
+    final rawValue = decoded.rawValue ?? decoded.displayValue ?? '';
+    final raw = normalizeDecodedValue(rawValue);
+    if (!_cameraFrames.accept('$_deviceId|$_scanType|$raw')) return;
+    if (kDebugMode || _scanDebug) {
+      debugPrint('[SCAN_DECODE] ${jsonEncode({
+            'rawValue': rawValue,
+            'normalizedValue': raw,
+            'barcodeFormat': decoded.format.name
+          })}');
+    }
 
     _qrIdleTimer?.cancel();
     _qrIdleTimer = Timer(_noQrClearTimeout, () {
       _currentlyVisibleCode = '';
-      _lastScannedCode = '';
     });
 
     if (_currentlyVisibleCode != raw) {
       _currentlyVisibleCode = raw;
     }
 
-    final draft =
-        _ScanDraft.fromRaw(raw, fallbackBin: _defaultBinController.text);
-    if (raw == _lastScannedCode) {
-      // mobile_scanner reports the same QR on consecutive camera frames.  This
-      // is not a duplicate inventory scan, so ignore it without displaying a
-      // duplicate warning.  The lock is cleared after the QR leaves the frame.
-      return;
-    }
+    final draft = _ScanDraft.fromRaw(rawValue,
+        fallbackBin: _defaultBinController.text,
+        barcodeFormat: decoded.format.name);
 
-    _lastScannedCode = raw;
     unawaited(_handleDraft(draft, source: 'mobile'));
   }
 
@@ -587,7 +593,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _setStatus('Login required', Colors.red);
       return;
     }
-    if (draft.partNumber.isEmpty) {
+    if (draft.partNumber.isEmpty && draft.rawValue.isEmpty) {
       _setStatus('Invalid QR', Colors.red);
       return;
     }
@@ -614,27 +620,35 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       final currentBin = _upper(draft.binLocation);
       final api = ApiClient(_settings);
       Future<Map<String, dynamic>?>? smartBinFuture;
-      if (_isSmartBinEligible(_scanType) && _online && _activeAuditId.isNotEmpty) {
+      if (source == 'manual' &&
+          _isSmartBinEligible(_scanType) &&
+          _online &&
+          _activeAuditId.isNotEmpty) {
         // The read-only preflight can run alongside the local duplicate check.
         // Previously these two independent waits happened one after the other.
-        smartBinFuture = api.smartBinCheck(
-          dealerCode: _dealerCode,
-          auditId: _activeAuditId,
-          partNumber: draft.partNumber,
-          partDescription: draft.partDescription,
-          binLocation: currentBin,
-          scanType: _scanType,
-          qty: draft.quantity,
-        ).then<Map<String, dynamic>?>((value) => value).catchError((_) => null);
+        smartBinFuture = api
+            .smartBinCheck(
+              dealerCode: _dealerCode,
+              auditId: _activeAuditId,
+              partNumber: draft.partNumber,
+              partDescription: draft.partDescription,
+              binLocation: currentBin,
+              scanType: _scanType,
+              qty: draft.quantity,
+            )
+            .then<Map<String, dynamic>?>((value) => value)
+            .catchError((_) => null);
       }
 
-      final duplicateRecord = await _database.latestMatchingScan(
-        rawValue: draft.rawValue,
-        scanType: _scanType,
-        dealerCode: _dealerCode,
-        auditId: _activeAuditId,
-        userId: _userId,
-      );
+      final duplicateRecord = source == 'manual'
+          ? await _database.latestMatchingScan(
+              rawValue: draft.rawValue,
+              scanType: _scanType,
+              dealerCode: _dealerCode,
+              auditId: _activeAuditId,
+              userId: _userId,
+            )
+          : null;
       if (duplicateRecord != null) {
         await _showDuplicateScanAlert(
           draft,
@@ -718,7 +732,14 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         createdAt: now,
         status: 'Pending',
         source: source,
-        metadata: metadata,
+        metadata: {
+          ...metadata,
+          if (source != 'manual') ...{
+            'cameraDecoded': true,
+            'rawDecodedValue': draft.rawValue,
+            'barcodeFormat': draft.barcodeFormat
+          }
+        },
       );
 
       _showInstantScan(record);
@@ -1039,7 +1060,6 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   void _resetScanLock({String message = 'Ready to rescan'}) {
     _qrIdleTimer?.cancel();
     _currentlyVisibleCode = '';
-    _lastScannedCode = '';
     if (mounted) {
       _setStatus(message, Colors.blue);
     }
@@ -1288,6 +1308,28 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                       onDetect: _onDetect,
                       fit: BoxFit.cover,
                     ),
+                    Positioned(
+                      right: 12,
+                      top: 12,
+                      child: ValueListenableBuilder<MobileScannerState>(
+                        valueListenable: _cameraController,
+                        builder: (context, camera, _) =>
+                            camera.torchState == TorchState.unavailable
+                                ? const SizedBox.shrink()
+                                : IconButton.filledTonal(
+                                    tooltip: camera.torchState == TorchState.on
+                                        ? 'Torch OFF'
+                                        : 'Torch ON',
+                                    onPressed: camera.isRunning
+                                        ? () => _cameraController.toggleTorch()
+                                        : null,
+                                    icon: Icon(
+                                        camera.torchState == TorchState.on
+                                            ? Icons.flash_on
+                                            : Icons.flash_off),
+                                  ),
+                      ),
+                    ),
                     AnimatedOpacity(
                       opacity: _savingScan ? 1 : 0,
                       duration: const Duration(milliseconds: 120),
@@ -1433,7 +1475,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                                     ? Icons.keyboard
                                     : Icons.qr_code_scanner,
                                 color: color),
-                            title: Text('${scan.partNumber}  x${scan.quantity}',
+                            title: Text(
+                                '${scan.partNumber.isEmpty ? 'Pending validation' : scan.partNumber}  x${scan.quantity}',
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w900)),
                             subtitle: Column(
@@ -1853,6 +1896,7 @@ class _ScanDraft {
     required this.quantity,
     required this.binLocation,
     this.partDescription = '',
+    this.barcodeFormat = 'UNKNOWN',
   });
 
   final String rawValue;
@@ -1860,104 +1904,19 @@ class _ScanDraft {
   final int quantity;
   final String binLocation;
   final String partDescription;
+  final String barcodeFormat;
 
-  factory _ScanDraft.fromRaw(String raw, {String fallbackBin = ''}) {
-    final text = raw.trim();
-    var part = '';
-    var bin = _upper(fallbackBin);
-    var qty = 1;
-
-    try {
-      final parsed = jsonDecode(text);
-      if (parsed is Map<String, dynamic>) {
-        part = _upper(parsed['partNumber'] ??
-            parsed['partNo'] ??
-            parsed['part'] ??
-            parsed['sku'] ??
-            parsed['itemCode']);
-        bin = _upper(parsed['binLocation'] ??
-            parsed['bin'] ??
-            parsed['location'] ??
-            bin);
-        qty = int.tryParse('${parsed['qty'] ?? parsed['quantity'] ?? 1}') ?? 1;
-      }
-    } catch (_) {
-      final uri = Uri.tryParse(text);
-      final query = uri != null && uri.hasQuery
-          ? uri.queryParameters
-          : text.contains('=') && !text.startsWith('{')
-              ? Uri.tryParse(
-                          'https://scan.local/?${text.replaceAll('|', '&').replaceAll(';', '&')}')
-                      ?.queryParameters ??
-                  const <String, String>{}
-              : const <String, String>{};
-      String queryValue(Iterable<String> names) {
-        for (final name in names) {
-          for (final entry in query.entries) {
-            final key =
-                entry.key.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-            if (key == name && entry.value.trim().isNotEmpty) {
-              return entry.value.trim();
-            }
-          }
-        }
-        return '';
-      }
-
-      part = _upper(queryValue(const [
-        'partnumber',
-        'partno',
-        'part',
-        'pn',
-        'sku',
-        'itemcode',
-        'item',
-        'p'
-      ]));
-      bin = _upper(queryValue(const ['binlocation', 'bin', 'location', 'loc']))
-              .isEmpty
-          ? bin
-          : _upper(queryValue(const ['binlocation', 'bin', 'location', 'loc']));
-      qty = int.tryParse(queryValue(const ['qty', 'quantity'])) ?? qty;
-
-      final upperText = _upper(text);
-      if (part.isEmpty) {
-        part = _matchValue(upperText,
-            r'(?:PART\s*NO|PART\s*NUMBER|PARTNO|PART|PN|SKU|ITEM\s*CODE|ITEM)[:=#\-\s]+([A-Z0-9._/-]{3,40})');
-      }
-      final parsedBin = _matchValue(upperText,
-          r'(?:BIN\s*LOCATION|BIN|LOCATION|LOC)[:=#\-\s]+([A-Z0-9._/-]{1,30})');
-      if (parsedBin.isNotEmpty) bin = parsedBin;
-      qty = int.tryParse(_matchValue(
-              upperText, r'(?:QTY|QUANTITY)[:=#\-\s]+([0-9]{1,5})')) ??
-          qty;
-      if (part.isEmpty) {
-        final parsedSlash = parseSlashScan(text);
-        if (parsedSlash != null) {
-          part = parsedSlash.partNumber;
-          qty = parsedSlash.quantity;
-        }
-      }
-      if (part.isEmpty &&
-          RegExp(r'^[A-Z0-9][A-Z0-9._/-]{2,39}$').hasMatch(upperText)) {
-        part = upperText;
-      }
-    }
-
+  factory _ScanDraft.fromRaw(String raw,
+      {String fallbackBin = '', String barcodeFormat = 'UNKNOWN'}) {
+    // Transport camera input unchanged; business parsing runs in the common backend service.
     return _ScanDraft(
-      rawValue: text,
-      partNumber: _upper(part),
-      quantity: qty <= 0 ? 1 : qty,
-      binLocation: _upper(bin),
-      partDescription: '',
-    );
+        rawValue: raw,
+        partNumber: '',
+        quantity: 1,
+        binLocation: _upper(fallbackBin),
+        barcodeFormat: barcodeFormat);
   }
 }
 
 String _upper(Object? value) =>
     value == null ? '' : value.toString().trim().toUpperCase();
-
-String _matchValue(String text, String pattern) {
-  final match = RegExp(pattern, caseSensitive: false).firstMatch(text);
-  return match == null ? '' : _upper(match.group(1));
-}

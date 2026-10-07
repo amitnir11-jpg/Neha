@@ -4364,6 +4364,9 @@
     state.lastRealtimeAt = Date.now();
     if (options.showSuccess === true) showScanPopup(scan);
     prependScanHistory(scan);
+    refreshPartStockSummary(scan).catch(error => console.warn('[SCAN] part summary refresh failed', error.message));
+    clearTimeout(state.scanHistoryRealtimeTimer);
+    state.scanHistoryRealtimeTimer = setTimeout(() => loadScanHistory().catch((error) => console.warn('[SCAN] history refresh failed', error.message)), 80);
     // Keep the dashboard snapshot stable until the user explicitly refreshes it.
   }
 
@@ -4545,7 +4548,7 @@
     setText('scanHistoryPageInfo', `Page ${state.scanHistoryPage || 1} of ${data.pagination?.totalPages || 1}`);
     if ($('#scanHistoryPrev')) $('#scanHistoryPrev').disabled = (state.scanHistoryPage || 1) <= 1;
     if ($('#scanHistoryNext')) $('#scanHistoryNext').disabled = (state.scanHistoryPage || 1) >= (data.pagination?.totalPages || 1);
-    const summary = scanHistorySummary(records, {});
+    const summary = scanHistorySummary(records, data.summary || {});
     state.scanHistorySummary = { ...(data.summary || {}), ...summary };
     renderScanHistoryRecords(records, state.scanHistorySummary);
     enhanceCoreTables();
@@ -4869,7 +4872,7 @@
       ? (state.scanHistoryRecords || []).map((item) => scanHistoryRecordKey(item) === recordKey ? scan : item)
       : [scan].concat(state.scanHistoryRecords || []);
     state.scanHistoryRecords = sortScanHistoryRecords(mergeScanHistoryRecords(nextRecords)).slice(0, isBarcodeWorkspaceActive() ? 10 : 500);
-    const summary = scanHistorySummary(state.scanHistoryRecords, {});
+    const summary = { ...state.scanHistorySummary, visibleRows: state.scanHistoryRecords.length };
     state.scanHistorySummary = summary;
     renderScanHistoryRecords(state.scanHistoryRecords, state.scanHistorySummary);
     enhanceCoreTables();
@@ -5121,6 +5124,7 @@
       menu.style.display = 'none';
     });
     updateScanTypeFields(form);
+    if (form.elements.type.value === 'INWARD' && bin) validateManualSourceBin(form).catch(console.warn);
     (bin ? $('[name="part"]', form) : binInput)?.focus();
   }
 
@@ -5145,7 +5149,8 @@
     const needsSourceBinFirst = ['OUTWARD', 'FITTED'].includes(scanType);
     const upiFirstBarcode = form.id === 'barcodeScanForm' && needsSourceBinFirst;
     const manualBinFirst = form.id === 'manualScanForm' && scanType !== 'VERIFICATION';
-    const manualBinMissing = manualBinFirst && !String(binInput?.value || '').trim();
+    const manualBinValue = String(binInput?.value || '').trim();
+    const manualBinMissing = manualBinFirst && (!manualBinValue || (scanType === 'INWARD' && state.validatedManualBin !== `${form.elements.dealerCode.value}|${cleanDealerCode(manualBinValue)}`));
     const showPartLookupBin = !upiFirstBarcode;
     if (binInput) {
       binInput.required = manualBinFirst || (!upiFirstBarcode && needsSourceBinFirst) || (form.id === 'barcodeScanForm' && ['INWARD', 'DAMAGE'].includes(scanType));
@@ -5170,6 +5175,7 @@
       partInput.closest('label')?.classList.toggle('hidden', upiFirstBarcode);
     }
     if (rawInput) rawInput.disabled = manualBinMissing;
+    if (form.id === 'manualScanForm') $$('button[type="submit"]', form).forEach(button => { button.disabled = manualBinMissing; });
     if (form.id === 'barcodeScanForm') {
       const ready = upiFirstBarcode || !needsSourceBinFirst || Boolean(String(binInput?.value || '').trim());
       setLivePill('barcodeReadyStatus', ready ? (upiFirstBarcode ? 'Ready for UPI / QR Scan' : 'Ready for Scan') : 'Enter Bin Location', ready);
@@ -5209,7 +5215,7 @@
   }
 
   async function submitScan(form, options = {}) {
-    if (form.id === 'barcodeScanForm' && !String((options.payload || formObject(form)).binLocation || '').trim()) {
+    if (form.id === 'barcodeScanForm' && !['OUTWARD', 'FITTED', 'VERIFICATION'].includes(String((options.payload || formObject(form)).type || '').toUpperCase()) && !String((options.payload || formObject(form)).binLocation || '').trim()) {
       toast('Please select or scan Source Bin Location first.', 'error');
       $('#barcodeBinLocation')?.focus();
       return;
@@ -5228,6 +5234,10 @@
     const normalized = normalizeScanPayload(payload);
     normalized.scanType = String(normalized.scanType || normalized.type || 'INWARD').trim().toUpperCase();
     normalized.type = normalized.scanType;
+    if (isBarcodeForm && (normalized.upiId || normalized.upiNo || extractUpiIdFromText(normalized))) {
+      normalized.qty = 1;
+      normalized.quantity = 1;
+    }
     normalized.binLocation = normalizePartText(normalized.binLocation);
     normalized.bin = normalized.binLocation;
     normalized.source = isBarcodeForm ? 'barcode' : (normalized.source || 'manual');
@@ -5358,6 +5368,7 @@
           apiCalls: 1
         }));
       }
+      if (data.partSummary && cleanDealerCode(data.scan?.dealerCode || '') === scanStockDealerCode()) renderPartStockSummary(data.partSummary);
       if (data && data.scan) {
         // Handle successful save
         const savedScan = data.scan || {};
@@ -5379,7 +5390,12 @@
           partName: data.scan.partDescription || data.scan.partName,
           category: data.scan.category || data.scan.productCategory
         });
-        localStorage.setItem(BARCODE_LAST_BIN_KEY, form.elements.binLocation.value);
+        if (normalized.scanType === 'OUTWARD' && data.scan) {
+          setText('barcodeCurrentBin', data.scan.binLocation || data.scan.bin || 'Workshop');
+          toast(`Picked From: ${data.scan.binLocation || data.scan.bin || 'Workshop'}`);
+        } else {
+          localStorage.setItem(BARCODE_LAST_BIN_KEY, form.elements.binLocation.value);
+        }
         lockBarcodeScan(data.scan || normalized, 1800);
         state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
         state.barcodeLastAt = Date.now();
@@ -5494,7 +5510,7 @@
         if (isBarcodeForm) removeQueuedBarcodeScan(normalized);
         playScanTone(retryData.duplicate ? 'duplicate' : 'success');
         if (isBarcodeForm) {
-          localStorage.setItem(BARCODE_LAST_BIN_KEY, form.elements.binLocation.value);
+          if (normalized.scanType !== 'OUTWARD') localStorage.setItem(BARCODE_LAST_BIN_KEY, form.elements.binLocation.value);
           lockBarcodeScan(retryData.scan || normalized, 1800);
           state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
           state.barcodeLastAt = Date.now();
@@ -5574,7 +5590,7 @@
       if (isRetryableTransportError(error)) {
         const queued = enqueueScan(normalized, error.message || 'Server unavailable; scan saved locally');
         if (isBarcodeForm) {
-          localStorage.setItem(BARCODE_LAST_BIN_KEY, form.elements.binLocation.value);
+          if (normalized.scanType !== 'OUTWARD') localStorage.setItem(BARCODE_LAST_BIN_KEY, form.elements.binLocation.value);
           lockBarcodeScan(queued, 900);
           state.barcodeLastRaw = rawBarcodeText || state.barcodeLastRaw;
           state.barcodeLastAt = Date.now();
@@ -12233,24 +12249,102 @@
     }
   }
 
+  function renderPartStockSummary(summary) {
+    const node = $('#scanPartSummary');
+    if (!node || !summary) return;
+    state.lastStockSummaryPart = summary.partNumber;
+    node.hidden = false;
+    node.textContent = `${summary.partNumber} | Inward ${wholeNumber(summary.inwardQty)} | Outward ${wholeNumber(summary.outwardQty)} | Fitted ${wholeNumber(summary.fittedQty)} | Damage ${wholeNumber(summary.damageQty)} | Available ${wholeNumber(summary.availableQty)}`;
+  }
+
+  function scanStockDealerCode() {
+    return cleanDealerCode($('#barcodeScanForm [name="dealerCode"]')?.value || currentDealerCode());
+  }
+
+  async function refreshPartStockSummary(scan = {}) {
+    const partNumber = scan.partNumber || scan.part || state.lastStockSummaryPart;
+    const dealerCode = cleanDealerCode(scan.dealerCode || scanStockDealerCode());
+    if (!partNumber || !dealerCode || dealerCode !== scanStockDealerCode()) return;
+    const requestId = (state.partSummaryRequestId || 0) + 1;
+    state.partSummaryRequestId = requestId;
+    const query = new URLSearchParams({ dealerCode, partNumber });
+    if (scan.auditId) query.set('auditId', scan.auditId);
+    const summary = await api(`/api/scans/part-summary?${query}`);
+    if (requestId === state.partSummaryRequestId && dealerCode === scanStockDealerCode()) renderPartStockSummary(summary);
+  }
+
+  async function validateManualSourceBin(form = $('#manualScanForm')) {
+    if (!form || form.elements.type.value !== 'INWARD') return;
+    const binLocation = cleanDealerCode(form.elements.bin.value);
+    const dealerCode = form.elements.dealerCode.value;
+    const key = `${dealerCode}|${binLocation}`;
+    if (state.validatedManualBin === key) return;
+    state.validatedManualBin = '';
+    updateScanTypeFields(form);
+    if (!binLocation || !dealerCode) return;
+    try {
+      const result = await api(`/api/scans/validate-bin?${new URLSearchParams({ dealerCode, binLocation })}`);
+      if (`${form.elements.dealerCode.value}|${cleanDealerCode(form.elements.bin.value)}` !== key) return;
+      state.validatedManualBin = result.valid ? key : '';
+      updateScanTypeFields(form);
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
+  async function validateBarcodeSourceBin(form = $('#barcodeScanForm')) {
+    if (!form || form.elements.type.value !== 'INWARD') return;
+    const binLocation = cleanDealerCode(form.elements.binLocation.value);
+    const dealerCode = form.elements.dealerCode.value;
+    const key = `${dealerCode}|${binLocation}`;
+    if (state.validatedBarcodeBin === key) return;
+    state.validatedBarcodeBin = '';
+    updateBarcodeWorkspace(form);
+    if (!binLocation || !dealerCode) return;
+    try {
+      const result = await api(`/api/scans/validate-bin?${new URLSearchParams({ dealerCode, binLocation })}`);
+      if (`${form.elements.dealerCode.value}|${cleanDealerCode(form.elements.binLocation.value)}` !== key) return;
+      state.validatedBarcodeBin = result.valid ? key : '';
+      updateBarcodeWorkspace(form);
+    } catch (error) {
+      if (`${form.elements.dealerCode.value}|${cleanDealerCode(form.elements.binLocation.value)}` === key) {
+        $('#barcodeBinReady').textContent = error.message;
+      }
+    }
+  }
+
   function updateBarcodeWorkspace(form = $('#barcodeScanForm')) {
     if (!form) return;
     const bin = cleanDealerCode(form.elements.binLocation.value || '');
     const fitted = form.elements.type.value === 'FITTED';
-    form.elements.binLocation.required = true;
-    form.elements.binLocation.disabled = false;
-    form.elements.part.disabled = !bin;
+    const autoOutward = ['OUTWARD', 'FITTED'].includes(form.elements.type.value);
+    form.elements.binLocation.readOnly = autoOutward;
+    form.elements.binLocation.placeholder = autoOutward ? 'Auto-detected from scanned QR / UPI' : 'Select, type or scan bin';
+    $('#clearBarcodeBin')?.classList.toggle('hidden', autoOutward);
+    $('#barcodeBinLabel small').textContent = autoOutward ? 'Auto-detected from QR / UPI. Manual entry uses the source bin below.' : 'Enter / Scan bin first (Mandatory)';
+    $('#barcodeBinStep small').textContent = autoOutward ? 'Auto-detected from QR / UPI' : 'Enter / Scan bin first (Mandatory)';
+    form.elements.binLocation.required = !autoOutward;
+    form.elements.binLocation.disabled = autoOutward;
+    const inward = form.elements.type.value === 'INWARD';
+    const binReady = Boolean(bin) && state.validatedBarcodeBin === `${form.elements.dealerCode.value}|${bin}`;
+    form.elements.rawScan.disabled = inward && !binReady;
+    form.elements.part.disabled = inward ? !binReady : !bin && !autoOutward;
+    $$('button[type="submit"], #saveBarcodeManualScan', form).forEach(button => { button.disabled = inward && !binReady; });
+    $('#barcodeBinLabel')?.classList.toggle('hidden', autoOutward);
+    $('#barcodeBinStep')?.classList.toggle('hidden', autoOutward);
+    $('#barcodeScanStep b').textContent = autoOutward ? '2' : '3';
     form.elements.part.readOnly = false;
     form.elements.part.required = false;
-    form.elements.part.placeholder = bin ? 'Enter part number' : 'Select source bin first';
+    form.elements.part.placeholder = autoOutward ? 'Use Manual Entry for part-only outward' : bin ? 'Enter part number' : 'Select source bin first';
     form.elements.regdNo.required = fitted;
     form.elements.jobCardNo.required = fitted;
-    $('#barcodeBinLabel')?.classList.toggle('source-bin-missing', !bin);
-    $('#barcodeBinStep')?.classList.toggle('missing', !bin);
+    $('#barcodeBinLabel')?.classList.toggle('source-bin-missing', !bin && !autoOutward);
+    $('#barcodeBinLabel .required-mark')?.classList.toggle('hidden', autoOutward);
+    $('#barcodeBinStep')?.classList.toggle('missing', !bin && !autoOutward);
     const status = $('#barcodeBinReady');
     if (status) {
-      status.textContent = bin ? `Bin ${bin} selected. Ready to scan or enter part.` : 'Please select or scan Source Bin Location first.';
-      status.classList.toggle('ready', Boolean(bin));
+      status.textContent = autoOutward ? 'Auto-detected from scanned QR / UPI' : bin && (!inward || binReady) ? `Bin ${bin} selected. Ready to scan or enter part.` : (inward && bin ? 'Validating bin location...' : 'Enter bin location first');
+      status.classList.toggle('ready', autoOutward || (inward ? binReady : Boolean(bin)));
     }
     setText('barcodeCurrentBin', bin || '—');
   }
@@ -12261,12 +12355,16 @@
     const bin = cleanDealerCode(parsed.binLocation || '');
     if (!bin) return false;
     const form = $('#barcodeScanForm');
+    if (['OUTWARD', 'FITTED'].includes(form.elements.type.value)) {
+      if (target === $('#barcodeRaw')) target.value = '';
+      return true;
+    }
     form.elements.binLocation.value = bin;
     localStorage.setItem(BARCODE_LAST_BIN_KEY, bin);
     if (target === $('#barcodeRaw')) target.value = '';
     updateScanTypeFields(form);
+    validateBarcodeSourceBin(form).then(() => { if (!form.elements.rawScan.disabled) form.elements.rawScan.focus(); }).catch(console.warn);
     playScanTone('success');
-    form.elements.rawScan.focus();
     return true;
   }
 
@@ -12288,6 +12386,13 @@
   async function saveBarcodeManualScan() {
     const form = $('#barcodeScanForm');
     if (!form || state.barcodeAutoSaving) return;
+    if (['OUTWARD', 'FITTED'].includes(form.elements.type.value)) {
+      $('#manualScanForm').elements.type.value = form.elements.type.value;
+      updateScanTypeFields($('#manualScanForm'));
+      $('#scan [data-subview="manualEntry"]')?.click();
+      toast('Enter the source bin and part in Manual Entry.');
+      return;
+    }
     if (!form.elements.binLocation.value.trim()) {
       toast('Please select or scan Source Bin Location first.', 'error');
       form.elements.binLocation.focus();
@@ -12306,6 +12411,7 @@
     manualForm.elements.bin.value = form.elements.binLocation.value;
     manualForm.elements.rawScan.value = '';
     manualForm.elements.part.disabled = false;
+    if (form.elements.type.value === 'INWARD') state.validatedManualBin = state.validatedBarcodeBin;
     manualForm.elements.regdNo.disabled = false;
     manualForm.elements.jobCardNo.disabled = false;
     clearTimeout(form.elements.rawScan.autoSaveTimer);
@@ -12330,11 +12436,13 @@
   function restoreBarcodeScanDefaults() {
     const form = $('#barcodeScanForm');
     if (!form) return;
+    if (['OUTWARD', 'FITTED'].includes(form.elements.type.value)) form.elements.binLocation.value = '';
     $('#barcodeDeviceId').value = ensureDeviceId();
     $('[name="qty"]', form).value = $('[name="qty"]', form).value || 1;
     const savedBin = localStorage.getItem(BARCODE_LAST_BIN_KEY) || '';
     if (savedBin && !$('[name="binLocation"]', form).value) $('[name="binLocation"]', form).value = savedBin;
     updateScanTypeFields(form);
+    validateBarcodeSourceBin(form).catch(console.warn);
     setLivePill('barcodeAutoSaveStatus', 'Auto Save: ON', true);
   }
 
@@ -12359,6 +12467,10 @@
       fillBarcodePartFromRaw();
     }
     const scanType = String($('[name="type"]', form)?.value || normalized.scanType || normalized.type || '').toUpperCase();
+    if (['OUTWARD', 'FITTED'].includes(scanType)) {
+      form.elements.binLocation.value = '';
+      localStorage.removeItem(BARCODE_LAST_BIN_KEY);
+    }
     if (['OUTWARD', 'FITTED'].includes(scanType)) {
       const status = $('#barcodePartLocationStatus');
       if (status) {
@@ -12386,11 +12498,16 @@
       const capturedRaw = String(input.value || '').trim();
       if (!capturedRaw || acceptBarcodeBinQr(capturedRaw)) return;
       const bin = normalizePartText(form.elements.binLocation.value || '');
-      if (!bin) {
+      if (!bin && !['OUTWARD', 'FITTED', 'VERIFICATION'].includes(form.elements.type.value)) {
         playScanTone('error');
         toast('Please select or scan Source Bin Location first.', 'error');
         setLivePill('barcodeReadyStatus', 'Enter Bin Location', false);
         form.elements.binLocation.focus();
+        return;
+      }
+      if (form.elements.type.value === 'FITTED' && (!form.elements.regdNo.value.trim() || !form.elements.jobCardNo.value.trim())) {
+        setLivePill('barcodeReadyStatus', 'Enter Regd No and Job Card No to save this QR', false);
+        (!form.elements.regdNo.value.trim() ? form.elements.regdNo : form.elements.jobCardNo).focus();
         return;
       }
       fillBarcodePartFromRaw();
@@ -12778,6 +12895,8 @@
       state.barcodeDuplicateLocks.clear();
       setLivePill('barcodeReadyStatus', event.target.value ? 'Ready for Scan' : 'Enter Bin Location', Boolean(event.target.value));
       updateScanTypeFields(event.target.closest('form'));
+      clearTimeout(state.binValidationTimer);
+      state.binValidationTimer = setTimeout(() => validateBarcodeSourceBin().catch(console.warn), 250);
     });
     $('#barcodePartNumber')?.addEventListener('input', (event) => {
       clearTimeout(event.target.lookupTimer);
@@ -12793,11 +12912,12 @@
       event.preventDefault();
       acceptBarcodeBinQr(event.target.value, event.target);
       updateScanTypeFields(event.target.closest('form'));
-      if (event.target.value.trim()) focusNextBarcodeField();
+      validateBarcodeSourceBin().then(() => { if (state.validatedBarcodeBin) focusNextBarcodeField(); }).catch(console.warn);
     });
     $('#barcodeBinLocation')?.addEventListener('change', (event) => {
       acceptBarcodeBinQr(event.target.value, event.target);
       updateScanTypeFields(event.target.closest('form'));
+      validateBarcodeSourceBin().catch(console.warn);
     });
     $('#barcodeBeep')?.addEventListener('change', (event) => setText('barcodeBeepLabel', event.target.checked ? 'Beep: ON' : 'Beep: OFF'));
     $('#saveBarcodeManualScan')?.addEventListener('click', () => saveBarcodeManualScan().catch((error) => toast(error.message, 'error')));
@@ -12810,13 +12930,15 @@
     $('#manualScanForm [name="bin"]')?.addEventListener('input', (event) => {
       event.target.value = cleanDealerCode(event.target.value);
       updateScanTypeFields(event.target.closest('form'));
+      clearTimeout(state.manualBinValidationTimer);
+      state.manualBinValidationTimer = setTimeout(() => validateManualSourceBin().catch(console.warn), 250);
     });
     $('#manualScanForm [name="bin"]')?.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;
       event.preventDefault();
       const form = event.target.closest('form');
       updateScanTypeFields(form);
-      if (event.target.value.trim()) $('[name="part"]', form)?.focus();
+      validateManualSourceBin(form).then(() => { if (!$('[name="part"]', form).disabled) $('[name="part"]', form).focus(); }).catch(console.warn);
     });
     $('#clearManualScan')?.addEventListener('click', () => {
       const form = $('#manualScanForm');
@@ -13022,10 +13144,19 @@
       }
     });
     $('#barcodeRaw').addEventListener('change', () => scheduleBarcodeAutosave(35));
+    ['regdNo', 'jobCardNo'].forEach(name => $(`#barcodeScanForm [name="${name}"]`)?.addEventListener('change', () => scheduleBarcodeAutosave(35)));
     $$('#manualScanForm [name="type"], #barcodeScanForm [name="type"]').forEach((select) => {
       updateScanTypeFields(select.closest('form'));
       select.addEventListener('change', () => {
+        if (select.closest('form')?.id === 'barcodeScanForm' && ['OUTWARD', 'FITTED'].includes(select.value)) {
+          select.closest('form').elements.binLocation.value = '';
+          localStorage.removeItem(BARCODE_LAST_BIN_KEY);
+        }
         updateScanTypeFields(select.closest('form'));
+        if (select.closest('form')?.id === 'barcodeScanForm' && select.value === 'INWARD') {
+          validateBarcodeSourceBin().catch(console.warn);
+          select.closest('form').elements.binLocation.focus();
+        }
         if (['OUTWARD', 'FITTED'].includes(String(select.value || '').toUpperCase())) {
           const form = select.closest('form');
           if (form?.id === 'barcodeScanForm') form.elements.rawScan.focus();
@@ -14161,6 +14292,7 @@
     });
     socket.on('scan:deleted', () => {
       queueReconciliationRefresh('scan deleted');
+      refreshPartStockSummary().catch(console.warn);
       if ($('#scan')?.classList.contains('active')) queueScanRefresh(500);
       if ($('#binTransfer')?.classList.contains('active')) loadBinTransferParts(activeBinTransferForm()).catch(console.warn);
     });
@@ -14176,7 +14308,11 @@
     socket.on('inventory:update', (payload = {}) => {
       state.lastRealtimeAt = Date.now();
       markReportsStale('inventory update', { autoRefresh: false });
-      // Inventory events invalidate the server snapshot, but do not reload it.
+      refreshPartStockSummary(payload).catch(console.warn);
+      if ($('#scan')?.classList.contains('active')) {
+        clearTimeout(state.scanHistoryRealtimeTimer);
+        state.scanHistoryRealtimeTimer = setTimeout(() => loadScanHistory().catch(console.warn), 80);
+      }
     });
     socket.on('reports:update', () => {
       state.lastRealtimeAt = Date.now();
