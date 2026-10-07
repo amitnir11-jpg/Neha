@@ -134,7 +134,7 @@ const PORT = Number(process.env.PORT || process.env.APP_PORT || 3000);
 const HOST = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
 const RELEASE_BUILD = require('./utils/buildInfo').readBuildInfo();
 const APP_VERSION = RELEASE_BUILD.appVersion || RELEASE_BUILD.version;
-const WEB_SCANNER_BUILD = '20261007-scan-qr-build-v3';
+const WEB_SCANNER_BUILD = '20261007-camera-formats-v8';
 const MOBILE_APP_VERSION = 'Daksh Scan Lite v1.2.16';
 const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();
 const DEFAULT_ADMIN_PASSWORD = String(process.env.DEFAULT_ADMIN_PASSWORD || 'admin');
@@ -483,6 +483,8 @@ app.use('/vendor/zxing', express.static(path.join(__dirname, 'node_modules', '@z
   lastModified: true,
   setHeaders: setStaticAssetHeaders
 }));
+app.use('/vendor/zxing-wasm', express.static(path.join(__dirname, 'node_modules', 'zxing-wasm', 'dist', 'iife', 'reader')));
+app.use('/vendor/zxing-wasm', express.static(path.join(__dirname, 'node_modules', 'zxing-wasm', 'dist', 'reader')));
 
 app.use(async (req, res, next) => {
   if (!PROTECTED_BROWSER_PAGES.has(String(req.path || '').toLowerCase())) return next();

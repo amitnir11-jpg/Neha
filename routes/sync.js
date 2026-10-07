@@ -1711,6 +1711,22 @@ async function saveNormalizedScan(scan, req, options = {}) {
     const existingTransaction = await Inventory.findOne(scanIdentityScope({
       $or: [{ uniqueScanId: transactionId }, { scanId: transactionId }]
     }, scan)).lean();
+  if (scan.source?.cameraDecoded === true) {
+    const rawValue = scan.source.rawDecodedValue ?? scan.source.rawScanString ?? scan.rawScanString;
+    const decoded = await require('../services/ScannedCodeService').resolveScannedCode(rawValue, scan.source.barcodeFormat, scan.dealerCode);
+    const ledgerIdentity = ['OUTWARD', 'FITTED'].includes(scan.scanType) && decoded.type === 'DIRECT_BARCODE';
+    if (!decoded.success && !ledgerIdentity) return { status: 'failed', httpStatus: 422, scan, error: decoded.message };
+    scan.partNumber = decoded.partNumber;
+    scan.normalizedPartNumber = normalizePartNumber(decoded.partNumber);
+    scan.part = decoded.partNumber;
+    scan.parsedCode = { ...decoded, price: undefined };
+    scan.quantity = scan.qty = 1;
+    scan.upiId = decoded.upi || '';
+    scan.upiNo = decoded.upi || '';
+    scan.rawScanString = decoded.normalizedValue;
+    scan._cameraPrice = decoded.price;
+    if (process.env.SCAN_DEBUG_LOGS === 'true') console.debug('[SCAN_DECODE]', JSON.stringify({ rawValue, ...scan.parsedCode }));
+  }
     if (existingTransaction) {
       return { status: 'synced', scan: existingTransaction, error: '', alreadyApplied: true };
     }
@@ -1731,7 +1747,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
   markPerf('binOwnership');
   const validationPromise = scan.scanType === 'VERIFICATION'
     ? Promise.resolve(null)
-    : masterValidation.validatePartAgainstMaster({
+    : scan._cameraPrice ? Promise.resolve({ valid: true, master: scan._cameraPrice.masterRecord || scan._cameraPrice, price: scan._cameraPrice }) : masterValidation.validatePartAgainstMaster({
       partNumber: scan.normalizedPartNumber || scan.partNumber,
       dealerCode: scan.dealerCode,
       rawScannedValue: scan.rawScanString,
@@ -2410,7 +2426,7 @@ async function pushHandler(req, res) {
     const activeAuditId = clean(activeAudit.auditId || activeAudit._id);
     const hasUniqueUpiMovement = incoming.some((item) => {
       const normalized = normalizeScan(item);
-      return ['OUTWARD', 'FITTED'].includes(normalized.scanType) && Boolean(upiCodeValue(normalized));
+      return item.cameraDecoded === true || (['OUTWARD', 'FITTED'].includes(normalized.scanType) && Boolean(upiCodeValue(normalized)));
     });
     if (hasUniqueUpiMovement) {
       const logs = [];

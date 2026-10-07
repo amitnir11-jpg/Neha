@@ -58,6 +58,8 @@ app.get(['/report', '/report/'], (req, res) => sendPublicFile(res, 'report.html'
 app.get(['/scan', '/scan/', '/mobile', '/mobile-scanner', '/mobile-scanner/', '/mobile-web', '/mobile-web/'], (req, res) => sendPublicFile(res, 'scan.html'));
 
 app.use('/vendor/zxing', express.static(path.join(__dirname, '..', 'node_modules', '@zxing', 'library', 'umd')));
+app.use('/vendor/zxing-wasm', express.static(path.join(__dirname, '..', 'node_modules', 'zxing-wasm', 'dist', 'iife', 'reader')));
+app.use('/vendor/zxing-wasm', express.static(path.join(__dirname, '..', 'node_modules', 'zxing-wasm', 'dist', 'reader')));
 app.use(express.static(PUBLIC_DIR));
 
 app.listen(PORT, '0.0.0.0', () => {

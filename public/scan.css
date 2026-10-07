@@ -69,6 +69,9 @@ a {
   display: none !important;
 }
 
+#torchBtn[hidden], #scanDecodeDebug[hidden] { display: none !important; }
+.scan-decode-debug { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; font-size: 11px; background: #f3f5f7; }
+
 .scan-page {
   position: relative;
   overflow-x: hidden;
@@ -1683,3 +1686,9 @@ body {
     border-radius: var(--radius-md);
   }
 }
+
+.scan-inventory-summary { margin: 12px 0; }
+.scan-inventory-summary > div { display: grid; gap: 4px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.scan-inventory-summary span { font-size: 11px; color: var(--muted); }
+
+.scan-part-summary { padding: 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }

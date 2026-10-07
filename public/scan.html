@@ -9,7 +9,7 @@
   <title>Daksh Scan</title>
   <link rel="icon" href="/brand/favicon.ico" type="image/x-icon">
   <link rel="apple-touch-icon" sizes="512x512" href="/brand/app-icon.png">
-  <link rel="stylesheet" href="/scan.css?v=20261007-scan-qr-build-v3">
+  <link rel="stylesheet" href="/scan.css?v=20261007-camera-formats-v8">
   <link rel="stylesheet" href="/css/select-system.css?v=20260908-enterprise-select-v3">
 </head>
 <body class="scan-page">
@@ -129,6 +129,7 @@
 
           <div class="control-row">
             <button id="startScanBtn" class="btn btn-primary" type="button">Camera On</button>
+            <button id="torchBtn" class="btn btn-secondary" type="button" aria-pressed="false" hidden>Torch ON</button>
             <button id="manualBtn" class="btn btn-secondary" type="button">Manual Entry</button>
             <button id="syncNowBtn" class="btn btn-primary" type="button">Sync Now</button>
             <a id="liteApkBtn" class="btn btn-secondary" href="/api/apk/lite">Lite APK</a>
@@ -164,6 +165,8 @@
         </aside>
       </section>
 
+      <p id="scanPartSummary" class="scan-part-summary" role="status" hidden></p>
+      <pre id="scanDecodeDebug" class="scan-decode-debug" hidden aria-label="Development decode log"></pre>
       <section class="history-card">
         <div class="panel-title compact">
           <div>
@@ -171,6 +174,12 @@
             <h3>Last 10 scans</h3>
           </div>
           <p class="history-note">Local queue updates first, then syncs.</p>
+        </div>
+        <div class="queue-grid scan-inventory-summary" aria-live="polite">
+          <div><span>NET AVAILABLE QUANTITY</span><strong id="scanNetAvailable">--</strong></div>
+          <div><span>SCAN ROWS</span><strong id="scanTotalRows">--</strong></div>
+          <div><span>UNIQUE PARTS</span><strong id="scanUniqueParts">--</strong></div>
+          <div><span>VISIBLE ROWS</span><strong id="scanVisibleRows">0</strong></div>
         </div>
         <div class="table-wrap">
           <table class="scan-table">
@@ -181,6 +190,7 @@
                 <th>Qty</th>
                 <th>Type</th>
                 <th>Bin</th>
+                <th>Device</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -297,8 +307,9 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="/config.js"></script>
-  <script src="/js/scan-parser.js?v=20261007-scan-qr-build-v3"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/scan-parser.js?v=20261007-camera-formats-v8"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
-  <script src="/scan.js?v=20261007-scan-qr-build-v3"></script>
+  <script src="/scan.js?v=20261007-camera-formats-v8"></script>
 </body>
 </html>

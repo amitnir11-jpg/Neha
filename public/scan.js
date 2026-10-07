@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20261007-scan-qr-build-v3';
+  const APP_VERSION = '20261007-camera-formats-v8';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -17,8 +17,9 @@
   const API_TIMEOUT_MS = 45000;
   const LOGIN_CONFIG_TIMEOUT_MS = 15000;
   const STORAGE_OPEN_TIMEOUT_MS = 7000;
+  const WASM_MAX_DECODE_WIDTH = 1920;
   const BATCH_SIZE = 50;
-  const DEDUPE_MS = 2600;
+  const DEDUPE_MS = 1800;
   const DUPLICATE_NOTICE_MS = 3000;
   const SMART_BIN_DECISIONS = new Set(['USE_EXISTING', 'USE_EXISTING_BIN', 'SAVE_NEW_BIN', 'CONTINUE_NEW', 'ADD_ADDITIONAL']);
   const DEFAULT_DEVICE_NAME = 'Daksh Web Scanner';
@@ -35,7 +36,8 @@
     'itf',
     'codabar',
     'pdf417',
-    'aztec'
+    'aztec',
+    'code_93'
   ];
 
   const ZXING_SCRIPT_SRC = `/vendor/zxing/index.min.js?v=${CACHE_VERSION}`;
@@ -64,12 +66,12 @@
     },
     OUTWARD: {
       label: 'Outward',
-      requiresBin: true,
-      note: 'Source bin required'
+      requiresBin: false,
+      note: 'Source bin auto-detected from QR / UPI'
     },
     FITTED: {
       label: 'Fitted',
-      requiresBin: true,
+      requiresBin: false,
       note: 'Source bin, vehicle + job card'
     },
     DAMAGE: {
@@ -212,6 +214,9 @@
   }
 
   function clearSession() {
+    state.inventorySocket?.disconnect();
+    state.inventorySocket = null;
+    state.inventorySummary = null;
     state.session = null;
     storageRemove(SESSION_KEY);
     try {
@@ -345,7 +350,7 @@
   }
 
   function partFirstMode(mode = state.mode) {
-    return ['OUTWARD', 'FITTED'].includes(upper(mode));
+    return false;
   }
 
   async function availableBinsForPart(partNumber) {
@@ -472,38 +477,9 @@
   }
 
   function parsePartCandidate(raw = '') {
-    const text = clean(raw);
-    if (!text) return '';
-
-    try {
-      const parsed = JSON.parse(text);
-      if (parsed && typeof parsed === 'object') {
-        const fromObject = firstObjectValue(parsed, ['partNumber', 'partNo', 'part', 'sku', 'itemCode', 'item', 'p']);
-        if (fromObject) return normalizePartCandidateValue(fromObject);
-      }
-    } catch (_) {}
-
-    const parser = window && window.DakshScanParser ? window.DakshScanParser : null;
-    const parsed = parser ? parser.parseScanValue(text) : null;
-    if (parsed && parsed.type === 'UPI' && parsed.partNumber) {
-      return normalizePartCandidateValue(parsed.partNumber);
-    }
-
-    const data = { ...parseQueryLikeScan(text), ...parseKeyValueScan(text) };
-    const fromStructuredText = firstParserValue(data, ['partno', 'partnumber', 'part', 'pn', 'sku', 'item', 'p']);
-    if (fromStructuredText) return normalizePartCandidateValue(fromStructuredText);
-
-    const partMatch = text.match(/(?:part\s*no|part\s*number|part|pn|sku|item)\s*[:=#-]?\s*([a-z0-9._/-]+)/i);
-    if (partMatch && partMatch[1]) return normalizePartCandidateValue(partMatch[1]);
-
-    const simpleTokens = text.split(/[|,;\n\r\t ]+/).filter(Boolean);
-    const rawLooksStructured = /[:?=&]|:\/\/|upi:|http/i.test(text);
-    if (simpleTokens.length === 1 && !rawLooksStructured && isValidPartCandidate(simpleTokens[0])) {
-      return normalizePartCandidateValue(simpleTokens[0]);
-    }
-    return '';
+    const parsed = window.DakshScanParser.parseScannedCode(raw, 'UNKNOWN');
+    return parsed.success ? parsed.partNumber : '';
   }
-
   function parseRawPreview(raw = '') {
     const text = clean(raw);
     if (!text) return '';
@@ -1141,14 +1117,17 @@
     const merged = [];
     const seen = new Set();
     const push = (row = {}) => {
-      const key = scanIdentityKey(row) || recordKey(row) || `${clean(row.rawScanString || row.rawScan || '')}|${clean(row.timestamp || row.createdAt || row.mobileCreatedAt || '')}`;
+      // A UPI can have separate INWARD, FITTED and OUTWARD transactions. Merge
+      // local/server copies by transaction ID without hiding later movements.
+      const key = clean(row.uniqueScanId || row.scanId || row._id || row.id) || recordKey(row)
+        || `${scanIdentityKey(row) || clean(row.rawScanString || row.rawScan || '')}|${clean(row.scanType || row.type)}|${clean(row.timestamp || row.createdAt || row.mobileCreatedAt || '')}`;
       if (!key || seen.has(key)) return;
       seen.add(key);
       merged.push(row);
     };
     localRows.forEach(push);
     remoteRows.forEach(push);
-    return merged.slice(0, 10);
+    return merged.sort((a, b) => new Date(b.timestamp || b.mobileCreatedAt || b.createdAt || 0) - new Date(a.timestamp || a.mobileCreatedAt || a.createdAt || 0)).slice(0, 10);
   }
 
   async function copyTextValue(value, label = 'Value') {
@@ -1398,6 +1377,7 @@
     await deleteRecord(scanId);
     removeStateRow(scanId);
     state.liveRecentRows = null;
+    state.inventorySummary = null;
     state.liveRecentRefreshPromise = null;
     state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
     renderQueueBadgeCounts();
@@ -1514,7 +1494,7 @@
     const regInput = byId('manualRegdNo');
     const jobInput = byId('manualJobCardNo');
 
-    binWrap.classList.toggle('hidden', !info.requiresBin);
+    binWrap.classList.toggle('hidden', !info.requiresBin && !['OUTWARD', 'FITTED'].includes(state.mode));
     mrpWrap.classList.toggle('hidden', verification);
     if (dlcWrap) dlcWrap.classList.toggle('hidden', verification);
     qtyWrap.classList.toggle('hidden', verification);
@@ -1523,12 +1503,57 @@
 
     binInput.required = info.requiresBin && (!partFirstMode() || Boolean(state.pendingSourcePart));
     const partInput = byId('manualPartNumber');
-    if (partInput) partInput.disabled = false;
+    if (partInput) {
+      partInput.disabled = state.mode === 'INWARD' && !inwardBinReady(byId('manualBinLocation')?.value);
+      partInput.required = !state.manualRaw;
+    }
+    const blockedInward = state.mode === 'INWARD' && !inwardBinReady(byId('manualBinLocation')?.value);
+    qs('button[type="submit"]', byId('manualForm')).disabled = blockedInward;
+    binWrap.classList.toggle('hidden', ['OUTWARD', 'FITTED'].includes(state.mode) && Boolean(state.manualRaw));
+    qtyInput.readOnly = Boolean(state.manualRaw);
     qtyInput.required = !verification;
     mrpInput.required = false;
     if (dlcInput) dlcInput.required = false;
     regInput.required = fitted;
     jobInput.required = fitted;
+  }
+
+  function inwardBinReady(bin = loadActiveBin()) {
+    return Boolean(bin) && state.validatedInwardBin === `${activeDealerCode()}|${upper(bin)}`;
+  }
+
+  async function validateInwardBin(bin = loadActiveBin()) {
+    const key = `${activeDealerCode()}|${upper(bin)}`;
+    if (state.validatedInwardBin === key && bin) return true;
+    if (!bin || !activeDealerCode()) return false;
+    try {
+      const result = await api(`/api/scans/validate-bin?${new URLSearchParams({ dealerCode: activeDealerCode(), binLocation: upper(bin) })}`);
+      if (key.split('|')[0] !== activeDealerCode()) return false;
+      state.validatedInwardBin = result.valid ? key : '';
+      renderModeFields();
+      renderBinPanel();
+      renderCameraControlState();
+      return Boolean(result.valid);
+    } catch (error) {
+      state.validatedInwardBin = '';
+      toast(error.message || 'Bin validation failed', 'error');
+      return false;
+    }
+  }
+
+  function renderPartStockSummary(summary) {
+    const node = byId('scanPartSummary');
+    if (!node || !summary) return;
+    state.lastStockSummaryPart = summary.partNumber;
+    node.hidden = false;
+    node.textContent = `${summary.partNumber} | Inward ${fmtNumber(summary.inwardQty)} | Outward ${fmtNumber(summary.outwardQty)} | Fitted ${fmtNumber(summary.fittedQty)} | Damage ${fmtNumber(summary.damageQty)} | Available ${fmtNumber(summary.availableQty)}`;
+  }
+
+  async function refreshPartStockSummary(partNumber = state.lastStockSummaryPart) {
+    if (!partNumber || !activeDealerCode() || !navigator.onLine) return;
+    const scope = `${activeDealerCode()}|${activeAuditId()}|${partNumber}`;
+    const summary = await api(`/api/scans/part-summary?${new URLSearchParams({ dealerCode: activeDealerCode(), auditId: activeAuditId(), partNumber })}`);
+    if (scope === `${activeDealerCode()}|${activeAuditId()}|${partNumber}`) renderPartStockSummary(summary);
   }
 
   function renderBinPanel() {
@@ -1539,12 +1564,19 @@
     const current = loadActiveBin();
     if (!panel || !input || !message) return;
 
-    panel.classList.toggle('hidden', !info.requiresBin && state.mode !== 'OUTWARD');
+    panel.classList.toggle('hidden', ['OUTWARD', 'FITTED', 'VERIFICATION'].includes(state.mode));
     byId('activeBinField')?.classList.toggle('hidden', partFirstMode() && !state.pendingSourcePart);
-    input.value = current;
+    input.value = state.mode === 'OUTWARD' ? '' : current;
+    input.readOnly = state.mode === 'OUTWARD';
+    input.placeholder = state.mode === 'OUTWARD' ? 'Auto-detected from scanned QR / UPI' : 'Select or scan source bin';
+    if (['OUTWARD', 'FITTED'].includes(state.mode)) {
+      panel.classList.remove('blocked');
+      message.textContent = 'Auto-detected from scanned QR / UPI';
+      return;
+    }
     input.required = info.requiresBin && (!partFirstMode() || Boolean(state.pendingSourcePart));
     if (info.requiresBin) {
-      const ready = Boolean(current);
+      const ready = Boolean(current) && (state.mode !== 'INWARD' || inwardBinReady(current));
       panel.classList.toggle('ready', ready);
       panel.classList.toggle('blocked', !ready);
       message.textContent = partFirstMode() && !state.pendingSourcePart
@@ -1575,7 +1607,7 @@
     if (partFirstMode() && !state.pendingSourcePart) return true;
     if (!requiresBin()) return true;
     const bin = loadActiveBin();
-    if (bin) return true;
+    if (bin && (state.mode !== 'INWARD' || inwardBinReady(bin))) return true;
     state.cameraRequested = true;
     cameraState('Choose the source bin for this part, then scan its UPI.');
     toast('Choose or enter the source bin location for this part.', 'error');
@@ -1590,7 +1622,7 @@
     return bin;
   }
 
-  function saveBinAndStartCamera({ openCapture = true } = {}) {
+  async function saveBinAndStartCamera({ openCapture = true } = {}) {
     const input = byId('activeBinLocation');
     const bin = setActiveBin(input?.value || '');
     if (!bin) {
@@ -1598,6 +1630,7 @@
       input?.focus();
       return '';
     }
+    if (state.mode === 'INWARD' && !(await validateInwardBin(bin))) return '';
     const startKey = `${state.mode}:${bin}`;
     const now = Date.now();
     if (state.lastBinStartValue === startKey && now - Number(state.lastBinStartAt || 0) < 700) return bin;
@@ -1639,16 +1672,21 @@
     const hasDealer = Boolean(activeDealerCode());
     const rows = recentRowsForDisplay();
     const body = byId('scanRows');
+    const summary = state.inventorySummary;
+    [['scanNetAvailable', summary?.netAvailableQuantity], ['scanTotalRows', summary?.scanRows], ['scanUniqueParts', summary?.uniqueParts], ['scanVisibleRows', rows.length]].forEach(([id, value]) => {
+      const node = byId(id);
+      if (node) node.textContent = value === undefined ? '--' : fmtNumber(value);
+    });
     if (online && !hasDealer) {
-      body.innerHTML = '<tr><td colspan="6">Waiting for dealer context...</td></tr>';
+      body.innerHTML = '<tr><td colspan="7">Waiting for dealer context...</td></tr>';
       return;
     }
     if (online && state.liveRecentRows === null && !sessionRows().length) {
-      body.innerHTML = '<tr><td colspan="6">Loading live recent scans...</td></tr>';
+      body.innerHTML = '<tr><td colspan="7">Loading live recent scans...</td></tr>';
       return;
     }
     if (!rows.length) {
-      body.innerHTML = `<tr><td colspan="6">${online ? 'No active scans on server' : 'No scans yet'}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="7">${online ? 'No active scans on server' : 'No scans yet'}</td></tr>`;
       return;
     }
     body.innerHTML = rows.map((row) => {
@@ -1658,7 +1696,7 @@
         : status === 'failed' && row.retryable !== false
           ? 'Retrying'
           : (status || 'pending').replace(/^./, (char) => char.toUpperCase());
-      const time = fmtTime(row.mobileCreatedAt || row.timestamp || row.createdAt);
+      const time = new Date(row.timestamp || row.mobileCreatedAt || row.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
       const title = escapeHtml(row.syncError || '');
       return `
         <tr>
@@ -1677,6 +1715,7 @@
           <td>${escapeHtml(fmtNumber(rowQty(row)))}</td>
           <td>${escapeHtml(rowMode(row))}</td>
           <td>${escapeHtml(rowBin(row) || '-')}</td>
+          <td>${escapeHtml(row.entryChannel === 'web' || String(row.deviceId || '').startsWith('WEB-') ? 'WEB' : row.deviceName || row.deviceId || '-')}</td>
           <td title="${title}${row.nextRetryAt ? ` · Next retry ${fmtTime(row.nextRetryAt)}` : ''}">${escapeHtml(statusLabel)}</td>
       </tr>
       `;
@@ -1686,16 +1725,19 @@
   async function refreshLiveRecentScans({ force = false } = {}) {
     if (!state.session?.token) {
       state.liveRecentRows = null;
+      state.inventorySummary = null;
       renderHistoryRows();
       return [];
     }
     if (!activeDealerCode()) {
       state.liveRecentRows = null;
+      state.inventorySummary = null;
       renderHistoryRows();
       return [];
     }
     if (!navigator.onLine) {
       state.liveRecentRows = null;
+      state.inventorySummary = null;
       renderHistoryRows();
       return [];
     }
@@ -1723,6 +1765,8 @@
             ? data
             : [];
       state.liveRecentRows = records.slice(0, 10);
+      state.inventorySummary = data.summary || null;
+      refreshPartStockSummary().catch(() => undefined);
       updateLastScan(mergeRecentRows()[0] || null);
       renderHistoryRows();
       return mergeRecentRows();
@@ -1779,7 +1823,7 @@
       : live
         ? 'Camera Off'
         : 'Camera On';
-    button.disabled = Boolean(starting);
+    button.disabled = Boolean(starting) || (!live && state.mode === 'INWARD' && !inwardBinReady());
     button.setAttribute('aria-pressed', live ? 'true' : 'false');
   }
 
@@ -1821,8 +1865,8 @@
   function cameraConstraints() {
     const video = {
       facingMode: { ideal: 'environment' },
-      width: { ideal: 1280, min: 640 },
-      height: { ideal: 720, min: 480 },
+      width: { ideal: 1920, min: 640 },
+      height: { ideal: 1080, min: 480 },
       frameRate: { ideal: 24, min: 12, max: 30 },
       advanced: [
         { focusMode: 'continuous' },
@@ -1876,7 +1920,7 @@
   }
 
   function nativeBarcodeText(code = {}) {
-    return clean(code.rawValue || code.rawText || code.displayValue || code.text || '');
+    return String(code.rawValue ?? code.rawText ?? code.displayValue ?? code.text ?? '');
   }
 
   function scheduleNativeDetection(video, runId, delay = 100) {
@@ -1899,9 +1943,10 @@
       if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
         const detector = await nativeBarcodeDetector();
         if (detector && state.nativeDetectorRunning && runId === state.nativeDetectorRunId) {
+          const decodeStartedAt = performance.now();
           const codes = await detector.detect(video);
           const raw = nativeBarcodeText(codes && codes[0]);
-          if (raw) handleDecodeResult({ text: raw, rawValue: raw });
+          if (raw) handleDecodeResult({ text: raw, rawValue: raw, format: codes[0].format, decodeMs: performance.now() - decodeStartedAt });
         }
       }
     } catch (_) {
@@ -1947,8 +1992,10 @@
     setCameraLive(false);
     clearTimeout(state.cameraTimer);
     clearTimeout(state.zxingRestartTimer);
+    clearTimeout(state.wasmTimer);
     state.cameraTimer = null;
     state.zxingRestartTimer = null;
+    state.wasmTimer = null;
     state.scanning = false;
     if (!preserveRequest) {
       state.cameraRequested = false;
@@ -1957,7 +2004,7 @@
   }
 
   function decodeResultText(result) {
-    return clean(typeof result?.getText === 'function' ? result.getText() : result?.text || result?.rawValue || result);
+    return String(typeof result?.getText === 'function' ? result.getText() : result?.text ?? result?.rawValue ?? result ?? '');
   }
 
   function waitForImageLoad(image) {
@@ -2247,11 +2294,52 @@
     }
     if (state.scanReader) return state.scanReader;
     const hints = new Map();
-    // Let ZXing try every supported format. A hand-picked format list silently
-    // misses valid inventory labels such as RSS, Micro QR, and extensions.
+    // ZXing 0.21 defaults omit Codabar and UPC-E. Enable the full implemented
+    // production format set explicitly instead of relying on those defaults.
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, window.DakshScanParser.cameraBarcodeFormats.map(name => ZX.BarcodeFormat[name]).filter(value => value !== undefined));
     state.scanReader = new BrowserMultiFormatReader(hints, 45);
     state.scanReader.timeBetweenDecodingAttempts = 45;
     return state.scanReader;
+  }
+
+  async function ensureWasmReader() {
+    if (state.wasmReaderPromise) return state.wasmReaderPromise;
+    state.wasmReaderPromise = (async () => {
+      if (!window.ZXingWASM) await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = `/vendor/zxing-wasm/index.js?v=${CACHE_VERSION}`;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Full-format barcode decoder could not load'));
+        document.head.appendChild(script);
+      });
+      await window.ZXingWASM.prepareZXingModule({ overrides: { locateFile: file => `/vendor/zxing-wasm/${file}` }, fireImmediately: true });
+      return window.ZXingWASM;
+    })().catch(error => { state.wasmReaderPromise = null; throw error; });
+    return state.wasmReaderPromise;
+  }
+
+  async function startWasmDetection(video, runId) {
+    const reader = await ensureWasmReader();
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const frame = async () => {
+      if (!state.scanning || runId !== state.cameraRunId || !video.srcObject) return;
+      try {
+        if (video.readyState >= 2 && video.videoWidth) {
+          const scale = Math.min(1, WASM_MAX_DECODE_WIDTH / video.videoWidth);
+          canvas.width = Math.round(video.videoWidth * scale);
+          canvas.height = Math.round(video.videoHeight * scale);
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const started = performance.now();
+          const results = await reader.readBarcodes(context.getImageData(0, 0, canvas.width, canvas.height), { formats: ['AllReadable'], tryHarder: true, maxNumberOfSymbols: 1 });
+          if (state.scanning && runId === state.cameraRunId && results[0]?.text) {
+            handleDecodeResult({ rawValue: results[0].text, format: results[0].format, decodeMs: performance.now() - started });
+          }
+        }
+      } catch (_) { /* An undecodable frame leaves the camera running. */ }
+      if (state.scanning && runId === state.cameraRunId) state.wasmTimer = setTimeout(frame, 120);
+    };
+    void frame();
   }
 
   async function enableCameraFocus(video) {
@@ -2260,6 +2348,8 @@
       const track = stream?.getVideoTracks?.()[0];
       if (!track?.getCapabilities || !track?.applyConstraints) return;
       const capabilities = track.getCapabilities();
+      const torchButton = byId('torchBtn');
+      if (torchButton) { torchButton.hidden = capabilities.torch !== true; torchButton.disabled = false; }
       const focusModes = Array.isArray(capabilities.focusMode) ? capabilities.focusMode : [];
       const advanced = [];
       if (focusModes.includes('continuous')) {
@@ -2326,7 +2416,7 @@
     frame.addEventListener('click', tapToFocus);
   }
 
-  function createScanRecord({ rawText = '', manual = false, partNumber = '', qty = 1, binLocation = '', regdNo = '', jobCardNo = '' } = {}) {
+  function createScanRecord({ rawText = '', manual = false, partNumber = '', qty = 1, binLocation = '', regdNo = '', jobCardNo = '', decodeMetadata = null } = {}) {
     const timestamp = nowIso();
     const scanType = currentScanType();
     const part = normalizeText(partNumber || parsePartCandidate(rawText));
@@ -2352,8 +2442,8 @@
       partNumber: part,
       normalizedPartNumber: part,
       part: part,
-      qty: scanType === 'VERIFICATION' ? 1 : Number(qty || 1) || 1,
-      quantity: scanType === 'VERIFICATION' ? 1 : Number(qty || 1) || 1,
+      qty: scanType === 'VERIFICATION' || extractUpiIdFromText({ rawScanString: rawText }) ? 1 : Number(qty || 1) || 1,
+      quantity: scanType === 'VERIFICATION' || extractUpiIdFromText({ rawScanString: rawText }) ? 1 : Number(qty || 1) || 1,
       mrp: undefined,
       dlc: undefined,
       manualMRP: undefined,
@@ -2412,6 +2502,7 @@
       syncError: '',
       retryCount: 0
     };
+    if (decodeMetadata) Object.assign(record, decodeMetadata, { cameraDecoded: true });
     if (scanType === 'FITTED' && manual) {
       record.isFitted = true;
       record.fittedQty = record.qty;
@@ -2722,7 +2813,7 @@
     const errorText = clean(row.syncError || row.errorMessage || row.reason || '');
     const networkPending = /network|timeout|timed out|offline|failed to fetch|connection|request timed out/i.test(errorText) || (!navigator.onLine && status === 'pending');
     const statusText = status === 'synced'
-      ? 'Synced'
+      ? 'SUCCESS · Synced'
       : status === 'pending'
         ? (networkPending ? 'Network pending' : 'Queued')
       : status === 'duplicate' || status === 'failed-duplicate'
@@ -2742,6 +2833,7 @@
     byId('lastScanTitle').textContent = description || part || 'Scan captured';
     byId('lastScanMeta').textContent = [
       part ? `Part ${part}` : '',
+      row.parsedCode?.upi ? `UPI ${row.parsedCode.upi}` : '',
       mode,
       `Qty ${fmtNumber(qty)}`,
       bin ? `Bin ${bin}` : '',
@@ -2762,7 +2854,7 @@
     await putRecord(record);
     upsertStateRow(record);
     applyRecordToUi(record);
-    void enrichStoredRecord(record).catch(() => undefined);
+    if (!record.cameraDecoded) void enrichStoredRecord(record).catch(() => undefined);
     if (!silent) {
       toast(navigator.onLine ? 'Queued' : 'Network pending', navigator.onLine ? 'success' : 'warning');
       beep('ok');
@@ -2831,6 +2923,10 @@
       syncKey: row.syncKey || row.scanId,
       clientSyncKey: row.clientSyncKey || row.syncKey || row.scanId,
       rawScanString: row.rawScanString || row.rawScan || row.rawUpi || '',
+      cameraDecoded: row.cameraDecoded === true,
+      rawDecodedValue: row.rawDecodedValue,
+      barcodeFormat: row.barcodeFormat,
+      decodeMs: row.decodeMs,
       rawScan: row.rawScan || row.rawScanString || row.rawUpi || '',
       rawBarcode: row.rawBarcode || row.rawScanString || row.rawUpi || '',
       rawUpi: row.rawUpi || row.rawScanString || row.rawScan || '',
@@ -2941,6 +3037,8 @@
       body: convertToSyncPayload(record),
       timeoutMs: API_TIMEOUT_MS
     });
+    if (response.partSummary && record.dealerCode === activeDealerCode() && record.auditId === activeAuditId()) renderPartStockSummary(response.partSummary);
+    else refreshPartStockSummary(record.partNumber).catch(() => undefined);
     const serverScan = response.scan || (Array.isArray(response.insertedRecords) ? response.insertedRecords[0] : null) || {};
     const saved = mergeStoredRecordWithServer(record, serverScan, {
       status: 'synced',
@@ -3017,6 +3115,7 @@
         };
         saveSession(nextSession);
         state.liveRecentRows = null;
+        state.inventorySummary = null;
         state.liveRecentRefreshPromise = null;
         state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
         updateLastScan(null);
@@ -3050,6 +3149,7 @@
     state.recentRefreshTimer = null;
     state.versionTimer = null;
     state.liveRecentRows = null;
+    state.inventorySummary = null;
     state.liveRecentRefreshPromise = null;
     state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
     clearSession();
@@ -3088,6 +3188,7 @@
     state.partMasterCache.clear();
     state.partMasterLookupPromise.clear();
     state.liveRecentRows = null;
+    state.inventorySummary = null;
     state.liveRecentRefreshPromise = null;
     state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
     clearSession();
@@ -3209,6 +3310,7 @@
         startNativeDetector(video).catch(() => undefined);
       }
       let zxingStarted = false;
+      try { await startWasmDetection(video, runId); zxingStarted = true; } catch (error) { console.warn('[SCAN_DECODER]', error.message); }
       const startZxingFromVideo = (reader) => {
         if (typeof reader.decodeContinuously === 'function') {
           reader.decodeContinuously(video, onDecode);
@@ -3220,7 +3322,7 @@
         }
         return false;
       };
-      if (!nativeDetector) {
+      if (!zxingStarted) {
         try {
           const reader = await ensureReader();
           if (!state.scanning || runId !== state.cameraRunId) return;
@@ -3294,22 +3396,33 @@
 
   function handleDecodeResult(result) {
     if (state.smartBinPromptOpen || state.duplicateAlertOpen) return;
-    const raw = decodeResultText(result);
+    const rawValue = decodeResultText(result);
+    const formatValue = typeof result?.getBarcodeFormat === 'function' ? result.getBarcodeFormat() : result?.format;
+    const format = typeof formatValue === 'number' ? window.ZXing?.BarcodeFormat?.[formatValue] : formatValue;
+    const parsed = window.DakshScanParser.parseScannedCode(rawValue, format);
+    const raw = parsed.normalizedValue;
     if (!raw) return;
     const key = `${state.mode}|${raw}`;
     const lastSeen = state.lastDecodeAtByKey.get(key) || 0;
     if (Date.now() - lastSeen < DEDUPE_MS) return;
     state.lastDecodeAtByKey.set(key, Date.now());
+    const decodeMetadata = { rawDecodedValue: rawValue, barcodeFormat: parsed.barcodeFormat, decodeMs: result?.decodeMs };
+    if (new URLSearchParams(location.search).get('scanDebug') === '1' || storageGet('dakshScanDebug') === 'true') {
+      const details = { ...decodeMetadata, normalizedValue: raw, candidatePart: parsed.partNumber, candidateUpi: parsed.upi };
+      console.debug('[SCAN_DECODE]', JSON.stringify(details));
+      const panel = byId('scanDecodeDebug');
+      if (panel) { panel.hidden = false; panel.textContent = JSON.stringify(details, null, 2); }
+    }
     if (state.lastDecodeAtByKey.size > 40) {
       for (const [entryKey, timestamp] of state.lastDecodeAtByKey.entries()) {
         if (Date.now() - timestamp > 30000) state.lastDecodeAtByKey.delete(entryKey);
       }
     }
     cameraState('Scanned');
-    void processDecodedText(raw);
+    void processDecodedText(raw, decodeMetadata);
   }
 
-  async function processDecodedText(raw) {
+  async function processDecodedText(raw, decodeMetadata = null) {
     const mode = currentScanType();
     if (requiresBin() && !ensureActiveBinReady()) {
       cameraState('Ready to scan');
@@ -3360,13 +3473,14 @@
       vibrate([30, 40, 30]);
       openManualDialog({
         rawText: raw,
+        decodeMetadata,
         title: 'Complete fitted details',
         autoPartNumber: state.pendingSourcePart || parsePartCandidate(raw)
       });
       return;
     }
     const partNumber = state.pendingSourcePart || parsePartCandidate(raw);
-    if (!partNumber) {
+    if (!partNumber && !(mode === 'OUTWARD' && extractUpiIdFromText({ rawScanString: raw }))) {
       cameraState('Part number not found');
       toast('The code was read, but it does not contain a recognized part number. Use manual entry or check the QR data.', 'error');
       return;
@@ -3374,6 +3488,7 @@
     let record = createScanRecord({
       rawText: raw,
       manual: false,
+      decodeMetadata,
       partNumber,
       binLocation: requiresBin() ? loadActiveBin() : ''
     });
@@ -3565,6 +3680,7 @@
       sendHeartbeat().catch(() => undefined);
     } finally {
       state.syncRunning = false;
+      refreshLiveRecentScans({ force: true }).catch(() => undefined);
       renderQueueBadgeCounts();
       renderHistoryRows();
       if (state.syncAgain && state.session?.token && navigator.onLine) {
@@ -3684,10 +3800,11 @@
     });
   }
 
-  function openManualDialog({ rawText = '', autoPartNumber = '', title = '' } = {}) {
+  function openManualDialog({ rawText = '', autoPartNumber = '', title = '', decodeMetadata = null } = {}) {
     if (!ensureScanSession()) return;
     const dialog = byId('manualDialog');
     state.manualRaw = clean(rawText);
+    state.manualDecodeMetadata = decodeMetadata;
     state.manualMode = state.mode;
     state.manualResumeAfterClose = state.cameraRequested && !state.paused;
     state.paused = true;
@@ -3741,7 +3858,7 @@
     const qty = Number(form.get('qty') || 1);
     let binLocation = upper(form.get('binLocation') || '');
     const partNumber = upper(form.get('partNumber'));
-    if (!partNumber) {
+    if (!partNumber && !state.manualRaw) {
       toast('Part number is required', 'error');
       byId('manualPartNumber').focus();
       return;
@@ -3749,7 +3866,7 @@
     const regdNo = upper(form.get('regdNo') || '');
     const jobCardNo = upper(form.get('jobCardNo') || '');
 
-    if (requiresBin() && !binLocation) {
+    if ((requiresBin() || ['OUTWARD', 'FITTED'].includes(mode)) && !binLocation && !state.manualRaw) {
       let bins = [];
       if (partFirstMode()) {
         try { bins = await availableBinsForPart(partNumber); } catch (_) {}
@@ -3770,6 +3887,10 @@
       }
     }
 
+    if (mode === 'INWARD') {
+      if (!(await validateInwardBin(binLocation))) return;
+      setActiveBin(binLocation);
+    }
     if (mode === 'FITTED' && (!regdNo || !jobCardNo)) {
       toast('Registration number and job card number are required for fitted scans', 'error');
       return;
@@ -3779,6 +3900,7 @@
     let record = createScanRecord({
       rawText,
       manual: true,
+      decodeMetadata: state.manualDecodeMetadata,
       partNumber,
       qty: mode === 'VERIFICATION' ? 1 : qty,
       binLocation,
@@ -3808,6 +3930,17 @@
   }
 
   function bindEvents() {
+    byId('torchBtn')?.addEventListener('click', async () => {
+      const track = state.cameraStream?.getVideoTracks?.()[0];
+      const button = byId('torchBtn');
+      if (!track?.getCapabilities?.().torch) { button.hidden = true; return; }
+      try {
+        const enabled = !Boolean(track.getSettings?.().torch);
+        await track.applyConstraints({ advanced: [{ torch: enabled }] });
+        button.textContent = enabled ? 'Torch OFF' : 'Torch ON';
+        button.setAttribute('aria-pressed', String(enabled));
+      } catch (_) { button.disabled = true; }
+    });
     byId('copyUrlBtn')?.addEventListener('click', () => copyScanUrl());
     byId('copyScannerUrlBtn').addEventListener('click', () => copyScanUrl());
     byId('loginForm').addEventListener('submit', (event) => {
@@ -3892,6 +4025,9 @@
     });
     byId('manualBinLocation').addEventListener('input', (event) => {
       event.target.value = upper(event.target.value);
+      renderModeFields();
+      clearTimeout(state.manualBinValidationTimer);
+      if (state.mode === 'INWARD') state.manualBinValidationTimer = setTimeout(() => validateInwardBin(event.target.value), 250);
     });
     byId('activeBinLocation').addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;
@@ -4016,6 +4152,7 @@
       state.pendingLogin = null;
       saveSession(session);
       state.liveRecentRows = null;
+      state.inventorySummary = null;
       state.liveRecentRefreshPromise = null;
       state.liveRecentRefreshToken = Number(state.liveRecentRefreshToken || 0) + 1;
       updateLastScan(null);
@@ -4068,7 +4205,25 @@
     return true;
   }
 
+  function bindInventorySocket() {
+    const token = state.session?.token;
+    if (!window.io || !token) return;
+    if (state.inventorySocket?.auth?.token === token) return;
+    state.inventorySocket?.disconnect();
+    const options = { auth: { token }, transports: ['websocket', 'polling'] };
+    const socket = apiBaseUrl() ? window.io(apiBaseUrl(), options) : window.io(options);
+    state.inventorySocket = socket;
+    const refresh = (payload = {}) => {
+      if (payload.dealerCode && upper(payload.dealerCode) !== activeDealerCode()) return;
+      if (payload.auditId && clean(payload.auditId) !== activeAuditId()) return;
+      clearTimeout(state.inventoryRefreshTimer);
+      state.inventoryRefreshTimer = setTimeout(() => refreshLiveRecentScans({ force: true }).catch(() => undefined), 80);
+    };
+    ['connect', 'scan:saved', 'scan:deleted', 'inventory:update', 'sync:completed'].forEach((event) => socket.on(event, refresh));
+  }
+
   function startTimers() {
+    bindInventorySocket();
     clearTimeout(state.syncDelayTimer);
     clearInterval(state.syncTimer);
     clearInterval(state.recentRefreshTimer);
@@ -4114,11 +4269,17 @@
   function setMode(mode, { silent = false } = {}) {
     const nextMode = MODE_INFO[upper(mode)] ? upper(mode) : 'INWARD';
     if (nextMode !== state.mode) state.pendingSourcePart = '';
+    if (['OUTWARD', 'FITTED'].includes(nextMode)) saveActiveBin('');
+    if (nextMode === 'INWARD') {
+      validateInwardBin().catch(() => undefined);
+      setTimeout(() => byId('activeBinLocation')?.focus(), 0);
+    }
     saveMode(nextMode);
     renderModeButtons();
     renderModeMeta();
     renderModeFields();
     renderBinPanel();
+    renderCameraControlState();
     const info = currentModeInfo();
     if (info.requiresBin) {
       const activeBin = loadActiveBin();
