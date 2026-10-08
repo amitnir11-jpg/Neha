@@ -78,3 +78,19 @@ test('native detection keeps scheduling after a temporary video pause', async ()
   await context.detectNativeFrame(video, 1);
   assert.equal(scheduled.length, 1);
 });
+
+test('background scanner renders preserve an unsubmitted bin while its field has focus', () => {
+  const field = { value: 'CAMERA1' };
+  const nodes = { binPanel: { classList: { toggle() {}, remove() {} } }, activeBinLocation: field,
+    binPanelMessage: {}, activeBinField: { classList: { toggle() {} } } };
+  const document = { activeElement: field };
+  const context = vm.createContext({ document, state: { mode: 'INWARD' }, byId: id => nodes[id],
+    loadActiveBin: () => '', currentModeInfo: () => ({ requiresBin: true, label: 'Inward' }),
+    partFirstMode: () => false, inwardBinReady: () => false });
+  vm.runInContext(functionSource('  function renderBinPanel(', '  function ensureActiveBinReady('), context);
+  context.renderBinPanel();
+  assert.equal(field.value, 'CAMERA1');
+  document.activeElement = null;
+  context.renderBinPanel();
+  assert.equal(field.value, '');
+});

@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20261008-sku-v10';
+  const APP_VERSION = '20261008-bin-input-v11';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -1575,7 +1575,8 @@
 
     panel.classList.toggle('hidden', ['OUTWARD', 'FITTED', 'VERIFICATION'].includes(state.mode));
     byId('activeBinField')?.classList.toggle('hidden', partFirstMode() && !state.pendingSourcePart);
-    input.value = state.mode === 'OUTWARD' ? '' : current;
+    // Health/session refreshes must not erase a bin while the operator is typing.
+    if (document.activeElement !== input) input.value = state.mode === 'OUTWARD' ? '' : current;
     input.readOnly = state.mode === 'OUTWARD';
     input.placeholder = state.mode === 'OUTWARD' ? 'Auto-detected from scanned QR / UPI' : 'Enter bin (created automatically if new)';
     if (['OUTWARD', 'FITTED'].includes(state.mode)) {

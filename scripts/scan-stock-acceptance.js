@@ -382,8 +382,13 @@ async function verifyBrowser() {
       canvas.width = 1280; canvas.height = 720;
       const ctx = canvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height);
       window.acceptanceCanvas = canvas;
-      const stream = canvas.captureStream(15);
-      setInterval(() => stream.getVideoTracks()[0]?.requestFrame?.(), 70);
+      const stream = canvas.captureStream(0);
+      setInterval(() => {
+        ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        const image = window.acceptanceCameraImage;
+        if (image) ctx.drawImage(image, (canvas.width - image.width) / 2, (canvas.height - image.height) / 2);
+        stream.getVideoTracks()[0]?.requestFrame?.();
+      }, 70);
       return stream;
     };
   }, { token, user, dealerCode, auditId });
@@ -395,7 +400,14 @@ async function verifyBrowser() {
   // Use a fresh bin so the real 1D camera save is independent of previous fixture scans.
   await opticalPage.locator('#activeBinLocation').fill('CAMERA1');
   await opticalPage.locator('#saveBinBtn').click();
-  await opticalPage.waitForFunction(() => document.querySelector('#binPanelMessage').textContent.includes('Scanning will save to bin CAMERA1'));
+  try {
+    await opticalPage.waitForFunction(() => document.querySelector('#binPanelMessage').textContent.includes('Scanning will save to bin CAMERA1'));
+  } catch (error) {
+    await opticalPage.screenshot({ path: path.join(artifactDir, 'mobile-bin-failure.png'), fullPage: true });
+    console.error('Optical bin setup', await opticalPage.locator('#toast').textContent(),
+      await opticalPage.locator('#binPanelMessage').textContent(), errors);
+    throw error;
+  }
   assert.equal(await models.Bin.countDocuments({ dealerCode, binCode: 'CAMERA1' }), 1);
   passed('mobile Set Bin creates a missing dealer bin and starts the camera');
   await opticalPage.waitForFunction(() => document.querySelector('#cameraPreview').readyState >= 2 && window.ZXingWASM);
@@ -409,6 +421,7 @@ async function verifyBrowser() {
     });
     await opticalPage.evaluate(async imageData => {
       const image = new Image(); image.src = imageData; await image.decode();
+      window.acceptanceCameraImage = image;
       const canvas = window.acceptanceCanvas, ctx = canvas.getContext('2d');
       ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(image, (canvas.width - image.width) / 2, (canvas.height - image.height) / 2);
@@ -416,7 +429,7 @@ async function verifyBrowser() {
     const result = await (await savedResponse).json();
     assert.equal(result.success, true, JSON.stringify(result));
     assert.equal(result.scan.partNumber, expectedPart);
-    if (clear) await opticalPage.evaluate(() => { const ctx = window.acceptanceCanvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1280, 720); });
+    if (clear) await opticalPage.evaluate(() => { window.acceptanceCameraImage = null; const ctx = window.acceptanceCanvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1280, 720); });
     return result;
   };
   const oneD = await captureImage('fixture-code128.png', '32410KTC920S');
@@ -436,7 +449,7 @@ async function verifyBrowser() {
   const heldStarted = await opticalPage.evaluate(() => performance.now());
   await opticalPage.waitForFunction(started => performance.now() - started > 3000, heldStarted);
   assert.equal(await models.Inventory.countDocuments({ dealerCode, partNumber: '32410KTC920S', binLocation: 'CAMERA1', scanType: 'INWARD' }), beforeHeldSku + 1);
-  await opticalPage.evaluate(() => { const ctx = window.acceptanceCanvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1280, 720); });
+  await opticalPage.evaluate(() => { window.acceptanceCameraImage = null; const ctx = window.acceptanceCanvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1280, 720); });
   passed('mobile camera decodes the complete sample SKU and a continuously held label adds only one piece');
   // Exercise recovery with the actual fallback decoder and the same live stream.
   await opticalPage.evaluate(() => {
