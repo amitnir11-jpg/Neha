@@ -5,18 +5,21 @@ const Bin = require('../models/Bin');
 const router = require('../routes/binTransfer');
 
 test('bin transfer source options only include bins with available scanned stock', async () => {
-  const inventoryAggregate = Inventory.aggregate;
+  const inventoryFind = Inventory.find;
   const binFind = Bin.find;
   try {
-    Inventory.aggregate = async (pipeline) => {
-      const match = pipeline[0].$match;
-      assert.equal(match.dealerCode, '11646');
-      assert.equal(match.auditId, 'AUD1');
-      assert.equal(match.syncStatus, 'synced');
-      assert.equal(match.isDeleted.$ne, true);
-      assert.equal(match.isDuplicate.$ne, true);
-      assert.ok(match.$and.length >= 2);
-      return [{ _id: '1', qty: 8 }];
+    Inventory.find = (filter) => {
+      assert.equal(filter.dealerCode, '11646');
+      assert.equal(filter.auditId, 'AUD1');
+      assert.ok(filter.$and.length >= 3);
+      return {
+        sort() { return this; },
+        async lean() { return [
+          { _id: 'scan1', dealerCode: '11646', auditId: 'AUD1', partNumber: 'PART1', scanType: 'INWARD', qty: 8, binLocation: '1' },
+          { _id: 'scan2', dealerCode: '11646', auditId: 'AUD1', partNumber: 'PART2', scanType: 'INWARD', qty: 1, binLocation: 'A1' },
+          { _id: 'scan3', dealerCode: '11646', auditId: 'AUD1', partNumber: 'PART2', scanType: 'OUTWARD', qty: 1, binLocation: 'A1', stockDeductedFromBin: 'A1' }
+        ]; }
+      };
     };
     Bin.find = () => ({
       sort() { return this; },
@@ -36,7 +39,7 @@ test('bin transfer source options only include bins with available scanned stock
     assert.deepEqual(response.payload.sourceBins.map((bin) => bin.binCode), ['1']);
     assert.deepEqual(response.payload.destinationBins, ['1', 'A1', 'A2']);
   } finally {
-    Inventory.aggregate = inventoryAggregate;
+    Inventory.find = inventoryFind;
     Bin.find = binFind;
   }
 });

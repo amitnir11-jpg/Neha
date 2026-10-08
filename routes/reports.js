@@ -1,4 +1,4 @@
-const { stockQuantitySummary } = require('../utils/stockQuantity');
+const { stockQuantitySummary, stockMovementBin } = require('../utils/stockQuantity');
 const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
@@ -1031,12 +1031,13 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
 function selectRows(data, type) {
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') {
     const binScans = data.scans;
+    const stockBin = (scan) => stockMovementBin(scan) || 'UNKNOWN';
     return groupRows(
       binScans,
-      (scan) => `${scan.dealerCode || 'UNKNOWN'}:${scan.binLocation || scan.bin || 'UNKNOWN'}:${scan.partNumber || scan.part || ''}`,
+      (scan) => `${scan.dealerCode || 'UNKNOWN'}:${stockBin(scan)}:${scan.partNumber || scan.part || ''}`,
       (scan) => ({
         dealerCode: scan.dealerCode || '',
-        bin: scan.binLocation || scan.bin || 'UNKNOWN',
+        bin: stockBin(scan),
         partNumber: scan.partNumber || scan.part || '',
         partDescription: scan.partDescription || scan.partName || '',
         productCategory: canonicalizePartCategory(scan.productCategory || ''),

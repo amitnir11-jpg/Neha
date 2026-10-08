@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
 const { calculatePartStock } = require('../services/StockCalculationService');
-const { stockQuantitySummary, stockMovementQuantity, stockAvailableQuantity } = require('../utils/stockQuantity');
+const { stockQuantitySummary, stockMovementQuantity, stockAvailableQuantity, stockMovementBin } = require('../utils/stockQuantity');
 const { summarizeMovementBucket } = require('../utils/inventoryValueEngine');
 const { reportTotals, applyMovementCountRules } = require('../utils/reportTotals');
 const { movementQty } = require('../utils/inventoryMovementState');
@@ -58,6 +58,13 @@ test('deleted, duplicate, rejected, verification, and local rows do not enter st
     row('dup3', 'INWARD', 'A1', { isDuplicate: true }), row('reject4', 'INWARD', 'A1', { scanStatus: 'REJECTED' }),
     row('verify5', 'VERIFICATION', 'A1'), row('local6', 'INWARD', 'A1', { isLocalPart: true })];
   assert.equal(calculatePartStock(rows, 'ABC123').availableQty, 1);
+});
+
+test('shared stock bin attribution uses source bins for deductions and returned bins for fitted returns', () => {
+  assert.equal(stockMovementBin({ scanType: 'INWARD', binLocation: 'A1' }), 'A1');
+  assert.equal(stockMovementBin({ scanType: 'OUTWARD', binLocation: 'A2', stockDeductedFromBin: 'A1' }), 'A1');
+  assert.equal(stockMovementBin({ scanType: 'DAMAGE', binLocation: 'A2', sourceBin: 'A1' }), 'A1');
+  assert.equal(stockMovementBin({ scanType: 'FITTED_RETURN', binLocation: 'A2', returnedToBin: 'A1' }), 'A1');
 });
 function extract(file, start, end) {
   const source = fs.readFileSync(file, 'utf8');
@@ -188,7 +195,7 @@ test('failed movement insertion rolls back source UPI claim in the transaction c
 
 test('bin-wise report uses central store and workshop balances for the golden sequence', () => {
   const { fittedWorkshopQuantity } = require('../utils/fittedStock');
-  const context = vm.createContext({ stockQuantitySummary, fittedWorkshopQuantity,
+  const context = vm.createContext({ stockQuantitySummary, stockMovementBin, fittedWorkshopQuantity,
     money: value => Math.round(value * 100) / 100,
     canonicalizePartCategory: value => value,
     scanDlc: () => 10, scanValueRow: () => ({ valuationMRP: 20 }), scanQuantity: stockMovementQuantity

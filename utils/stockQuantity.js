@@ -5,6 +5,16 @@ function stockMovementType(scan = {}) {
   return ({ VERIFY: 'VERIFICATION', OUT: 'OUTWARD', FIT: 'FITTED', FITTED_ON_VEHICLE: 'FITTED', DAMAGED: 'DAMAGE' })[type] || type;
 }
 
+function stockMovementBin(scan = {}) {
+  const type = stockMovementType(scan);
+  const fields = type === 'FITTED_RETURN'
+    ? [scan.returnedToBin, scan.stockDeductedFromBin, scan.binLocation, scan.bin]
+    : ['OUTWARD', 'FITTED', 'DAMAGE'].includes(type)
+      ? [scan.stockDeductedFromBin, scan.sourceBin, scan.binLocation, scan.bin]
+      : [scan.binLocation, scan.bin, scan.currentBin];
+  return String(fields.find(value => String(value || '').trim()) || '').trim().toUpperCase();
+}
+
 function stockUnitQuantity(scan = {}) {
   // Load the existing legacy quantity parser only at call time to avoid the value-engine import cycle.
   const value = scan.qty ?? scan.quantity ?? require('./inventoryValueEngine').scanQty(scan);
@@ -55,4 +65,4 @@ function stockQuantitySummary(scans = []) {
   return totals;
 }
 
-module.exports = { stockMovementType, stockUnitQuantity, activeStockTransaction, stockMovementQuantity, stockWorkshopQuantity, stockAvailableQuantity, stockQuantitySummary };
+module.exports = { stockMovementType, stockMovementBin, stockUnitQuantity, activeStockTransaction, stockMovementQuantity, stockWorkshopQuantity, stockAvailableQuantity, stockQuantitySummary };

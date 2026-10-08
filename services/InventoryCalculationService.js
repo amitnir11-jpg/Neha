@@ -4,7 +4,7 @@ const Dealer = require('../models/Dealer');
 const { getActiveAudit, auditWorkflowStatus } = require('../utils/audit');
 const { normalizePartNumber } = require('../utils/normalize');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
-const { stockQuantitySummary, stockMovementType, stockUnitQuantity, activeStockTransaction } = require('../utils/stockQuantity');
+const { stockQuantitySummary, stockMovementType, stockMovementBin, stockUnitQuantity, activeStockTransaction } = require('../utils/stockQuantity');
 const { applyInventoryLedgerFilter } = require('../utils/inventoryLedgerFilter');
 const { getPricesFromPartMaster } = require('../utils/partMasterPrice');
 const { invalidateCache } = require('../utils/safeCache');
@@ -76,9 +76,7 @@ function calculateInventoryLedger(input = [], options = {}) {
     for (const scan of scans) {
       transactionQty += stockUnitQuantity(scan);
       const type = stockMovementType(scan);
-      const bin = clean(type === 'FITTED' || type === 'OUTWARD' || type === 'DAMAGE'
-        ? scan.stockDeductedFromBin || scan.sourceBin || scan.binLocation || scan.bin
-        : scan.binLocation || scan.bin || scan.currentBin).toUpperCase();
+      const bin = stockMovementBin(scan);
       if (!bin) continue;
       if (!byBin.has(bin)) byBin.set(bin, []);
       byBin.get(bin).push(scan);

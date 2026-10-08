@@ -9,9 +9,11 @@ const Audit = require('../models/Audit');
 const BinTransferHistory = require('../models/BinTransferHistory');
 const BinLabelPrintLog = require('../models/BinLabelPrintLog');
 const auth = require('./auth');
-const { validScanClause } = require('../utils/masterValidation');
 const { getActiveAudit } = require('../utils/audit');
 const { formatIstDateTime } = require('../utils/time');
+const { calculateInventoryLedger, loadLedgerRows } = require('../services/InventoryCalculationService');
+const { stockMovementType, stockMovementBin } = require('../utils/stockQuantity');
+const { withDatabaseTransaction } = require('../services/prisma');
 
 const router = express.Router();
 
@@ -35,30 +37,7 @@ function binRegex(bin) {
   return new RegExp(`^${escapeRegExp(clean(bin))}$`, 'i');
 }
 
-const BLANK_MARKERS = ['', 'NULL', 'UNDEFINED', 'N/A', 'NA', '-'];
-const CURRENT_BIN_FIELDS = ['binLocation', 'bin', 'currentBin', 'current_bin', 'location'];
 const PART_NUMBER_FIELDS = ['normalizedPartNumber', 'partNumber', 'part', 'partNo', 'extractedPartNumber'];
-
-function firstNonBlankExpression(fields = []) {
-  return fields.reduceRight((fallback, field) => ({
-    $let: {
-      vars: {
-        value: {
-          $trim: {
-            input: { $toString: { $ifNull: [`$${field}`, ''] } }
-          }
-        }
-      },
-      in: {
-        $cond: [
-          { $in: [{ $toUpper: '$$value' }, BLANK_MARKERS] },
-          fallback,
-          '$$value'
-        ]
-      }
-    }
-  }), '');
-}
 
 function firstNonBlankValue(row = {}, fields = []) {
   for (const field of fields) {
@@ -66,10 +45,6 @@ function firstNonBlankValue(row = {}, fields = []) {
     if (value && !BLANK_MARKERS.includes(value.toUpperCase())) return value;
   }
   return '';
-}
-
-function binFieldClause(fromBin) {
-  return { $or: CURRENT_BIN_FIELDS.map((field) => ({ [field]: binRegex(fromBin) })) };
 }
 
 function compactBins(items = []) {
@@ -90,32 +65,6 @@ function compactBins(items = []) {
     })
     .filter(Boolean)
     .sort((a, b) => a.binCode.localeCompare(b.binCode, undefined, { numeric: true, sensitivity: 'base' }));
-}
-
-function stockQtyExpression() {
-  const qtyValue = {
-    $convert: {
-      input: { $ifNull: ['$qty', { $ifNull: ['$quantity', { $ifNull: ['$availableQty', 0] }] }] },
-      to: 'double',
-      onError: 0,
-      onNull: 0
-    }
-  };
-  const scanType = {
-    $toUpper: {
-      $toString: { $ifNull: ['$scanType', { $ifNull: ['$type', ''] }] }
-    }
-  };
-  return {
-    $switch: {
-      branches: [
-        { case: { $eq: [scanType, 'INWARD'] }, then: { $abs: qtyValue } },
-        { case: { $in: [scanType, ['OUTWARD', 'FITTED', 'DAMAGE']] }, then: { $multiply: [{ $abs: qtyValue }, -1] } },
-        { case: { $eq: [scanType, 'VERIFICATION'] }, then: 0 }
-      ],
-      default: 0
-    }
-  };
 }
 
 function userName(req) {
@@ -181,31 +130,6 @@ function publicPart(row) {
   };
 }
 
-function countedReportScanClause() {
-  return {
-    syncStatus: 'synced',
-    isDuplicate: { $ne: true },
-    isDeleted: { $ne: true },
-    deletedAt: null,
-    $and: [{ $or: [
-      { scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] } },
-      { scanStatus: { $exists: false } }, { scanStatus: '' }, { scanStatus: null }
-    ] }]
-  };
-}
-
-function transferStockMatch(dealerCode, auditId = '') {
-  const master = validScanClause();
-  const report = countedReportScanClause();
-  return {
-    ...master,
-    ...report,
-    dealerCode,
-    ...(auditId ? { auditId } : {}),
-    $and: [...(master.$and || []), ...(report.$and || [])]
-  };
-}
-
 async function resolveTransferAuditId(dealerCode, requestedAuditId = '') {
   const requested = clean(requestedAuditId);
   if (requested && requested.toLowerCase() !== 'active') return requested;
@@ -223,49 +147,21 @@ async function resolveTransferAuditId(dealerCode, requestedAuditId = '') {
 }
 
 async function groupedParts(dealerCode, fromBin = '', auditId = '') {
-  const sourceBin = /^all$/i.test(clean(fromBin)) ? '' : clean(fromBin);
-  const binMatch = sourceBin ? [{ $match: { _btCurrentBin: binRegex(sourceBin) } }] : [];
-  const rows = await Inventory.aggregate([
-    { $match: transferStockMatch(dealerCode, auditId) },
-    {
-      $addFields: {
-        _btCurrentBin: firstNonBlankExpression(CURRENT_BIN_FIELDS),
-        _btPartNumber: firstNonBlankExpression(PART_NUMBER_FIELDS),
-        _btPartDescription: firstNonBlankExpression(['partDescription', 'partName', 'description', 'partDesc']),
-        _btCategory: firstNonBlankExpression(['productCategory', 'category', 'productGroup']),
-        _btStockQty: stockQtyExpression()
-      }
-    },
-    ...binMatch,
-    {
-      $group: {
-        _id: {
-          partNumber: '$_btPartNumber',
-          bin: '$_btCurrentBin'
-        },
-        dealerCode: { $first: '$dealerCode' },
-        partDescription: { $first: '$_btPartDescription' },
-        category: { $first: '$_btCategory' },
-        availableQty: { $sum: '$_btStockQty' },
-        lastScanTime: { $max: '$timestamp' }
-      }
-    },
-    {
-      $project: {
-        _id: 0,
-        partNumber: '$_id.partNumber',
-        currentBin: '$_id.bin',
-        dealerCode: 1,
-        partDescription: 1,
-        category: 1,
-        availableQty: 1,
-        lastScanTime: 1
-      }
-    },
-    { $match: { availableQty: { $gt: 0 }, partNumber: { $nin: [null, ''] } } },
-    { $sort: { partNumber: 1, currentBin: 1 } }
-  ]);
-  return rows.map(publicPart);
+  const sourceBin = /^all$/i.test(clean(fromBin)) ? '' : clean(fromBin).toUpperCase();
+  if (!clean(dealerCode)) return [];
+  const scope = { dealerCode: upper(dealerCode), auditId: clean(auditId) };
+  const { records } = await loadLedgerRows({}, { scope });
+  return calculateInventoryLedger(records, { scope }).binBreakdown
+    .filter((row) => Number(row.availableQty) > 0
+      && (!sourceBin || upper(row.binLocation) === sourceBin))
+    .map((row) => publicPart({
+      partNumber: row.partNumber,
+      partDescription: row.partDescription,
+      category: row.category,
+      availableQty: row.availableQty,
+      currentBin: row.binLocation,
+      dealerCode: scope.dealerCode
+    }));
 }
 
 function selectedLabelKey(item = {}) {
@@ -339,7 +235,7 @@ function groupedBinLabelItems(parts = [], settings = {}) {
   return items;
 }
 
-async function transferPart({ dealerCode, auditId = '', fromBin, toBin, partNumber, qty, transferType, req }) {
+async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, toBin, partNumber, qty, transferType, req }) {
   const cleanPart = normalizePart(partNumber);
   const requestedQty = Number(qty);
   if (!dealerCode) throw new Error('Dealer required');
@@ -353,14 +249,14 @@ async function transferPart({ dealerCode, auditId = '', fromBin, toBin, partNumb
   if (netAvailableQty <= 0) throw new Error('No available qty found for selected part in Source Bin');
   if (requestedQty > netAvailableQty) throw new Error('Qty cannot be greater than available qty');
 
-  const records = (await Inventory.find({
-    ...transferStockMatch(dealerCode, auditId),
-    ...binFieldClause(fromBin)
-  }).sort({ timestamp: 1, createdAt: 1 }).lean()).filter((record) => {
+  const { records: ledgerRows } = await loadLedgerRows({}, { scope: { dealerCode, auditId } });
+  const records = ledgerRows.filter((record) => {
     const recordPart = normalizePart(firstNonBlankValue(record, PART_NUMBER_FIELDS));
-    const recordType = upper(record.scanType || record.type);
-    return recordPart === cleanPart && !['OUTWARD', 'FITTED', 'DAMAGE'].includes(recordType);
-  });
+    const recordType = stockMovementType(record);
+    const recordBin = stockMovementBin(record);
+    return recordPart === cleanPart && recordBin === upper(fromBin)
+      && ['INWARD', 'AUDIT', 'FITTED_RETURN'].includes(recordType);
+  }).sort((a, b) => new Date(a.timestamp || a.createdAt || 0) - new Date(b.timestamp || b.createdAt || 0));
 
   const movableQty = records.reduce((sum, record) => sum + Number(record.qty || record.quantity || 0), 0);
   if (requestedQty > movableQty) throw new Error('Qty cannot be greater than available qty');
@@ -430,16 +326,20 @@ async function transferPart({ dealerCode, auditId = '', fromBin, toBin, partNumb
   return history;
 }
 
+async function transferPart(input) {
+  // Inventory edits and their history row must commit or roll back together.
+  // PostgreSQL serializable transactions also make concurrent availability
+  // checks retry against the newly committed stock state.
+  return withDatabaseTransaction(() => transferPartInTransaction(input));
+}
+
 async function dealerBins(dealerCode, auditId = '') {
   const [scanBins, masterBins] = await Promise.all([
-    Inventory.aggregate([
-      { $match: transferStockMatch(dealerCode, auditId) },
-      { $project: { bin: firstNonBlankExpression(CURRENT_BIN_FIELDS), qty: stockQtyExpression() } },
-      { $match: { bin: { $nin: ['', 'null', 'undefined', 'NULL', 'UNDEFINED'] } } },
-      { $group: { _id: '$bin', qty: { $sum: '$qty' } } },
-      { $match: { qty: { $gt: 0 } } },
-      { $sort: { _id: 1 } }
-    ]),
+    groupedParts(dealerCode, '', auditId).then((parts) => {
+      const byBin = new Map();
+      parts.forEach((part) => byBin.set(part.currentBin, (byBin.get(part.currentBin) || 0) + Number(part.availableQty || 0)));
+      return Array.from(byBin, ([_id, qty]) => ({ _id, qty }));
+    }),
     Bin.find({ dealerCode, active: { $ne: false }, binCode: { $nin: [null, '', 'null', 'undefined'] } }).sort({ binCode: 1 }).lean()
   ]);
 
