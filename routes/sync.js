@@ -1826,19 +1826,6 @@ async function saveNormalizedScan(scan, req, options = {}) {
   const upiLocationError = skuMovement ? null : await prepareUpiSourceLocation(scan, options);
   markPerf('upiLocation');
   if (upiLocationError) return { status: 'failed', scan, error: upiLocationError };
-  if (scan.binLocation) {
-    const binCode = upper(scan.binLocation);
-    const [ownedBin, conflictingBin] = await Promise.all([
-      Bin.findOne({ dealerCode: scan.dealerCode, binCode, active: { $ne: false } }).lean(),
-      Bin.findOne({ dealerCode: { $ne: scan.dealerCode }, binCode, active: { $ne: false } }).lean()
-    ]);
-    if (scan.scanType === 'INWARD' && !ownedBin) {
-      return { status: 'failed', httpStatus: 422, scan, error: 'Select a valid active bin for this dealer.' };
-    }
-    if (!ownedBin && conflictingBin) {
-      return { status: 'failed', httpStatus: 403, scan, error: 'BIN_DOES_NOT_BELONG_TO_ACTIVE_DEALER' };
-    }
-  }
   markPerf('binOwnership');
   const validationPromise = scan.scanType === 'VERIFICATION'
     ? Promise.resolve(null)
@@ -1948,6 +1935,39 @@ async function saveNormalizedScan(scan, req, options = {}) {
     }
     logSync('scan validation failed', { deviceId: scan.deviceId, scanId: scan.uniqueScanId, errors });
     return { status: 'failed', scan, error: errors.join(', ') };
+  }
+
+  // The scan page registers typed bins through /set-bin, but a delayed request,
+  // offline APK, or an older client may reach sync without that registration.
+  // Register the explicitly selected inward bin here as a dealer scoped record.
+  // A same-named bin belonging to a different dealer is unrelated and must not
+  // block this dealer from using its own location.
+  if (scan.scanType === 'INWARD' && scan.binLocation) {
+    const binCode = upper(scan.binLocation);
+    let bin = await Bin.findOne({ dealerCode: scan.dealerCode, binCode }).lean();
+    if (bin?.active === false) {
+      return { status: 'failed', httpStatus: 422, scan,
+        error: `Bin ${binCode} is inactive. Activate it in Bin Master before scanning.` };
+    }
+    if (!bin) {
+      try {
+        bin = await withDatabaseTransaction(async () => Bin.create({
+          dealerCode: scan.dealerCode,
+          binCode,
+          binName: binCode,
+          active: true
+        }));
+      } catch (error) {
+        // Another request may have registered this bin concurrently. Accept it
+        // only if the dealer's resulting record is active.
+        bin = await Bin.findOne({ dealerCode: scan.dealerCode, binCode }).lean();
+        if (!bin || bin.active === false) {
+          return { status: 'failed', httpStatus: 422, scan,
+            error: 'Select a valid active bin for this dealer.' };
+        }
+      }
+      req.io?.emit('master:update', { dealerCode: scan.dealerCode, scope: 'bins' });
+    }
   }
 
   if (['OUTWARD', 'FITTED'].includes(scan.scanType) && !skuMovement) {
