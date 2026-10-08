@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const ExcelJS = require('exceljs');
+const { applyResolvedDatabaseUrl } = require('../utils/postgresEnv');
 
 const root = path.resolve(__dirname, '..');
 
@@ -356,6 +357,11 @@ async function verifyDatabaseIsolation() {
 }
 
 async function main() {
+  if (!applyResolvedDatabaseUrl().url) {
+    console.log('local-parts-isolation-check: skipped (DATABASE_URL not configured)');
+    return;
+  }
+
   verifyStaticIsolation();
   await verifyRouteGuards();
   await verifyDatabaseIsolation();
