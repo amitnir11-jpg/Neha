@@ -188,6 +188,7 @@ class SyncService {
       var synced = 0;
       final completedKeys = <String>{};
       final duplicateByKey = <String, String>{};
+      final duplicateRecords = <ScanRecord>[];
       final failedByKey = <String, String>{};
       final touchedLocalIds = <String>{};
       final completedAt = (data['completedAt'] ?? '').toString();
@@ -251,6 +252,9 @@ class SyncService {
             await database.updateStatus(record.localId, 'Duplicate',
                 serverSyncId: completedAt,
                 errorMessage: duplicateByKey[duplicateKey] ?? '');
+            duplicateRecords.add(record.copyWith(
+                status: 'Duplicate',
+                errorMessage: duplicateByKey[duplicateKey] ?? 'This code was already scanned.'));
             touchedLocalIds.add(record.localId);
             continue;
           }
@@ -279,7 +283,8 @@ class SyncService {
       }
 
       return SyncResult(true, (data['message'] ?? 'Sync completed').toString(),
-          synced: synced, serverReached: true, hasClockSkew: hasClockSkew);
+          synced: synced, serverReached: true, hasClockSkew: hasClockSkew,
+          duplicateRecords: duplicateRecords);
     } on ApiException catch (error) {
       final statusCode = error.statusCode ?? 0;
       final hasRowFailureDetails = (error.data['logs'] is List &&
@@ -310,11 +315,13 @@ class SyncResult {
   SyncResult(this.success, this.message,
       {required this.synced,
       this.serverReached = false,
-      this.hasClockSkew = false});
+      this.hasClockSkew = false,
+      this.duplicateRecords = const []});
 
   final bool success;
   final String message;
   final int synced;
   final bool serverReached;
   final bool hasClockSkew;
+  final List<ScanRecord> duplicateRecords;
 }

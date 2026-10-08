@@ -376,6 +376,20 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
           await _syncService.syncPending(includeFailed: includeFailed);
       final syncedAt = DateTime.now();
       await _refreshLocalState();
+      if (result.duplicateRecords.isNotEmpty && mounted) {
+        final duplicate = result.duplicateRecords.first;
+        await _showDuplicateScanAlert(
+          _ScanDraft(
+            rawValue: duplicate.rawValue,
+            partNumber: duplicate.partNumber,
+            quantity: duplicate.quantity,
+            binLocation: duplicate.binLocation,
+          ),
+          reason: duplicate.errorMessage.isEmpty
+              ? 'This code was already scanned.'
+              : duplicate.errorMessage,
+        );
+      }
       if (result.success) await _refreshRecentScans(forceServer: true);
       if (!mounted) return;
       setState(() {
@@ -691,15 +705,13 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
             .catchError((_) => null);
       }
 
-      final duplicateRecord = source == 'manual'
-          ? await _database.latestMatchingScan(
+      final duplicateRecord = await _database.latestMatchingScan(
               rawValue: draft.rawValue,
               scanType: _scanType,
               dealerCode: _dealerCode,
               auditId: _activeAuditId,
               userId: _userId,
-            )
-          : null;
+            );
       if (duplicateRecord != null) {
         await _showDuplicateScanAlert(
           draft,

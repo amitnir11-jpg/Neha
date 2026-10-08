@@ -3526,7 +3526,7 @@
     const partNumber = state.pendingSourcePart || parsePartCandidate(raw);
     if (!partNumber && !(mode === 'OUTWARD' && extractUpiIdFromText({ rawScanString: raw }))) {
       cameraState('Part number not found');
-      toast('The code was read, but it does not contain a recognized part number. Use manual entry or check the QR data.', 'error');
+      toast(`Raw barcode: ${raw || '(empty)'}. Reason: no part number could be extracted from a supported barcode structure.`, 'error');
       return;
     }
     let record = createScanRecord({
@@ -3585,6 +3585,7 @@
     let rejectedCount = 0;
     let failedCount = 0;
     let pendingCount = 0;
+    let lastRejectedDetail = '';
     let retryDelayMs = null;
     try {
       for (const row of batch) {
@@ -3649,6 +3650,7 @@
           if (duplicate) {
             duplicateCount += 1;
             await markDuplicateRecord(row, data.existing || data.scan || {}, message);
+            showDuplicateOnce(row, data.existing || data.scan || {}, message);
             continue;
           }
           if (isRetryableTransportError(error)) {
@@ -3676,6 +3678,7 @@
           if (rejected) rejectedCount += 1;
           else failedCount += 1;
           if (rejected) {
+            lastRejectedDetail = message;
             const next = {
               ...row,
               status: 'failed',
@@ -3717,7 +3720,7 @@
         const message = pendingCount
           ? `${pendingCount} scan(s) remain pending until the connection is restored.`
           : failedCount || rejectedCount
-            ? `${terminalCount} scan(s) processed: ${rejectedCount} rejected, ${failedCount} failed.`
+            ? `${terminalCount} scan(s) processed: ${rejectedCount} rejected, ${failedCount} failed.${lastRejectedDetail ? ` ${lastRejectedDetail}` : ''}`
             : `${syncedCount} scan(s) synced${duplicateCount ? `, ${duplicateCount} duplicate(s) blocked` : ''}.`;
         toast(message, failedCount || rejectedCount ? 'error' : pendingCount || duplicateCount ? 'warning' : 'success');
       }

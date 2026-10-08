@@ -1785,7 +1785,10 @@ async function saveNormalizedScan(scan, req, options = {}) {
             reason: 'Duplicate unique UPI', message: duplicatePolicy.duplicateUpiMessage(existing) }, scan);
         }
       }
-      return { status: 'failed', httpStatus: 422, scan, error: decoded.message };
+      scan.parsedCode = { ...decoded, price: undefined };
+      return { status: 'failed', httpStatus: 422, scan, error: decoded.message,
+        message: decoded.message, rawValue: decoded.rawValue, extractedPartNumber: decoded.partNumber || '',
+        reason: decoded.reason, failureReason: decoded.failureReason || decoded.message };
     }
     scan.partNumber = decoded.partNumber;
     scan.normalizedPartNumber = normalizePartNumber(decoded.partNumber);

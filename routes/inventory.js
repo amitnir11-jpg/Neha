@@ -4745,7 +4745,9 @@ router.get('/resolve-code', auth.requireAuth, async (req, res) => {
     const dealerCode = normalizeDealerCode(req.query.dealerCode);
     const audit = await getActiveAudit({ dealerCode });
     const decoded = await require('../services/ScannedCodeService').resolveScannedCode(req.query.rawValue, req.query.barcodeFormat, dealerCode);
-    if (!decoded.success) return res.status(422).json({ success: false, message: decoded.message });
+    if (!decoded.success) return res.status(422).json({ success: false, message: decoded.message,
+      rawValue: decoded.rawValue, extractedPartNumber: decoded.partNumber || '', reason: decoded.reason,
+      failureReason: decoded.failureReason || decoded.message });
     const bins = decoded.identityKind === 'SKU' && audit
       ? await require('../services/SkuStockService').loadSkuBins({ dealerCode, auditId: clean(audit.auditId || audit._id), partNumber: decoded.partNumber }) : [];
     return res.json({ success: true, parsedCode: { ...decoded, price: undefined },
