@@ -9,6 +9,7 @@ const reportModule = require('./report');
 const reconciliationRoute = require('./reconciliation');
 const localPartsRoute = require('./localParts');
 const inventoryRoute = require('./inventory');
+const { calculateInventoryLedger } = require('../services/InventoryCalculationService');
 const Inventory = require('../models/Inventory');
 const Dealer = require('../models/Dealer');
 const router = reportModule;
@@ -1030,71 +1031,54 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
 
 function selectRows(data, type) {
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') {
-    const binScans = data.scans;
-    const stockBin = (scan) => stockMovementBin(scan) || 'UNKNOWN';
-    return groupRows(
-      binScans,
-      (scan) => `${scan.dealerCode || 'UNKNOWN'}:${stockBin(scan)}:${scan.partNumber || scan.part || ''}`,
-      (scan) => ({
-        dealerCode: scan.dealerCode || '',
-        bin: stockBin(scan),
-        partNumber: scan.partNumber || scan.part || '',
-        partDescription: scan.partDescription || scan.partName || '',
-        productCategory: canonicalizePartCategory(scan.productCategory || ''),
-        mrp: scan.currentCatalogueMRP || scanValueRow(scan).valuationMRP || 0,
-        dlc: scanDlc(scan),
-        finalInventoryValue: 0,
-        totalDlcValue: 0,
-        mrpValueReference: 0,
-        totalMrpValue: 0,
+    // Bin Transfer and this report must use the same movement/bin attribution
+    // and the same net-stock ledger. In particular, OUTWARD/FITTED/DAMAGE rows
+    // deduct from stockDeductedFromBin/sourceBin, not necessarily binLocation.
+    const scans = Array.isArray(data.scans) ? data.scans : [];
+    const ledger = calculateInventoryLedger(scans);
+    const scanByBinPart = new Map();
+    scans.forEach((scan) => {
+      const partNumber = String(scan.normalizedPartNumber || scan.partNumber || scan.part || '').trim().toUpperCase();
+      const bin = stockMovementBin(scan) || 'UNKNOWN';
+      const key = `${bin}::${partNumber}`;
+      const prior = scanByBinPart.get(key);
+      if (!prior || new Date(scan.timestamp || scan.createdAt || 0) > new Date(prior.timestamp || prior.createdAt || 0)) {
+        scanByBinPart.set(key, scan);
+      }
+    });
+    return ledger.binBreakdown.map((stock) => {
+      const scan = scanByBinPart.get(`${stock.binLocation}::${stock.partNumber}`) || {};
+      const mrp = Number(scan.currentCatalogueMRP || scanValueRow(scan).valuationMRP || stock.mrp || 0);
+      const dlc = Number(scanDlc(scan) || stock.dlc || 0);
+      const qty = Number(stock.availableQty || 0);
+      return {
+        dealerCode: stock.dealerCode || scan.dealerCode || '',
+        bin: stock.binLocation || 'UNKNOWN',
+        partNumber: stock.partNumber,
+        partDescription: stock.partDescription || scan.partDescription || scan.partName || '',
+        productCategory: canonicalizePartCategory(stock.category || scan.productCategory || ''),
+        mrp,
+        dlc,
+        qty,
+        availableQty: qty,
+        physicalBinQty: stock.storeQty,
+        actualAuditQty: qty,
+        fittedWorkshopQty: stock.fittedQty,
+        totalDealerStockQty: qty,
+        finalInventoryValue: money(qty * dlc),
+        totalDlcValue: money(qty * dlc),
+        mrpValueReference: money(qty * mrp),
+        totalMrpValue: money(qty * mrp),
         scanType: scan.scanType || scan.type || '',
         fittedQty: 0,
-        fittedStatus: '',
+        fittedStatus: 'Not Fitted',
         regdNo: '',
         jobCardNo: '',
         autoDetectedBin: '',
         stockDeductedFromBin: '',
-        stockScans: [],
-        qty: 0,
-        physicalBinQty: 0,
-        actualAuditQty: 0,
-        lastScanTime: scan.timestamp,
+        lastScanTime: scan.timestamp || scan.createdAt || '',
         deviceId: scan.deviceId || ''
-      }),
-      (target, scan) => {
-        target.stockScans.push(scan);
-        const qty = scanQuantity(scan);
-        const valueRow = scanValueRow(scan);
-        if (!target.mrp) target.mrp = Number(scan.currentCatalogueMRP || valueRow.valuationMRP || 0);
-        if (!target.dlc) target.dlc = scanDlc(scan);
-        target.qty += qty;
-        target.physicalBinQty = target.qty;
-        target.actualAuditQty = target.qty;
-        target.finalInventoryValue = money(target.qty * Number(target.dlc || 0));
-        target.totalDlcValue = target.finalInventoryValue;
-        target.mrpValueReference = money(target.qty * Number(target.mrp || 0));
-        target.totalMrpValue = target.mrpValueReference;
-        if (!target.partDescription) target.partDescription = scan.partDescription || scan.partName || '';
-        if (!target.productCategory) target.productCategory = canonicalizePartCategory(scan.productCategory || '');
-        if (!target.deviceId) target.deviceId = scan.deviceId || '';
-        if ((scan.scanType || scan.type) === 'FITTED') target.fittedQty += fittedWorkshopQuantity(scan);
-        target.fittedStatus = target.fittedQty > 0 ? 'Fitted' : 'Not Fitted';
-        if (!target.regdNo) target.regdNo = scan.regdNo || '';
-        if (!target.jobCardNo) target.jobCardNo = scan.jobCardNo || '';
-        if (!target.autoDetectedBin && scan.autoDetectedBin) target.autoDetectedBin = 'Yes';
-        if (!target.stockDeductedFromBin) target.stockDeductedFromBin = scan.stockDeductedFromBin || '';
-        if (new Date(scan.timestamp) > new Date(target.lastScanTime || 0)) target.lastScanTime = scan.timestamp;
-      }
-    ).map(row => {
-      const totals = stockQuantitySummary(row.stockScans);
-      delete row.stockScans;
-      return { ...row, ...totals, qty: totals.availableQty, availableQty: totals.availableQty,
-        physicalBinQty: totals.storeQty, fittedWorkshopQty: totals.fittedQty,
-        totalDealerStockQty: totals.availableQty, actualAuditQty: totals.availableQty,
-        finalInventoryValue: money(totals.availableQty * Number(row.dlc || 0)),
-        totalDlcValue: money(totals.availableQty * Number(row.dlc || 0)),
-        mrpValueReference: money(totals.availableQty * Number(row.mrp || 0)),
-        totalMrpValue: money(totals.availableQty * Number(row.mrp || 0)) };
+      };
     }).sort((a, b) => String(a.bin).localeCompare(String(b.bin)) || String(a.partNumber).localeCompare(String(b.partNumber)));
   }
 
