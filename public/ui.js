@@ -12295,7 +12295,9 @@
     updateScanTypeFields(form);
     if (!binLocation || !dealerCode) return;
     try {
-      const result = await api(`/api/scans/validate-bin?${new URLSearchParams({ dealerCode, binLocation })}`);
+      const result = await api('/api/scans/set-bin', { method: 'POST', body: {
+        dealerCode, auditId: activeAuditIdForScope(), binLocation
+      } });
       if (`${form.elements.dealerCode.value}|${cleanDealerCode(form.elements.bin.value)}` !== key) return;
       state.validatedManualBin = result.valid ? key : '';
       updateScanTypeFields(form);
@@ -12314,7 +12316,9 @@
     updateBarcodeWorkspace(form);
     if (!binLocation || !dealerCode) return;
     try {
-      const result = await api(`/api/scans/validate-bin?${new URLSearchParams({ dealerCode, binLocation })}`);
+      const result = await api('/api/scans/set-bin', { method: 'POST', body: {
+        dealerCode, auditId: activeAuditIdForScope(), binLocation
+      } });
       if (`${form.elements.dealerCode.value}|${cleanDealerCode(form.elements.binLocation.value)}` !== key) return;
       state.validatedBarcodeBin = result.valid ? key : '';
       updateBarcodeWorkspace(form);
