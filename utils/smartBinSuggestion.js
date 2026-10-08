@@ -66,7 +66,7 @@ function movementQty(scan = {}) {
 }
 
 function isIgnoredScan(scan = {}) {
-  if (!scan || scan.deletedAt) return true;
+  if (!scan || scan.deletedAt || scan.isDeleted === true || scan.isDuplicate === true) return true;
   const syncStatus = upper(scan.syncStatus);
   const scanStatus = upper(scan.scanStatus);
   const status = upper(scan.status);

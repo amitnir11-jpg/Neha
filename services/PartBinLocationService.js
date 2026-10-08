@@ -84,6 +84,10 @@ async function queryInventoryRows(scope = {}) {
   const filter = {
     dealerCode: normalized.dealerCode,
     auditId: normalized.auditId,
+    isDeleted: { $ne: true },
+    isDuplicate: { $ne: true },
+    deletedAt: null,
+    syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] },
     $and: [
       {
         $or: [

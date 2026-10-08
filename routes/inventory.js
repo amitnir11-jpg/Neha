@@ -1925,17 +1925,18 @@ async function smartBinSuggestionForScan(input = {}) {
     };
   }
 
+  const manualInward = normalizeSource(input.source || input.scanSource, 'barcode') === 'manual'
+    && upper(input.scanType || input.type) === 'INWARD';
   const suggestion = await getPartBinLocationSuggestion({
     dealerCode,
     auditId,
     partNumber,
     binLocation: currentBin
   }, {
-    // The bin projection is maintained as scans are saved. Rebuilding it from
-    // the complete inventory history for every barcode makes scan latency
-    // grow with the age of the dealer's data.
-    refresh: false,
-    promptOnLastBin: normalizeSource(input.source || input.scanSource, 'barcode') === 'manual' && upper(input.scanType || input.type) === 'INWARD',
+    // Manual inward placement must use current counted inventory rather than
+    // a stale bin projection. Other scan paths retain their existing fast path.
+    refresh: manualInward,
+    promptOnLastBin: manualInward,
     settings: smartBinSettings || {}
   }).catch(() => ({
     dealerCode,

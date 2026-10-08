@@ -1309,10 +1309,10 @@ async function smartBinWarningForScan(scan = {}) {
     partNumber,
     binLocation: currentBin
   }, {
-    // The bin projection is updated when each scan is committed. Rebuilding it
-    // from the full inventory history on every save makes latency grow with
-    // audit size; only a missing projection should trigger a one-time rebuild.
-    refresh: false,
+    // Manual inward bin prompts must agree with current counted inventory. A
+    // stale projection can otherwise advertise bins for deleted or reversed
+    // stock, so refresh this part's scoped projection before showing choices.
+    refresh: isManualEntry(scan) && scanType === 'INWARD',
     promptOnLastBin: isManualEntry(scan) && scanType === 'INWARD',
     settings: settings || {}
   }).catch(() => null);

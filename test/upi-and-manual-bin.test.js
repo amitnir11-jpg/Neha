@@ -4,6 +4,7 @@ const policy = require('../utils/scanDuplicatePolicy');
 const { makeQrFingerprint } = require('../utils/scanIdentity');
 const { matchesFilter } = require('../models/prismaModel');
 const { buildSuggestionPayload, normalizePartBinScope } = require('../services/PartBinLocationService');
+const { buildBinLocationGroups } = require('../utils/smartBinSuggestion');
 
 const raw = 'D/GCSG0000272850/CCG8FN2C6D4C/957010805000S     /000010/0000011.00/AAB/1/G/000/00';
 const variant = 'D/OTHERBATCH123/CCG8FN2C6D4C/957010805000S/000001/0000012.00/OTHER/1/G/000/00';
@@ -53,4 +54,15 @@ test('normalized bin scope preserves its current bin across backend helper calls
   const result = buildSuggestionPayload([{ binLocation: 'A1', quantity: 3 }], { ...scope, promptOnLastBin: true });
   assert.equal(result.currentBin, 'B1');
   assert.equal(result.shouldPrompt, true);
+});
+
+test('smart-bin stock projection ignores deleted and duplicate inventory rows', () => {
+  const rows = buildBinLocationGroups([
+    { ...scan(raw, 'A1'), partNumber: '20K211S', qty: 10, scanStatus: 'ACCEPTED' },
+    { ...scan(raw, 'U3'), partNumber: '20K211S', qty: 1, scanStatus: 'ACCEPTED', isDeleted: true },
+    { ...scan(raw, 'A3'), partNumber: '20K211S', qty: 1, scanStatus: 'ACCEPTED', isDuplicate: true }
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].binLocation, 'A1');
+  assert.equal(rows[0].qty, 10);
 });
