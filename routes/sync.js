@@ -1088,9 +1088,13 @@ function normalizeScan(item = {}) {
   const upiId = clean(item.upiNo || item.upiId || item.upiID || item.upiSequence || item.upiScanId || item.transactionId || item.txnId || inventory.extractUpiId(item, parsed));
   const upiNo = upiId;
   const syncKey = clean(item.syncKey || inventory.buildSyncKey({ dealerCode, upiId, partNumber, scanType, timestamp }));
-  const quantity = upiCodeValue({ partNumber, upiId, rawScanString: rawScan })
-    ? 1
-    : inventory.numberValue(firstValue(item, ['quantity', 'qty', 'count']) || parsed.qty, 1);
+  const requestedQuantity = firstValue(item, ['quantity', 'qty', 'count']);
+  const quantity = inventory.numberValue(
+    requestedQuantity !== undefined && requestedQuantity !== null && String(requestedQuantity).trim() !== ''
+      ? requestedQuantity
+      : parsed.qty,
+    1
+  );
   const idSource = scanSource === 'manual'
     ? { deviceId: item.deviceId }
     : { ...item, deviceId: item.deviceId };
@@ -1288,6 +1292,9 @@ async function smartBinWarningForScan(scan = {}) {
   const currentBin = clean(scan.binLocation || scan.bin || '');
   const scanType = upper(scan.scanType || scan.type || '');
   const eligibleTypes = new Set(['INWARD', 'DAMAGE', 'AUDIT']);
+  // Manual inward entry requires a placement choice. Other capture paths
+  // already choose their bin and retain their existing opt-in suggestion flow.
+  if (!(isManualEntry(scan) && scanType === 'INWARD') && scan.smartBinEnabled !== true) return null;
   if (!dealerCode || !auditId || !partNumber || !currentBin || !eligibleTypes.has(scanType)) {
     return null;
   }
@@ -1306,6 +1313,7 @@ async function smartBinWarningForScan(scan = {}) {
     // from the full inventory history on every save makes latency grow with
     // audit size; only a missing projection should trigger a one-time rebuild.
     refresh: false,
+    promptOnLastBin: isManualEntry(scan) && scanType === 'INWARD',
     settings: settings || {}
   }).catch(() => null);
 
@@ -1329,6 +1337,8 @@ async function smartBinWarningForScan(scan = {}) {
     auditId,
     currentBin,
     existingBin,
+    lastBin: suggestion.lastBin,
+    promptOnLastBin: suggestion.promptOnLastBin,
     newBin,
     promptTitle: 'PART ALREADY AVAILABLE IN OTHER BIN',
     suggestedBin: clean(suggestion.suggestedBin || currentBin || ''),
@@ -1344,6 +1354,8 @@ async function smartBinWarningForScan(scan = {}) {
       partDescription,
       currentBin,
       existingBin,
+      lastBin: suggestion.lastBin,
+      promptOnLastBin: suggestion.promptOnLastBin,
       newBin,
       promptTitle: 'PART ALREADY AVAILABLE IN OTHER BIN',
       suggestedBin: clean(suggestion.suggestedBin || currentBin || ''),
@@ -1595,7 +1607,8 @@ async function findManualPartBinDuplicate(scan = {}) {
     query.uniqueScanId = { $nin: excludedIds };
     query.scanId = { $nin: excludedIds };
   }
-  return Inventory.findOne(query).sort({ timestamp: 1, createdAt: 1 }).lean();
+  const rows = await Inventory.find(query).sort({ timestamp: 1, createdAt: 1 }).lean();
+  return rows.find(row => !upiCodeValue(row) && require('../utils/stockQuantity').activeStockTransaction(row)) || null;
 }
 
 async function scanPolicyResult(scan = {}) {
@@ -1633,7 +1646,7 @@ async function scanPolicyResult(scan = {}) {
   scan.rawUpiHash = scan.rawUpiHash || duplicatePolicy.rawUpiHash(scan);
   const identityFilter = duplicatePolicy.identityDuplicateFilter(scan);
   const [manualDuplicate, identityDuplicate] = await Promise.all([
-    findManualPartBinDuplicate(scan),
+    scan._confirmedManualBinChoice ? Promise.resolve(null) : findManualPartBinDuplicate(scan),
     identityFilter ? Inventory.findOne(identityFilter).sort({ timestamp: 1, createdAt: 1 }).lean() : null
   ]);
   if (manualDuplicate) {
@@ -1716,7 +1729,23 @@ async function saveNormalizedScan(scan, req, options = {}) {
     const rawValue = scan.source.rawDecodedValue ?? scan.source.rawScanString ?? scan.rawScanString;
     const decoded = await require('../services/ScannedCodeService').resolveScannedCode(rawValue, scan.source.barcodeFormat, scan.dealerCode);
     const ledgerIdentity = ['OUTWARD', 'FITTED'].includes(scan.scanType) && decoded.type === 'DIRECT_BARCODE';
-    if (!decoded.success && !ledgerIdentity) return { status: 'failed', httpStatus: 422, scan, error: decoded.message };
+    if (!decoded.success && !ledgerIdentity) {
+      // A previously saved standalone UPI is not a Part Master SKU. Report its
+      // duplicate before falling back to the unknown-part validation error.
+      if (scan.scanType === 'INWARD' && decoded.type === 'DIRECT_BARCODE') {
+        const token = upper(decoded.normalizedValue);
+        const filter = duplicatePolicy.activeUpiDuplicateFilter({ ...scan, partNumber: '', normalizedPartNumber: '',
+          upiId: token, upiNo: token, upiCode: token, globalUpiKey: '', barcodeIdentityKind: 'UNIQUE_UPI' });
+        const candidates = filter ? await Inventory.find(filter).lean() : [];
+        const existing = candidates.find(row => duplicatePolicy.uniqueUpiIdentityToken(row) === token);
+        if (existing) {
+          await logDuplicateScan(scan, existing, 'Duplicate unique UPI');
+          return duplicateResult({ status: 'duplicate', existing, upiDuplicate: true,
+            reason: 'Duplicate unique UPI', message: duplicatePolicy.duplicateUpiMessage(existing) }, scan);
+        }
+      }
+      return { status: 'failed', httpStatus: 422, scan, error: decoded.message };
+    }
     scan.partNumber = decoded.partNumber;
     scan.normalizedPartNumber = normalizePartNumber(decoded.partNumber);
     scan.part = decoded.partNumber;
@@ -1894,7 +1923,24 @@ async function saveNormalizedScan(scan, req, options = {}) {
     scan.stockDeductedFromBin = '';
   }
 
-  scan.qrFingerprint = manualEntry ? '' : makeQrFingerprint(scan);
+  const manualBinPrompt = manualEntry && scan.scanType === 'INWARD' && !upiCodeValue(scan)
+    ? await smartBinWarningForScan(scan) : null;
+  if (manualBinPrompt) {
+    const action = smartBinDecisionAction(scan);
+    if (!smartBinDecisionUsesExisting(action) && !smartBinDecisionAllowsNewLocation(action)) return manualBinPrompt;
+    if (smartBinDecisionUsesExisting(action)) {
+      const suggestion = manualBinPrompt.smartBinSuggestion || manualBinPrompt;
+      const selected = upper(scan.smartBinSelectedBin || suggestion.suggestedBin);
+      if (!suggestion.existingBins.some(bin => upper(bin.binLocation) === selected)) {
+        return { status: 'failed', httpStatus: 422, scan, error: 'Choose one of the existing bins shown in the prompt.' };
+      }
+      const bin = await Bin.findOne({ dealerCode: scan.dealerCode, binCode: selected, active: { $ne: false } }).lean();
+      if (!bin) return { status: 'failed', httpStatus: 422, scan, error: 'The selected existing bin is inactive or unavailable.' };
+    }
+    applySmartBinDecision(scan, manualBinPrompt.smartBinSuggestion || manualBinPrompt, action);
+    scan._confirmedManualBinChoice = true;
+  }
+  scan.qrFingerprint = manualEntry && !duplicatePolicy.uniqueUpiIdentityToken(scan) ? '' : makeQrFingerprint(scan);
   if (scan.scanType === 'FITTED') scan.qrFingerprint = '';
   if (scan.scanType === 'OUTWARD' && scan.qrFingerprint) scan.qrFingerprint = `OUTWARD:${scan.qrFingerprint}`;
   scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
@@ -1966,7 +2012,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
     if (!smartBinDecisionUsesExisting(decision.action) && !smartBinDecisionAllowsNewLocation(decision.action)) {
       return smartBinState;
     }
-    scan.qrFingerprint = manualEntry ? '' : makeQrFingerprint(scan);
+    scan.qrFingerprint = manualEntry && !duplicatePolicy.uniqueUpiIdentityToken(scan) ? '' : makeQrFingerprint(scan);
     if (scan.scanType === 'FITTED') scan.qrFingerprint = '';
     if (scan.scanType === 'OUTWARD' && scan.qrFingerprint) scan.qrFingerprint = `OUTWARD:${scan.qrFingerprint}`;
     scan.rawUpiHash = duplicatePolicy.rawUpiHash(scan);
@@ -2021,8 +2067,10 @@ async function saveNormalizedScan(scan, req, options = {}) {
   let doc;
   try {
     doc = await withDatabaseTransaction(async () => {
-      if (scan.barcodeIdentityKind === 'SKU') {
-        await getPrismaClient().$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`daksh-sku:${scan.dealerCode}:${scan.auditId}:${scan.partNumber}`}, 0)) IS NULL AS locked`;
+      if (scan.barcodeIdentityKind === 'SKU' || manualEntry) {
+        const lockKey = manualEntry ? `daksh-manual-request:${scan.dealerCode}:${scan.auditId}:${scan.uniqueScanId}`
+          : `daksh-sku:${scan.dealerCode}:${scan.auditId}:${scan.partNumber}`;
+        await getPrismaClient().$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0)) IS NULL AS locked`;
         const replay = await Inventory.findOne(scanIdentityScope({ uniqueScanId: scan.uniqueScanId }, scan)).lean();
         if (replay) {
           const error = new Error('Scan request already committed');
@@ -2494,7 +2542,8 @@ async function pushHandler(req, res) {
     const activeAuditId = clean(activeAudit.auditId || activeAudit._id);
     const hasUniqueUpiMovement = incoming.some((item) => {
       const normalized = normalizeScan(item);
-      return item.cameraDecoded === true || (!isManualEntry(normalized) && Boolean(normalized.rawScanString))
+      return item.cameraDecoded === true || Boolean(duplicatePolicy.uniqueUpiIdentityToken(normalized))
+        || (!isManualEntry(normalized) && Boolean(normalized.rawScanString))
         || (['OUTWARD', 'FITTED'].includes(normalized.scanType) && Boolean(upiCodeValue(normalized)));
     });
     if (hasUniqueUpiMovement) {

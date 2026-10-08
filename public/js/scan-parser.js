@@ -59,6 +59,10 @@
     if (skuLabel) return { success: true, type: 'HERO_SKU_LABEL', rawUpi: null, rawQr: null,
       normalizedQr: normalizeDecodedValue(raw), rawScan: raw, fields: tokens, quantity: 1,
       rawQuantity: '', upiId: '', ...skuLabel };
+    const legacyOneD = parseHeroLegacyOneDLabel(raw);
+    if (legacyOneD) return { success: true, type: 'HERO_SKU_LABEL', rawUpi: null, rawQr: null,
+      normalizedQr: normalizeDecodedValue(raw), rawScan: raw, fields: tokens, quantity: 1,
+      rawQuantity: '', upiId: '', ...legacyOneD };
     const looksLikeHeroQr = tokens.length >= 5
       && (tokens[0].toUpperCase() === 'D' || resolveHeroPartIndex(tokens, masterLookup) >= 0);
 
@@ -135,6 +139,13 @@
     return match ? { partNumber: match[1], packagingCode: match[2] } : null;
   }
 
+  function parseHeroLegacyOneDLabel(value) {
+    // Older Hero 1D labels carry a part number followed by a longer packaging
+    // code. Keep the suffix as packaging data; it is not a proven item serial.
+    const match = normalizeDecodedValue(value).match(/^(\d{5}[A-Z0-9]{7,9})\/([A-Z0-9]\d{13})$/);
+    return match ? { partNumber: match[1], packagingCode: match[2] } : null;
+  }
+
   // Shared browser/Node parser. Master validation and approved identity mapping
   // belong to the backend, never to camera adapters.
   function parseScannedCode(rawValue, format, masterLookup = []) {
@@ -152,6 +163,8 @@
     const legacyUpi = normalizedValue.match(/^([A-Z0-9._-]{3,79})\/(UPI[A-Z0-9._-]+)$/);
     if (legacyUpi) return { ...base, success: true, type: 'LEGACY_UPI', partNumber: legacyUpi[1],
       upi: legacyUpi[2], identityKind: 'UNIQUE_UPI', hasUniqueItemId: true };
+    const legacyOneD = parseHeroLegacyOneDLabel(normalizedValue);
+    if (legacyOneD) return { ...base, ...legacyOneD, success: true, type: 'HERO_LEGACY_1D', identityKind: 'SKU' };
     const slash = parseScanValue(normalizedValue, masterLookup);
     if (slash.type === 'UPI' || slash.type === 'HERO_QR') {
       return { ...base, sourceType: 'QR', success: slash.success, reason: slash.reason, type: 'HERO_QR',
@@ -181,7 +194,7 @@
   }
 
   const cameraBarcodeFormats = ['QR_CODE', 'CODE_128', 'CODE_39', 'CODE_93', 'EAN_13', 'EAN_8', 'UPC_A', 'UPC_E', 'ITF', 'CODABAR', 'RSS_14', 'DATA_MATRIX', 'AZTEC', 'PDF_417'];
-  const api = { cameraBarcodeFormats, clean, normalizePartToken, parseScanValue, parseScannedCode, parseHeroSkuLabel, normalizeDecodedValue, normalizeBarcodeFormat, isQuantityToken, isLikelyPartToken, resolveHeroPartIndex };
+  const api = { cameraBarcodeFormats, clean, normalizePartToken, parseScanValue, parseScannedCode, parseHeroSkuLabel, parseHeroLegacyOneDLabel, normalizeDecodedValue, normalizeBarcodeFormat, isQuantityToken, isLikelyPartToken, resolveHeroPartIndex };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.DakshScanParser = api;
   global.scanParser = api;

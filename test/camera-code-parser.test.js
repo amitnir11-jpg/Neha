@@ -35,9 +35,25 @@ test('exact master identity takes precedence over QR shape', () => {
   const raw = 'D/132/HE5B0199510/EBHPE5EQTWD4/44831KVH900S/001';
   assert.equal(parser.parseScannedCode(raw, 'CODE_128', [raw]).type, 'DIRECT_BARCODE');
 });
+test('older Hero 1D labels extract the Part Master candidate and retain packaging data as SKU', () => {
+  const samples = [
+    ['77238KTC900ZCS/G3122000021001', '77238KTC900ZCS', 'G3122000021001'],
+    ['61108AACH40ZCS/D3533000166001', '61108AACH40ZCS', 'D3533000166001']
+  ];
+  for (const [raw, partNumber, packagingCode] of samples) {
+    const parsed = parser.parseScannedCode(raw, 'CODE_128');
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.type, 'HERO_LEGACY_1D');
+    assert.equal(parsed.partNumber, partNumber);
+    assert.equal(parsed.packagingCode, packagingCode);
+    assert.equal(parsed.identityKind, 'SKU');
+    assert.equal(parsed.hasUniqueItemId, false);
+    assert.equal(parsed.rawValue, raw);
+  }
+});
 test('server validates exact candidates, preserves numeric barcode and rejects unknown prefix', async () => {
   const calls = [];
-  const master = new Map(['32410KTC920S', '44831KVH900S', '4006381333931'].map(part => [part, { masterRecord: { partNumber: part } }]));
+  const master = new Map(['32410KTC920S', '44831KVH900S', '4006381333931', '77238KTC900ZCS', '61108AACH40ZCS'].map(part => [part, { masterRecord: { partNumber: part } }]));
   const context = vm.createContext({ module: { exports: {} }, require: name => name.includes('scanParser') ? parser : {
     getPriceFromPartMaster: async (part, dealer, options) => { calls.push({ part, dealer, options }); return master.get(part) || null; }
   } });
@@ -46,6 +62,19 @@ test('server validates exact candidates, preserves numeric barcode and rejects u
   assert.equal((await resolve('32410ktc920s ', 'code128', 'D01')).partNumber, '32410KTC920S');
   assert.equal((await resolve(heroQr, 'qrCode', 'D01')).upi, 'EBHPE5EQTWD4');
   assert.equal((await resolve('4006381333931', 'ean13', 'D01')).partNumber, '4006381333931');
+  for (const [raw, part] of [
+    ['77238KTC900ZCS/G3122000021001', '77238KTC900ZCS'],
+    ['61108AACH40ZCS/D3533000166001', '61108AACH40ZCS']
+  ]) {
+    const resolved = await resolve(raw, 'code128', 'D01');
+    assert.equal(resolved.partNumber, part);
+    assert.equal(resolved.packagingCode, raw.split('/')[1]);
+    assert.equal(resolved.identityKind, 'SKU');
+  }
+  const unknownHeroPart = await resolve('88888KTC900ZCS/G3122000021001', 'code128', 'D01');
+  assert.equal(unknownHeroPart.success, false);
+  assert.equal(unknownHeroPart.partNumber, '88888KTC900ZCS');
+  assert.equal(unknownHeroPart.message, 'Part 88888KTC900ZCS not found in Part Master');
   const rejected = await resolve('PREFIX-32410KTC920S', 'code128', 'D01');
   assert.equal(rejected.success, false);
   assert.equal(rejected.message, 'Part PREFIX-32410KTC920S not found in Part Master');

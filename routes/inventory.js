@@ -402,7 +402,10 @@ async function findBackendDuplicate(input = {}, options = {}) {
 
   const globalDuplicateFilter = duplicatePolicy.activeUpiDuplicateFilter(payload);
   const globalDuplicate = globalDuplicateFilter
-    ? await Inventory.findOne({ ...globalDuplicateFilter, globalUpiKey: payload.globalUpiKey }).sort({ timestamp: 1, createdAt: 1 }).lean()
+    // The filter also matches legacy rows by their stored UPI aliases or raw
+    // QR text. Requiring the newer hash here bypasses those compatibility
+    // terms and lets an already-scanned UPI through.
+    ? await Inventory.findOne(globalDuplicateFilter).sort({ timestamp: 1, createdAt: 1 }).lean()
     : null;
   if (globalDuplicate) {
     return {
@@ -673,6 +676,9 @@ function isValidPartNumber(value) {
 }
 
 function normalizeSource(value, fallback = 'manual') {
+  if (value && typeof value === 'object') {
+    value = value.source || value.scanSource || value.entryMode || value.type || '';
+  }
   const source = String(value || fallback).trim().toLowerCase();
   if (/manual/.test(source)) return 'manual';
   if (/bluetooth/.test(source)) return 'bluetooth_scanner';
@@ -1929,6 +1935,7 @@ async function smartBinSuggestionForScan(input = {}) {
     // the complete inventory history for every barcode makes scan latency
     // grow with the age of the dealer's data.
     refresh: false,
+    promptOnLastBin: normalizeSource(input.source || input.scanSource, 'barcode') === 'manual' && upper(input.scanType || input.type) === 'INWARD',
     settings: smartBinSettings || {}
   }).catch(() => ({
     dealerCode,
