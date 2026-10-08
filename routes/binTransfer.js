@@ -11,7 +11,8 @@ const BinLabelPrintLog = require('../models/BinLabelPrintLog');
 const auth = require('./auth');
 const { getActiveAudit } = require('../utils/audit');
 const { formatIstDateTime } = require('../utils/time');
-const { calculateInventoryLedger, loadLedgerRows } = require('../services/InventoryCalculationService');
+const { calculateInventoryLedger } = require('../services/InventoryCalculationService');
+const { applyTransactionScanFilter } = require('./inventory');
 const { stockMovementType, stockMovementBin } = require('../utils/stockQuantity');
 const { withDatabaseTransaction } = require('../services/prisma');
 
@@ -150,7 +151,8 @@ async function groupedParts(dealerCode, fromBin = '', auditId = '') {
   const sourceBin = /^all$/i.test(clean(fromBin)) ? '' : clean(fromBin).toUpperCase();
   if (!clean(dealerCode)) return [];
   const scope = { dealerCode: upper(dealerCode), auditId: clean(auditId) };
-  const { records } = await loadLedgerRows({}, { scope });
+  const reportCompatibleFilter = applyTransactionScanFilter({ dealerCode: scope.dealerCode, auditId: scope.auditId });
+  const records = await Inventory.find(reportCompatibleFilter).sort({ timestamp: -1, createdAt: -1 }).lean();
   return calculateInventoryLedger(records, { scope }).binBreakdown
     .filter((row) => Number(row.availableQty) > 0
       && (!sourceBin || upper(row.binLocation) === sourceBin))
@@ -249,7 +251,8 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
   if (netAvailableQty <= 0) throw new Error('No available qty found for selected part in Source Bin');
   if (requestedQty > netAvailableQty) throw new Error('Qty cannot be greater than available qty');
 
-  const { records: ledgerRows } = await loadLedgerRows({}, { scope: { dealerCode, auditId } });
+  const reportCompatibleFilter = applyTransactionScanFilter({ dealerCode, auditId });
+  const ledgerRows = await Inventory.find(reportCompatibleFilter).sort({ timestamp: -1, createdAt: -1 }).lean();
   const records = ledgerRows.filter((record) => {
     const recordPart = normalizePart(firstNonBlankValue(record, PART_NUMBER_FIELDS));
     const recordType = stockMovementType(record);

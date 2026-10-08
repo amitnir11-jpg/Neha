@@ -11,6 +11,9 @@ test('bin transfer source options only include bins with available scanned stock
     Inventory.find = (filter) => {
       assert.equal(filter.dealerCode, '11646');
       assert.equal(filter.auditId, 'AUD1');
+      assert.equal(filter.syncStatus, 'synced');
+      assert.equal(filter.isDuplicate.$ne, true);
+      assert.ok(filter.$and.some((clause) => clause.scanStatus?.$in?.includes('ACCEPTED')));
       assert.ok(filter.$and.length >= 3);
       return {
         sort() { return this; },
