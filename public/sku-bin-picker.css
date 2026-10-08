@@ -1,0 +1,5 @@
+.sku-bin-dialog { width: min(420px, calc(100vw - 32px)); border: 1px solid #ddd; border-radius: 12px; padding: 20px; color: #19232d; background: white; }
+.sku-bin-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.sku-bin-dialog form { display: grid; gap: 12px; }
+.sku-bin-dialog label { display: grid; gap: 8px; }
+.sku-bin-dialog select, .sku-bin-dialog button { min-height: 44px; padding: 8px; font: inherit; }

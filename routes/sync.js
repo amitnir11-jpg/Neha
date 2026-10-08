@@ -1612,7 +1612,7 @@ async function scanPolicyResult(scan = {}) {
       message: duplicatePolicy.duplicateUpiMessage(activeDuplicate)
     };
   }
-  if (scan.scanType === 'FITTED') {
+  if (scan.scanType === 'FITTED' && scan.barcodeIdentityKind !== 'SKU') {
     const duplicate = await Inventory.findOne(duplicateQuery(scan)).sort({ timestamp: 1, createdAt: 1 }).lean();
     if (duplicate) {
       const requestedQty = requestedQuantity(scan, 1);
@@ -1711,7 +1711,8 @@ async function saveNormalizedScan(scan, req, options = {}) {
     return { status: 'failed', httpStatus: 409, scan, error: 'Scan audit does not match the active audit for this dealer.' };
   }
   applyActiveAudit(scan, activeAudit);
-  if (scan.source?.cameraDecoded === true) {
+  const transportCode = require('../utils/scanParser').parseScannedCode(scan.rawScanString, scan.source?.barcodeFormat);
+  if (scan.source?.cameraDecoded === true || (!isManualEntry(scan) && scan.rawScanString && transportCode.success)) {
     const rawValue = scan.source.rawDecodedValue ?? scan.source.rawScanString ?? scan.rawScanString;
     const decoded = await require('../services/ScannedCodeService').resolveScannedCode(rawValue, scan.source.barcodeFormat, scan.dealerCode);
     const ledgerIdentity = ['OUTWARD', 'FITTED'].includes(scan.scanType) && decoded.type === 'DIRECT_BARCODE';
@@ -1720,9 +1721,14 @@ async function saveNormalizedScan(scan, req, options = {}) {
     scan.normalizedPartNumber = normalizePartNumber(decoded.partNumber);
     scan.part = decoded.partNumber;
     scan.parsedCode = { ...decoded, price: undefined };
+    scan.barcodeIdentityKind = decoded.success ? decoded.identityKind : 'UNIQUE_UPI';
     scan.quantity = scan.qty = 1;
     scan.upiId = decoded.upi || '';
     scan.upiNo = decoded.upi || '';
+    if (scan.barcodeIdentityKind === 'SKU') {
+      scan.upiCode = '';
+      scan.qrFingerprint = scan.rawUpiHash = scan.globalUpiKey = '';
+    }
     scan.rawScanString = decoded.normalizedValue;
     scan._cameraPrice = decoded.price;
     if (process.env.SCAN_DEBUG_LOGS === 'true') console.debug('[SCAN_DECODE]', JSON.stringify({ rawValue, ...scan.parsedCode }));
@@ -1739,7 +1745,12 @@ async function saveNormalizedScan(scan, req, options = {}) {
       return { status: 'synced', scan: existingTransaction, error: '', alreadyApplied: true };
     }
   }
-  const upiLocationError = await prepareUpiSourceLocation(scan, options);
+  const skuMovement = scan.barcodeIdentityKind === 'SKU' && ['OUTWARD', 'FITTED', 'DAMAGE'].includes(scan.scanType);
+  if (skuMovement) {
+    const binError = await require('../services/SkuStockService').prepareSkuSourceLocation(scan);
+    if (binError) return { ...binError, scan };
+  }
+  const upiLocationError = skuMovement ? null : await prepareUpiSourceLocation(scan, options);
   markPerf('upiLocation');
   if (upiLocationError) return { status: 'failed', scan, error: upiLocationError };
   if (scan.binLocation) {
@@ -1866,7 +1877,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
     return { status: 'failed', scan, error: errors.join(', ') };
   }
 
-  if (['OUTWARD', 'FITTED'].includes(scan.scanType)) {
+  if (['OUTWARD', 'FITTED'].includes(scan.scanType) && !skuMovement) {
     const detected = await autoDetectOutwardBin(scan);
     if (!detected || (!detected.binLocation && detected.sourceLocationType !== 'WORKSHOP')) {
       logSync('outward auto bin failed', { deviceId: scan.deviceId, scanId: scan.uniqueScanId, partNumber: scan.partNumber });
@@ -1877,7 +1888,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
     scan.autoDetectedBin = Boolean(upiCodeValue(scan));
     scan.binSelectionMode = upiCodeValue(scan) ? 'AUTO_UPI' : 'MANUAL';
     scan.stockDeductedFromBin = detected.binLocation;
-  } else if (['INWARD', 'DAMAGE'].includes(scan.scanType)) {
+  } else if (['INWARD', 'DAMAGE'].includes(scan.scanType) && !skuMovement) {
     scan.binSelectionMode = 'MANUAL';
     scan.autoDetectedBin = false;
     scan.stockDeductedFromBin = '';
@@ -1940,7 +1951,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
     await emitEnterpriseRealtime(req.io || req.app.get('io'), [updatedFitted]);
     return { status: 'synced', scan: updatedFitted, error: '', updated: true };
   }
-  const smartBinState = upiCodeValue(scan) && ['OUTWARD', 'FITTED'].includes(scan.scanType)
+  const smartBinState = skuMovement || (upiCodeValue(scan) && ['OUTWARD', 'FITTED'].includes(scan.scanType))
     ? null
     : await smartBinWarningForScan(scan);
   if (smartBinState) {
@@ -2010,6 +2021,24 @@ async function saveNormalizedScan(scan, req, options = {}) {
   let doc;
   try {
     doc = await withDatabaseTransaction(async () => {
+      if (scan.barcodeIdentityKind === 'SKU') {
+        await getPrismaClient().$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`daksh-sku:${scan.dealerCode}:${scan.auditId}:${scan.partNumber}`}, 0)) IS NULL AS locked`;
+        const replay = await Inventory.findOne(scanIdentityScope({ uniqueScanId: scan.uniqueScanId }, scan)).lean();
+        if (replay) {
+          const error = new Error('Scan request already committed');
+          error.code = 'SCAN_REQUEST_REPLAY';
+          error.existing = replay;
+          throw error;
+        }
+        if (skuMovement) {
+          const sourceError = await require('../services/SkuStockService').prepareSkuSourceLocation(scan);
+          if (sourceError || scan.binLocation !== finalBin) {
+            const error = new Error(sourceError?.error || 'The selected SKU source bin changed. Rescan the item.');
+            error.code = 'UPI_LOCATION_CHANGED';
+            throw error;
+          }
+        }
+      }
       await lockUpiIdentity(scan);
       if (['OUTWARD', 'FITTED'].includes(scan.scanType) && upiCodeValue(scan)) {
         const locationError = await prepareUpiSourceLocation(scan, options);
@@ -2075,6 +2104,8 @@ async function saveNormalizedScan(scan, req, options = {}) {
     qrFingerprint: scan.qrFingerprint,
     rawUpiHash: scan.rawUpiHash,
     globalUpiKey: scan.globalUpiKey,
+    barcodeIdentityKind: scan.barcodeIdentityKind,
+    barcodeType: scan.parsedCode?.barcodeType,
     part: scan.partNumber,
     partNumber: scan.partNumber,
     normalizedPartNumber: scan.normalizedPartNumber || scan.partNumber,
@@ -2171,6 +2202,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
     });
     markPerf('transactionSave');
     } catch (error) {
+      if (error.code === 'SCAN_REQUEST_REPLAY') return { status: 'synced', scan: error.existing, error: '', alreadyApplied: true };
       if (error.code === 'DUPLICATE_UPI_SCAN') {
         const policy = {
           status: 'duplicate',
@@ -2462,7 +2494,8 @@ async function pushHandler(req, res) {
     const activeAuditId = clean(activeAudit.auditId || activeAudit._id);
     const hasUniqueUpiMovement = incoming.some((item) => {
       const normalized = normalizeScan(item);
-      return item.cameraDecoded === true || (['OUTWARD', 'FITTED'].includes(normalized.scanType) && Boolean(upiCodeValue(normalized)));
+      return item.cameraDecoded === true || (!isManualEntry(normalized) && Boolean(normalized.rawScanString))
+        || (['OUTWARD', 'FITTED'].includes(normalized.scanType) && Boolean(upiCodeValue(normalized)));
     });
     if (hasUniqueUpiMovement) {
       const logs = [];

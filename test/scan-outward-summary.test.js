@@ -146,14 +146,14 @@ test('committed outward triggers history refresh without refreshing dashboard', 
   await timers[0]();
   assert.equal(refreshes, 1);
 });
-test('mobile history orders a newly committed remote outward ahead of ten old local scans', () => {
-  const old = Array.from({ length: 10 }, (_, i) => stockRow(`in${i + 1}`, 'INWARD', 1));
-  const outward = stockRow('out20', 'OUTWARD', 1);
+test('mobile history orders a newly committed remote outward ahead of twenty old local scans', () => {
+  const old = Array.from({ length: 20 }, (_, i) => stockRow(`in${i + 1}`, 'INWARD', 1));
+  const outward = stockRow('out21', 'OUTWARD', 1);
   const context = vm.createContext({ state: { liveRecentRows: [outward] }, clean,
     sessionRows: () => old, scanIdentityKey: row => row.uniqueScanId, recordKey: row => row._id });
   vm.runInContext(extract('public/scan.js', 'function mergeRecentRows(', 'async function copyTextValue('), context);
   const rows = context.mergeRecentRows();
-  assert.equal(rows.length, 10);
+  assert.equal(rows.length, 20);
   assert.equal(rows[0].scanType, 'OUTWARD');
 });
 

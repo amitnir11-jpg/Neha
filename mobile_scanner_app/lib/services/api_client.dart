@@ -180,6 +180,16 @@ class ApiClient {
 
   Future<Map<String, dynamic>> health() => _request('/api/health', auth: false);
 
+  Future<Map<String, dynamic>> resolveCode(String rawValue, String barcodeFormat,
+      {required String dealerCode}) => _request('/api/scans/resolve-code?${Uri(queryParameters: {
+        'rawValue': rawValue, 'barcodeFormat': barcodeFormat, 'dealerCode': dealerCode
+      }).query}');
+
+  Future<Map<String, dynamic>> partStock(String partNumber,
+      {required String dealerCode, required String auditId}) => _request('/api/scans/part-summary?${Uri(queryParameters: {
+        'partNumber': partNumber, 'dealerCode': dealerCode, 'auditId': auditId
+      }).query}');
+
   Future<Map<String, dynamic>> mobileStatus({String deviceId = ''}) async {
     final id = deviceId.isEmpty ? await settings.deviceId : deviceId;
     final query = id.isEmpty ? '' : '?deviceId=${Uri.encodeComponent(id)}';

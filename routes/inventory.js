@@ -600,7 +600,7 @@ function parseRawScan(rawScan) {
   }
 
   const parsedScan = parseScanValue(raw);
-  if (parsedScan.type === 'UPI') {
+  if (parsedScan.type === 'UPI' || parsedScan.type === 'HERO_SKU_LABEL') {
     return {
       upiNo: upper(parsedScan.upiId || ''),
       upiId: upper(parsedScan.upiId || ''),
@@ -616,7 +616,7 @@ function parseRawScan(rawScan) {
       staffName: '',
       userName: '',
       type: '',
-      qrParsed: true,
+      qrParsed: parsedScan.type === 'UPI',
       rawScan: raw
     };
   }
@@ -4728,6 +4728,21 @@ async function scanInventorySummary(query = {}, req = {}) {
 router.get('/part-summary', auth.requireAuth, async (req, res) => {
   try {
     return res.json({ success: true, ...(await loadPartStock(req.query)) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/resolve-code', auth.requireAuth, async (req, res) => {
+  try {
+    const dealerCode = normalizeDealerCode(req.query.dealerCode);
+    const audit = await getActiveAudit({ dealerCode });
+    const decoded = await require('../services/ScannedCodeService').resolveScannedCode(req.query.rawValue, req.query.barcodeFormat, dealerCode);
+    if (!decoded.success) return res.status(422).json({ success: false, message: decoded.message });
+    const bins = decoded.identityKind === 'SKU' && audit
+      ? await require('../services/SkuStockService').loadSkuBins({ dealerCode, auditId: clean(audit.auditId || audit._id), partNumber: decoded.partNumber }) : [];
+    return res.json({ success: true, parsedCode: { ...decoded, price: undefined },
+      master: decoded.price?.masterRecord, binOptions: bins });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

@@ -130,6 +130,8 @@ async function processScan(input = {}, options = {}) {
   }
   return {
     partSummary,
+    requiresBinSelection: Boolean(result.requiresBinSelection),
+    binOptions: result.binOptions,
     success,
     status,
     httpStatus: responseStatusFor(result),

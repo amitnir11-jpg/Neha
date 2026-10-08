@@ -17,6 +17,7 @@ function numberValue(value, fallback = 0) {
 const { stockMovementType: movementTypeValue, stockMovementQuantity } = require('./stockQuantity');
 
 function upiCodeValue(input = {}) {
+  if (input.barcodeIdentityKind === 'SKU') return '';
   const canonical = duplicatePolicy.canonicalUpiValue(input);
   if (canonical) return upper(canonical);
   const explicit = upper(input.upiCode || input.upiNo || input.upiId || input.upi || '');

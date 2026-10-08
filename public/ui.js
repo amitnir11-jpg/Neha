@@ -2095,6 +2095,7 @@
   }
 
   function barcodeScanKey(scan = {}) {
+    if (scan.barcodeIdentityKind === 'SKU' || window.DakshScanParser?.parseHeroSkuLabel(scan.rawScan || scan.rawScanString || '')) return '';
     const dealerCode = cleanDealerCode(scan.dealerCode || currentDealerCode() || '');
     const partNumber = normalizePartText(scan.partNumber || scan.part || scan.normalizedPartNumber || '');
     const auditId = String(scan.auditId || activeAuditIdForScope() || '').trim();
@@ -2458,7 +2459,7 @@
     const raw = String(rawScan || '').trim();
     const parser = window && window.DakshScanParser ? window.DakshScanParser : null;
     const parsed = parser ? parser.parseScanValue(raw) : null;
-    if (parsed && parsed.type === 'UPI' && parsed.partNumber) {
+    if (parsed && ['UPI', 'HERO_SKU_LABEL'].includes(parsed.type) && parsed.partNumber) {
       return {
         upiId: normalizePartText(parsed.upiId || ''),
         partNumber: normalizePartText(parsed.partNumber),
@@ -5358,7 +5359,15 @@
 
     try {
       const requestStartedAt = performance.now();
-      const data = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 });
+      let data;
+      try { data = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 }); }
+      catch (error) {
+        if (!error.data?.requiresBinSelection) throw error;
+        const bin = await window.DakshSkuBinPicker.choose(error.data.binOptions, normalized.partNumber);
+        if (!bin) throw error;
+        normalized.binLocation = normalized.bin = bin;
+        data = await api('/api/scans/process', { method: 'POST', body: normalized, timeoutMs: 20000 });
+      }
       if (window.SCAN_PERF_LOGS === true) {
         console.info('[SCAN_PERF_BROWSER]', JSON.stringify({
           scanId: clean(normalized.scanId || normalized.uniqueScanId || ''),

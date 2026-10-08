@@ -103,6 +103,7 @@ function scanSyncKey(input = {}) {
 }
 
 function rawUpiHash(input = {}) {
+  if (input.barcodeIdentityKind === 'SKU') return '';
   const raw = rawScanText(input) || clean(input.upiNo || input.upiId || input.upiID || '');
   if (!raw) return '';
   const scope = [
@@ -115,6 +116,7 @@ function rawUpiHash(input = {}) {
 }
 
 function canonicalUpiValue(input = {}) {
+  if (input.barcodeIdentityKind === 'SKU') return '';
   const raw = rawScanText(input);
   const slashIdentity = slashQrIdentity(raw);
   if (slashIdentity) return slashIdentity;
@@ -139,6 +141,7 @@ function canonicalUpiValue(input = {}) {
 }
 
 function globalQrIdentity(input = {}) {
+  if (input.barcodeIdentityKind === 'SKU') return { type: '', value: '' };
   const raw = rawScanText(input);
   const slashIdentity = slashQrIdentity(raw);
   if (slashIdentity) return { type: 'QR', value: slashIdentity };
@@ -176,6 +179,7 @@ function scopedGlobalUpiKey(input = {}, key = input.globalUpiKey) {
 }
 
 function activeUpiDuplicateFilter(input = {}) {
+  if (input.barcodeIdentityKind === 'SKU') return null;
   const identity = globalQrIdentity(input);
   const globalKey = clean(input.globalUpiKey || globalUpiKey(input));
   if (!identity.value && !globalKey) return null;

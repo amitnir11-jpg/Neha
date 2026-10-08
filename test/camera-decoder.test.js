@@ -12,7 +12,9 @@ test('on-device WASM decoder reads QR and all eight required 1D symbologies', as
     ['code128', '32410KTC920S'], ['code39', '32410KTC920S'], ['ean13', '4006381333931'],
     ['ean8', '96385074'], ['upca', '0012345678905'], ['upce', '0012345000065'],
     ['interleaved2of5', '1234567890'], ['rationalizedCodabar', 'A123456B'],
-    ['qrcode', 'D/132/HE5B0199510/EBHPE5EQTWD4/44831KVH900S      /001/20170505125743/00']
+    ['qrcode', 'D/132/HE5B0199510/EBHPE5EQTWD4/44831KVH900S      /001/20170505125743/00'],
+    ['hero-sku-code128', '32410KTC920S/G3223000065001'],
+    ['datamatrix', 'PART=32410KTC920S|UPI=DMUNIQUE123']
   ]) {
     const decoded = await reader.readBarcodes(fs.readFileSync(path.join(__dirname, 'fixtures/barcodes', `fixture-${name}.png`)),
       { formats: ['AllReadable'], tryHarder: true, maxNumberOfSymbols: 1 });

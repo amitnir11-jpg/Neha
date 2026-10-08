@@ -83,6 +83,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   bool _syncRequested = false;
   Timer? _liveRefreshTimer;
   bool _duplicateDialogOpen = false;
+  bool _movementPromptOpen = false;
+  Map<String, dynamic> _partStock = {};
   int _pendingCount = 0;
   int _failedCount = 0;
   String _clockSkewWarning = '';
@@ -284,16 +286,23 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     if (_online && (_serverConnected || forceServer)) {
       try {
         rows = await ApiClient(_settings)
-            .recentScans(limit: 10, dealerCode: _dealerCode);
+            .recentScans(limit: 20, dealerCode: _dealerCode);
       } catch (_) {}
     }
     if (!_online) {
-      rows = await _database.lastScans();
+      rows = await _database.lastScans(limit: 20);
     }
     if (!mounted) return;
     setState(() {
-      _lastScans = rows.take(10).toList();
+      _lastScans = rows.take(20).toList();
     });
+    if (_online && rows.isNotEmpty && rows.first.partNumber.isNotEmpty) {
+      try {
+        final totals = await ApiClient(_settings).partStock(rows.first.partNumber,
+            dealerCode: _dealerCode, auditId: _activeAuditId);
+        if (mounted) setState(() => _partStock = totals);
+      } catch (_) {}
+    }
   }
 
   Future<void> _registerDevice() async {
@@ -547,7 +556,48 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     );
   }
 
+  Future<String?> _chooseSkuBin(List<Map<String, dynamic>> bins) {
+    return showDialog<String>(context: context, builder: (dialogContext) => SimpleDialog(
+      title: const Text('Choose SKU source bin'),
+      children: [
+        const Padding(padding: EdgeInsets.all(16), child: Text('This barcode identifies a part, not a unique piece. Choose the bin you are taking it from.')),
+        ...bins.map((bin) => SimpleDialogOption(
+          onPressed: () => Navigator.pop(dialogContext, '${bin['binLocation']}'),
+          child: Text('${bin['binLocation']} — ${bin['availableQty']} available'))),
+        SimpleDialogOption(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+      ],
+    ));
+  }
+
+  Future<Map<String, String>?> _fittedDetails() async {
+    final vehicle = TextEditingController();
+    final job = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    try {
+      return await showDialog<Map<String, String>>(context: context, builder: (dialogContext) => AlertDialog(
+        title: const Text('Fitted vehicle details'),
+        content: Form(key: formKey, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextFormField(controller: vehicle, decoration: const InputDecoration(labelText: 'Vehicle registration'),
+            validator: (value) => (value ?? '').trim().isEmpty ? 'Required' : null),
+          TextFormField(controller: job, decoration: const InputDecoration(labelText: 'Job card number'),
+            validator: (value) => (value ?? '').trim().isEmpty ? 'Required' : null),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+          FilledButton(onPressed: () {
+            if (formKey.currentState?.validate() == true) {
+              Navigator.pop(dialogContext, {
+                'regdNo': _upper(vehicle.text), 'jobCardNo': _upper(job.text)
+              });
+            }
+          }, child: const Text('Save fitted')),
+        ],
+      ));
+    } finally { vehicle.dispose(); job.dispose(); }
+  }
+
   Future<void> _onDetect(BarcodeCapture capture) async {
+    if (_movementPromptOpen) { return; }
     if (_requiresBinBeforeScan && _upper(_defaultBinController.text).isEmpty) {
       _setStatus('Enter bin location before scanning', Colors.red);
       return;
@@ -617,7 +667,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         return;
       }
 
-      final currentBin = _upper(draft.binLocation);
+      final currentBin = ['OUTWARD', 'FITTED'].contains(_scanType) && source != 'manual'
+          ? '' : _upper(draft.binLocation);
       final api = ApiClient(_settings);
       Future<Map<String, dynamic>?>? smartBinFuture;
       if (source == 'manual' &&
@@ -671,7 +722,41 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       if (smartBinFuture != null) smartBinSuggestion = await smartBinFuture;
 
       var resolvedBin = currentBin;
+      var resolvedPart = draft.partNumber;
       var metadata = <String, dynamic>{};
+      final captureMode = _scanType;
+      if (source != 'manual' && _online) {
+        _movementPromptOpen = true;
+        try {
+          final resolved = await api.resolveCode(draft.rawValue, draft.barcodeFormat, dealerCode: _dealerCode);
+          final parsed = Map<String, dynamic>.from(resolved['parsedCode'] as Map? ?? {});
+          resolvedPart = '${parsed['partNumber'] ?? ''}';
+          metadata['parsedCode'] = parsed;
+          final master = Map<String, dynamic>.from(resolved['master'] as Map? ?? {});
+          metadata['partDescription'] = master['partDescription'] ?? master['partName'] ?? '';
+          if (parsed['identityKind'] == 'SKU' && ['OUTWARD', 'FITTED', 'DAMAGE'].contains(captureMode)) {
+            final bins = (resolved['binOptions'] as List? ?? []).whereType<Map>().map((bin) => Map<String, dynamic>.from(bin)).toList();
+            if (bins.isEmpty) { _setStatus('No eligible physical SKU stock. Scan a unique UPI for tracked stock.', Colors.red); return; }
+            if (resolvedBin.isEmpty || !bins.any((bin) => bin['binLocation'] == resolvedBin)) {
+              resolvedBin = bins.length == 1 ? '${bins.first['binLocation']}'
+                  : await _chooseSkuBin(bins) ?? '';
+              if (resolvedBin.isEmpty) { _setStatus('Source bin selection cancelled', Colors.orange); return; }
+            }
+          }
+        } on ApiException catch (error) {
+          // A plain existing UPI may have no standalone Part Master match.
+          if (!['OUTWARD', 'FITTED'].contains(captureMode) || draft.rawValue.contains('/')) rethrow;
+          if (error.statusCode != 422) rethrow;
+        } finally { _movementPromptOpen = false; }
+      }
+      if (_scanType != captureMode) return;
+      if (captureMode == 'FITTED') {
+        _movementPromptOpen = true;
+        Map<String, String>? details;
+        try { details = await _fittedDetails(); } finally { _movementPromptOpen = false; }
+        if (details == null) { _setStatus('Fitted details cancelled', Colors.orange); return; }
+        metadata.addAll(details);
+      }
       if (draft.partDescription.isNotEmpty) {
         metadata['partDescription'] = draft.partDescription;
         metadata['partName'] = draft.partDescription;
@@ -720,7 +805,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       final record = ScanRecord(
         localId: localId,
         rawValue: draft.rawValue,
-        partNumber: draft.partNumber,
+        partNumber: resolvedPart,
         quantity: draft.quantity,
         binLocation: resolvedBin,
         scanType: _scanType,
@@ -781,7 +866,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       _statusText = 'Saved locally';
       _statusColor = Colors.green;
       _pendingCount += 1;
-      _lastScans = [record, ..._lastScans].take(10).toList();
+      _lastScans = [record, ..._lastScans].take(20).toList();
     });
     Future.delayed(const Duration(milliseconds: 180), () {
       if (mounted) setState(() => _savingScan = false);
@@ -1449,6 +1534,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                   ],
                 ),
               ),
+              if (_partStock.isNotEmpty) Padding(padding: const EdgeInsets.all(12), child: Text(
+                '${_partStock['partNumber']} | Inward ${_partStock['inwardQty']} | Outward ${_partStock['outwardQty']} | Fitted ${_partStock['fittedQty']} | Damage ${_partStock['damageQty']} | Available ${_partStock['availableQty']}')),
               Container(
                 width: double.infinity,
                 color: Colors.white,

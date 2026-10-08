@@ -159,6 +159,56 @@ async function main() {
   assert.equal(filtered.summary.netAvailableQuantity, all.summary.netAvailableQuantity);
   assert.equal(all.summary.netAvailableQuantity, (await summary()).availableQty);
   passed('manual quantity, ten-row history and filter-independent full stock totals');
+  const skuRaw = '32410KTC920S/G3223000065001';
+  const skuPart = '32410KTC920S';
+  for (const binCode of ['SKUA', 'SKUB']) await models.Bin.create({ dealerCode, binCode, active: true });
+  const skuPayload = (type, binLocation = '', extra = {}) => payload(type, '', binLocation, {
+    partNumber: skuPart, cameraDecoded: true, rawDecodedValue: skuRaw, rawScan: skuRaw,
+    barcodeFormat: 'CODE_128', ...extra });
+  const skuScan = (type, bin, extra) => api('/api/scans/process', skuPayload(type, bin, extra));
+  const skuSummary = () => api(`/api/scans/part-summary?dealerCode=${dealerCode}&auditId=${auditId}&partNumber=${skuPart}`);
+  let lastSkuRequest;
+  for (let i = 0; i < 3; i++) {
+    lastSkuRequest = skuPayload('INWARD', 'SKUA', { quantity: 99, upiNo: 'FALSE-CLIENT-SERIAL' });
+    const saved = await api('/api/scans/process', lastSkuRequest);
+    assert.equal(saved.success, true, JSON.stringify(saved));
+    assert.equal(saved.scan.partNumber, skuPart);
+    assert.equal(saved.scan.quantity, 1);
+    assert.equal(saved.scan.barcodeIdentityKind, 'SKU');
+    assert.equal(saved.scan.upiNo, '');
+    assert.equal(saved.scan.globalUpiKey, '');
+    assert.equal(saved.scan.rawDecodedValue, skuRaw);
+  }
+  assert.equal((await skuSummary()).availableQty, 3);
+  assert.equal((await api('/api/scans/process', lastSkuRequest)).alreadyApplied, true);
+  assert.equal((await skuSummary()).availableQty, 3);
+  passed('sample SKU inward counts three separate pieces, never invents a UPI, and request replay is idempotent');
+  const skuOut = await skuScan('OUTWARD');
+  assert.equal(skuOut.success, true, JSON.stringify(skuOut));
+  assert.equal(skuOut.scan.binLocation, 'SKUA');
+  const skuFit = await skuScan('FITTED', '', { regdNo: 'SKUCAR', jobCardNo: 'SKUJOB' });
+  assert.equal(skuFit.success, true, JSON.stringify(skuFit));
+  assert.equal((await skuSummary()).availableQty, 2);
+  assert.equal((await skuSummary()).storeQty, 1);
+  assert.equal((await skuSummary()).fittedQty, 1);
+  assert.equal((await skuScan('DAMAGE')).success, true);
+  assert.equal((await skuSummary()).storeQty, 0);
+  assert.equal((await skuSummary()).availableQty, 1);
+  assert.equal((await skuScan('OUTWARD')).success, false);
+  passed('SKU outward, fitted and damage use eligible physical stock and never consume pending workshop stock');
+  assert.equal((await skuScan('INWARD', 'SKUA')).success, true);
+  const concurrentSku = await Promise.all([skuScan('OUTWARD'), skuScan('OUTWARD')]);
+  assert.equal(concurrentSku.filter(result => result.success).length, 1, JSON.stringify(concurrentSku));
+  assert.equal((await skuSummary()).storeQty, 0);
+  passed('two simultaneous SKU outward requests cannot oversell the last physical piece');
+  for (const bin of ['SKUA', 'SKUB']) assert.equal((await skuScan('INWARD', bin, { smartBinDecision: 'SAVE_NEW_BIN' })).success, true);
+  const chooseSku = await skuScan('OUTWARD');
+  assert.equal(chooseSku.requiresBinSelection, true, JSON.stringify(chooseSku));
+  assert.deepEqual(chooseSku.binOptions.map(bin => bin.binLocation), ['SKUA', 'SKUB']);
+  assert.equal((await skuScan('OUTWARD', 'UNKNOWN')).success, false);
+  assert.equal((await skuScan('OUTWARD', 'SKUB')).success, true);
+  assert.equal((await skuScan('FITTED', 'SKUA', { regdNo: 'SKUCAR', jobCardNo: 'SKUJOB' })).success, true);
+  passed('SKU multiple-bin movement requires a selected eligible bin and repeated fitted SKU pieces remain separate transactions');
   const cameraRaw = ' \r\n32410ktc920s\t ';
   const directCamera = await scan('INWARD', '', 'A1', { partNumber: 'WRONG-CLIENT-FIELD', cameraDecoded: true, rawDecodedValue: cameraRaw, rawScan: cameraRaw, barcodeFormat: 'code_128' });
   assert.equal(directCamera.success, true, JSON.stringify(directCamera));
@@ -315,7 +365,7 @@ async function verifyBrowser() {
     await new Promise(resolve => setTimeout(resolve, 300));
   }
   assert.equal((await summary()).availableQty, beforeMobileFit);
-  await mobilePage.waitForFunction(() => document.querySelector('#scanVisibleRows').textContent === '10');
+  await mobilePage.waitForFunction(() => document.querySelector('#scanVisibleRows').textContent === '20');
   assert.equal(await mobilePage.locator('#torchBtn').isVisible(), false, 'Unsupported fake camera hides torch');
   await mobilePage.screenshot({ path: path.join(artifactDir, 'mobile-fitted.png'), fullPage: true });
   passed('mobile FITTED camera capture collects vehicle/job details and preserves total availability');
@@ -350,7 +400,7 @@ async function verifyBrowser() {
   passed('mobile Set Bin creates a missing dealer bin and starts the camera');
   await opticalPage.waitForFunction(() => document.querySelector('#cameraPreview').readyState >= 2 && window.ZXingWASM);
   const starts = await opticalPage.evaluate(() => window.acceptanceCameraStarts);
-  const captureImage = async (fixture, expectedPart) => {
+  const captureImage = async (fixture, expectedPart, { clear = true } = {}) => {
     const savedResponse = opticalPage.waitForResponse(response => response.url().endsWith('/api/scans/process') && response.request().method() === 'POST').catch(async error => {
       await opticalPage.screenshot({ path: path.join(artifactDir, 'mobile-optical-failure.png'), fullPage: true });
       console.error('Optical capture failure', fixture, await opticalPage.locator('#cameraState').textContent(),
@@ -366,7 +416,7 @@ async function verifyBrowser() {
     const result = await (await savedResponse).json();
     assert.equal(result.success, true, JSON.stringify(result));
     assert.equal(result.scan.partNumber, expectedPart);
-    await opticalPage.evaluate(() => { const ctx = window.acceptanceCanvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1280, 720); });
+    if (clear) await opticalPage.evaluate(() => { const ctx = window.acceptanceCanvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1280, 720); });
     return result;
   };
   const oneD = await captureImage('fixture-code128.png', '32410KTC920S');
@@ -379,6 +429,15 @@ async function verifyBrowser() {
   await opticalPage.screenshot({ path: path.join(artifactDir, 'mobile-real-decoder.png'), fullPage: true });
   assert.deepEqual(errors, []);
   passed('mobile camera optically decodes CODE128 and Hero QR with one continuous stream and visible raw development log');
+  const beforeHeldSku = await models.Inventory.countDocuments({ dealerCode, partNumber: '32410KTC920S', binLocation: 'CAMERA1', scanType: 'INWARD' });
+  const sampleSku = await captureImage('fixture-hero-sku-code128.png', '32410KTC920S', { clear: false });
+  assert.equal(sampleSku.scan.barcodeIdentityKind, 'SKU');
+  assert.equal(sampleSku.scan.upiNo, '');
+  const heldStarted = await opticalPage.evaluate(() => performance.now());
+  await opticalPage.waitForFunction(started => performance.now() - started > 3000, heldStarted);
+  assert.equal(await models.Inventory.countDocuments({ dealerCode, partNumber: '32410KTC920S', binLocation: 'CAMERA1', scanType: 'INWARD' }), beforeHeldSku + 1);
+  await opticalPage.evaluate(() => { const ctx = window.acceptanceCanvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1280, 720); });
+  passed('mobile camera decodes the complete sample SKU and a continuously held label adds only one piece');
   // Exercise recovery with the actual fallback decoder and the same live stream.
   await opticalPage.evaluate(() => {
     window.ZXingWASM.readBarcodes = async () => { throw new Error('Acceptance decoder runtime failure'); };

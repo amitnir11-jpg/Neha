@@ -9,6 +9,7 @@ function normalizeToken(value) {
 }
 
 function makeQrFingerprint(input = {}) {
+  if (input.barcodeIdentityKind === 'SKU') return '';
   const rawScan = clean(input.rawScanString || input.rawScan || input.rawBarcode || input.rawQR || input.rawUpi || input.barcode || input.raw || input.scanText);
   const fallback = [
     input.upiNo,

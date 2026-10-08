@@ -3,6 +3,17 @@ import 'package:daksh_mobile_scanner/utils/scan_parser.dart';
 import 'package:daksh_mobile_scanner/models/scan_record.dart';
 
 void main() {
+  test('a held SKU label cannot keep adding pieces as camera time passes', () {
+    var time = DateTime.utc(2026);
+    final guard = CameraFrameGuard(clock: () => time);
+    expect(guard.accept('PHONE1|INWARD|32410KTC920S/G3223000065001'), isTrue);
+    for (var frame = 0; frame < 30; frame++) {
+      time = time.add(const Duration(milliseconds: 200));
+      expect(guard.accept('PHONE1|INWARD|32410KTC920S/G3223000065001'), isFalse);
+    }
+    time = time.add(const Duration(milliseconds: 2000));
+    expect(guard.accept('PHONE1|INWARD|32410KTC920S/G3223000065001'), isTrue);
+  });
   test('camera normalization never guesses barcode contents from printed text',
       () {
     expect(normalizeDecodedValue(' \r\n32410ktc920s\t '), '32410KTC920S');

@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20261008-bin-camera-v9';
+  const APP_VERSION = '20261008-sku-v10';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -464,6 +464,7 @@
   }
 
   function scanIdentityKey(scan = {}) {
+    if (scan.barcodeIdentityKind === 'SKU' || window.DakshScanParser.parseHeroSkuLabel(scan.rawScanString || scan.rawScan || '')) return '';
     const type = upper(scan.scanType || scan.type || state.mode);
     if (type === 'VERIFICATION') return '';
     const upi = extractUpiIdFromText(scan);
@@ -1128,7 +1129,7 @@
     };
     localRows.forEach(push);
     remoteRows.forEach(push);
-    return merged.sort((a, b) => new Date(b.timestamp || b.mobileCreatedAt || b.createdAt || 0) - new Date(a.timestamp || a.mobileCreatedAt || a.createdAt || 0)).slice(0, 10);
+    return merged.sort((a, b) => new Date(b.timestamp || b.mobileCreatedAt || b.createdAt || 0) - new Date(a.timestamp || a.mobileCreatedAt || a.createdAt || 0)).slice(0, 20);
   }
 
   async function copyTextValue(value, label = 'Value') {
@@ -1753,7 +1754,7 @@
     const params = new URLSearchParams({
       dealerCode: activeDealerCode(),
       auditId: activeAuditId(),
-      limit: '10'
+      limit: '20'
     });
     const scopeKey = [activeDealerCode(), activeAuditId(), deviceId()].join('|');
     const requestToken = Number(state.liveRecentRefreshToken || 0) + 1;
@@ -1772,7 +1773,7 @@
           : Array.isArray(data)
             ? data
             : [];
-      state.liveRecentRows = records.slice(0, 10);
+      state.liveRecentRows = records.slice(0, 20);
       state.inventorySummary = data.summary || null;
       refreshPartStockSummary().catch(() => undefined);
       updateLastScan(mergeRecentRows()[0] || null);
@@ -3063,11 +3064,20 @@
 
   async function saveRecordToServer(record = {}, options = {}) {
     const requestStartedAt = performance.now();
-    const response = await api('/api/scans/process', {
-      method: 'POST',
-      body: convertToSyncPayload(record),
-      timeoutMs: API_TIMEOUT_MS
-    });
+    let response;
+    try {
+      response = await api('/api/scans/process', { method: 'POST', body: convertToSyncPayload(record), timeoutMs: API_TIMEOUT_MS });
+    } catch (error) {
+      if (!error.data?.requiresBinSelection) throw error;
+      state.skuBinPromptOpen = true;
+      let bin;
+      try { bin = await window.DakshSkuBinPicker.choose(error.data.binOptions, error.data.partNumber || record.partNumber); }
+      finally { state.skuBinPromptOpen = false; }
+      if (!bin) throw error;
+      record = { ...record, binLocation: bin, bin };
+      await putRecord(record);
+      response = await api('/api/scans/process', { method: 'POST', body: convertToSyncPayload(record), timeoutMs: API_TIMEOUT_MS });
+    }
     if (response.partSummary && record.dealerCode === activeDealerCode() && record.auditId === activeAuditId()) renderPartStockSummary(response.partSummary);
     else refreshPartStockSummary(record.partNumber).catch(() => undefined);
     const serverScan = response.scan || (Array.isArray(response.insertedRecords) ? response.insertedRecords[0] : null) || {};
@@ -3423,13 +3433,18 @@
   }
 
   function handleDecodeResult(result) {
-    if (state.smartBinPromptOpen || state.duplicateAlertOpen) return;
+    if (state.smartBinPromptOpen || state.duplicateAlertOpen || state.skuBinPromptOpen) return;
     const rawValue = decodeResultText(result);
     const formatValue = typeof result?.getBarcodeFormat === 'function' ? result.getBarcodeFormat() : result?.format;
     const format = typeof formatValue === 'number' ? window.ZXing?.BarcodeFormat?.[formatValue] : formatValue;
     const parsed = window.DakshScanParser.parseScannedCode(rawValue, format);
     const raw = parsed.normalizedValue;
     if (!raw) return;
+    const seenAt = Date.now();
+    const held = state.visibleCameraCode === raw && seenAt - Number(state.visibleCameraAt || 0) < 1000;
+    state.visibleCameraCode = raw;
+    state.visibleCameraAt = seenAt;
+    if (held) return;
     const key = `${state.mode}|${raw}`;
     const lastSeen = state.lastDecodeAtByKey.get(key) || 0;
     if (Date.now() - lastSeen < DEDUPE_MS) return;
