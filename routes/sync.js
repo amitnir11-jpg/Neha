@@ -1944,29 +1944,16 @@ async function saveNormalizedScan(scan, req, options = {}) {
   // block this dealer from using its own location.
   if (scan.scanType === 'INWARD' && scan.binLocation) {
     const binCode = upper(scan.binLocation);
-    let bin = await Bin.findOne({ dealerCode: scan.dealerCode, binCode }).lean();
-    if (bin?.active === false) {
-      return { status: 'failed', httpStatus: 422, scan,
-        error: `Bin ${binCode} is inactive. Activate it in Bin Master before scanning.` };
-    }
-    if (!bin) {
-      try {
-        bin = await withDatabaseTransaction(async () => Bin.create({
-          dealerCode: scan.dealerCode,
-          binCode,
-          binName: binCode,
-          active: true
-        }));
-      } catch (error) {
-        // Another request may have registered this bin concurrently. Accept it
-        // only if the dealer's resulting record is active.
-        bin = await Bin.findOne({ dealerCode: scan.dealerCode, binCode }).lean();
-        if (!bin || bin.active === false) {
-          return { status: 'failed', httpStatus: 422, scan,
-            error: 'Select a valid active bin for this dealer.' };
-        }
-      }
-      req.io?.emit('master:update', { dealerCode: scan.dealerCode, scope: 'bins' });
+    try {
+      const result = await require('../services/DealerBinService').ensureActiveDealerBin(scan.dealerCode, binCode);
+      if (result.created || result.reactivated) req.io?.emit('master:update', { dealerCode: scan.dealerCode, scope: 'bins' });
+    } catch (error) {
+      logSync('inward bin registration failed', {
+        dealerCode: scan.dealerCode, binCode, scanId: scan.uniqueScanId,
+        error: error.message, code: error.code || ''
+      });
+      return { status: 'failed', httpStatus: 500, scan,
+        error: `Could not prepare bin ${binCode} for dealer ${scan.dealerCode}. Please retry; contact support if it continues.` };
     }
   }
 

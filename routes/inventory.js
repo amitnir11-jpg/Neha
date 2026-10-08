@@ -4766,20 +4766,15 @@ router.post('/set-bin', auth.requireAuth, async (req, res) => {
       || ['NULL', 'UNDEFINED'].includes(binLocation)) {
       return res.status(400).json({ success: false, valid: false, message: 'Enter a valid bin location.' });
     }
-    // requireAuth checks the operator's dealer assignment and active audit.
-    // Serialize first-time registration so change/Enter/Set Bin cannot create duplicates.
-    const result = await withDatabaseTransaction(async () => {
-      const bin = await Bin.findOne({ dealerCode, binCode: binLocation }).lean();
-      if (bin) return { bin, created: false };
-      return { bin: await Bin.create({ dealerCode, binCode: binLocation, binName: binLocation, active: true }), created: true };
-    });
-    if (result.bin.active === false) {
-      return res.status(422).json({ success: false, valid: false, binLocation,
-        message: `Bin ${binLocation} is inactive. Activate it in Bin Master before scanning.` });
-    }
-    if (result.created) req.io?.emit('master:update', { dealerCode, scope: 'bins' });
+    // Typing/selecting a location is an explicit request to use it for this
+    // dealer. Register missing locations and restore locations deactivated in
+    // error; bin codes are scoped to a dealer.
+    const result = await require('../services/DealerBinService').ensureActiveDealerBin(dealerCode, binLocation);
+    if (result.created || result.reactivated) req.io?.emit('master:update', { dealerCode, scope: 'bins' });
+    const message = result.created ? `Bin ${binLocation} created and ready`
+      : result.reactivated ? `Bin ${binLocation} activated and ready` : `Bin ${binLocation} ready`;
     return res.json({ success: true, valid: true, binLocation, created: result.created,
-      message: result.created ? `Bin ${binLocation} created and ready` : `Bin ${binLocation} ready` });
+      reactivated: result.reactivated, message });
   } catch (error) {
     return res.status(500).json({ success: false, valid: false, message: error.message });
   }
@@ -4789,10 +4784,12 @@ router.get('/validate-bin', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = normalizeDealerCode(req.query.dealerCode);
     const binLocation = upper(req.query.binLocation);
-    const bin = dealerCode && binLocation
-      ? await Bin.findOne({ dealerCode, binCode: binLocation, active: { $ne: false } }).lean() : null;
-    return res.status(bin ? 200 : 422).json({ success: Boolean(bin), valid: Boolean(bin), binLocation,
-      message: bin ? `Bin ${binLocation} ready` : 'Select a valid active bin for this dealer.' });
+    if (!dealerCode || !binLocation) return res.status(400).json({ success: false, valid: false,
+      binLocation, message: 'Enter a dealer and bin location.' });
+    const result = await require('../services/DealerBinService').ensureActiveDealerBin(dealerCode, binLocation);
+    if (result.created || result.reactivated) req.io?.emit('master:update', { dealerCode, scope: 'bins' });
+    return res.json({ success: true, valid: true, binLocation,
+      created: result.created, reactivated: result.reactivated, message: `Bin ${binLocation} ready` });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
