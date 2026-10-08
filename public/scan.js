@@ -776,7 +776,7 @@
   function renderDuplicateAlert(message = '', existing = {}) {
     const { dialog, title, message: messageNode, ok } = duplicateAlertNodes();
     if (!dialog) return;
-    if (title) title.textContent = 'QR CODE ALREADY SCANNED';
+    if (title) title.textContent = 'BARCODE / QR ALREADY SCANNED';
     if (messageNode) {
       messageNode.textContent = clean(message || duplicateScanMessage(existing || {}));
     }

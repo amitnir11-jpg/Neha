@@ -7,6 +7,7 @@ const { calculateSkuBins } = require('../services/SkuStockService');
 const { calculatePartStock } = require('../services/StockCalculationService');
 const { reportTotals, applyMovementCountRules } = require('../utils/reportTotals');
 const { summarizeMovementBucket } = require('../utils/inventoryValueEngine');
+const { legacyHeroBarcodeIdentity } = require('../utils/scanIdentity');
 
 test('validated Hero 1D packaging label is a SKU, not a fabricated serial/UPI', () => {
   const raw = '32410KTC920S/G3223000065001';
@@ -25,12 +26,17 @@ test('validated Hero 1D packaging label is a SKU, not a fabricated serial/UPI', 
   }
 });
 
-test('verified SKU records have transaction identity but no raw-code unique-item key', () => {
+test('legacy Hero barcode labels block the same inward barcode but do not claim the suffix is a UPI', () => {
   const scan = { barcodeIdentityKind: 'SKU', rawScan: '32410KTC920S/G3223000065001', partNumber: '32410KTC920S', dealerCode: 'D01', auditId: 'A1', scanType: 'INWARD', uniqueScanId: 'PHYSICAL-SCAN-1' };
+  assert.equal(legacyHeroBarcodeIdentity(scan), '32410KTC920S/G3223000065001');
+  assert.equal(legacyHeroBarcodeIdentity({ ...scan, rawScan: '32410KTC920S' }), '');
   assert.equal(policy.globalUpiKey(scan), '');
   assert.equal(policy.canonicalUpiValue(scan), '');
   assert.equal(policy.rawUpiHash(scan), '');
-  assert.equal(makeQrFingerprint(scan), '');
+  assert.ok(makeQrFingerprint(scan));
+  assert.equal(makeQrFingerprint(scan), makeQrFingerprint({ ...scan, binLocation: 'B2', uniqueScanId: 'PHYSICAL-SCAN-2' }));
+  assert.notEqual(makeQrFingerprint(scan), makeQrFingerprint({ ...scan, rawScan: '32410KTC920S/G3223000065002' }));
+  assert.equal(makeQrFingerprint({ ...scan, scanType: 'OUTWARD' }), '');
   assert.equal(policy.activeUpiDuplicateFilter(scan), null);
   assert.ok(policy.identityDuplicateFilter(scan));
   const qr = parser.parseScannedCode('D/132/HE5B0199510/EBHPE5EQTWD4/44831KVH900S/001/20170505125743/00', 'QR_CODE');

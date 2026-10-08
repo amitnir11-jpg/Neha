@@ -51,7 +51,7 @@ async function main() {
   await models.Bin.create({ dealerCode, binCode: 'B1', active: true });
   await models.Bin.create({ dealerCode, binCode: 'C1', active: true });
   await models.MasterPart.create({ dealerCode, partNumber, partDescription: 'Acceptance steering handle', mrp: 100, dlc: 80, category: 'SHEET METAL' });
-  for (const [number, description] of [['32410KTC920S', 'CABLE START MOTOR'], ['44831KVH900S', 'Hero QR fixture'], ['4006381333931', 'EAN fixture']]) {
+  for (const [number, description] of [['32410KTC920S', 'CABLE START MOTOR'], ['44831KVH900S', 'Hero QR fixture'], ['4006381333931', 'EAN fixture'], ['77238KTC900ZCS', 'Hero legacy 1D fixture'], ['61108AACH40ZCS', 'Hero legacy 1D fixture']]) {
     await models.MasterPart.create({ dealerCode, partNumber: number, partDescription: description, mrp: 86, dlc: 70, category: 'ELECTRICAL' });
   }
   const createdUser = await models.User.create({ username: `scan-${suffix.toLowerCase()}`, name: 'Scan Acceptance', role: 'admin', dealerAccess: [dealerCode], active: true, approved: true });
@@ -217,6 +217,18 @@ async function main() {
   assert.equal(directCamera.scan.partNumber, '32410KTC920S');
   assert.equal(directCamera.scan.rawDecodedValue, cameraRaw);
   assert.equal(directCamera.scan.parsedCode.barcodeFormat, 'CODE_128');
+  const legacyHeroRaw = '77238KTC900ZCS/G3122000021001';
+  const legacyHeroFirst = await scan('INWARD', '', 'A1', { partNumber: 'WRONG-CLIENT-FIELD', cameraDecoded: true, rawDecodedValue: legacyHeroRaw, rawScan: legacyHeroRaw, barcodeFormat: 'CODE_128' });
+  assert.equal(legacyHeroFirst.success, true, JSON.stringify(legacyHeroFirst));
+  assert.equal(legacyHeroFirst.scan.partNumber, '77238KTC900ZCS');
+  const legacyHeroDuplicate = await scan('INWARD', '', 'B1', { partNumber: '77238KTC900ZCS', cameraDecoded: true, rawDecodedValue: legacyHeroRaw, rawScan: legacyHeroRaw, barcodeFormat: 'CODE_128' });
+  assert.equal(legacyHeroDuplicate.duplicate, true, JSON.stringify(legacyHeroDuplicate));
+  assert.equal(legacyHeroDuplicate.upiDuplicate, true, JSON.stringify(legacyHeroDuplicate));
+  assert.match(legacyHeroDuplicate.message, /already scanned/i);
+  assert.equal(await models.Inventory.countDocuments({ dealerCode, auditId, partNumber: '77238KTC900ZCS', rawScan: legacyHeroRaw, scanType: 'INWARD' }), 1);
+  const otherLegacyPackage = '77238KTC900ZCS/G3122000021002';
+  assert.equal((await scan('INWARD', '', 'B1', { partNumber: '77238KTC900ZCS', cameraDecoded: true, rawDecodedValue: otherLegacyPackage, rawScan: otherLegacyPackage, barcodeFormat: 'CODE_128' })).success, true);
+  passed('same Hero legacy 1D label raises the duplicate response across bins while a different package code remains scannable');
   // Keep the API fixture distinct from the physical QR image decoded later.
   const qrRaw = 'D/132/HE5B0199510/APICAMERAUPI/44831KVH900S      /001/20170505125743/00';
   const qrCamera = await scan('INWARD', '', 'A1', { partNumber: 'APICAMERAUPI', cameraDecoded: true, rawDecodedValue: qrRaw, rawScan: qrRaw, barcodeFormat: 'qr_code' });

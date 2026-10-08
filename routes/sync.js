@@ -1625,6 +1625,19 @@ async function scanPolicyResult(scan = {}) {
       message: duplicatePolicy.duplicateUpiMessage(activeDuplicate)
     };
   }
+  if (require('../utils/scanIdentity').legacyHeroBarcodeIdentity(scan)) {
+    const legacyBarcodeDuplicate = await findLegacyHeroBarcodeDuplicate(scan);
+    if (legacyBarcodeDuplicate) {
+      return {
+        ok: false,
+        status: 'duplicate',
+        existing: legacyBarcodeDuplicate,
+        upiDuplicate: true,
+        reason: 'Duplicate Hero barcode already scanned',
+        message: 'This barcode is already scanned.'
+      };
+    }
+  }
   if (scan.scanType === 'FITTED' && scan.barcodeIdentityKind !== 'SKU') {
     const duplicate = await Inventory.findOne(duplicateQuery(scan)).sort({ timestamp: 1, createdAt: 1 }).lean();
     if (duplicate) {
@@ -1673,6 +1686,34 @@ async function lockUpiIdentity(scan = {}) {
   await getPrismaClient().$queryRaw`
     SELECT pg_advisory_xact_lock(hashtextextended(${`daksh-upi:${globalUpiKey}`}, 0)) IS NULL AS locked
   `;
+}
+
+async function findLegacyHeroBarcodeDuplicate(scan = {}) {
+  const identity = require('../utils/scanIdentity').legacyHeroBarcodeIdentity(scan);
+  const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
+  if (!identity || !partNumber || upper(scan.scanType || scan.type) !== 'INWARD') return null;
+  const escapedIdentity = identity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const duplicateIdentityTerms = scan.qrFingerprint ? [{ qrFingerprint: scan.qrFingerprint }] : [];
+  for (const field of ['rawScan', 'rawScanString', 'rawDecodedValue', 'rawBarcode', 'rawQR', 'rawUpi']) {
+    duplicateIdentityTerms.push({ [field]: { $regex: `^${escapedIdentity}$`, $options: 'i' } });
+  }
+  const duplicate = await Inventory.findOne({
+    dealerCode: upper(scan.dealerCode),
+    auditId: clean(scan.auditId),
+    isDuplicate: { $ne: true },
+    isDeleted: { $ne: true },
+    deletedAt: null,
+    syncStatus: { $nin: ['duplicate', 'rejected', 'failed', 'deleted'] },
+    scanStatus: { $in: acceptedStatuses() },
+    $and: [
+      { $or: [{ scanType: 'INWARD' }, { type: 'INWARD' }, { movementType: 'INWARD' }] },
+      { $or: [{ normalizedPartNumber: partNumber }, { partNumber }, { part: partNumber }] },
+      { $or: duplicateIdentityTerms }
+    ]
+  }).sort({ timestamp: 1, createdAt: 1 }).lean();
+  return duplicate && require('../utils/scanIdentity').legacyHeroBarcodeIdentity(duplicate) === identity
+    ? duplicate
+    : null;
 }
 
 async function saveNormalizedScan(scan, req, options = {}) {
@@ -2078,6 +2119,13 @@ async function saveNormalizedScan(scan, req, options = {}) {
           error.existing = replay;
           throw error;
         }
+        const legacyBarcodeDuplicate = await findLegacyHeroBarcodeDuplicate(scan);
+        if (legacyBarcodeDuplicate) {
+          const error = new Error('This barcode is already scanned.');
+          error.code = 'DUPLICATE_UPI_SCAN';
+          error.existing = legacyBarcodeDuplicate;
+          throw error;
+        }
         if (skuMovement) {
           const sourceError = await require('../services/SkuStockService').prepareSkuSourceLocation(scan);
           if (sourceError || scan.binLocation !== finalBin) {
@@ -2271,6 +2319,18 @@ async function saveNormalizedScan(scan, req, options = {}) {
         };
       }
       if (!isDuplicateKeyError(error)) throw error;
+      const legacyBarcodeDuplicate = await findLegacyHeroBarcodeDuplicate(scan);
+      if (legacyBarcodeDuplicate) {
+        const policy = {
+          status: 'duplicate',
+          existing: legacyBarcodeDuplicate,
+          upiDuplicate: true,
+          reason: 'Duplicate Hero barcode already scanned',
+          message: 'This barcode is already scanned.'
+        };
+        await logDuplicateScan(scan, legacyBarcodeDuplicate, policy.reason);
+        return duplicateResult(policy, scan);
+      }
       const retryExisting = duplicateQuery(scan) ? await Inventory.findOne(duplicateQuery(scan)).lean() : null;
       if (retryExisting) {
         await refreshInventoryUpiState(retryExisting).catch(() => undefined);
