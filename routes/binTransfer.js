@@ -15,6 +15,7 @@ const { stockMovementType, stockMovementBin, activeStockTransaction } = require(
 const { withDatabaseTransaction } = require('../services/prisma');
 const scanModification = require('../services/ScanModificationService');
 const { invalidateCache } = require('../utils/safeCache');
+const { firstNonBlankValue } = require('../utils/binTransfer');
 
 const router = express.Router();
 
@@ -39,14 +40,6 @@ function binRegex(bin) {
 }
 
 const PART_NUMBER_FIELDS = ['normalizedPartNumber', 'partNumber', 'part', 'partNo', 'extractedPartNumber'];
-
-function firstNonBlankValue(row = {}, fields = []) {
-  for (const field of fields) {
-    const value = clean(row[field]);
-    if (value && !BLANK_MARKERS.includes(value.toUpperCase())) return value;
-  }
-  return '';
-}
 
 function compactBins(items = []) {
   const seen = new Set();
