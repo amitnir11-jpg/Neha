@@ -44,6 +44,7 @@ test('sample scan appears in Bin Transfer and stock report, then disappears afte
 
   try {
     Inventory.find = (filter) => ({
+      select() { return this; },
       sort() { return this; },
       async lean() { return visibleRows(filter); }
     });

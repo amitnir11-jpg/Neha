@@ -24,6 +24,7 @@ test('bin transfer source options only include bins with available scanned stock
       assert.ok(filter.$and.some((clause) => clause.scanStatus?.$in?.includes('ACCEPTED')));
       assert.ok(filter.$and.length >= 3);
       return {
+        select() { return this; },
         sort() { return this; },
         async lean() { return [
           { _id: 'scan1', dealerCode: '11646', auditId: 'AUD1', partNumber: 'PART1', scanType: 'INWARD', qty: 8, binLocation: '1' },

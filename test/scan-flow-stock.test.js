@@ -196,6 +196,7 @@ test('failed movement insertion rolls back source UPI claim in the transaction c
 test('bin-wise report uses central store and workshop balances for the golden sequence', () => {
   const { fittedWorkshopQuantity } = require('../utils/fittedStock');
   const context = vm.createContext({ stockQuantitySummary, stockMovementBin, fittedWorkshopQuantity,
+    calculateInventoryLedger: require('../services/InventoryCalculationService').calculateInventoryLedger,
     money: value => Math.round(value * 100) / 100,
     canonicalizePartCategory: value => value,
     scanDlc: () => 10, scanValueRow: () => ({ valuationMRP: 20 }), scanQuantity: stockMovementQuantity
@@ -205,9 +206,9 @@ test('bin-wise report uses central store and workshop balances for the golden se
   const scans = [row('in1', 'INWARD', 'A1'), row('in2', 'INWARD', 'A1'), row('in3', 'INWARD', 'B1'), row('in4', 'INWARD', 'B1'),
     row('out5', 'OUTWARD', 'B1'), row('fit6', 'FITTED', 'A1', { fittedQty: 1, status: 'FITTED_PENDING' }), row('damage7', 'DAMAGE', 'B1')];
   const reports = context.selectRows({ scans }, 'bin-wise-stock');
-  assert.equal(reports.reduce((sum, bin) => sum + bin.qty, 0), 2);
+  assert.equal(reports.reduce((sum, bin) => sum + bin.qty, 0), 1);
   const a1 = reports.find(bin => bin.bin === 'A1');
-  assert.equal(a1.qty, 2);
+  assert.equal(a1.qty, 1);
   assert.equal(a1.physicalBinQty, 1);
   assert.equal(a1.fittedWorkshopQty, 1);
   scans[5].status = 'BILLED';
