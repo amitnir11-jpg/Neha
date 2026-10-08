@@ -10,6 +10,7 @@ function normalizeToken(value) {
 
 function makeQrFingerprint(input = {}) {
   if (input.barcodeIdentityKind === 'SKU') return '';
+  const uniqueUpi = require('./scanDuplicatePolicy').uniqueUpiIdentityToken(input);
   const rawScan = clean(input.rawScanString || input.rawScan || input.rawBarcode || input.rawQR || input.rawUpi || input.barcode || input.raw || input.scanText);
   const fallback = [
     input.upiNo,
@@ -18,7 +19,7 @@ function makeQrFingerprint(input = {}) {
     input.uniqueScanId,
     input.clientScanId
   ].map(normalizeToken).filter(Boolean).join('|');
-  const identity = rawScan || fallback;
+  const identity = uniqueUpi ? `UPI:${uniqueUpi}` : rawScan || fallback;
   if (!identity) return '';
 
   const scope = [
@@ -27,14 +28,14 @@ function makeQrFingerprint(input = {}) {
     input.scanType || input.type || '',
     identity,
     // Include bin so the same scan can exist in multiple bins without colliding.
-    input.binLocation || input.bin || input.location || ''
+    uniqueUpi ? '' : input.binLocation || input.bin || input.location || ''
   ].map(normalizeToken).filter(Boolean).join('|');
 
   return createHash('sha256').update(scope).digest('hex');
 }
 
 function isDuplicateKeyError(error) {
-  return Boolean(error && (error.code === 11000 || /duplicate key/i.test(String(error.message || ''))));
+  return Boolean(error && ([11000, 'P2002', '23505'].includes(error.code) || /duplicate key|unique constraint/i.test(String(error.message || ''))));
 }
 
 module.exports = {

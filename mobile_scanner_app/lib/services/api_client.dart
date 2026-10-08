@@ -208,11 +208,11 @@ class ApiClient {
     return _request(
       '/api/scans/smart-bin-check',
       method: 'POST',
-      auth: false,
       fast: true,
       timeout: const Duration(seconds: 2),
       body: {
         'dealerCode': dealerCode.trim().toUpperCase(),
+        'source': 'manual',
         'auditId': auditId.trim(),
         'partNumber': partNumber.trim().toUpperCase(),
         'partDescription': partDescription.trim(),

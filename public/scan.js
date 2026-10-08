@@ -769,8 +769,8 @@
     const { useExisting, saveNew, select } = smartBinPromptNodes();
     const existingBin = clean((select && select.value) || payload.selectedBin || payload.existingBin || payload.suggestedBin || payload.primaryBin || '');
     const newBin = clean(payload.newBin || payload.currentBin || payload.binLocation || '');
-    if (useExisting) useExisting.textContent = existingBin ? `Scan in ${existingBin}` : 'Scan in Existing Bin';
-    if (saveNew) saveNew.textContent = newBin ? `Continue with ${newBin}` : 'Continue with Current Bin';
+    if (useExisting) useExisting.textContent = payload.promptOnLastBin ? `Save in ${existingBin === payload.lastBin ? 'same' : 'selected'} bin ${existingBin}` : existingBin ? `Scan in ${existingBin}` : 'Scan in Existing Bin';
+    if (saveNew) saveNew.textContent = payload.promptOnLastBin ? `Save in different bin ${newBin}` : newBin ? `Continue with ${newBin}` : 'Continue with Current Bin';
   }
 
   function renderDuplicateAlert(message = '', existing = {}) {

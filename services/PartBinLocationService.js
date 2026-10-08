@@ -22,7 +22,7 @@ function normalizePartBinScope(input = {}) {
   const dealerCode = upper(input.dealerCode || input.dealer || '');
   const auditId = clean(input.auditId || input.audit || '');
   const partNumber = normalizePartNumber(input.partNumber || input.part || input.normalizedPartNumber || '');
-  const currentBin = normalizeBinLocation(input.binLocation || input.bin || '');
+  const currentBin = normalizeBinLocation(input.binLocation || input.bin || input.currentBin || '');
   return { dealerCode, auditId, partNumber, currentBin };
 }
 
@@ -103,7 +103,7 @@ async function queryInventoryRows(scope = {}) {
 
   try {
     return await Inventory.find(filter)
-      .select('dealerCode auditId partNumber normalizedPartNumber partDescription partName binLocation bin scanType type qty quantity timestamp scanTime createdAt updatedAt userName loginId username staffName smartBinDecisionBy reason remarks smartBinReason smartBinDecisionReason deletedAt syncStatus scanStatus status')
+      .select('dealerCode auditId partNumber normalizedPartNumber partDescription partName binLocation bin scanType type qty quantity timestamp scanTime createdAt updatedAt lastManualMergedAt userName loginId username staffName smartBinDecisionBy reason remarks smartBinReason smartBinDecisionReason deletedAt syncStatus scanStatus status')
       .sort({ timestamp: 1, createdAt: 1, _id: 1 })
       .lean();
   } catch (error) {
@@ -240,7 +240,9 @@ function buildSuggestionPayload(rows = [], scope = {}, settings = {}) {
     .filter((row) => row.binLocation);
 
   const primaryBin = existingBins[0] ? existingBins[0].binLocation : currentBin;
-  const existingBin = primaryBin || currentBin;
+  const lastBin = existingBins.slice().sort((a, b) =>
+    new Date(b.lastScanDate || b.createdDate || 0) - new Date(a.lastScanDate || a.createdDate || 0))[0]?.binLocation || '';
+  const existingBin = scope.promptOnLastBin ? lastBin || primaryBin || currentBin : primaryBin || currentBin;
   const newBin = currentBin;
   const secondaryBins = existingBins.slice(1).map((row) => row.binLocation);
   const sameBinExists = Boolean(newBin && existingBins.some((row) => row.binLocation === newBin));
@@ -249,13 +251,16 @@ function buildSuggestionPayload(rows = [], scope = {}, settings = {}) {
   const locationLimitReached = existingBins.length >= maxAllowedLocationsPerPart;
   const canAddNewLocation = allowMultipleLocations && !locationLimitReached;
   const canContinueCurrent = allowMultipleLocations && !locationLimitReached;
-  const shouldPrompt = Boolean(existingBins.length > 0 && newBin && !sameBinExists);
+  const shouldPrompt = Boolean(existingBins.length > 0 && newBin
+    && (scope.promptOnLastBin ? existingBin !== newBin : !sameBinExists));
   const partDescription = clean(existingBins[0] ? existingBins[0].partDescription : '');
   const promptTitle = 'PART ALREADY AVAILABLE IN OTHER BIN';
   const existingBinText = existingBins.length > 1
     ? existingBins.map((row) => row.binLocation).join(', ')
     : existingBin || '-';
-  const message = `PART ${normalized.partNumber || '-'} IS AVAILABLE IN BIN ${existingBinText || '-'}\n\nWill you continue scanning in ${existingBinText || '-'} or continue with ${newBin || 'this bin'}?`;
+  const message = scope.promptOnLastBin
+    ? `PART ${normalized.partNumber || '-'} WAS LAST SAVED IN BIN ${existingBin || '-'}\n\nSave in the same bin ${existingBin || '-'} or the different bin ${newBin || '-'}?`
+    : `PART ${normalized.partNumber || '-'} IS AVAILABLE IN BIN ${existingBinText || '-'}\n\nWill you continue scanning in ${existingBinText || '-'} or continue with ${newBin || 'this bin'}?`;
 
   return {
     dealerCode: normalized.dealerCode,
@@ -263,6 +268,8 @@ function buildSuggestionPayload(rows = [], scope = {}, settings = {}) {
     partNumber: normalized.partNumber,
     currentBin,
     existingBin,
+    lastBin,
+    promptOnLastBin: Boolean(scope.promptOnLastBin),
     newBin,
     primaryBin,
     primaryLocation: primaryBin,
@@ -270,7 +277,7 @@ function buildSuggestionPayload(rows = [], scope = {}, settings = {}) {
     existingBins,
     existingBinCount: existingBins.length,
     totalQty: existingBins.reduce((sum, row) => sum + Number(row.qty || 0), 0),
-    suggestedBin: primaryBin || currentBin,
+    suggestedBin: scope.promptOnLastBin ? existingBin : primaryBin || currentBin,
     sameBinExists,
     shouldPrompt,
     canUseExisting: Boolean(existingBins.length),
@@ -312,7 +319,7 @@ async function getSmartBinSuggestion(input = {}, options = {}) {
   }
 
   const rows = await ensurePartBinLocations(scope, { refresh: Boolean(options.refresh) });
-  return buildSuggestionPayload(rows, scope, options.settings || {});
+  return buildSuggestionPayload(rows, { ...scope, promptOnLastBin: options.promptOnLastBin === true }, options.settings || {});
 }
 
 async function recordPartBinLocationFromScan(scan = {}, options = {}) {

@@ -18,7 +18,7 @@ function normalizeBinLocation(value) {
 }
 
 function scanMoment(scan = {}) {
-  const value = scan.timestamp || scan.scanTime || scan.createdAt || scan.updatedAt || scan.time || scan.dateTime || 0;
+  const value = scan.lastManualMergedAt || scan.timestamp || scan.scanTime || scan.createdAt || scan.updatedAt || scan.time || scan.dateTime || 0;
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 }

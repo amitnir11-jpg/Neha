@@ -5322,6 +5322,8 @@
       return;
     }
     if (isBarcodeForm && isBarcodeScanRecentlyLocked(normalized, 3000)) {
+      playScanTone('error');
+      toast('This UPI / QR was just scanned. Check the previous scan result.', 'error');
       setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
       resetBarcodeScanFields(form, normalized, options.expectedRaw);
       setTimeout(focusNextBarcodeField, 700);
@@ -5504,6 +5506,7 @@
           }
           throw retryError;
         }
+        if (retryData.partSummary && cleanDealerCode(retryData.scan?.dealerCode || '') === scanStockDealerCode()) renderPartStockSummary(retryData.partSummary);
         if (retryData && retryData.scan) {
           const savedScan = retryData.scan || {};
           addSyncLog({
@@ -5530,7 +5533,7 @@
           resetManualScanFields(form);
         }
         markReportsStale(isBarcodeForm ? 'barcode scan' : 'manual scan', { autoRefresh: false });
-        return;
+        return retryData;
       }
       if (
         error.status === 409
@@ -5539,7 +5542,7 @@
         && !(!isBarcodeForm && error.data?.manualDuplicate)
       ) {
         if (isBarcodeForm) removeQueuedBarcodeScan(normalized);
-        playScanTone('duplicate');
+        playScanTone(error.data?.upiDuplicate ? 'error' : 'duplicate');
         const duplicateScan = error.data?.scan || error.data?.existing || normalized;
         addSyncLog({
           partNumber: duplicateScan.partNumber || duplicateScan.part || normalized.partNumber,
@@ -6237,8 +6240,8 @@
     const { useExisting, saveNew, select } = smartBinPromptNodes();
     const existingBin = cleanDealerCode((select && select.value) || payload.selectedBin || payload.existingBin || payload.suggestedBin || payload.primaryBin || '');
     const newBin = cleanDealerCode(payload.newBin || payload.currentBin || payload.binLocation || '');
-    if (useExisting) useExisting.textContent = existingBin ? `Scan in ${existingBin}` : 'Scan in Existing Bin';
-    if (saveNew) saveNew.textContent = newBin ? `Continue with ${newBin}` : 'Continue with Current Bin';
+    if (useExisting) useExisting.textContent = payload.promptOnLastBin ? `Save in ${existingBin === payload.lastBin ? 'same' : 'selected'} bin ${existingBin}` : existingBin ? `Scan in ${existingBin}` : 'Scan in Existing Bin';
+    if (saveNew) saveNew.textContent = payload.promptOnLastBin ? `Save in different bin ${newBin}` : newBin ? `Continue with ${newBin}` : 'Continue with Current Bin';
   }
 
   function renderSmartBinSuggestionModal(payload = {}) {
@@ -12587,7 +12590,8 @@
       const key = [payload.dealerCode, bin, payload.type, normalizedRaw].join('|');
       if (state.barcodeLastCaptureKey === key && Date.now() - state.barcodeLastAt < 3000) {
         setLivePill('barcodeReadyStatus', 'Duplicate blocked', false);
-        playScanTone('duplicate');
+        playScanTone('error');
+        toast('This barcode / QR was just scanned. Check the previous scan result.', 'error');
         resetBarcodeScanFields(form);
         return;
       }

@@ -140,8 +140,25 @@ function canonicalUpiValue(input = {}) {
   return '';
 }
 
+function uniqueUpiIdentityToken(input = {}) {
+  if (input.barcodeIdentityKind === 'SKU') return '';
+  const raw = rawScanText(input);
+  const parsed = require('./scanParser').parseScannedCode(raw, input.barcodeFormat);
+  if (parsed.success && parsed.hasUniqueItemId && parsed.upi && clean(parsed.upi).length >= 3) {
+    return compactIdentity(parsed.upi);
+  }
+  const part = scanPartNumber(input);
+  for (const value of [input.upiId, input.upiNo, input.upiCode, input.uniqueUpiId]) {
+    const token = compactIdentity(value);
+    if (token && !token.includes('/') && token !== part && !/^MANUAL[:|#-]/i.test(token)) return token;
+  }
+  return '';
+}
+
 function globalQrIdentity(input = {}) {
   if (input.barcodeIdentityKind === 'SKU') return { type: '', value: '' };
+  const uniqueUpi = uniqueUpiIdentityToken(input);
+  if (uniqueUpi) return { type: 'UPI', value: uniqueUpi };
   const raw = rawScanText(input);
   const slashIdentity = slashQrIdentity(raw);
   if (slashIdentity) return { type: 'QR', value: slashIdentity };
@@ -195,10 +212,23 @@ function activeUpiDuplicateFilter(input = {}) {
       { upiId: { $regex: upiPattern, $options: 'i' } }
     );
   };
-  if (identity.value && identity.type === 'UPI') addUpiTerms(identity.value);
+  if (identity.value && identity.type === 'UPI') {
+    addUpiTerms(identity.value);
+    const escaped = identity.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Legacy rows may store the full QR in every UPI alias. Match its exact
+    // UPI segment without rewriting those rows or mistaking a part for a UPI.
+    const patterns = [
+      `(?:^|/)\\s*${escaped}\\s*(?:/|$)`,
+      `(?:^|[|;&?,\\s])(?:UPI|UPIID|UNIQUEID)\\s*[:=]\\s*${escaped}(?:[|;&?,\\s]|$)`,
+      `"(?:UPI|UPIID|UNIQUEID)"\\s*:\\s*"\\s*${escaped}\\s*"`
+    ];
+    for (const field of ['rawScan', 'rawScanString', 'rawBarcode', 'rawQR', 'rawUpi', 'upiCode', 'upiNo', 'upiId']) {
+      for (const pattern of patterns) terms.push({ [field]: { $regex: pattern, $options: 'i' } });
+    }
+  }
   const raw = rawScanText(input);
   const rawSlashToken = slashUpiToken(raw);
-  if (rawSlashToken) addUpiTerms(rawSlashToken);
+  if (rawSlashToken && identity.type !== 'UPI') addUpiTerms(rawSlashToken);
   if (identity.value && ['QR', 'RAW'].includes(identity.type)) {
     const rawValue = raw ? upper(raw) : identity.value;
     const escapedRaw = rawValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -335,6 +365,7 @@ module.exports = {
   businessDuplicateFilter,
   businessDuplicateKey,
   canonicalUpiValue,
+  uniqueUpiIdentityToken,
   duplicateUpiMessage,
   allowCrossBinDuplicate,
   globalQrIdentity,

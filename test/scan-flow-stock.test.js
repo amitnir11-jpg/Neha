@@ -151,7 +151,7 @@ function transactionHarness({ failInsert = false } = {}) {
     const scan = { dealerCode: 'D01', auditId: 'AUD1', partNumber: 'ABC123', normalizedPartNumber: 'ABC123',
       binLocation: 'B1', upiNo: 'UPI003', upiId: 'UPI003', quantity: 1, scanType, uniqueScanId: scanId, source: {},
       globalUpiKey: scanId, rawScanString: 'UPI:UPI003', scanSource: 'barcode' };
-    const context = vm.createContext({ Inventory, scan, options: {}, withDatabaseTransaction, console,
+    const context = vm.createContext({ Inventory, scan, options: {}, withDatabaseTransaction, console, manualEntry: false,
       upiCodeValue, movementTypeValue, normalizePartNumber, fittedStock,
       clean: value => String(value || '').trim(), upper: value => String(value || '').trim().toUpperCase(),
       isManualEntry: () => false, lockUpiIdentity: async () => {},

@@ -37,6 +37,7 @@ async function api(route, body, authToken = token) {
 }
 function payload(type, upi, binLocation = '', extra = {}) {
   return { dealerCode, auditId, partNumber, type, upiNo: upi, rawScan: upi ? `${partNumber}/${upi}` : '',
+    ...(upi ? { smartBinDecision: 'SAVE_NEW_BIN' } : {}),
     binLocation, quantity: 9, source: 'barcode', scanSource: 'barcode', uniqueScanId: randomUUID(),
     deviceId: 'SCAN-ACCEPTANCE', ...extra };
 }
@@ -84,6 +85,7 @@ async function main() {
   assert.equal((await models.Bin.findOne({ dealerCode, binCode: 'DISABLED' }).lean()).active, false);
   // Leave the golden stock sequence's part untouched by this registration check.
   await models.Inventory.deleteMany({ dealerCode, upiNo: 'AUTO-BIN' });
+  await models.PartBinLocation.deleteMany({ dealerCode, partNumber, binLocation: 'A5' });
   passed('mobile operator creates a new bin once, scans inward, and cannot change another dealer or reactivate an inactive bin');
   for (const [upi, bin] of [['UPI001', 'A1'], ['UPI002', 'A1'], ['UPI003', 'B1'], ['UPI004', 'B1']]) {
     const saved = await scan('INWARD', upi, bin);
@@ -147,7 +149,7 @@ async function main() {
     await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS scan_acceptance_fail_insert()');
   }
   passed('real PostgreSQL insertion failure rolls back source claim and stock');
-  const manual = await scan('INWARD', '', 'C1', { source: 'manual', scanSource: 'manual', quantity: 10 });
+  const manual = await scan('INWARD', '', 'C1', { source: 'manual', scanSource: 'manual', quantity: 10, smartBinDecision: 'SAVE_NEW_BIN' });
   assert.equal(manual.success, true, JSON.stringify(manual));
   assert.equal(manual.scan.quantity, 10);
   for (let i = 0; i < 12; i++) assert.equal((await scan('INWARD', `HISTORY-${i}`, 'B1')).success, true);
@@ -227,14 +229,95 @@ async function main() {
   passed('camera direct/QR/EAN raw values override wrong client fields and reject unknown prefixes');
   // The APK offline queue uses the existing bulk endpoint with raw camera data.
   const apkRaw = 'D/132/HE5B0199510/APKUPI123/44831KVH900S/001/20170505125743/00';
-  const apkScan = payload('INWARD', '', 'B1', { partNumber: '', cameraDecoded: true, rawDecodedValue: apkRaw, rawScan: apkRaw, barcodeFormat: 'qrCode', deviceId: 'APK-ACCEPTANCE', source: 'mobile' });
+  const apkScan = payload('INWARD', '', 'B1', { partNumber: '', cameraDecoded: true, rawDecodedValue: apkRaw, rawScan: apkRaw, barcodeFormat: 'qrCode', deviceId: 'APK-ACCEPTANCE', source: 'mobile', smartBinDecision: 'SAVE_NEW_BIN' });
   const apkBulk = await api('/api/mobile/sync-bulk', { dealerCode, auditId, deviceId: 'APK-ACCEPTANCE', scans: [apkScan] });
   assert.equal(apkBulk.success, true, JSON.stringify(apkBulk));
   assert.equal(apkBulk.insertedRecords[0].partNumber, '44831KVH900S');
   assert.equal(apkBulk.insertedRecords[0].parsedCode.upi, 'APKUPI123');
   passed('APK offline bulk payload uses the same authoritative raw camera parser');
+  await verifyDuplicateAndManualBins();
   if (process.env.PLAYWRIGHT_MODULE) await verifyBrowser();
   fs.writeFileSync(path.join(artifactDir, 'results.json'), JSON.stringify({ checks, scanTimings, browserVerified: Boolean(browser), timestamp: new Date().toISOString() }, null, 2));
+}
+
+async function verifyDuplicateAndManualBins() {
+  const uniquePart = '957010805000S';
+  const manualPart = 'MANUALCHECK123';
+  for (const number of [uniquePart, manualPart]) await models.MasterPart.create({ dealerCode, partNumber: number, partDescription: 'Duplicate and bin acceptance', mrp: 100, dlc: 80, category: 'FASTENER' });
+  const firstRaw = `D/GCSG0000272850/CCG8FN2C6D4C/${uniquePart}     /000010/0000011.00/AAB/1/G/000/00`;
+  const changedRaw = `D/OTHERBATCH123/CCG8FN2C6D4C/${uniquePart}/000001/0000012.00/OTHER/1/G/000/00`;
+  const qr = (rawValue, binLocation = 'A1', extras = {}) => payload('INWARD', '', binLocation, { partNumber: uniquePart,
+    rawScan: rawValue, rawDecodedValue: rawValue, cameraDecoded: true, barcodeFormat: 'QR_CODE', ...extras });
+  const uniqueRows = () => models.Inventory.find({ dealerCode, auditId, partNumber: uniquePart, isDeleted: { $ne: true } }).lean();
+  const first = await api('/api/scans/process', qr(firstRaw));
+  assert.equal(first.success, true, JSON.stringify(first));
+  for (const request of [qr(firstRaw), qr(changedRaw, 'B1'), qr('CCG8FN2C6D4C'), qr(changedRaw, 'B1', { source: 'manual', scanSource: 'manual', cameraDecoded: false })]) {
+    const duplicate = await api('/api/scans/process', request);
+    assert.equal(duplicate.code, 409, JSON.stringify(duplicate));
+    assert.equal(duplicate.upiDuplicate, true);
+    assert.match(duplicate.message, /already scanned/i);
+    assert.equal((await uniqueRows()).length, 1);
+    assert.equal((await uniqueRows())[0].quantity, 1);
+  }
+  // The active unique fingerprint index is the final guard for new UPI rows.
+  await assert.rejects(prisma.inventory.create({ data: { id: randomUUID(), dealerCode, auditId, scanType: 'INWARD',
+    qrFingerprint: first.scan.qrFingerprint, isDeleted: false, deletedAt: null, data: { partNumber: uniquePart } } }), error => error.code === 'P2002');
+  // Recognize historical full-QR aliases without a production backfill.
+  await models.Inventory.updateOne({ _id: first.scan._id }, { $set: { upiId: firstRaw, upiNo: firstRaw, upiCode: firstRaw, globalUpiKey: 'LEGACY-ACCEPTANCE-KEY' } });
+  assert.equal((await api('/api/scans/process', qr(changedRaw))).upiDuplicate, true);
+  const mobileToken = jwt.sign(secondUser, secret, { expiresIn: '1h' });
+  const duplicateBulk = await api('/api/mobile/sync-bulk', { dealerCode, auditId, deviceId: 'UPI-APK', scans: [qr(changedRaw, 'B1')] }, mobileToken);
+  assert.equal(duplicateBulk.duplicateCount, 1, JSON.stringify(duplicateBulk));
+  assert.equal((await uniqueRows()).length, 1);
+  passed('unique UPI repeats across text variants, bins, manual raw scans and APK bulk are errors with unchanged quantities; database index rejects duplicate fingerprints');
+  const raceRaw1 = firstRaw.replace('CCG8FN2C6D4C', 'RACEUPI1234');
+  const raceRaw2 = changedRaw.replace('CCG8FN2C6D4C', 'RACEUPI1234');
+  const race = await Promise.all([api('/api/scans/process', qr(raceRaw1, 'B1', { smartBinDecision: 'SAVE_NEW_BIN' })),
+    api('/api/scans/process', qr(raceRaw2, 'C1', { smartBinDecision: 'SAVE_NEW_BIN' }), mobileToken)]);
+  assert.equal(race.filter(result => result.success).length, 1, JSON.stringify(race));
+  assert.equal(race.filter(result => result.upiDuplicate).length, 1, JSON.stringify(race));
+  assert.equal((await uniqueRows()).length, 2);
+  const different = await api('/api/scans/process', qr(firstRaw.replace('CCG8FN2C6D4C', 'DIFFERENTUPI1')));
+  assert.equal(different.success, true, JSON.stringify(different));
+  assert.equal((await uniqueRows()).length, 3);
+  await models.Inventory.updateOne({ _id: first.scan._id }, { $set: { isDeleted: true, deletedAt: new Date() } });
+  await require('../services/PartBinLocationService').rebuildPartBinLocations({ dealerCode, auditId, partNumber: uniquePart });
+  assert.equal((await api('/api/scans/process', qr(firstRaw))).success, true);
+  assert.equal((await uniqueRows()).length, 3);
+  passed('simultaneous unique UPI scans create one row, different UPIs for the same part are accepted, and a soft-deleted UPI may be rescanned');
+  const manual = (bin, quantity, extras = {}) => payload('INWARD', '', bin, { partNumber: manualPart, source: 'manual', scanSource: 'manual', quantity, ...extras });
+  const manualRows = () => models.Inventory.find({ dealerCode, auditId, partNumber: manualPart }).lean();
+  const initialManual = await api('/api/scans/process', manual('A1', 3));
+  assert.equal(initialManual.success, true, JSON.stringify(initialManual));
+  const sameRequest = manual('B1', 2);
+  const samePrompt = await api('/api/scans/process', sameRequest, mobileToken);
+  assert.equal(samePrompt.smartBinWarning, true, JSON.stringify(samePrompt));
+  assert.equal(samePrompt.smartBinSuggestion.lastBin, 'A1');
+  assert.equal((await manualRows()).length, 1);
+  const savedSame = await api('/api/scans/process', { ...sameRequest, smartBinDecision: 'USE_EXISTING_BIN', smartBinSelectedBin: 'A1' }, mobileToken);
+  assert.equal(savedSame.success, true, JSON.stringify(savedSame));
+  assert.equal(savedSame.scan.binLocation, 'A1');
+  assert.equal((await models.Inventory.findById(initialManual.scan._id).lean()).quantity, 3);
+  assert.equal((await manualRows()).reduce((sum, row) => sum + row.quantity, 0), 5);
+  const newRequest = manual('B1', 4);
+  assert.equal((await api('/api/scans/process', newRequest)).smartBinWarning, true);
+  const savedNew = await api('/api/scans/process', { ...newRequest, smartBinDecision: 'SAVE_NEW_BIN' });
+  assert.equal(savedNew.success, true, JSON.stringify(savedNew));
+  assert.equal(savedNew.scan.binLocation, 'B1');
+  const backRequest = manual('A1', 1);
+  const backPrompt = await api('/api/scans/process', backRequest);
+  assert.equal(backPrompt.smartBinWarning, true, JSON.stringify(backPrompt));
+  assert.equal(backPrompt.smartBinSuggestion.lastBin, 'B1');
+  assert.equal((await manualRows()).reduce((sum, row) => sum + row.quantity, 0), 9);
+  assert.equal((await api('/api/scans/process', { ...backRequest, smartBinDecision: 'SAVE_NEW_BIN' })).success, true);
+  assert.equal((await api('/api/scans/process', { ...sameRequest, smartBinDecision: 'USE_EXISTING_BIN', smartBinSelectedBin: 'A1' })).alreadyApplied, true);
+  assert.equal((await manualRows()).reduce((sum, row) => sum + row.quantity, 0), 10);
+  passed('manual different-bin entry asks for last bin, saves either chosen bin once, prompts even for an existing destination and preserves original rows');
+  const uniqueQuantities = (await uniqueRows()).map(row => ({ id: row._id, qty: row.quantity }));
+  const untrackedManual = await api('/api/scans/process', payload('INWARD', '', 'A1', { partNumber: uniquePart, source: 'manual', scanSource: 'manual', quantity: 2 }));
+  assert.equal(untrackedManual.success, true, JSON.stringify(untrackedManual));
+  for (const row of uniqueQuantities) assert.equal((await models.Inventory.findById(row.id).lean()).quantity, row.qty);
+  passed('manual entry does not merge quantity into a uniquely tracked UPI row');
 }
 
 async function verifyBrowser() {
