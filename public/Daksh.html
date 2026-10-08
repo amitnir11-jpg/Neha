@@ -29,7 +29,7 @@
   <link rel="stylesheet" href="/css/app-controls.css?v=20260908-enterprise-controls-v2">
   <link rel="stylesheet" href="/dashboard-layout.css?v=20260928-dashboard-dealer-picker-v2">
   <link rel="stylesheet" href="/compact-layout.css?v=20260921-global-density-v2">
-  <link rel="stylesheet" href="/barcode-workspace.css?v=20261007-barcode-workspace-v2">
+  <link rel="stylesheet" href="/barcode-workspace.css?v=20261008-single-scan-v12">
 </head>
 <body class="app-booting">
   <script>
@@ -312,14 +312,7 @@
 
       <section id="scan" class="view">
         <div class="card">
-          <div class="subtabs">
-            <button class="subtab" data-subview="manualEntry">Manual Entry</button>
-            <button class="subtab" data-subview="localPartEntry">Local Part</button>
-            <button class="subtab active" data-subview="barcodeEntry">Barcode/Web Scan</button>
-            <button class="subtab" data-subview="mobileSync">Mobile Sync</button>
-          </div>
-
-          <div id="manualEntry" class="subview">
+          <div id="manualEntry" class="subview" hidden inert aria-hidden="true">
             <form id="manualScanForm" class="grid-form">
               <label>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
               <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>VERIFICATION</option><option>FITTED</option><option>DAMAGE</option></select></label>
@@ -341,7 +334,7 @@
             </form>
           </div>
 
-          <div id="localPartEntry" class="subview">
+          <div id="localPartEntry" class="subview" hidden inert aria-hidden="true">
             <form id="localPartForm" class="grid-form local-part-form">
               <input name="id" type="hidden">
               <label>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
@@ -394,7 +387,7 @@
 
           <div id="barcodeEntry" class="subview active">
             <div class="barcode-workspace-head">
-              <h2>Scan Parts - Barcode / QR</h2>
+              <h2>Scan</h2>
               <div class="barcode-bin-state"><span id="barcodeBinReady" role="status" aria-live="polite">Select or scan Source Bin Location first.</span><span class="barcode-current-bin">Current Bin<strong id="barcodeCurrentBin">—</strong></span></div>
             </div>
             <ol class="barcode-workflow" aria-label="Scan workflow">
@@ -440,7 +433,7 @@
             </form>
           </div>
 
-          <div id="mobileSync" class="subview">
+          <div id="mobileSync" class="subview" hidden inert aria-hidden="true">
             <div class="toolbar">
               <span class="live-pill green-dot">Auto Sync ON</span>
               <button id="manualSyncBtn" class="btn primary" type="button">Manual Sync</button>
@@ -1754,7 +1747,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="/sku-bin-picker.css?v=20261008-sku-v10">
   <script src="/js/sku-bin-picker.js?v=20261008-sku-v10"></script>
-  <script src="/ui.js?v=20261008-sku-v10"></script>
+  <script src="/ui.js?v=20261008-single-scan-v12"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

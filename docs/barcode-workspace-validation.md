@@ -1,5 +1,13 @@
 # Barcode/Web Scan layout and validation — 2026-10-06
 
+## Single Scan screen — 2026-10-08
+
+Scan now opens one workspace headed "Scan", without the Manual Entry, Local Part, Barcode/Web Scan or Mobile Sync tab bar. Barcode/QR capture, inline part entry, source-bin selection, movement type, part details and scan history stay on this screen. Quick manual-entry actions focus the inline form. Part-only OUTWARD/FITTED entry resolves eligible physical SKU bins and requests a source-bin choice when more than one qualifies, then uses the existing manual save service.
+
+The desktop Mobile Sync tab was a manual JSON queue tool; Mobile Web/APK saves and automatic background synchronization do not need that tab. Legacy form controls remain hidden and inert because existing adapters still reference them. Existing Local Part records, reports and backend routes are retained.
+
+Admin and audit-user Chrome fixture sessions verify the single screen, barcode saves, inline entry, source-bin selection, history filters and returning from Dashboard. No unexpected JavaScript console errors occur. Screenshots at 1366×768, 1440×900 and 1920×1080 retain four visible history rows. Scanner/history/manual regressions pass; the isolated migration test is skipped when no database URL is configured.
+
 ## Current verification — 2026-10-08
 
 `npm test` and `npm run build` pass. The fitted-alias and mobile source-format failures recorded below describe earlier revisions and are resolved. The default test run skips database checks without `DATABASE_URL`; a separate run against the existing isolated local `scan_acceptance` database passed all nine barcode-save tests, including migration replay, and all 32 Local Parts isolation assertions.

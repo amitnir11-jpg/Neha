@@ -23,9 +23,11 @@ function historyHarness() {
   let handler;
   const reads = [];
   const context = vm.createContext({
-    normalizePartNumber, upper, escapeRegex,
+    normalizePartNumber, upper, escapeRegex, clean: value => String(value || '').trim(),
     router: { get: (_path, _auth, callback) => { handler = callback; } }, auth: { requireAuth() {} },
     applyScanVisibility: (_req, filter) => filter, applyTestScanMode: filter => filter,
+    getActiveAudit: async () => ({ auditId: 'AUD-FIXTURE' }),
+    scanInventorySummary: async () => ({ netAvailableQuantity: rows.length, scanRows: rows.length, uniqueParts: 2 }),
     buildListQuery: query => ({ ...(query.dealerCode ? { dealerCode: query.dealerCode } : {}), ...(query.type ? { scanType: query.type } : {}) }),
     Inventory: {
       find: filter => {

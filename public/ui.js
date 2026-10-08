@@ -12330,7 +12330,7 @@
     form.elements.binLocation.readOnly = autoOutward;
     form.elements.binLocation.placeholder = autoOutward ? 'Auto-detected from scanned QR / UPI' : 'Select, type or scan bin';
     $('#clearBarcodeBin')?.classList.toggle('hidden', autoOutward);
-    $('#barcodeBinLabel small').textContent = autoOutward ? 'Auto-detected from QR / UPI. Manual entry uses the source bin below.' : 'Enter / Scan bin first (Mandatory)';
+    $('#barcodeBinLabel small').textContent = autoOutward ? 'Auto-detected from QR / UPI. Part-only entry asks for its source bin.' : 'Enter / Scan bin first (Mandatory)';
     $('#barcodeBinStep small').textContent = autoOutward ? 'Auto-detected from QR / UPI' : 'Enter / Scan bin first (Mandatory)';
     form.elements.binLocation.required = !autoOutward;
     form.elements.binLocation.disabled = autoOutward;
@@ -12344,7 +12344,7 @@
     $('#barcodeScanStep b').textContent = autoOutward ? '2' : '3';
     form.elements.part.readOnly = false;
     form.elements.part.required = false;
-    form.elements.part.placeholder = autoOutward ? 'Use Manual Entry for part-only outward' : bin ? 'Enter part number' : 'Select source bin first';
+    form.elements.part.placeholder = autoOutward ? 'Enter part number or scan its barcode / QR' : bin ? 'Enter part number' : 'Select source bin first';
     form.elements.regdNo.required = fitted;
     form.elements.jobCardNo.required = fitted;
     $('#barcodeBinLabel')?.classList.toggle('source-bin-missing', !bin && !autoOutward);
@@ -12395,21 +12395,38 @@
   async function saveBarcodeManualScan() {
     const form = $('#barcodeScanForm');
     if (!form || state.barcodeAutoSaving) return;
-    if (['OUTWARD', 'FITTED'].includes(form.elements.type.value)) {
-      $('#manualScanForm').elements.type.value = form.elements.type.value;
-      updateScanTypeFields($('#manualScanForm'));
-      $('#scan [data-subview="manualEntry"]')?.click();
-      toast('Enter the source bin and part in Manual Entry.');
+    const stockMovement = ['OUTWARD', 'FITTED'].includes(form.elements.type.value);
+    if (!form.elements.dealerCode.value || !form.elements.part.value.trim() || !(Number(form.elements.qty.value) > 0)) {
+      toast('Dealer, part number and a quantity greater than zero are required.', 'error');
       return;
     }
-    if (!form.elements.binLocation.value.trim()) {
+    if (!stockMovement && !form.elements.binLocation.value.trim()) {
       toast('Please select or scan Source Bin Location first.', 'error');
       form.elements.binLocation.focus();
       return;
     }
-    if (!form.elements.dealerCode.value || !form.elements.part.value.trim() || !(Number(form.elements.qty.value) > 0)) {
-      toast('Dealer, part number and a quantity greater than zero are required.', 'error');
-      return;
+    let sourceBin = form.elements.binLocation.value;
+    if (stockMovement) {
+      state.barcodeAutoSaving = true;
+      $('#saveBarcodeManualScan').disabled = true;
+      try {
+        const resolved = await api(`/api/scans/resolve-code?${new URLSearchParams({ dealerCode: form.elements.dealerCode.value,
+          rawValue: form.elements.part.value.trim(), barcodeFormat: 'UNKNOWN' })}`);
+        const bins = (resolved.binOptions || []).filter(bin => Number(bin.availableQty) >= Number(form.elements.qty.value));
+        if (!bins.length) {
+          toast('No eligible physical stock for this quantity. Scan its unique UPI if the stock is individually tracked.', 'error');
+          return;
+        }
+        sourceBin = bins.length === 1 ? bins[0].binLocation
+          : await window.DakshSkuBinPicker.choose(bins, form.elements.part.value.trim());
+        if (!sourceBin) return;
+      } catch (error) {
+        toast(error.message || 'Could not resolve source stock.', 'error');
+        return;
+      } finally {
+        state.barcodeAutoSaving = false;
+        $('#saveBarcodeManualScan').disabled = false;
+      }
     }
     // Adapt the screen to the proven manual-save path, including its duplicate
     // confirmation, master validation and permission checks. The clone is detached.
@@ -12417,7 +12434,7 @@
     ['dealerCode', 'type', 'part', 'qty', 'regdNo', 'jobCardNo', 'partName', 'category', 'mrp', 'dlc'].forEach((name) => {
       manualForm.elements[name].value = form.elements[name].value;
     });
-    manualForm.elements.bin.value = form.elements.binLocation.value;
+    manualForm.elements.bin.value = sourceBin;
     manualForm.elements.rawScan.value = '';
     manualForm.elements.part.disabled = false;
     if (form.elements.type.value === 'INWARD') state.validatedManualBin = state.validatedBarcodeBin;
@@ -12652,9 +12669,7 @@
       if (dealerCode) loadBinTransferBins(dealerCode).catch((error) => toast(error.message, 'error'));
     }
     if (viewId === 'scan') {
-      // Opening Scan must expose the redesigned operator workspace immediately.
-      // The other three tabs remain available through their existing handlers.
-      $$('#scan .subtab').forEach((tab) => tab.classList.toggle('active', tab.dataset.subview === 'barcodeEntry'));
+      // Scan has one operator workspace; legacy controls only support existing adapters.
       $$('#scan .subview').forEach((panel) => panel.classList.toggle('active', panel.id === 'barcodeEntry'));
       state.scanHistoryPage = 1;
       restoreBarcodeScanDefaults();
@@ -13178,7 +13193,6 @@
     $('#homeManualSyncBtn')?.addEventListener('click', runSync);
     $('#quickActionStartScan')?.addEventListener('click', () => {
       openView('scan');
-      $('#scan [data-subview="barcodeEntry"]')?.click();
       setTimeout(() => {
         const rawInput = $('#barcodeRaw');
         (rawInput?.disabled ? $('#barcodeBinLocation') : rawInput)?.focus();
@@ -13186,11 +13200,10 @@
     });
     $('#quickActionManualEntry')?.addEventListener('click', () => {
       openView('scan');
-      $('#scan [data-subview="manualEntry"]')?.click();
       setTimeout(() => {
-        const nextField = $('#manualScanForm [name="part"]')?.disabled
-          ? $('#manualScanForm [name="bin"]')
-          : $('#manualScanForm [name="part"]');
+        const nextField = $('#barcodeScanForm [name="part"]')?.disabled
+          ? $('#barcodeBinLocation')
+          : $('#barcodeScanForm [name="part"]');
         nextField?.focus();
       }, 0);
     });

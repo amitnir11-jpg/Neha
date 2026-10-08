@@ -55,6 +55,14 @@ const server = http.createServer((req, res) => {
         else if (url.pathname==='/api/sync/status') data={success:true,server:'online',db:'connected',connectedDevices:0,pending:0,failed:0,totalSynced:22};
         else if (url.pathname==='/api/settings/smart-bin-suggestion') data={success:true,settings:{enabled:false}};
         else if (url.pathname==='/api/qr/bins' || url.pathname==='/api/master/bins') data={success:true,bins:[{binCode:'A-01',binLocation:'A-01',dealerCode:'11646'},{binCode:'B-02',binLocation:'B-02',dealerCode:'11646'}]};
+        else if (url.pathname==='/api/scans/validate-bin') data={success:true,valid:['A-01','B-02'].includes(url.searchParams.get('binLocation'))};
+        else if (url.pathname==='/api/scans/resolve-code') data={success:true,binOptions:[{binLocation:'A-01',availableQty:100},{binLocation:'B-02',availableQty:100}]};
+        else if (url.pathname==='/api/scans/part-summary') {
+          const partNumber=url.searchParams.get('partNumber');const partRows=rows.filter(row=>row.partNumber===partNumber);
+          const quantity=type=>partRows.filter(row=>(row.scanType||row.type)===type).reduce((sum,row)=>sum+Number(row.qty||row.quantity||0),0);
+          const inwardQty=quantity('INWARD'),outwardQty=quantity('OUTWARD'),fittedQty=quantity('FITTED'),damageQty=quantity('DAMAGE');
+          data={success:true,partNumber,inwardQty,outwardQty,fittedQty,damageQty,availableQty:inwardQty-outwardQty-damageQty};
+        }
         else if (url.pathname==='/api/mobile/validate-part') {const part=parts[url.searchParams.get('partNumber')];data={success:true,found:!!part,...part};}
         else if (url.pathname==='/api/master/parts/suggest') data={success:true,suggestions:Object.values(parts).filter(part=>part.partNumber.includes((url.searchParams.get('q')||'').toUpperCase()))};
         else if (url.pathname==='/api/scans/history') {
@@ -75,25 +83,28 @@ const server = http.createServer((req, res) => {
       await page.waitForFunction(()=>window.__DAKSH_DASHBOARD_BOOT__?.markers.some(marker=>marker.label==='DOMContentLoaded startup complete'));
       assert.equal(await page.locator('#barcodeEntry').getAttribute('class'),'subview active','Scan must open directly on Barcode/Web Scan');
       assert.ok(requests.filter(request=>request.path==='/api/scans/history').every(request=>new URLSearchParams(request.query).get('limit')==='10'));
-      await page.locator('[data-subview="barcodeEntry"]').click();
       await page.waitForFunction(()=>document.querySelectorAll('#scanHistoryRows tr').length===10);
-      await page.locator('#barcodeScanForm [name="dealerCode"]').selectOption('11646');await page.waitForTimeout(150);assert.equal(await page.locator('#scan .subtab').count(),4);
+      await page.locator('#barcodeScanForm [name="dealerCode"]').selectOption('11646');await page.waitForTimeout(150);assert.equal(await page.locator('#scan .subtab').count(),0);
+      for(const panel of ['manualEntry','localPartEntry','mobileSync']) assert.equal(await page.locator(`#${panel}`).isVisible(),false);
+      assert.equal(await page.locator('#barcodeManualTitle').isVisible(),true);
       assert.equal(await page.locator('#focusScanner').count(),0);
       assert.equal(await page.locator('#barcodePartNumber').isDisabled(),true);
       const raw=page.locator('#barcodeRaw'); const bin=page.locator('#barcodeBinLocation');
-      await raw.fill('53155AAW000S');await raw.press('Enter');await page.waitForTimeout(100);assert.equal(saves.length,0);
+      assert.equal(await raw.isDisabled(),true);assert.equal(saves.length,0);
+      await bin.fill('A-01');await bin.press('Enter');await page.waitForFunction(()=>!document.querySelector('#barcodeRaw').disabled);
       await raw.fill('BIN:A-01');await raw.press('Enter');await page.waitForFunction(()=>document.querySelector('#barcodeCurrentBin').textContent==='A-01');
-      await bin.fill('B-02');await bin.press('Enter');assert.equal(await page.locator('#barcodeCurrentBin').textContent(),'B-02');await raw.fill('BIN:A-01');await raw.press('Enter');await page.waitForFunction(()=>document.querySelector('#barcodeCurrentBin').textContent==='A-01');const beforeHistory=requests.filter(req=>req.path==='/api/scans/history').length;
+      await page.waitForFunction(()=>document.querySelector('#barcodeCurrentBin').textContent==='A-01'&&!document.querySelector('#barcodeRaw').disabled);const beforeHistory=requests.filter(req=>req.path==='/api/scans/history').length;
       await raw.fill('53155AAW000S');await raw.press('Enter');await page.waitForFunction(()=>document.querySelector('#barcodeReadyStatus').textContent.includes('Saved'));
       assert.equal(saves.length,1);assert.equal(await bin.inputValue(),'A-01');assert.equal(await raw.inputValue(),'');
       assert.equal(await page.locator('#scanHistoryRows tr').count(),10);assert.ok((await page.locator('#scanHistoryRows tr').first().textContent()).includes('53155AAW000S'));
       assert.equal(requests.filter(req=>req.path==='/api/scans/history').length,beforeHistory,'save must not reload history');
       assert.equal(await page.locator('#barcodeScanForm [data-fill="mrp"]').inputValue(),'15');
       for(const type of ['OUTWARD','FITTED','DAMAGE']) {
-        await page.locator('#barcodeScanForm [name="type"]').selectOption(type);assert.equal(await bin.inputValue(),'A-01');
+        await page.locator('#barcodeScanForm [name="type"]').selectOption(type);
+        if(type==='DAMAGE'){await bin.fill('A-01');await bin.press('Enter');}else assert.equal(await bin.isVisible(),false);
         if(type==='FITTED'){await page.locator('#barcodeScanForm [name="regdNo"]').fill('RJ17FS655');await page.locator('#barcodeScanForm [name="jobCardNo"]').fill('JC1234');}
         const count=saves.length;await raw.fill(`PART=14610AAT001S|UPI=${type}001|QTY=1`);await raw.press('Enter');await page.waitForFunction(count=>document.querySelector('#barcodeReadyStatus').textContent.includes('Saved'),count);
-        await page.waitForTimeout(220);assert.equal(saves.length,count+1);assert.equal(saves.at(-1).scanType,type);assert.equal(await bin.inputValue(),'A-01');
+        await page.waitForTimeout(220);assert.equal(saves.length,count+1);assert.equal(saves.at(-1).scanType,type);if(type==='DAMAGE')assert.equal(await bin.inputValue(),'A-01');
       }
       await page.locator('#barcodeScanForm [name="type"]').selectOption('INWARD');
       await page.locator('#barcodePartNumber').fill('957010805000S');await page.waitForTimeout(500);assert.equal(await page.locator('#barcodeScanForm [data-fill="partName"]').inputValue(),'BOLT 8X50');await page.locator('#barcodeScanForm [name="qty"]').fill('3');
@@ -112,8 +123,21 @@ const server = http.createServer((req, res) => {
       await raw.fill('BIN:A-01');await raw.press('Enter');await page.waitForTimeout(80);
       await page.evaluate(()=>window.fixtureSocket.handlers['scan:saved']({scanId:'LIVE-FIXTURE',partNumber:'53155AAW000S',partDescription:'LIVE SOCKET PART',scanType:'INWARD',type:'INWARD',qty:1,remainingQty:1,dealerCode:'11646',binLocation:'A-01',bin:'A-01',timestamp:new Date().toISOString(),deviceId:'WEB-FIXTURE'}));
       assert.ok((await page.locator('#scanHistoryRows tr').first().textContent()).includes('LIVE SOCKET PART'));
+      // Part-only outward stays on Scan and asks for its eligible source bin.
+      await page.locator('#barcodeScanForm [name="type"]').selectOption('OUTWARD');
+      await page.locator('#barcodePartNumber').fill('53155AAW000S');
+      await page.locator('#barcodeScanForm [name="qty"]').fill('1');
+      const manualOutCount=saves.length;
+      await page.locator('#saveBarcodeManualScan').click();
+      await page.locator('.sku-bin-dialog select').selectOption('B-02');
+      await page.getByRole('button',{name:'Use selected bin',exact:true}).click();
+      await page.waitForFunction(()=>!document.querySelector('#saveBarcodeManualScan').disabled&&!document.querySelector('#barcodePartNumber').value);
+      assert.equal(saves.length,manualOutCount+1);assert.equal(saves.at(-1).scanType,'OUTWARD');assert.equal(saves.at(-1).binLocation,'B-02');
+      assert.equal(await page.locator('#barcodeEntry').isVisible(),true);assert.equal(await page.locator('#manualEntry').isVisible(),false);
+      await page.locator('#barcodeScanForm [name="type"]').selectOption('INWARD');await bin.fill('A-01');await bin.press('Enter');
+      await page.waitForFunction(()=>!document.querySelector('#barcodeRaw').disabled);
       await page.locator('#barcodeBeep').check();await page.locator('#clearBarcodeScan').click();await page.waitForTimeout(4500);if(role==='admin')for(const size of [{width:1366,height:768},{width:1440,height:900},{width:1920,height:1080}]){await page.setViewportSize(size);await page.screenshot({path:`.codex-artifacts/barcode-workspace-${size.width}.png`});const fourth=await page.locator('#scanHistoryRows tr').nth(3).boundingBox();results.push({viewport:size,firstFourRowsVisible:fourth.y+fourth.height<=size.height});assert.ok(fourth.y+fourth.height<=size.height,JSON.stringify({fourth,size}));}
-      await page.locator('[data-subview="manualEntry"]').click();await page.waitForTimeout(150);assert.equal(await page.locator('.scan-history-table th').count(),18);await page.locator('#scanHistorySelectAll').check();assert.equal(await page.locator('.scan-history-checkbox:checked').count(),await page.locator('.scan-history-checkbox').count());await page.locator('.side-link[data-view="dashboard"]').click();await page.locator('.side-link[data-view="scan"]').click();await page.waitForTimeout(150);assert.equal(await page.locator('#barcodeEntry').getAttribute('class'),'subview active');assert.equal(await page.locator('.scan-history-table th').count(),14);await page.locator('#scanHistorySelectAll').check();assert.equal(await page.locator('.scan-history-checkbox:checked').count(),10);assert.equal(await bin.inputValue(),'A-01');results.push({role,saves:saves.length,consoleErrors:errors,passed:true});assert.deepEqual(errors,[]);
+      await page.locator('.side-link[data-view="dashboard"]').click();await page.locator('.side-link[data-view="scan"]').click();await page.waitForTimeout(150);assert.equal(await page.locator('#barcodeEntry').getAttribute('class'),'subview active');assert.equal(await page.locator('#scan .subtab').count(),0);assert.equal(await page.locator('.scan-history-table th').count(),14);await page.locator('#scanHistorySelectAll').check();assert.equal(await page.locator('.scan-history-checkbox:checked').count(),10);assert.equal(await bin.inputValue(),'A-01');results.push({role,saves:saves.length,consoleErrors:errors,passed:true});assert.deepEqual(errors,[]);
       await context.close();
     }
     fs.writeFileSync('.codex-artifacts/barcode-workspace-results.json',JSON.stringify(results,null,2));console.log(JSON.stringify(results));
