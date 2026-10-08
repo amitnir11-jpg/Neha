@@ -1,5 +1,7 @@
 # Report loading and complete-audit download — 2026-10-04
 
+Current verification, 8 October 2026: `npm test` passes, including all 59 report checks and the previously failing fitted-quantity assertion. `npm run build` passes. Separate checks against the isolated local PostgreSQL acceptance database pass migration replay and all 32 Local Parts isolation assertions. The older failure and unavailable-database statements below describe earlier revisions. Authenticated production report/download comparisons and deployment verification remain outstanding.
+
 Diagnosis-time status: report-generation and download defects are reproduced locally and the local fixes pass focused validation. Production was still unhealthy; authenticated downloads and real dealer/audit values were not verified. The user subsequently authorized pushing these fixes to GitHub and Railway; see repository history for publication status.
 
 ## Confirmed findings

@@ -4733,6 +4733,33 @@ router.get('/part-summary', auth.requireAuth, async (req, res) => {
   }
 });
 
+router.post('/set-bin', auth.requireAuth, async (req, res) => {
+  try {
+    const dealerCode = normalizeDealerCode(req.body.dealerCode);
+    const binLocation = upper(req.body.binLocation);
+    if (!dealerCode || dealerCode === 'ALL' || !binLocation || binLocation.length > 100 || /[\r\n\t]/.test(binLocation)
+      || ['NULL', 'UNDEFINED'].includes(binLocation)) {
+      return res.status(400).json({ success: false, valid: false, message: 'Enter a valid bin location.' });
+    }
+    // requireAuth checks the operator's dealer assignment and active audit.
+    // Serialize first-time registration so change/Enter/Set Bin cannot create duplicates.
+    const result = await withDatabaseTransaction(async () => {
+      const bin = await Bin.findOne({ dealerCode, binCode: binLocation }).lean();
+      if (bin) return { bin, created: false };
+      return { bin: await Bin.create({ dealerCode, binCode: binLocation, binName: binLocation, active: true }), created: true };
+    });
+    if (result.bin.active === false) {
+      return res.status(422).json({ success: false, valid: false, binLocation,
+        message: `Bin ${binLocation} is inactive. Activate it in Bin Master before scanning.` });
+    }
+    if (result.created) req.io?.emit('master:update', { dealerCode, scope: 'bins' });
+    return res.json({ success: true, valid: true, binLocation, created: result.created,
+      message: result.created ? `Bin ${binLocation} created and ready` : `Bin ${binLocation} ready` });
+  } catch (error) {
+    return res.status(500).json({ success: false, valid: false, message: error.message });
+  }
+});
+
 router.get('/validate-bin', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = normalizeDealerCode(req.query.dealerCode);

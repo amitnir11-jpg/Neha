@@ -1,5 +1,19 @@
 # Scan flow and shared stock calculation validation
 
+## Mobile Web bin registration and decoder recovery — 2026-10-08
+
+Mobile Web now registers a missing dealer bin when the operator enters it and uses Set Bin or confirms the field. This addresses the reported A1/A5 rejection when those bins had not been created in Bin Master. `POST /api/scans/set-bin` runs through authenticated dealer/audit access checks and a serializable transaction, returns an existing active bin unchanged, creates a missing bin, and rejects inactive bins. Concurrent requests create one record. Manual-entry bin confirmation uses the same operation; typing partial bin codes does not create records.
+
+Camera decoder initialization now has an eight-second timeout and falls back to the JavaScript QR/1D decoder. Repeated WASM frame exceptions also trigger that fallback on the existing stream. Late initialization after Camera Off cannot restart detection, and a temporary video pause no longer permanently stops native detection. Full-frame decoding remains enabled for QR and 1D codes, and scanner assets/build identifiers advance to `20261008-bin-camera-v9`.
+
+All 22 acceptance checks pass, covering mobile-user bin registration, concurrent registration, inward persistence, dealer isolation, inactive-bin protection, Mobile Web Set Bin, optical CODE128/Hero QR capture and actual JavaScript 1D/QR fallback after a forced WASM failure. The full `npm test` passes with the isolated database enabled. Four camera recovery unit tests cover startup timeout, repeated errors versus undecodable frames, cancellation and temporary video pause. These are local checks with fixture images; the photographed physical label and the user's phone still require a device retest after deployment.
+
+## Verification follow-up — 2026-10-08
+
+`npm test` and `npm run build` pass. The database-dependent barcode migration test was rerun with the isolated local PostgreSQL database and passed (nine barcode-save tests, zero skips). The Local Parts database check also passed all 32 assertions.
+
+The PostgreSQL/API/authenticated Chrome acceptance runner passed all 19 checks, including real optical CODE128 and Hero QR decoding from fixture images through a canvas camera stream, with one continuous camera session. The API QR fixture previously reused the optical fixture's UPI and caused the final check to fail on legitimate duplicate protection; it now has a separate UPI. Application duplicate rules are unchanged. Results and screenshots are in `.codex-artifacts/scan-acceptance/`. Physical device checks and authenticated production verification remain outstanding.
+
 The implementation follows the new INWARD / OUTWARD / FITTED workflow. On 7 October 2026, the remaining acceptance checks passed against an isolated local PostgreSQL 18 cluster with all 20 project migrations applied. Real HTTP requests, persisted stock, simultaneous scans, rollback after a forced database insertion failure, authenticated Chrome screens, and live Socket.IO refresh were verified. This verifies the local application; deployment has not been performed or tested.
 
 ## Behavior implemented

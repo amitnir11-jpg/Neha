@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20261007-camera-formats-v8';
+  const APP_VERSION = '20261008-bin-camera-v9';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -18,6 +18,7 @@
   const LOGIN_CONFIG_TIMEOUT_MS = 15000;
   const STORAGE_OPEN_TIMEOUT_MS = 7000;
   const WASM_MAX_DECODE_WIDTH = 1920;
+  const DECODER_START_TIMEOUT_MS = 8000;
   const BATCH_SIZE = 50;
   const DEDUPE_MS = 1800;
   const DUPLICATE_NOTICE_MS = 3000;
@@ -1522,20 +1523,27 @@
     return Boolean(bin) && state.validatedInwardBin === `${activeDealerCode()}|${upper(bin)}`;
   }
 
-  async function validateInwardBin(bin = loadActiveBin()) {
+  async function validateInwardBin(bin = loadActiveBin(), { createIfMissing = false } = {}) {
     const key = `${activeDealerCode()}|${upper(bin)}`;
     if (state.validatedInwardBin === key && bin) return true;
     if (!bin || !activeDealerCode()) return false;
+    const requestId = state.binValidationRequestId = (state.binValidationRequestId || 0) + 1;
     try {
-      const result = await api(`/api/scans/validate-bin?${new URLSearchParams({ dealerCode: activeDealerCode(), binLocation: upper(bin) })}`);
-      if (key.split('|')[0] !== activeDealerCode()) return false;
+      const result = createIfMissing
+        ? await api('/api/scans/set-bin', { method: 'POST', body: { dealerCode: activeDealerCode(), auditId: activeAuditId(), binLocation: upper(bin) } })
+        : await api(`/api/scans/validate-bin?${new URLSearchParams({ dealerCode: activeDealerCode(), binLocation: upper(bin) })}`);
+      if (key.split('|')[0] !== activeDealerCode() || requestId !== state.binValidationRequestId) return false;
       state.validatedInwardBin = result.valid ? key : '';
       renderModeFields();
       renderBinPanel();
       renderCameraControlState();
       return Boolean(result.valid);
     } catch (error) {
+      if (requestId !== state.binValidationRequestId) return false;
       state.validatedInwardBin = '';
+      renderModeFields();
+      renderBinPanel();
+      renderCameraControlState();
       toast(error.message || 'Bin validation failed', 'error');
       return false;
     }
@@ -1568,7 +1576,7 @@
     byId('activeBinField')?.classList.toggle('hidden', partFirstMode() && !state.pendingSourcePart);
     input.value = state.mode === 'OUTWARD' ? '' : current;
     input.readOnly = state.mode === 'OUTWARD';
-    input.placeholder = state.mode === 'OUTWARD' ? 'Auto-detected from scanned QR / UPI' : 'Select or scan source bin';
+    input.placeholder = state.mode === 'OUTWARD' ? 'Auto-detected from scanned QR / UPI' : 'Enter bin (created automatically if new)';
     if (['OUTWARD', 'FITTED'].includes(state.mode)) {
       panel.classList.remove('blocked');
       message.textContent = 'Auto-detected from scanned QR / UPI';
@@ -1589,7 +1597,7 @@
           ? state.pendingSourcePart
             ? `No bin was selected for ${state.pendingSourcePart}. Choose an available bin or enter the source bin, then scan its UPI / QR code.`
             : 'Scan or enter the part number first. The system will find its source bin.'
-          : `Enter the source bin before ${info.label.toLowerCase()} scans.`;
+          : `Enter the source bin and tap Set Bin before ${info.label.toLowerCase()} scans. New bins are created automatically.`;
     } else if (state.mode === 'VERIFICATION') {
       panel.classList.remove('blocked');
       panel.classList.remove('ready');
@@ -1630,7 +1638,7 @@
       input?.focus();
       return '';
     }
-    if (state.mode === 'INWARD' && !(await validateInwardBin(bin))) return '';
+    if (state.mode === 'INWARD' && !(await validateInwardBin(bin, { createIfMissing: true }))) return '';
     const startKey = `${state.mode}:${bin}`;
     const now = Date.now();
     if (state.lastBinStartValue === startKey && now - Number(state.lastBinStartAt || 0) < 700) return bin;
@@ -1938,7 +1946,11 @@
   }
 
   async function detectNativeFrame(video, runId) {
-    if (!state.nativeDetectorRunning || runId !== state.nativeDetectorRunId || !video || video.paused || video.ended) return;
+    if (!state.nativeDetectorRunning || runId !== state.nativeDetectorRunId || !video) return;
+    if (video.paused || video.ended) {
+      scheduleNativeDetection(video, runId, 100);
+      return;
+    }
     try {
       if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
         const detector = await nativeBarcodeDetector();
@@ -2248,12 +2260,19 @@
     }
   }
 
+  function decoderStartupTimeout(promise) {
+    let timer;
+    return Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Barcode decoder startup timed out')), DECODER_START_TIMEOUT_MS);
+    })]).finally(() => clearTimeout(timer));
+  }
+
   async function loadZxingLibrary() {
     if (window.ZXing?.BrowserMultiFormatReader && window.ZXing?.DecodeHintType && window.ZXing?.BarcodeFormat) {
       return window.ZXing;
     }
     if (state.zxingPromise) return state.zxingPromise;
-    state.zxingPromise = new Promise((resolve, reject) => {
+    state.zxingPromise = decoderStartupTimeout(new Promise((resolve, reject) => {
       const existing = document.querySelector('script[data-zxing-loader="true"]');
       if (existing) {
         if (window.ZXing?.BrowserMultiFormatReader && window.ZXing?.DecodeHintType && window.ZXing?.BarcodeFormat) {
@@ -2278,7 +2297,8 @@
       };
       script.onerror = () => reject(new Error('ZXing scanner library failed to load'));
       document.head.appendChild(script);
-    }).catch((error) => {
+    })).catch((error) => {
+      document.querySelector('script[data-zxing-loader="true"]')?.remove();
       state.zxingPromise = null;
       throw error;
     });
@@ -2304,7 +2324,7 @@
 
   async function ensureWasmReader() {
     if (state.wasmReaderPromise) return state.wasmReaderPromise;
-    state.wasmReaderPromise = (async () => {
+    state.wasmReaderPromise = decoderStartupTimeout((async () => {
       if (!window.ZXingWASM) await new Promise((resolve, reject) => {
         const script = document.createElement('script');
         script.src = `/vendor/zxing-wasm/index.js?v=${CACHE_VERSION}`;
@@ -2314,14 +2334,17 @@
       });
       await window.ZXingWASM.prepareZXingModule({ overrides: { locateFile: file => `/vendor/zxing-wasm/${file}` }, fireImmediately: true });
       return window.ZXingWASM;
-    })().catch(error => { state.wasmReaderPromise = null; throw error; });
+    })()).catch(error => { state.wasmReaderPromise = null; throw error; });
     return state.wasmReaderPromise;
   }
 
-  async function startWasmDetection(video, runId) {
+  async function startWasmDetection(video, runId, onFailure) {
     const reader = await ensureWasmReader();
+    if (!state.scanning || runId !== state.cameraRunId) return;
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) throw new Error('Camera decoder canvas is unavailable');
+    let failures = 0;
     const frame = async () => {
       if (!state.scanning || runId !== state.cameraRunId || !video.srcObject) return;
       try {
@@ -2332,11 +2355,19 @@
           context.drawImage(video, 0, 0, canvas.width, canvas.height);
           const started = performance.now();
           const results = await reader.readBarcodes(context.getImageData(0, 0, canvas.width, canvas.height), { formats: ['AllReadable'], tryHarder: true, maxNumberOfSymbols: 1 });
+          failures = 0;
           if (state.scanning && runId === state.cameraRunId && results[0]?.text) {
             handleDecodeResult({ rawValue: results[0].text, format: results[0].format, decodeMs: performance.now() - started });
           }
         }
-      } catch (_) { /* An undecodable frame leaves the camera running. */ }
+      } catch (error) {
+        // No symbol returns an empty array. Repeated exceptions mean this decoder failed.
+        if (++failures >= 3) {
+          console.warn('[SCAN_DECODER]', error.message);
+          await onFailure?.(error);
+          return;
+        }
+      }
       if (state.scanning && runId === state.cameraRunId) state.wasmTimer = setTimeout(frame, 120);
     };
     void frame();
@@ -3265,8 +3296,8 @@
     video.autoplay = true;
     video.setAttribute('playsinline', '');
     bindCameraTapToFocus(video);
-    const nativeDetectorPromise = nativeBarcodeDetector();
-    cameraState('Ready to scan');
+    const nativeDetectorPromise = decoderStartupTimeout(nativeBarcodeDetector()).catch(() => null);
+    cameraState('Starting camera');
     setCameraStarting(true);
     let stream = null;
     try {
@@ -3309,8 +3340,6 @@
         cameraState('Ready to scan');
         startNativeDetector(video).catch(() => undefined);
       }
-      let zxingStarted = false;
-      try { await startWasmDetection(video, runId); zxingStarted = true; } catch (error) { console.warn('[SCAN_DECODER]', error.message); }
       const startZxingFromVideo = (reader) => {
         if (typeof reader.decodeContinuously === 'function') {
           reader.decodeContinuously(video, onDecode);
@@ -3322,38 +3351,37 @@
         }
         return false;
       };
-      if (!zxingStarted) {
-        try {
+      let fallbackPromise;
+      const startFallbackDecoder = () => {
+        if (fallbackPromise) return fallbackPromise;
+        fallbackPromise = (async () => {
           const reader = await ensureReader();
           if (!state.scanning || runId !== state.cameraRunId) return;
           state.scanReader = reader;
-          cameraState('Ready to scan');
-          zxingStarted = startZxingFromVideo(reader);
-          if (!zxingStarted && reader && typeof reader.decodeFromConstraints === 'function') {
-            state.cameraStream = null;
-            try {
-              stream.getTracks().forEach((track) => track.stop());
-            } catch (_) {}
-            const startDecode = () => reader.decodeFromConstraints(cameraConstraints(), video, onDecode);
-            const promise = Promise.resolve(startDecode()).catch((error) => {
-              if (state.scanning && runId === state.cameraRunId) {
-                state.scanning = false;
-                setCameraStarting(false);
-                setCameraLive(false);
-                const message = error?.message || 'Camera failed to start';
-                cameraState(message);
-                toast(message, 'error');
-              }
-            });
-            promise.catch(() => undefined);
-            zxingStarted = true;
-          } else if (!zxingStarted) {
+          if (!startZxingFromVideo(reader)) {
             throw new Error('Scanner library failed to initialize');
           }
-        } catch (error) {
-          throw error;
-        }
+          cameraState('Ready to scan');
+        })();
+        return fallbackPromise;
+      };
+      if (!nativeDetector) cameraState('Loading QR / barcode decoder');
+      try {
+        await startWasmDetection(video, runId, async () => {
+          if (!state.scanning || runId !== state.cameraRunId) return;
+          try { await startFallbackDecoder(); }
+          catch (error) {
+            if (!state.scanning || runId !== state.cameraRunId) return;
+            stopCamera({ preserveRequest: true });
+            cameraState('Scanner unavailable. Turn Camera ON to retry.');
+            toast(error.message || 'Barcode decoder failed', 'error');
+          }
+        });
+      } catch (error) {
+        console.warn('[SCAN_DECODER]', error.message);
+        await startFallbackDecoder();
       }
+      if (!state.scanning || runId !== state.cameraRunId) return;
       await enableCameraFocus(video);
       cameraState('Ready to scan');
       state.cameraTimer = setTimeout(() => {
@@ -4027,7 +4055,9 @@
       event.target.value = upper(event.target.value);
       renderModeFields();
       clearTimeout(state.manualBinValidationTimer);
-      if (state.mode === 'INWARD') state.manualBinValidationTimer = setTimeout(() => validateInwardBin(event.target.value), 250);
+    });
+    byId('manualBinLocation').addEventListener('change', (event) => {
+      if (state.mode === 'INWARD') void validateInwardBin(event.target.value, { createIfMissing: true });
     });
     byId('activeBinLocation').addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;

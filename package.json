@@ -17,7 +17,7 @@
     "test:barcode": "node --test test/barcode-save-performance.test.js test/manual-save-performance.test.js test/request-performance.test.js test/dashboard-scan-refresh.test.js test/dashboard-aggregation.test.js test/prisma-slow-query.test.js test/scan-history-outward.test.js test/scan-save-performance.test.js test/scan-outward-summary.test.js test/scan-flow-stock.test.js",
     "test:network": "node --test test/network-discovery.test.js",
     "test:scan:acceptance": "node scripts/scan-stock-acceptance.js",
-    "test:camera": "node --test test/camera-code-parser.test.js test/camera-decoder.test.js",
+    "test:camera": "node --test test/camera-code-parser.test.js test/camera-decoder.test.js test/camera-recovery.test.js",
     "test:catalogue-upload": "node scripts/catalogue-upload-check.js",
     "test:local-parts-browser": "node scripts/local-parts-browser-smoke.js",
     "license:status": "node scripts/license-status.js",

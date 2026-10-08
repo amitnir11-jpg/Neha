@@ -55,7 +55,7 @@ async function main() {
   }
   const createdUser = await models.User.create({ username: `scan-${suffix.toLowerCase()}`, name: 'Scan Acceptance', role: 'admin', dealerAccess: [dealerCode], active: true, approved: true });
   user = require('../routes/auth').publicUser(createdUser);
-  secondUser = require('../routes/auth').publicUser(await models.User.create({ username: `scan-second-${suffix.toLowerCase()}`, name: 'Second operator', role: 'admin', dealerAccess: [dealerCode], active: true, approved: true }));
+  secondUser = require('../routes/auth').publicUser(await models.User.create({ username: `scan-second-${suffix.toLowerCase()}`, name: 'Second operator', role: 'mobile_user', dealerAccess: [dealerCode], active: true, approved: true }));
   token = jwt.sign(user, secret, { expiresIn: '1h' });
   log = fs.openSync(path.join(artifactDir, 'server.log'), 'w');
   server = spawn(process.execPath, ['server.js'], { cwd: path.resolve('.'), windowsHide: true,
@@ -70,6 +70,21 @@ async function main() {
   assert.equal((await api('/api/scans/process', payload('INWARD', 'INVALID', 'UNKNOWN'))).success, false);
   assert.equal(await models.Inventory.countDocuments({ dealerCode }), 0);
   passed('invalid INWARD bin writes no inventory');
+  const mobileToken = jwt.sign(secondUser, secret, { expiresIn: '1h' });
+  const setBin = () => api('/api/scans/set-bin', { dealerCode, auditId, binLocation: ' a5 ' }, mobileToken);
+  const registrations = await Promise.all([setBin(), setBin()]);
+  assert.ok(registrations.every(result => result.valid && result.binLocation === 'A5'), JSON.stringify(registrations));
+  assert.equal(registrations.filter(result => result.created).length, 1);
+  assert.equal(await models.Bin.countDocuments({ dealerCode, binCode: 'A5' }), 1);
+  assert.equal((await scan('INWARD', 'AUTO-BIN', 'A5')).success, true);
+  assert.equal((await api('/api/scans/set-bin', { dealerCode: 'OTHER-DEALER', binLocation: 'A5' }, mobileToken)).code, 403);
+  assert.equal(await models.Bin.countDocuments({ dealerCode: 'OTHER-DEALER', binCode: 'A5' }), 0);
+  await models.Bin.create({ dealerCode, binCode: 'DISABLED', active: false });
+  assert.equal((await api('/api/scans/set-bin', { dealerCode, auditId, binLocation: 'DISABLED' }, mobileToken)).code, 422);
+  assert.equal((await models.Bin.findOne({ dealerCode, binCode: 'DISABLED' }).lean()).active, false);
+  // Leave the golden stock sequence's part untouched by this registration check.
+  await models.Inventory.deleteMany({ dealerCode, upiNo: 'AUTO-BIN' });
+  passed('mobile operator creates a new bin once, scans inward, and cannot change another dealer or reactivate an inactive bin');
   for (const [upi, bin] of [['UPI001', 'A1'], ['UPI002', 'A1'], ['UPI003', 'B1'], ['UPI004', 'B1']]) {
     const saved = await scan('INWARD', upi, bin);
     assert.equal(saved.success, true, JSON.stringify(saved));
@@ -150,11 +165,12 @@ async function main() {
   assert.equal(directCamera.scan.partNumber, '32410KTC920S');
   assert.equal(directCamera.scan.rawDecodedValue, cameraRaw);
   assert.equal(directCamera.scan.parsedCode.barcodeFormat, 'CODE_128');
-  const qrRaw = 'D/132/HE5B0199510/EBHPE5EQTWD4/44831KVH900S      /001/20170505125743/00';
-  const qrCamera = await scan('INWARD', '', 'A1', { partNumber: 'EBHPE5EQTWD4', cameraDecoded: true, rawDecodedValue: qrRaw, rawScan: qrRaw, barcodeFormat: 'qr_code' });
+  // Keep the API fixture distinct from the physical QR image decoded later.
+  const qrRaw = 'D/132/HE5B0199510/APICAMERAUPI/44831KVH900S      /001/20170505125743/00';
+  const qrCamera = await scan('INWARD', '', 'A1', { partNumber: 'APICAMERAUPI', cameraDecoded: true, rawDecodedValue: qrRaw, rawScan: qrRaw, barcodeFormat: 'qr_code' });
   assert.equal(qrCamera.success, true, JSON.stringify(qrCamera));
   assert.equal(qrCamera.scan.partNumber, '44831KVH900S');
-  assert.equal(qrCamera.scan.parsedCode.upi, 'EBHPE5EQTWD4');
+  assert.equal(qrCamera.scan.parsedCode.upi, 'APICAMERAUPI');
   assert.equal((await scan('INWARD', '', 'A1', { cameraDecoded: true, rawDecodedValue: 'PREFIX-32410KTC920S', rawScan: 'PREFIX-32410KTC920S', barcodeFormat: 'CODE_128' })).success, false);
   const numericCamera = await scan('INWARD', '', 'B1', { cameraDecoded: true, rawDecodedValue: '4006381333931', rawScan: '4006381333931', barcodeFormat: 'ean_13' });
   assert.equal(numericCamera.success, true, JSON.stringify(numericCamera));
@@ -240,7 +256,7 @@ async function verifyBrowser() {
     // Supply decoded camera input while retaining the real UI, sync API, database and sockets.
     window.BarcodeDetector = class {
       static async getSupportedFormats() { return ['qr_code']; }
-      async detect() { const value = window.acceptanceBarcode; window.acceptanceBarcode = ''; return value ? [{ rawValue: value }] : []; }
+      async detect() { window.acceptanceNativeFrames = (window.acceptanceNativeFrames || 0) + 1; const value = window.acceptanceBarcode; window.acceptanceBarcode = ''; return value ? [{ rawValue: value }] : []; }
     };
   }, { token, user, dealerCode, auditId });
   const mobilePage = await mobile.newPage();
@@ -251,6 +267,7 @@ async function verifyBrowser() {
   await mobilePage.locator('#manualBtn').click();
   assert.equal(await mobilePage.locator('#manualPartNumber').isDisabled(), true);
   await mobilePage.locator('#manualBinLocation').fill('C1');
+  await mobilePage.locator('#manualBinLocation').press('Tab');
   await mobilePage.waitForFunction(() => !document.querySelector('#manualPartNumber').disabled);
   await mobilePage.locator('#manualCancelBtn').click();
   passed('mobile INWARD manual entry unlocks after dealer-bin validation');
@@ -260,6 +277,8 @@ async function verifyBrowser() {
   await mobilePage.waitForFunction(() => document.querySelector('#cameraPreview').srcObject
     && document.querySelector('#cameraPreview').readyState >= 2
     && document.querySelector('#startScanBtn').textContent.includes('Camera Off'));
+  await mobilePage.locator('#cameraPreview').scrollIntoViewIfNeeded();
+  await mobilePage.waitForFunction(() => window.acceptanceNativeFrames > 0);
   const outwardResponse = mobilePage.waitForResponse(response => response.url().endsWith('/api/scans/process') && response.request().method() === 'POST');
   await mobilePage.evaluate(() => { window.acceptanceBarcode = 'HISTORY-2'; });
   const outwardResult = await (await outwardResponse).json();
@@ -324,13 +343,20 @@ async function verifyBrowser() {
   await opticalPage.goto(`${origin}/mobile-web?scanDebug=1`);
   await opticalPage.locator('#scannerPanel').waitFor({ state: 'visible' });
   // Use a fresh bin so the real 1D camera save is independent of previous fixture scans.
-  await models.Bin.create({ dealerCode, binCode: 'CAMERA1', active: true });
   await opticalPage.locator('#activeBinLocation').fill('CAMERA1');
   await opticalPage.locator('#saveBinBtn').click();
+  await opticalPage.waitForFunction(() => document.querySelector('#binPanelMessage').textContent.includes('Scanning will save to bin CAMERA1'));
+  assert.equal(await models.Bin.countDocuments({ dealerCode, binCode: 'CAMERA1' }), 1);
+  passed('mobile Set Bin creates a missing dealer bin and starts the camera');
   await opticalPage.waitForFunction(() => document.querySelector('#cameraPreview').readyState >= 2 && window.ZXingWASM);
   const starts = await opticalPage.evaluate(() => window.acceptanceCameraStarts);
   const captureImage = async (fixture, expectedPart) => {
-    const savedResponse = opticalPage.waitForResponse(response => response.url().endsWith('/api/scans/process') && response.request().method() === 'POST');
+    const savedResponse = opticalPage.waitForResponse(response => response.url().endsWith('/api/scans/process') && response.request().method() === 'POST').catch(async error => {
+      await opticalPage.screenshot({ path: path.join(artifactDir, 'mobile-optical-failure.png'), fullPage: true });
+      console.error('Optical capture failure', fixture, await opticalPage.locator('#cameraState').textContent(),
+        await opticalPage.locator('#scanDecodeDebug').textContent(), await opticalPage.locator('#binPanelMessage').textContent(), errors);
+      throw error;
+    });
     await opticalPage.evaluate(async imageData => {
       const image = new Image(); image.src = imageData; await image.decode();
       const canvas = window.acceptanceCanvas, ctx = canvas.getContext('2d');
@@ -353,6 +379,20 @@ async function verifyBrowser() {
   await opticalPage.screenshot({ path: path.join(artifactDir, 'mobile-real-decoder.png'), fullPage: true });
   assert.deepEqual(errors, []);
   passed('mobile camera optically decodes CODE128 and Hero QR with one continuous stream and visible raw development log');
+  // Exercise recovery with the actual fallback decoder and the same live stream.
+  await opticalPage.evaluate(() => {
+    window.ZXingWASM.readBarcodes = async () => { throw new Error('Acceptance decoder runtime failure'); };
+  });
+  const fallbackBarcode = await captureImage('fixture-ean13.png', '4006381333931');
+  assert.equal(fallbackBarcode.scan.parsedCode.barcodeFormat, 'EAN_13');
+  await opticalPage.locator('[data-mode="OUTWARD"]').click();
+  const fallbackQr = await captureImage('fixture-qrcode.png', '44831KVH900S');
+  assert.equal(fallbackQr.scan.scanType, 'OUTWARD');
+  assert.equal(fallbackQr.scan.parsedCode.upi, 'EBHPE5EQTWD4');
+  assert.equal(fallbackQr.scan.parsedCode.barcodeFormat, 'QR_CODE');
+  assert.equal(await opticalPage.evaluate(() => window.acceptanceCameraStarts), starts);
+  assert.deepEqual(errors, []);
+  passed('decoder runtime failure falls back to real 1D and QR decoding without reopening the camera');
   await optical.close();
 }
 

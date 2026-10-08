@@ -1,5 +1,11 @@
 # Barcode/Web Scan layout and validation — 2026-10-06
 
+## Current verification — 2026-10-08
+
+`npm test` and `npm run build` pass. The fitted-alias and mobile source-format failures recorded below describe earlier revisions and are resolved. The default test run skips database checks without `DATABASE_URL`; a separate run against the existing isolated local `scan_acceptance` database passed all nine barcode-save tests, including migration replay, and all 32 Local Parts isolation assertions.
+
+The real PostgreSQL/API/Chrome acceptance runner now passes all 19 checks, including optical CODE128 and Hero QR decoding from image fixtures through a continuous canvas camera stream. Its API QR fixture uses a separate UPI so the later optical QR check does not encounter a legitimate duplicate from an earlier test. See [scan flow verification](scan-flow-stock-logic.md). Physical USB scanner operation, audible beep and authenticated production audit/report comparisons still require an operator session.
+
 The operator workspace is implemented and verified with local browser/API fixtures. Physical USB scanner operation, audible beep on the user's device, authenticated production stock movements, and production report/reconciliation comparisons remain pending. This document is not a production inventory sign-off.
 
 Before editing, the clean working version was preserved as `backup/barcode-layout-20261006`, pointing to `2e04673`. No schema, migration, database record, inventory calculation, pricing calculation, role rule, mobile scanner implementation, or WebSocket subscription was changed.
