@@ -24,6 +24,7 @@ const { cataloguePayload } = require('../utils/catalogue');
 const { formatDateLikeFields, formatIstDateTime, isDateLikeKey } = require('../utils/time');
 const { auditStockStatus, calculateInventoryValue, decorateScanValue, scanValueRow, validateReportValueSource } = require('../utils/inventoryValueEngine');
 const { getActiveAudit } = require('../utils/audit');
+const { resolveCurrentAudit } = require('../services/InventoryCalculationService');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals, signedScanQuantity } = require('../utils/reportTotals');
 const { fittedPhysicalMovement, fittedStatus, fittedWorkshopQuantity } = require('../utils/fittedStock');
@@ -152,20 +153,9 @@ async function resolveReportAuditQuery(query = {}) {
     return resolved;
   }
   if (!resolved.dealerCode) return resolved;
-  const [dealer, activeAudit] = await Promise.all([
-    Dealer.findOne({ dealerCode: resolved.dealerCode }).lean().catch(() => null),
-    getActiveAudit({ dealerCode: resolved.dealerCode }).catch(() => null)
-  ]);
-  let resolvedAuditId = cleanText((dealer && dealer.currentAuditId) || (activeAudit && activeAudit.auditId) || '');
-  if (!resolvedAuditId) {
-    const latestAudit = await Audit.findOne({ dealerCode: resolved.dealerCode })
-      .sort({ auditStartDate: -1, createdAt: -1 })
-      .select('auditId')
-      .lean()
-      .catch(() => null);
-    resolvedAuditId = cleanText(latestAudit && latestAudit.auditId);
-  }
-  if (resolvedAuditId) resolved.auditId = resolvedAuditId;
+  const scope = await resolveCurrentAudit(resolved.dealerCode);
+  const resolvedAuditId = cleanText(scope.auditId === '__NO_AUDIT_SELECTED__' ? '' : scope.auditId);
+  resolved.auditId = resolvedAuditId || '__NO_AUDIT_SELECTED__';
   return resolved;
 }
 

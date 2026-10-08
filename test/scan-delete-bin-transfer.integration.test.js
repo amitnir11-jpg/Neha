@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const Inventory = require('../models/Inventory');
 const Bin = require('../models/Bin');
 const ScanAuditLog = require('../models/ScanAuditLog');
+const BinTransferHistory = require('../models/BinTransferHistory');
 const { prisma } = require('../services/prisma');
 const { softDeleteScans } = require('../services/ScanModificationService');
 const { calculateInventoryLedger } = require('../services/InventoryCalculationService');
@@ -25,6 +26,7 @@ test('sample scan appears in Bin Transfer and stock report, then disappears afte
     inventoryFind: Inventory.find,
     inventoryFindByIdAndUpdate: Inventory.findByIdAndUpdate,
     binFind: Bin.find,
+    transferFind: BinTransferHistory.find,
     auditCreate: ScanAuditLog.create,
     transaction: prisma.$transaction
   };
@@ -53,6 +55,7 @@ test('sample scan appears in Bin Transfer and stock report, then disappears afte
       }
     });
     Bin.find = () => ({ sort() { return this; }, async lean() { return [{ binCode: 'A1', active: true }]; } });
+    BinTransferHistory.find = () => ({ async lean() { return []; } });
     ScanAuditLog.create = async (data) => ({ ...data, _id: 'audit-delete-1' });
     prisma.$transaction = async (work) => {
       const result = await work({});
@@ -73,6 +76,14 @@ test('sample scan appears in Bin Transfer and stock report, then disappears afte
         if (event === 'scan:deleted' || event === 'reports:update') assert.equal(committed, true, `${event} fires after commit`);
         emitted.push(event);
       } } };
+    BinTransferHistory.find = () => ({ async lean() {
+      return [{ transferId: 'BT-DEPENDENT', fromBin: 'A1', toBin: 'A2', transferredAt: new Date() }];
+    } });
+    await assert.rejects(softDeleteScans({ _id: sample._id, dealerCode: '11646', auditId: 'AUD1' }, req),
+      (error) => error.status === 409 && /dependent stock activity/.test(error.message));
+    assert.equal(sample.isDeleted, false, 'dependent stock must not be deleted');
+
+    BinTransferHistory.find = () => ({ async lean() { return []; } });
     const deletion = await softDeleteScans({ _id: sample._id, dealerCode: '11646', auditId: 'AUD1' }, req);
     assert.equal(deletion.deletedCount, 1);
 
@@ -91,6 +102,7 @@ test('sample scan appears in Bin Transfer and stock report, then disappears afte
     Inventory.find = saved.inventoryFind;
     Inventory.findByIdAndUpdate = saved.inventoryFindByIdAndUpdate;
     Bin.find = saved.binFind;
+    BinTransferHistory.find = saved.transferFind;
     ScanAuditLog.create = saved.auditCreate;
     prisma.$transaction = saved.transaction;
   }

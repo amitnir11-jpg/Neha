@@ -4646,8 +4646,8 @@
     return { ...deleteModalDetails };
   }
 
-  function deleteFailureError() {
-    return new Error('Unable to delete scan. Please try again.');
+  function deleteFailureError(error) {
+    return new Error(error?.data?.message || error?.message || 'Unable to delete scan. Please try again.');
   }
 
   function openScanEditModal(scanId = '', focusField = 'partNumber') {
@@ -11094,7 +11094,7 @@
     try {
       await api(`/api/admin/scans/${encodeURIComponent(id)}`, { method: 'DELETE', body: deleteDetails });
     } catch (error) {
-      throw deleteFailureError();
+      throw deleteFailureError(error);
     }
     removeScanHistoryRecords([scan]);
     toast('Scan deleted');
@@ -11125,7 +11125,7 @@
     try {
       data = await api('/api/admin/scans/delete-by-parts', { method: 'POST', body: payload });
     } catch (error) {
-      throw deleteFailureError();
+      throw deleteFailureError(error);
     }
     toast(`Part deleted: ${data.deletedCount || 0} scan(s) removed`);
     queueDashboardRefresh(250);
@@ -11147,7 +11147,7 @@
     try {
       await api('/api/admin/scans/delete-selected', { method: 'POST', body: { ids, ...deleteDetails } });
     } catch (error) {
-      throw deleteFailureError();
+      throw deleteFailureError(error);
     }
     removeScanHistoryRecords(scans);
     toast('Selected scans deleted');
@@ -11160,7 +11160,7 @@
     try {
       await api('/api/admin/cleanup-unknown-parts', { method: 'POST', body: { ...criteria, ...deleteDetails } });
     } catch (error) {
-      throw deleteFailureError();
+      throw deleteFailureError(error);
     }
     removeLocalMatching(criteria);
     toast('Unknown part scans deleted');
@@ -11178,7 +11178,7 @@
     try {
       await api(`/api/admin/dealer/${encodeURIComponent(dealer)}/scans`, { method: 'DELETE', body: deleteDetails });
     } catch (error) {
-      throw deleteFailureError();
+      throw deleteFailureError(error);
     }
     removeLocalMatching({ dealerCode: dealer });
     toast('Dealer scan data deleted');

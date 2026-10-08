@@ -10,6 +10,7 @@ const DuplicateScanLog = require('../models/DuplicateScanLog');
 const auth = require('./auth');
 const inventory = require('./inventory');
 const scanModification = require('../services/ScanModificationService');
+const { withDatabaseTransaction } = require('../services/prisma');
 const passwordReset = require('../services/PasswordResetService');
 const { cleanText, normalizePartNumber } = require('../utils/normalize');
 
@@ -426,7 +427,7 @@ router.delete('/scans/:scanId', auth.requireAuth, auth.requireAdmin, async (req,
     await emitRefresh(req);
     res.json({ success: true, message: DELETE_MESSAGE, deletedCount: result.deletedCount || 0 });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -438,7 +439,7 @@ router.post('/scans/delete-selected', auth.requireAuth, auth.requireAdmin, async
     await emitRefresh(req);
     res.json({ success: true, message: DELETE_MESSAGE, deletedCount: result.deletedCount || 0 });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -454,7 +455,7 @@ router.post('/scans/delete-by-parts', auth.requireAuth, auth.requireAdmin, async
     await emitRefresh(req);
     res.json({ success: true, message: DELETE_MESSAGE, deletedCount: result.deletedCount || 0, count: parts.length });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -465,7 +466,7 @@ router.post('/cleanup-unknown-parts', auth.requireAuth, auth.requireAdmin, async
     await emitRefresh(req);
     res.json({ success: true, message: DELETE_MESSAGE, deletedCount: result.deletedCount || 0 });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -492,7 +493,7 @@ router.delete('/part/scans', auth.requireAuth, auth.requireAdmin, async (req, re
     await emitRefresh(req);
     res.json({ success: true, deletedCount: result.deletedCount || 0 });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -500,14 +501,15 @@ router.delete('/part/all', auth.requireAuth, auth.requireAdmin, async (req, res)
   try {
     const partNo = normalizedPartNumber(req.body.partNumber || req.query.partNumber);
     const code = dealerCode(req.body.dealerCode || req.query.dealerCode);
-    const [masterResult, scanResult] = await Promise.all([
-      MasterPart.deleteMany(partMatch(partNo, code)),
-      scanModification.softDeleteScans(partMatch(partNo, code), req, { reason: req.body?.reason, remarks: req.body?.remarks })
-    ]);
+    const { masterResult, scanResult } = await withDatabaseTransaction(async () => {
+      const scanResult = await scanModification.softDeleteScans(partMatch(partNo, code), req, { reason: req.body?.reason, remarks: req.body?.remarks });
+      const masterResult = await MasterPart.deleteMany(partMatch(partNo, code));
+      return { masterResult, scanResult };
+    });
     await emitRefresh(req);
     res.json({ success: true, masterDeleted: masterResult.deletedCount || 0, scansDeleted: scanResult.deletedCount || 0 });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 

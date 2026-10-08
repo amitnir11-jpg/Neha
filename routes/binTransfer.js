@@ -4,14 +4,11 @@ const ExcelJS = require('exceljs');
 const QRCode = require('qrcode');
 const Inventory = require('../models/Inventory');
 const Bin = require('../models/Bin');
-const Dealer = require('../models/Dealer');
-const Audit = require('../models/Audit');
 const BinTransferHistory = require('../models/BinTransferHistory');
 const BinLabelPrintLog = require('../models/BinLabelPrintLog');
 const auth = require('./auth');
-const { getActiveAudit } = require('../utils/audit');
 const { formatIstDateTime } = require('../utils/time');
-const { calculateInventoryLedger } = require('../services/InventoryCalculationService');
+const { calculateInventoryLedger, resolveCurrentAudit } = require('../services/InventoryCalculationService');
 const { applyTransactionScanFilter } = require('./inventory');
 const { stockMovementType, stockMovementBin } = require('../utils/stockQuantity');
 const { withDatabaseTransaction } = require('../services/prisma');
@@ -134,23 +131,16 @@ function publicPart(row) {
 async function resolveTransferAuditId(dealerCode, requestedAuditId = '') {
   const requested = clean(requestedAuditId);
   if (requested && requested.toLowerCase() !== 'active') return requested;
-  const [dealer, activeAudit] = await Promise.all([
-    Dealer.findOne({ dealerCode }).lean().catch(() => null),
-    getActiveAudit({ dealerCode }).catch(() => null)
-  ]);
-  let auditId = clean(dealer?.currentAuditId || activeAudit?.auditId || '');
-  if (!auditId) {
-    const latest = await Audit.findOne({ dealerCode }).sort({ auditStartDate: -1, createdAt: -1 })
-      .select('auditId').lean().catch(() => null);
-    auditId = clean(latest?.auditId || '');
-  }
-  return auditId;
+  const scope = await resolveCurrentAudit(dealerCode);
+  return clean(scope.auditId === '__NO_AUDIT_SELECTED__' ? '' : scope.auditId);
 }
 
 async function groupedParts(dealerCode, fromBin = '', auditId = '') {
   const sourceBin = /^all$/i.test(clean(fromBin)) ? '' : clean(fromBin).toUpperCase();
   if (!clean(dealerCode)) return [];
-  const scope = { dealerCode: upper(dealerCode), auditId: clean(auditId) };
+  const currentAuditId = clean(auditId) || await resolveTransferAuditId(dealerCode);
+  if (!currentAuditId) return [];
+  const scope = { dealerCode: upper(dealerCode), auditId: currentAuditId };
   const reportCompatibleFilter = applyTransactionScanFilter({ dealerCode: scope.dealerCode, auditId: scope.auditId });
   const records = await Inventory.find(reportCompatibleFilter).sort({ timestamp: -1, createdAt: -1 }).lean();
   return calculateInventoryLedger(records, { scope }).binBreakdown
@@ -266,11 +256,14 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
 
   let remaining = requestedQty;
   let partDescription = '';
+  const sourceScanIds = [];
+  const movedScanIds = [];
   for (const record of records) {
     if (remaining <= 0) break;
     const recordQty = Number(record.qty || record.quantity || 0);
     if (recordQty <= 0) continue;
     partDescription = partDescription || record.partDescription || record.partName || '';
+    sourceScanIds.push(String(record._id || record.id));
 
     if (recordQty <= remaining) {
       await Inventory.updateOne(
@@ -283,6 +276,7 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
             : {})
         } }
       );
+      movedScanIds.push(String(record._id || record.id));
       remaining -= recordQty;
     } else {
       const movedQty = remaining;
@@ -299,6 +293,7 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
       clone.syncKey = clone.uniqueScanId;
       clone.qty = movedQty;
       clone.quantity = movedQty;
+      clone.transferOriginScanId = String(record._id || record.id);
       clone.binLocation = toBin;
       clone.bin = toBin;
       if (clone.upiCode || clone.upiNo || clone.upiId) {
@@ -307,7 +302,8 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
         clone.upiStatus = 'AVAILABLE';
       }
       clone.timestamp = new Date();
-      await Inventory.create(clone);
+      const movedRecord = await Inventory.create(clone);
+      movedScanIds.push(String(movedRecord._id || movedRecord.id || clone._id || ''));
       remaining = 0;
     }
   }
@@ -321,6 +317,8 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
     partNumber: cleanPart,
     partDescription,
     qty: requestedQty,
+    sourceScanIds: Array.from(new Set(sourceScanIds)),
+    movedScanIds: Array.from(new Set(movedScanIds.filter(Boolean))),
     transferType,
     transferredBy: userName(req),
     transferredAt: new Date()

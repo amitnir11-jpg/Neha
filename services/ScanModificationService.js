@@ -1,7 +1,9 @@
 const Inventory = require('../models/Inventory');
 const ScanAuditLog = require('../models/ScanAuditLog');
 const AuditLog = require('../models/AuditLog');
-const { activeInventoryValue, remainingQtyValue } = require('../utils/inventoryMovementState');
+const BinTransferHistory = require('../models/BinTransferHistory');
+const { activeInventoryValue, remainingQtyValue, upiCodeValue } = require('../utils/inventoryMovementState');
+const { stockMovementType, stockMovementBin, activeStockTransaction } = require('../utils/stockQuantity');
 const { invalidateCache } = require('../utils/safeCache');
 const { inDatabaseTransaction, withDatabaseTransaction, afterDatabaseCommit } = require('./prisma');
 
@@ -127,7 +129,7 @@ function invalidatedScope(row = {}) {
 function invalidateScanCaches(rows = []) {
   const scopes = rows.length ? rows : [{}];
   scopes.forEach((row) => invalidateCache({
-    tags: ['scan', 'dashboard', 'report', 'reconciliation', 'mobile', 'stock'],
+    tags: ['scan', 'scans', 'inventory', 'dashboard', 'report', 'reports', 'reconciliation', 'mobile', 'stock'],
     scope: invalidatedScope(row)
   }));
 }
@@ -139,6 +141,41 @@ function emitScanMutation(req, event, payload, rows = []) {
   req.io.emit('reports:update', payload);
   req.io.emit('inventory:update', payload);
   rows.forEach((row) => req.io.emit('scan:modified', { ...payload, dealerCode: row.dealerCode || '', auditId: row.auditId || '' }));
+}
+
+async function findInwardDependencies(scan, rowsBeingDeleted = []) {
+  if (!['INWARD', 'AUDIT', 'FITTED_RETURN'].includes(stockMovementType(scan))) return [];
+  const dealerCode = clean(scan.dealerCode).toUpperCase();
+  const auditId = clean(scan.auditId);
+  const partNumber = clean(scan.normalizedPartNumber || scan.partNumber || scan.part).toUpperCase().replace(/\s+/g, '');
+  const upi = upiCodeValue(scan);
+  const bin = stockMovementBin(scan);
+  if (!dealerCode || !auditId || !partNumber || !bin) return [];
+  const scanTime = new Date(scan.timestamp || scan.createdAt || 0).getTime();
+  const deletingIds = new Set(rowsBeingDeleted.map((row) => clean(row._id || row.id)));
+  const identityClause = upi ? [{ upiCode: upi }, { upiNo: upi }, { upiId: upi }, { globalUpiKey: upi }] : [];
+  const [partRows, transfers] = await Promise.all([
+    Inventory.find({ dealerCode, auditId, isDeleted: { $ne: true }, deletedAt: null,
+      $or: [{ normalizedPartNumber: partNumber }, { partNumber }, { part: partNumber }, ...identityClause] }).lean(),
+    BinTransferHistory.find({ dealerCode, auditId, partNumber }).lean()
+  ]);
+  const laterMovements = partRows.filter((row) => {
+    if (deletingIds.has(clean(row._id || row.id)) || !activeStockTransaction(row)) return false;
+    const type = stockMovementType(row);
+    const time = new Date(row.timestamp || row.createdAt || 0).getTime();
+    const sameUpi = upi && upiCodeValue(row) === upi;
+    return ['OUTWARD', 'FITTED', 'DAMAGE'].includes(type) && (sameUpi || stockMovementBin(row) === bin) && time >= scanTime;
+  });
+  const scanId = scanIdentifier(scan);
+  const relatedTransfers = transfers.filter((transfer) => {
+    const time = new Date(transfer.transferredAt || transfer.timestamp || transfer.createdAt || 0).getTime();
+    const linked = [transfer.sourceScanIds, transfer.movedScanIds].some((ids) => Array.isArray(ids) && ids.map(clean).includes(scanId));
+    return time >= scanTime && (linked || clean(transfer.fromBin).toUpperCase() === bin || clean(transfer.toBin).toUpperCase() === bin);
+  });
+  return [
+    ...laterMovements.map((row) => `${stockMovementType(row)} scan ${scanIdentifier(row)}`),
+    ...relatedTransfers.map((transfer) => `bin transfer ${clean(transfer.transferId || transfer._id || transfer.id)}`)
+  ];
 }
 
 async function saveAuditOrRollback(before, after, req, reason, remarks, action, update) {
@@ -226,6 +263,14 @@ async function softDeleteScans(filter, req, options = {}) {
   assertAdmin(req);
   const { reason, remarks } = requireReason(modificationBody(req, options));
   const rows = await Inventory.find({ ...(filter || {}), isDeleted: { $ne: true }, deletedAt: null }).lean();
+  for (const row of rows) {
+    const dependencies = await findInwardDependencies(row, rows);
+    if (dependencies.length) {
+      const error = new Error(`Cannot delete inward scan ${scanIdentifier(row)} because dependent stock activity exists: ${dependencies.join(', ')}. Reverse the dependent activity first.`);
+      error.status = 409;
+      throw error;
+    }
+  }
   const changed = [];
   const auditIds = [];
   const actor = actorFromRequest(req);
