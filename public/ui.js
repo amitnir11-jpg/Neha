@@ -12324,6 +12324,8 @@
 
   function updateBarcodeWorkspace(form = $('#barcodeScanForm')) {
     if (!form) return;
+    updateLocalPartScanMode(form);
+    if (form.elements.type.value === 'LOCAL_PART') return;
     const bin = cleanDealerCode(form.elements.binLocation.value || '');
     const fitted = form.elements.type.value === 'FITTED';
     const autoOutward = ['OUTWARD', 'FITTED'].includes(form.elements.type.value);
@@ -12356,6 +12358,46 @@
       status.classList.toggle('ready', autoOutward || (inward ? binReady : Boolean(bin)));
     }
     setText('barcodeCurrentBin', bin || '—');
+  }
+
+  function updateLocalPartScanMode(form) {
+    const local = form.elements.type.value === 'LOCAL_PART';
+    const panel = $('#localPartEntry');
+    if (!panel) return;
+    if (local && panel.parentElement !== $('#barcodeEntry')) $('#barcodeEntry').appendChild(panel);
+    panel.hidden = !local;
+    panel.inert = !local;
+    panel.setAttribute('aria-hidden', String(!local));
+    panel.classList.toggle('active', local);
+    const inputs = $('.barcode-entry-panels', form);
+    if (inputs) inputs.hidden = local;
+    const workflow = $('#barcodeEntry .barcode-workflow');
+    if (workflow) workflow.hidden = local;
+    const history = $('#scan .scan-history-card');
+    if (history) history.hidden = local;
+    if (!local) { state.localPartScanScope = ''; return; }
+    clearTimeout(form.elements.rawScan.autoSaveTimer);
+    form.elements.rawScan.disabled = true;
+    form.elements.binLocation.disabled = true;
+    form.elements.binLocation.required = false;
+    $('#barcodeBinLabel')?.classList.add('hidden');
+    $('#clearBarcodeBin')?.classList.add('hidden');
+    $('#scanPartSummary').hidden = true;
+    $('#barcodeBinReady').textContent = 'Local Part entry — enter quantity, description, MRP and DLC.';
+    $('#barcodeBinReady').classList.add('ready');
+    setText('barcodeCurrentBin', 'Not required');
+    const dealerCode = form.elements.dealerCode.value;
+    const localForm = $('#localPartForm');
+    if (localForm.elements.dealerCode.value !== dealerCode) resetLocalPartForm({ dealerCode });
+    setDealerSelectValue(localForm.elements.dealerCode, dealerCode);
+    syncLocalPartFormIdentity();
+    const scope = `${dealerCode}|${activeAuditIdForScope()}`;
+    if (state.localPartScanScope !== scope) {
+      state.localPartScanScope = scope;
+      const filter = $('#localPartHistoryFilters [name="dealerCode"]');
+      if (filter) setDealerSelectValue(filter, dealerCode);
+      if (dealerCode) loadLocalPartHistory({ page: 1 }).catch(error => toast(error.message, 'error'));
+    }
   }
 
   function acceptBarcodeBinQr(raw, target = $('#barcodeRaw')) {
@@ -12395,6 +12437,7 @@
   async function saveBarcodeManualScan() {
     const form = $('#barcodeScanForm');
     if (!form || state.barcodeAutoSaving) return;
+    if (form.elements.type.value === 'LOCAL_PART') { $('#localPartSaveBtn').click(); return; }
     const stockMovement = ['OUTWARD', 'FITTED'].includes(form.elements.type.value);
     if (!form.elements.dealerCode.value || !form.elements.part.value.trim() || !(Number(form.elements.qty.value) > 0)) {
       toast('Dealer, part number and a quantity greater than zero are required.', 'error');
@@ -12511,10 +12554,12 @@
   }
 
   function focusNextBarcodeField() {
+    if ($('#barcodeScanForm')?.elements.type.value === 'LOCAL_PART') { $('#localPartForm [name="partNumber"]')?.focus(); return; }
     $('#barcodeRaw')?.focus();
   }
 
   function scheduleBarcodeAutosave(delay = 35) {
+    if ($('#barcodeScanForm')?.elements.type.value === 'LOCAL_PART') return;
     const form = $('#barcodeScanForm');
     const input = $('#barcodeRaw');
     const raw = String(input?.value || '').trim();

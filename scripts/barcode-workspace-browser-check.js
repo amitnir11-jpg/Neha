@@ -34,7 +34,7 @@ const server = http.createServer((req, res) => {
   try {
     for (const role of ['admin', 'audit_user']) {
       let rows = initialRows.map(row => ({ ...row }));
-      const saves = []; const requests = []; const errors = []; const usedUpi = new Set();
+      const saves = []; const localSaves = []; const requests = []; const errors = []; const usedUpi = new Set();
       const user = { id: 'USER-FIXTURE', username: 'fixture', name: 'Test Operator', role, permissions: { canViewReports: true } };
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       await context.addInitScript(({ user, dealer }) => {
@@ -54,6 +54,11 @@ const server = http.createServer((req, res) => {
         else if (url.pathname==='/api/health') data={success:true,status:'OK',ready:true,server:'online',databaseStatus:'connected'};
         else if (url.pathname==='/api/sync/status') data={success:true,server:'online',db:'connected',connectedDevices:0,pending:0,failed:0,totalSynced:22};
         else if (url.pathname==='/api/settings/smart-bin-suggestion') data={success:true,settings:{enabled:false}};
+        else if (url.pathname==='/api/local-parts' && req.method()==='POST') {
+          const payload=req.postDataJSON();localSaves.push(payload);
+          data={success:true,message:'Local Part saved successfully',entry:{...payload,id:`LOCAL${localSaves.length}`}};
+        }
+        else if (url.pathname==='/api/local-parts' && req.method()==='GET') data={success:true,entries:localSaves.map((entry,index)=>({...entry,id:`LOCAL${index+1}`,status:'ACTIVE',referenceAuditId:fixtureAudit.auditId,totalMrpValue:Number(entry.quantity)*Number(entry.mrp),totalDlcValue:Number(entry.quantity)*Number(entry.dlc)})),pagination:{page:1,totalPages:1},summary:{grandTotalQuantity:localSaves.reduce((sum,entry)=>sum+Number(entry.quantity),0),grandTotalMrpValue:localSaves.reduce((sum,entry)=>sum+Number(entry.quantity)*Number(entry.mrp),0),grandTotalDlcValue:localSaves.reduce((sum,entry)=>sum+Number(entry.quantity)*Number(entry.dlc),0)}};
         else if (url.pathname==='/api/qr/bins' || url.pathname==='/api/master/bins') data={success:true,bins:[{binCode:'A-01',binLocation:'A-01',dealerCode:'11646'},{binCode:'B-02',binLocation:'B-02',dealerCode:'11646'}]};
         else if (url.pathname==='/api/scans/validate-bin') data={success:true,valid:['A-01','B-02'].includes(url.searchParams.get('binLocation'))};
         else if (url.pathname==='/api/scans/resolve-code') data={success:true,binOptions:[{binLocation:'A-01',availableQty:100},{binLocation:'B-02',availableQty:100}]};
@@ -87,6 +92,28 @@ const server = http.createServer((req, res) => {
       await page.locator('#barcodeScanForm [name="dealerCode"]').selectOption('11646');await page.waitForTimeout(150);assert.equal(await page.locator('#scan .subtab').count(),0);
       for(const panel of ['manualEntry','localPartEntry','mobileSync']) assert.equal(await page.locator(`#${panel}`).isVisible(),false);
       assert.equal(await page.locator('#barcodeManualTitle').isVisible(),true);
+      const inventoryBeforeLocal=saves.length;
+      await page.locator('#barcodeScanForm [name="type"]').selectOption('LOCAL_PART');
+      assert.equal(await page.locator('#localPartEntry').isVisible(),true);
+      assert.equal(await page.locator('#barcodeBinLabel').isVisible(),false);
+      assert.equal(await page.locator('.barcode-entry-panels').isVisible(),false);
+      assert.equal(await page.locator('#scan .scan-history-card').isVisible(),false);
+      await page.locator('#localPartForm [name="partNumber"]').fill('LOCAL-CABLE-01');
+      await page.locator('#localPartForm [name="quantity"]').fill('2');
+      await page.locator('#localPartForm [name="mrp"]').fill('100');
+      await page.locator('#localPartForm [name="dlc"]').fill('80');
+      await page.locator('#localPartForm [name="partDescription"]').fill('Local cable');
+      await page.locator('#localPartSaveBtn').click();
+      await page.waitForFunction(()=>document.querySelector('#localPartFormMessage').textContent.includes('saved successfully'));
+      assert.equal(localSaves.length,1);assert.equal(localSaves[0].dealerCode,'11646');assert.equal(localSaves[0].partNumber,'LOCAL-CABLE-01');assert.equal(saves.length,inventoryBeforeLocal);
+      await page.waitForFunction(()=>document.querySelector('#localPartHistoryRows').textContent.includes('LOCAL-CABLE-01'));
+      assert.equal(await page.locator('#localPartTotalMrpValue').textContent(),'200.00');
+      assert.equal(await page.locator('#localPartTotalDlcValue').textContent(),'160.00');
+      if(role==='admin')await page.screenshot({path:'.codex-artifacts/scan-local-part.png',fullPage:true});
+      await page.locator('#barcodeScanForm [name="type"]').selectOption('INWARD');
+      assert.equal(await page.locator('#localPartEntry').isVisible(),false);
+      assert.equal(await page.locator('.barcode-entry-panels').isVisible(),true);
+      assert.equal(await page.locator('#scan .scan-history-card').isVisible(),true);
       assert.equal(await page.locator('#focusScanner').count(),0);
       assert.equal(await page.locator('#barcodePartNumber').isDisabled(),true);
       const raw=page.locator('#barcodeRaw'); const bin=page.locator('#barcodeBinLocation');

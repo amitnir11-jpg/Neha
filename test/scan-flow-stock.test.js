@@ -67,7 +67,7 @@ function extract(file, start, end) {
 function workspaceHarness() {
   const nodes = new Map();
   function node(selector) {
-    if (!nodes.has(selector)) nodes.set(selector, { textContent: '', disabled: false, classList: {
+    if (!nodes.has(selector)) nodes.set(selector, { textContent: '', disabled: false, setAttribute() {}, classList: {
       flags: new Set(), toggle(name, enabled) { if (enabled) this.flags.add(name); else this.flags.delete(name); }
     } });
     return nodes.get(selector);

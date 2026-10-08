@@ -1,5 +1,6 @@
 @layer app-controls {
 #scan > .card > .subview[hidden] { display: none !important; }
+#scan #localPartEntry[hidden], #scan #localPartDealerField[hidden], #scan .barcode-entry-panels[hidden], #scan .barcode-workflow[hidden], #scan .scan-history-card[hidden] { display: none !important; }
 /* Keep automatic source-bin controls hidden despite the workspace display rules. */
 #barcodeEntry #barcodeBinLabel.hidden,
 #barcodeEntry #barcodeBinStep.hidden,

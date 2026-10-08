@@ -1,5 +1,11 @@
 # Barcode/Web Scan layout and validation — 2026-10-06
 
+## Local Part scan type — 2026-10-08
+
+The single Scan screen now includes **LOCAL PART** in Scan Type. Selecting it opens the existing Local Part form and history beneath the shared dealer/type context. Bin selection and ordinary inventory capture/history are hidden in this mode. Quantity, description, MRP, DLC and remarks are saved through `/api/local-parts`; no `LOCAL_PART` movement is submitted to `/api/scans/process`. Returning to INWARD/OUTWARD/FITTED/DAMAGE restores the normal workspace.
+
+Admin and audit-user Chrome fixture checks pass for Local Part selection, saving a non-catalogue part, dealer context, history refresh, MRP/DLC totals and returning to normal scanning. Existing scanner/history/stock regressions pass; backend storage and stock calculations are unchanged.
+
 ## Single Scan screen — 2026-10-08
 
 Scan now opens one workspace headed "Scan", without the Manual Entry, Local Part, Barcode/Web Scan or Mobile Sync tab bar. Barcode/QR capture, inline part entry, source-bin selection, movement type, part details and scan history stay on this screen. Quick manual-entry actions focus the inline form. Part-only OUTWARD/FITTED entry resolves eligible physical SKU bins and requests a source-bin choice when more than one qualifies, then uses the existing manual save service.
