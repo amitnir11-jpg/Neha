@@ -4,10 +4,13 @@ const ExcelJS = require('exceljs');
 const QRCode = require('qrcode');
 const Inventory = require('../models/Inventory');
 const Bin = require('../models/Bin');
+const Dealer = require('../models/Dealer');
+const Audit = require('../models/Audit');
 const BinTransferHistory = require('../models/BinTransferHistory');
 const BinLabelPrintLog = require('../models/BinLabelPrintLog');
 const auth = require('./auth');
 const { validScanClause } = require('../utils/masterValidation');
+const { getActiveAudit } = require('../utils/audit');
 const { formatIstDateTime } = require('../utils/time');
 
 const router = express.Router();
@@ -178,11 +181,52 @@ function publicPart(row) {
   };
 }
 
-async function groupedParts(dealerCode, fromBin = '') {
+function countedReportScanClause() {
+  return {
+    syncStatus: 'synced',
+    isDuplicate: { $ne: true },
+    isDeleted: { $ne: true },
+    deletedAt: null,
+    $and: [{ $or: [
+      { scanStatus: { $in: ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'] } },
+      { scanStatus: { $exists: false } }, { scanStatus: '' }, { scanStatus: null }
+    ] }]
+  };
+}
+
+function transferStockMatch(dealerCode, auditId = '') {
+  const master = validScanClause();
+  const report = countedReportScanClause();
+  return {
+    ...master,
+    ...report,
+    dealerCode,
+    ...(auditId ? { auditId } : {}),
+    $and: [...(master.$and || []), ...(report.$and || [])]
+  };
+}
+
+async function resolveTransferAuditId(dealerCode, requestedAuditId = '') {
+  const requested = clean(requestedAuditId);
+  if (requested && requested.toLowerCase() !== 'active') return requested;
+  const [dealer, activeAudit] = await Promise.all([
+    Dealer.findOne({ dealerCode }).lean().catch(() => null),
+    getActiveAudit({ dealerCode }).catch(() => null)
+  ]);
+  let auditId = clean(dealer?.currentAuditId || activeAudit?.auditId || '');
+  if (!auditId) {
+    const latest = await Audit.findOne({ dealerCode }).sort({ auditStartDate: -1, createdAt: -1 })
+      .select('auditId').lean().catch(() => null);
+    auditId = clean(latest?.auditId || '');
+  }
+  return auditId;
+}
+
+async function groupedParts(dealerCode, fromBin = '', auditId = '') {
   const sourceBin = /^all$/i.test(clean(fromBin)) ? '' : clean(fromBin);
   const binMatch = sourceBin ? [{ $match: { _btCurrentBin: binRegex(sourceBin) } }] : [];
   const rows = await Inventory.aggregate([
-    { $match: { dealerCode, ...validScanClause() } },
+    { $match: transferStockMatch(dealerCode, auditId) },
     {
       $addFields: {
         _btCurrentBin: firstNonBlankExpression(CURRENT_BIN_FIELDS),
@@ -295,7 +339,7 @@ function groupedBinLabelItems(parts = [], settings = {}) {
   return items;
 }
 
-async function transferPart({ dealerCode, fromBin, toBin, partNumber, qty, transferType, req }) {
+async function transferPart({ dealerCode, auditId = '', fromBin, toBin, partNumber, qty, transferType, req }) {
   const cleanPart = normalizePart(partNumber);
   const requestedQty = Number(qty);
   if (!dealerCode) throw new Error('Dealer required');
@@ -304,14 +348,13 @@ async function transferPart({ dealerCode, fromBin, toBin, partNumber, qty, trans
   if (!cleanPart) throw new Error('Part Number is required');
   if (!Number.isFinite(requestedQty) || requestedQty <= 0) throw new Error('Qty to transfer must be greater than 0');
 
-  const availablePart = (await groupedParts(dealerCode, fromBin)).find((part) => normalizePart(part.partNumber) === cleanPart);
+  const availablePart = (await groupedParts(dealerCode, fromBin, auditId)).find((part) => normalizePart(part.partNumber) === cleanPart);
   const netAvailableQty = Number((availablePart && (availablePart.availableQty || availablePart.quantity)) || 0);
   if (netAvailableQty <= 0) throw new Error('No available qty found for selected part in Source Bin');
   if (requestedQty > netAvailableQty) throw new Error('Qty cannot be greater than available qty');
 
   const records = (await Inventory.find({
-    dealerCode,
-    ...validScanClause(),
+    ...transferStockMatch(dealerCode, auditId),
     ...binFieldClause(fromBin)
   }).sort({ timestamp: 1, createdAt: 1 }).lean()).filter((record) => {
     const recordPart = normalizePart(firstNonBlankValue(record, PART_NUMBER_FIELDS));
@@ -373,6 +416,7 @@ async function transferPart({ dealerCode, fromBin, toBin, partNumber, qty, trans
   const history = await BinTransferHistory.create({
     transferId: `BT-${Date.now()}-${randomUUID().slice(0, 8).toUpperCase()}`,
     dealerCode,
+    auditId,
     fromBin,
     toBin,
     partNumber: cleanPart,
@@ -386,10 +430,10 @@ async function transferPart({ dealerCode, fromBin, toBin, partNumber, qty, trans
   return history;
 }
 
-async function dealerBins(dealerCode) {
+async function dealerBins(dealerCode, auditId = '') {
   const [scanBins, masterBins] = await Promise.all([
     Inventory.aggregate([
-      { $match: { dealerCode, ...validScanClause() } },
+      { $match: transferStockMatch(dealerCode, auditId) },
       { $project: { bin: firstNonBlankExpression(CURRENT_BIN_FIELDS), qty: stockQtyExpression() } },
       { $match: { bin: { $nin: ['', 'null', 'undefined', 'NULL', 'UNDEFINED'] } } },
       { $group: { _id: '$bin', qty: { $sum: '$qty' } } },
@@ -474,8 +518,11 @@ router.get('/bins', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = upper(req.query.dealerCode);
     if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer required' });
-    const binData = await dealerBins(dealerCode);
-    const bins = compactBins([...binData.toBins, ...binData.fromBins]);
+    const auditId = await resolveTransferAuditId(dealerCode, req.query.auditId);
+    const binData = await dealerBins(dealerCode, auditId);
+    // A source bin must contain positive available stock. Master-only bins
+    // remain valid destinations, but should not appear as transferable stock.
+    const bins = binData.fromBins;
     const sourceKey = upper(req.query.sourceBin || req.query.fromBin);
     const destinationBins = binData.toBins.length
       ? binData.toBins.filter((bin) => upper(bin.binCode) !== sourceKey).map((bin) => bin.binCode)
@@ -483,9 +530,11 @@ router.get('/bins', auth.requireAuth, async (req, res) => {
     const message = destinationBins.length ? '' : 'No destination bins found. Please create bins in Bin Master / Sequence Creation or scan stock into another bin.';
     return res.json({
       success: true,
-      ...binData,
+      auditId,
       bins,
       sourceBins: bins,
+      fromBins: bins,
+      toBins: binData.toBins,
       destinationBins,
       destinationSource: binData.toBins.length ? 'bin_master' : 'fallback_from_current_stock',
       message
@@ -504,7 +553,8 @@ router.get('/parts', auth.requireAuth, async (req, res) => {
     if (!fromBin && !partNumber && !/^all$/i.test(clean(req.query.sourceBin || req.query.fromBin || req.query.binLocation))) {
       return res.status(400).json({ success: false, message: 'Source Bin or Part Number is required' });
     }
-    const parts = (await groupedParts(dealerCode, fromBin)).filter((part) => {
+    const auditId = await resolveTransferAuditId(dealerCode, req.query.auditId);
+    const parts = (await groupedParts(dealerCode, fromBin, auditId)).filter((part) => {
       if (!partNumber) return true;
       return normalizePart(part.partNumber).includes(partNumber);
     });
@@ -527,7 +577,7 @@ router.get('/parts', auth.requireAuth, async (req, res) => {
       res.setHeader('Content-Disposition', 'attachment; filename="Daksh_Bin_Transfer_Parts.xlsx"');
       return res.send(Buffer.from(buffer));
     }
-    return res.json({ success: true, parts, data: parts, count: parts.length });
+    return res.json({ success: true, auditId, parts, data: parts, count: parts.length });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -654,6 +704,7 @@ router.get('/labels/logs', auth.requireAuth, async (req, res) => {
 router.post('/transfer', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = upper(req.body.dealerCode);
+    const auditId = await resolveTransferAuditId(dealerCode, req.body.auditId);
     const fromBin = clean(req.body.sourceBin || req.body.fromBin);
     const defaultToBin = clean(req.body.destinationBin || req.body.toBin);
     const fullBinTransfer = Boolean(req.body.fullBinTransfer);
@@ -661,7 +712,7 @@ router.post('/transfer', auth.requireAuth, async (req, res) => {
     if (!dealerCode) return res.status(400).json({ success: false, message: 'dealerCode required' });
     if (!fromBin) return res.status(400).json({ success: false, message: 'sourceBin required' });
 
-    const parts = fullBinTransfer ? await groupedParts(dealerCode, fromBin) : selectedParts;
+    const parts = fullBinTransfer ? await groupedParts(dealerCode, fromBin, auditId) : selectedParts;
     if (!fullBinTransfer && !parts.length) return res.status(400).json({ success: false, message: 'selected parts required unless fullBinTransfer=true' });
     if (!parts.length) return res.status(400).json({ success: false, message: 'No parts found in selected Source Bin' });
     const transfers = parts.map((part) => {
@@ -685,6 +736,7 @@ router.post('/transfer', auth.requireAuth, async (req, res) => {
     for (const part of transfers) {
       history.push(await transferPart({
         dealerCode,
+        auditId,
         fromBin: part.fromBin,
         toBin: part.toBin,
         partNumber: part.partNumber,
@@ -752,8 +804,11 @@ router.get('/history', auth.requireAuth, async (req, res) => {
 
 router.post('/single', auth.requireAuth, async (req, res) => {
   try {
+    const dealerCode = upper(req.body.dealerCode);
+    const auditId = await resolveTransferAuditId(dealerCode, req.body.auditId);
     const history = await transferPart({
-      dealerCode: upper(req.body.dealerCode),
+      dealerCode,
+      auditId,
       fromBin: clean(req.body.sourceBin || req.body.fromBin),
       toBin: clean(req.body.destinationBin || req.body.toBin),
       partNumber: req.body.partNumber,
@@ -771,6 +826,7 @@ router.post('/single', auth.requireAuth, async (req, res) => {
 router.post('/multiple', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = upper(req.body.dealerCode);
+    const auditId = await resolveTransferAuditId(dealerCode, req.body.auditId);
     const fromBin = clean(req.body.sourceBin || req.body.fromBin);
     const toBin = clean(req.body.destinationBin || req.body.toBin);
     const parts = Array.isArray(req.body.parts) ? req.body.parts : [];
@@ -779,6 +835,7 @@ router.post('/multiple', auth.requireAuth, async (req, res) => {
     for (const part of parts) {
       history.push(await transferPart({
         dealerCode,
+        auditId,
         fromBin,
         toBin,
         partNumber: part.partNumber || part,
@@ -797,14 +854,16 @@ router.post('/multiple', auth.requireAuth, async (req, res) => {
 router.post('/bulk', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = upper(req.body.dealerCode);
+    const auditId = await resolveTransferAuditId(dealerCode, req.body.auditId);
     const fromBin = clean(req.body.sourceBin || req.body.fromBin);
     const toBin = clean(req.body.destinationBin || req.body.toBin);
-    const parts = await groupedParts(dealerCode, fromBin);
+    const parts = await groupedParts(dealerCode, fromBin, auditId);
     if (!parts.length) return res.status(400).json({ success: false, message: 'No scanned parts found in selected From Bin' });
     const history = [];
     for (const part of parts) {
       history.push(await transferPart({
         dealerCode,
+        auditId,
         fromBin,
         toBin,
         partNumber: part.partNumber,
