@@ -3,7 +3,7 @@ const ScanAuditLog = require('../models/ScanAuditLog');
 const AuditLog = require('../models/AuditLog');
 const { activeInventoryValue, remainingQtyValue } = require('../utils/inventoryMovementState');
 const { invalidateCache } = require('../utils/safeCache');
-const { inDatabaseTransaction, withDatabaseTransaction } = require('./prisma');
+const { inDatabaseTransaction, withDatabaseTransaction, afterDatabaseCommit } = require('./prisma');
 
 function clean(value) {
   return String(value === undefined || value === null ? '' : value).trim();
@@ -214,8 +214,10 @@ async function updateScan(scan, update, req, options = {}) {
     throw error;
   }
   await saveAuditOrRollback(before, after, req, reason, remarks, options.action || 'UPDATE', nextUpdate);
-  invalidateScanCaches([after]);
-  emitScanMutation(req, 'scan:modified', { action: options.action || 'UPDATE', scan: after }, [after]);
+  afterDatabaseCommit(() => {
+    invalidateScanCaches([after]);
+    emitScanMutation(req, 'scan:modified', { action: options.action || 'UPDATE', scan: after }, [after]);
+  });
   return after;
 }
 
@@ -273,8 +275,10 @@ async function softDeleteScans(filter, req, options = {}) {
   }
 
   const deletedRows = changed.map((item) => item.after);
-  invalidateScanCaches(deletedRows);
-  emitScanMutation(req, 'scan:deleted', { action: 'DELETE', count: deletedRows.length, scans: deletedRows }, deletedRows);
+  afterDatabaseCommit(() => {
+    invalidateScanCaches(deletedRows);
+    emitScanMutation(req, 'scan:deleted', { action: 'DELETE', count: deletedRows.length, scans: deletedRows }, deletedRows);
+  });
   return { deletedCount: deletedRows.length, rows: deletedRows };
 }
 
@@ -333,8 +337,10 @@ async function restoreScan(scanId, req) {
     error.cause = auditError;
     throw error;
   }
-  invalidateScanCaches([after]);
-  emitScanMutation(req, 'scan:modified', { action: 'RESTORE', scan: after }, [after]);
+  afterDatabaseCommit(() => {
+    invalidateScanCaches([after]);
+    emitScanMutation(req, 'scan:modified', { action: 'RESTORE', scan: after }, [after]);
+  });
   return after;
 }
 

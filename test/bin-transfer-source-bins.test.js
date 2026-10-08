@@ -1,8 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const Inventory = require('../models/Inventory');
 const Bin = require('../models/Bin');
 const router = require('../routes/binTransfer');
+
+test('Bin Transfer screen has no reset control', () => {
+  const html = fs.readFileSync('public/Daksh.html', 'utf8');
+  const ui = fs.readFileSync('public/ui.js', 'utf8');
+  assert.doesNotMatch(html, /id="binTransferResetBtn"/);
+  assert.doesNotMatch(ui, /binTransferResetBtn/);
+});
 
 test('bin transfer source options only include bins with available scanned stock', async () => {
   const inventoryFind = Inventory.find;

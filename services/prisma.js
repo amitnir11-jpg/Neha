@@ -40,7 +40,7 @@ if (Number.isFinite(slowQueryThresholdMs) && slowQueryThresholdMs > 0) {
 const transactionContext = new AsyncLocalStorage();
 
 function getPrismaClient() {
-  return transactionContext.getStore() || prisma;
+  return transactionContext.getStore()?.client || prisma;
 }
 
 function inDatabaseTransaction() {
@@ -51,11 +51,16 @@ async function withDatabaseTransaction(work, options = {}) {
   if (inDatabaseTransaction()) return work(getPrismaClient());
   const attempts = options.attempts || 5;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const afterCommit = [];
     try {
-      return await prisma.$transaction(
-        (client) => transactionContext.run(client, () => work(client)),
+      const result = await prisma.$transaction(
+        (client) => transactionContext.run({ client, afterCommit }, () => work(client)),
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10000, timeout: options.timeout || 30000 }
       );
+      for (const callback of afterCommit) {
+        try { await callback(); } catch (error) { console.error('Post-commit callback failed:', error); }
+      }
+      return result;
     } catch (error) {
       // Retry the entire read/modify/write against a fresh serializable snapshot.
       // The callback must contain database work only, never external side effects.
@@ -63,6 +68,13 @@ async function withDatabaseTransaction(work, options = {}) {
       await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
     }
   }
+}
+
+function afterDatabaseCommit(callback) {
+  if (typeof callback !== 'function') return;
+  const context = transactionContext.getStore();
+  if (context) context.afterCommit.push(callback);
+  else return callback();
 }
 
 let ready = false;
@@ -139,6 +151,7 @@ module.exports = {
   getPrismaClient,
   inDatabaseTransaction,
   withDatabaseTransaction,
+  afterDatabaseCommit,
   connectDatabase,
   disconnectDatabase,
   markDatabaseUnavailable,

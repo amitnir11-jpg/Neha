@@ -9878,6 +9878,24 @@
     setText('binTransferPartsCount', 'Loading...');
   }
 
+  let binTransferStockRefreshTimer = null;
+  function queueBinTransferStockRefresh() {
+    clearTimeout(binTransferStockRefreshTimer);
+    binTransferStockRefreshTimer = setTimeout(async () => {
+      const form = activeBinTransferForm();
+      const { dealerCode, fromBin } = binTransferCriteria(form);
+      if (!dealerCode) return;
+      try {
+        await loadBinTransferBins(dealerCode);
+        const matchingSource = $$('.bin-transfer-from').find((select) => Array.from(select.options).some((option) => option.value === fromBin));
+        if (matchingSource) matchingSource.value = fromBin;
+        await loadBinTransferParts(form);
+      } catch (error) {
+        console.warn('BIN_TRANSFER_STOCK_REFRESH_FAILED', error);
+      }
+    }, 100);
+  }
+
   async function loadBinTransferBins(dealerCode) {
     state.binTransferLoadedParts = [];
     if (!dealerCode) {
@@ -13404,12 +13422,6 @@
     });
     $('#binTransferPartSearch')?.addEventListener('input', () => filterRenderedBinTransferParts());
     $('#binTransferShowHistoryBtn')?.addEventListener('click', () => loadBinTransferHistory().catch((error) => toast(error.message, 'error')));
-    $('#binTransferResetBtn')?.addEventListener('click', () => {
-      $('#binTransferForm')?.reset();
-      state.binTransferLoadedParts = [];
-      renderBinTransferParts([], 'Select Dealer Code and Source Bin, then click Show Parts.');
-      loadBinTransferBins('').catch(() => null);
-    });
     $('#binTransferExportHistoryBtn')?.addEventListener('click', () => {
       const query = queryFromForm($('#binTransferHistoryFilters'));
       downloadGet(`/api/bin-transfer/history${query ? `?${query}&` : '?'}format=excel`, 'Daksh_Bin_Transfer_History.xlsx').catch((error) => toast(error.message, 'error'));
@@ -14358,7 +14370,8 @@
       // handleNewScan already inserts the committed scan into the visible list;
       // reloading full scan history after every save slows continuous scanning.
       if ($('#binTransfer')?.classList.contains('active')) {
-        Promise.all([loadBinTransferParts(activeBinTransferForm()), loadBinTransferHistory()]).catch(console.warn);
+        queueBinTransferStockRefresh();
+        loadBinTransferHistory().catch(console.warn);
       }
     });
     socket.on('scan:duplicate', (scan = {}) => {
@@ -14369,7 +14382,7 @@
       queueReconciliationRefresh('scan deleted');
       refreshPartStockSummary().catch(console.warn);
       if ($('#scan')?.classList.contains('active')) queueScanRefresh(500);
-      if ($('#binTransfer')?.classList.contains('active')) loadBinTransferParts(activeBinTransferForm()).catch(console.warn);
+      if ($('#binTransfer')?.classList.contains('active')) queueBinTransferStockRefresh();
     });
     socket.on('scan:count:update', (payload = {}) => {
       state.lastRealtimeAt = Date.now();
@@ -14392,6 +14405,7 @@
     socket.on('reports:update', () => {
       state.lastRealtimeAt = Date.now();
       markReportsStale('report broadcast', { autoRefresh: false });
+      if ($('#binTransfer')?.classList.contains('active')) queueBinTransferStockRefresh();
     });
     socket.on('dealer-stock:update', (payload = {}) => {
       state.lastRealtimeAt = Date.now();
