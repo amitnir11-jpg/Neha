@@ -9795,12 +9795,12 @@
   }
 
   function binTransferPartRows(parts = []) {
-    return parts.map((part) => {
+    return parts.map((part, index) => {
       const availableQty = partAvailableQty(part);
       const defaultDestination = selectedMainDestinationBin();
       return `
-        <tr data-part="${escapeHtml(part.partNumber)}" data-current-bin="${escapeHtml(part.currentBin)}">
-          <td><input class="bin-transfer-check" type="checkbox" value="${escapeHtml(part.partNumber)}"></td>
+        <tr data-index="${index}" data-part="${escapeHtml(part.partNumber)}" data-current-bin="${escapeHtml(part.currentBin)}">
+          <td><input class="bin-transfer-check" type="checkbox" value="${index}"></td>
           <td>${partLink(part.partNumber)}</td>
           <td>${escapeHtml(part.partDescription)}</td>
           <td>${escapeHtml(part.productCategory || part.category)}</td>
@@ -9833,7 +9833,7 @@
 
   function selectedBinTransferParts(root = activeBinTransferPartRoot()) {
     return $$('.bin-transfer-check:checked', root).map((box) => {
-      const part = state.binTransferParts.find((item) => item.partNumber === box.value);
+      const part = state.binTransferParts[Number(box.value)];
       if (!part) return null;
       const row = box.closest('tr');
       const qtyInput = row?.querySelector('.bin-transfer-qty');
@@ -9908,7 +9908,7 @@
     }
     setBinTransferLoading('Loading bin locations...');
     const data = await api(`/api/bin-transfer/bins?dealerCode=${encodeURIComponent(dealerCode)}`);
-    const fromOptions = sourceBinOptionList(data.bins || data.sourceBins || []);
+    const fromOptions = sourceBinOptionList(data.allBins || data.bins || data.sourceBins || []);
     $$('.bin-transfer-from').forEach((select) => {
       select.innerHTML = fromOptions;
       select.value = 'ALL';
@@ -9945,6 +9945,35 @@
     const responseParts = normalizeBinTransferPartsResponse(data);
     state.binTransferLoadedParts = responseParts;
     filterRenderedBinTransferParts();
+  }
+
+  async function deleteBinTransferStock({ wholeBin = false } = {}) {
+    const form = $('#binTransferForm');
+    const { dealerCode, fromBin } = binTransferCriteria(form);
+    if (!dealerCode) return toast('Select a dealer first.', 'error');
+    const body = { dealerCode, reason: 'Bin inventory removal' };
+    let confirmation = '';
+    if (wholeBin) {
+      if (!fromBin || String(fromBin).toUpperCase() === 'ALL') return toast('Select one bin location first.', 'error');
+      body.binCodes = [fromBin];
+      confirmation = `Delete bin location ${fromBin} and all removable stock in it for dealer ${dealerCode}?`;
+    } else {
+      const selected = selectedBinTransferParts();
+      if (!selected.length) return toast('Select at least one part row to delete.', 'error');
+      body.items = selected.map((part) => ({ bin: part.currentBin, partNumber: part.partNumber }));
+      const summary = Array.from(new Set(body.items.map((item) => `${item.partNumber} (${item.bin})`)));
+      confirmation = `Delete ${selected.length} selected part row(s)?\n\n${summary.slice(0, 12).join('\n')}${summary.length > 12 ? `\n…and ${summary.length - 12} more` : ''}`;
+    }
+    confirmation += '\n\nThis soft-deletes the inward stock records with an audit trail. If later transfers or outward activity depend on that stock, deletion will be blocked until that activity is reversed.';
+    if (!window.confirm(confirmation)) return;
+    const response = await api('/api/bin-transfer/delete-stock', { method: 'POST', body });
+    toast(`Deleted ${Number(response.deletedCount || 0)} stock scan(s)${wholeBin ? ` and ${Number(response.binsDeleted || 0)} bin location(s)` : ''}.`, 'success');
+    await loadBinTransferBins(dealerCode);
+    const source = wholeBin ? 'ALL' : fromBin;
+    $$('.bin-transfer-from').forEach((select) => {
+      if (Array.from(select.options).some((option) => option.value === source)) select.value = source;
+    });
+    await loadBinTransferParts(form);
   }
 
   async function loadBinTransferHistory() {
@@ -13447,6 +13476,12 @@
     $('#binTransferClearSelectionBtn')?.addEventListener('click', () => {
       $$('.bin-transfer-check', $('#binTransferMainTab')).forEach((box) => { box.checked = false; });
       if ($('#binTransferSelectAll')) $('#binTransferSelectAll').checked = false;
+    });
+    $('#binTransferDeleteSelectedBtn')?.addEventListener('click', () => {
+      deleteBinTransferStock().catch((error) => toast(error.message, 'error'));
+    });
+    $('#binTransferDeleteBinBtn')?.addEventListener('click', () => {
+      deleteBinTransferStock({ wholeBin: true }).catch((error) => toast(error.message, 'error'));
     });
     $('#refreshBinTransferHistory')?.addEventListener('click', () => loadBinTransferHistory().catch((error) => toast(error.message, 'error')));
     $('#refreshBinTransferBtn')?.addEventListener('click', () => {

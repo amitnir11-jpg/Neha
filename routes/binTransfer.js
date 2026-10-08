@@ -4,14 +4,17 @@ const ExcelJS = require('exceljs');
 const QRCode = require('qrcode');
 const Inventory = require('../models/Inventory');
 const Bin = require('../models/Bin');
+const MasterPart = require('../models/MasterPart');
 const BinTransferHistory = require('../models/BinTransferHistory');
 const BinLabelPrintLog = require('../models/BinLabelPrintLog');
 const auth = require('./auth');
 const { formatIstDateTime } = require('../utils/time');
 const { calculateInventoryLedger, resolveCurrentAudit } = require('../services/InventoryCalculationService');
 const { applyTransactionScanFilter } = require('./inventory');
-const { stockMovementType, stockMovementBin } = require('../utils/stockQuantity');
+const { stockMovementType, stockMovementBin, activeStockTransaction } = require('../utils/stockQuantity');
 const { withDatabaseTransaction } = require('../services/prisma');
+const scanModification = require('../services/ScanModificationService');
+const { invalidateCache } = require('../utils/safeCache');
 
 const router = express.Router();
 
@@ -424,6 +427,11 @@ router.get('/bins', auth.requireAuth, async (req, res) => {
     // A source bin must contain positive available stock. Master-only bins
     // remain valid destinations, but should not appear as transferable stock.
     const bins = binData.fromBins;
+    const activityRows = await Inventory.find(applyTransactionScanFilter({ dealerCode, auditId }))
+      .select('binLocation bin currentBin stockDeductedFromBin sourceBin returnedToBin scanType type movementType')
+      .lean();
+    const activityBins = activityRows.map((row) => stockMovementBin(row)).filter(Boolean);
+    const allBins = compactBins([...binData.toBins, ...binData.fromBins, ...activityBins]);
     const sourceKey = upper(req.query.sourceBin || req.query.fromBin);
     const destinationBins = binData.toBins.length
       ? binData.toBins.filter((bin) => upper(bin.binCode) !== sourceKey).map((bin) => bin.binCode)
@@ -434,6 +442,7 @@ router.get('/bins', auth.requireAuth, async (req, res) => {
       auditId,
       bins,
       sourceBins: bins,
+      allBins,
       fromBins: bins,
       toBins: binData.toBins,
       destinationBins,
@@ -442,6 +451,86 @@ router.get('/bins', auth.requireAuth, async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/delete-stock', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const dealerCode = upper(req.body.dealerCode);
+    if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer required' });
+    const auditId = await resolveTransferAuditId(dealerCode, req.body.auditId);
+
+    const items = Array.isArray(req.body.items) ? req.body.items.map((item) => ({
+      bin: upper(item?.bin || item?.currentBin),
+      partNumber: normalizePart(item?.partNumber)
+    })).filter((item) => item.bin && item.partNumber) : [];
+    const binCodes = Array.from(new Set((Array.isArray(req.body.binCodes) ? req.body.binCodes : [])
+      .map(upper).filter(Boolean)));
+    if (!items.length && !binCodes.length) {
+      return res.status(400).json({ success: false, message: 'Select a bin or part stock row to delete.' });
+    }
+    if (items.length && !auditId) {
+      return res.status(400).json({ success: false, message: 'No active audit is selected for deleting part stock.' });
+    }
+
+    const targets = new Set([
+      ...binCodes.map((bin) => `${bin}::`),
+      ...items.map((item) => `${item.bin}::${item.partNumber}`)
+    ]);
+    const targetBins = Array.from(new Set([...binCodes, ...items.map((item) => item.bin)]));
+    const binPatterns = targetBins.map(binRegex);
+    const candidates = auditId ? await Inventory.find({
+      dealerCode,
+      ...(auditId ? { auditId } : {}),
+      isDeleted: { $ne: true },
+      deletedAt: null,
+      $or: [
+        { binLocation: { $in: binPatterns } },
+        { bin: { $in: binPatterns } },
+        { currentBin: { $in: binPatterns } },
+        { returnedToBin: { $in: binPatterns } },
+        { stockDeductedFromBin: { $in: binPatterns } },
+        { sourceBin: { $in: binPatterns } }
+      ]
+    }).lean() : [];
+    const deletableIds = candidates.filter((row) => {
+      if (!activeStockTransaction(row)) return false;
+      const movement = stockMovementType(row);
+      if (!['INWARD', 'AUDIT', 'FITTED_RETURN'].includes(movement)) return false;
+      const bin = upper(stockMovementBin(row));
+      const partNumber = normalizePart(row.normalizedPartNumber || row.partNumber || row.part || row.partNo);
+      return targets.has(`${bin}::`) || targets.has(`${bin}::${partNumber}`);
+    }).map((row) => row._id || row.id).filter(Boolean);
+
+    const result = await withDatabaseTransaction(async () => {
+      const deleted = deletableIds.length
+        ? await scanModification.softDeleteScans({ _id: { $in: deletableIds } }, req, {
+          reason: 'Bin inventory removal',
+          remarks: `Removed stock from bin(s): ${targetBins.join(', ')}`
+        })
+        : { deletedCount: 0 };
+      let binsDeleted = 0;
+      let masterUpdated = 0;
+      if (binCodes.length) {
+        const [binResult, masterResult] = await Promise.all([
+          Bin.deleteMany({ dealerCode, binCode: { $in: binCodes } }),
+          MasterPart.updateMany({ dealerCode, $or: binCodes.flatMap((bin) => [
+            { bin: binRegex(bin) }, { binLocation: binRegex(bin) }
+          ]) }, { $set: { bin: '', binLocation: '' } })
+        ]);
+        binsDeleted = binResult.deletedCount || 0;
+        masterUpdated = masterResult.modifiedCount || 0;
+      }
+      return { deletedCount: deleted.deletedCount || 0, binsDeleted, masterUpdated };
+    });
+
+    invalidateCache({ tags: ['inventory', 'scans', 'reports', 'bins', 'master', 'dashboard'], scope: { dealerCode, auditId } });
+    if (req.io && typeof req.io.emit === 'function' && binCodes.length) {
+      req.io.emit('master:update', { dealerCode, scope: 'bins' });
+    }
+    return res.json({ success: true, auditId, ...result, bins: binCodes });
+  } catch (error) {
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
