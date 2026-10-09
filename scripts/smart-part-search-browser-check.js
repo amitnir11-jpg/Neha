@@ -83,10 +83,13 @@ async function main() {
     const localForm = page.locator('#localPartForm');
     await localTab.click();
     await localForm.waitFor({ state: 'visible' });
+    const localPartInput = localForm.locator('[name="partNumber"]');
+    await page.waitForFunction(() => document.activeElement === document.querySelector('#localPartForm [name="partNumber"]'));
+    assert.equal(await localPartInput.evaluate(input => input.placeholder), 'Enter part number');
+    await page.screenshot({ path: path.join(artifacts, 'local-part-ready.png') });
     assert.equal(await page.locator('#regularPartEntryTab').isVisible(), false);
     assert.equal(await localForm.evaluate(form => form.closest('#barcodeScanForm')), null);
     assert.ok(await localForm.evaluate(form => form.closest('#localPartEntryTab')));
-    const localPartInput = localForm.locator('[name="partNumber"]');
     const localDescription = localForm.locator('[name="partDescription"]');
     const localQuantity = localForm.locator('[name="quantity"]');
     await localPartInput.fill(`LOCAL${session.stem}`);
@@ -123,7 +126,7 @@ async function main() {
     const persisted = await context.request.get(`${session.origin}/api/local-parts?dealerCode=${encodeURIComponent(who.dealerCode)}&partNumber=${encodeURIComponent(`LOCAL${session.stem}`)}`, { headers: { Authorization: `Bearer ${who.token}` } });
     assert.equal(persisted.status(), 200);
     const localData = await persisted.json();
-    assert.ok(localData.entries.some(entry => entry.partNumber === `LOCAL${session.stem}` && entry.dealerCode === who.dealerCode && entry.partDescription.toUpperCase() === 'ISOLATED LOCAL PART PERSISTENCE TEST'));
+    assert.ok(localData.entries.some(entry => entry.partNumber === `LOCAL${session.stem}` && entry.dealerCode === who.dealerCode && entry.binLocation === '1' && entry.partDescription.toUpperCase() === 'ISOLATED LOCAL PART PERSISTENCE TEST'));
     assert.equal(await page.locator('#barcodePartNumber').inputValue(), session.stem, 'successful Local Part save preserves the regular draft');
     assert.equal(await prisma.inventory.count(), inventoryBefore, 'Local Part save leaves regular inventory unchanged');
     assert.equal(await prisma.localPartEntry.count(), localPartsBefore + 1, 'exactly one persisted Local Part row is created');

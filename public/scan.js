@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20261009-scan-manual-tabs-v2';
+  const APP_VERSION = '20261009-scan-manual-tabs-v3';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';

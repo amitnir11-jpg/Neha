@@ -1720,6 +1720,8 @@
     state.localPartEditingId = '';
     $('[name="id"]', form).value = '';
     $('[name="quantity"]', form).value = '1.000';
+    $('[name="mrp"]', form).value = '0.00';
+    $('[name="dlc"]', form).value = '0.00';
     $('[name="binLocation"]', form).value = selectedBin;
     if (dealerCode) setDealerSelectValue($('[name="dealerCode"]', form), dealerCode);
     syncLocalPartFormIdentity();
@@ -1729,6 +1731,24 @@
     if (message && options.keepMessage !== true) {
       message.className = 'form-message';
       message.textContent = '';
+    }
+    if (options.focus === true) requestAnimationFrame(() => $('[name="partNumber"]', form)?.focus({ preventScroll: true }));
+  }
+
+  async function loadLocalPartCategories() {
+    const select = $('#localPartForm [name="category"]');
+    if (!select || select.dataset.loaded === 'true') return;
+    const current = select.value;
+    try {
+      const data = await api('/api/master/categories');
+      const categories = Array.isArray(data.categories) ? data.categories : [];
+      select.innerHTML = '<option value="">Select category</option>' + categories.map((category) =>
+        `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join('');
+      if (current && !categories.includes(current)) select.add(new Option(current, current));
+      select.value = current;
+      select.dataset.loaded = 'true';
+    } catch (error) {
+      console.warn('Local Part categories could not be loaded', error);
     }
   }
 
@@ -3369,6 +3389,7 @@
     const manualStaff = $('#manualStaff');
     if (manualStaff) manualStaff.value = state.user ? state.user.name || state.user.username || '' : '';
     syncLocalPartFormIdentity();
+    loadLocalPartCategories();
     const barcodeDeviceId = $('#barcodeDeviceId');
     if (barcodeDeviceId) barcodeDeviceId.value = ensureDeviceId();
     const allowUnknownToggle = $('#allowUnknownToggle');
@@ -12449,6 +12470,7 @@
       if (filter) setDealerSelectValue(filter, dealerCode);
       if (dealerCode) loadLocalPartHistory({ page: 1 }).catch(error => toast(error.message, 'error'));
     }
+    if (options.focus !== false) requestAnimationFrame(() => $('[name="partNumber"]', localForm)?.focus({ preventScroll: true }));
   }
 
   function updateLocalPartScanMode(form) {
@@ -13254,7 +13276,7 @@
     });
     $('#regularPartTab')?.addEventListener('click', () => setManualEntryTab('regular'));
     $('#localPartTab')?.addEventListener('click', () => setManualEntryTab('local'));
-    $('#localPartClearBtn')?.addEventListener('click', () => resetLocalPartForm());
+    $('#localPartClearBtn')?.addEventListener('click', () => resetLocalPartForm({ focus: true }));
     $('#localPartForm [name="dealerCode"]')?.addEventListener('change', syncLocalPartFormIdentity);
     $('#localPartForm [name="partNumber"]')?.addEventListener('blur', (event) => {
       event.target.value = clean(event.target.value).toUpperCase();

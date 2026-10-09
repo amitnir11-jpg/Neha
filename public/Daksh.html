@@ -29,7 +29,7 @@
   <link rel="stylesheet" href="/css/app-controls.css?v=20260908-enterprise-controls-v2">
   <link rel="stylesheet" href="/dashboard-layout.css?v=20260928-dashboard-dealer-picker-v2">
   <link rel="stylesheet" href="/compact-layout.css?v=20260921-global-density-v2">
-  <link rel="stylesheet" href="/barcode-workspace.css?v=20261009-scan-manual-tabs-v2">
+  <link rel="stylesheet" href="/barcode-workspace.css?v=20261009-scan-manual-tabs-v3">
 </head>
 <body class="app-booting">
   <script>
@@ -335,31 +335,37 @@
           </div>
 
           <div id="localPartEntry" class="local-part-entry" hidden inert aria-hidden="true">
+            <div class="local-part-entry-heading">
+              <span class="local-part-entry-icon" aria-hidden="true">▣</span>
+              <div><strong>Local Part</strong><small>Enter local part details (not in master data)</small></div>
+            </div>
             <form id="localPartForm" class="grid-form local-part-form">
               <input name="id" type="hidden">
               <label id="localPartDealerField" hidden>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
-              <label>Reference Audit ID<input name="referenceAuditId" id="localPartReferenceAuditId" readonly placeholder="Captured automatically"></label>
-              <label>Bin Location<input name="binLocation" maxlength="120" autocomplete="off" required placeholder="Selected scan bin"></label>
-              <label>Part Number<input name="partNumber" autocomplete="off" maxlength="120" required></label>
-              <label>Quantity<input name="quantity" type="number" min="0.001" step="0.001" value="1.000" required></label>
-              <label>MRP<input name="mrp" type="number" min="0" step="0.01" required></label>
-              <label>DLC<input name="dlc" type="number" min="0" step="0.01" required></label>
-              <label class="span-2">Part Description<input name="partDescription" maxlength="500" autocomplete="off" required></label>
-              <label>Category<input name="category" maxlength="120" autocomplete="off"></label>
-              <label>Staff / Entered By<input name="enteredByName" id="localPartEnteredBy" readonly></label>
-              <label class="span-3">Remarks<textarea name="remarks" rows="3" maxlength="2000" placeholder="Optional remarks"></textarea></label>
-              <div class="actions span-3">
-                <button id="localPartSaveBtn" class="btn primary" type="button">Save Local Part</button>
+              <input name="referenceAuditId" id="localPartReferenceAuditId" type="hidden">
+              <input name="binLocation" type="hidden" required>
+              <input name="enteredByName" id="localPartEnteredBy" type="hidden">
+              <label>Part Number <span class="required-mark">*</span><input name="partNumber" autocomplete="off" maxlength="120" required placeholder="Enter part number"></label>
+              <label>Part Description <span class="required-mark">*</span><input name="partDescription" maxlength="500" autocomplete="off" required placeholder="Enter part description"></label>
+              <label>Quantity <span class="required-mark">*</span><input name="quantity" type="number" min="0.001" step="0.001" value="1" required></label>
+              <label>MRP (₹)<input name="mrp" type="number" min="0" step="0.01" value="0.00" required></label>
+              <label>DLC (₹)<input name="dlc" type="number" min="0" step="0.01" value="0.00" required></label>
+              <label>Category<select name="category"><option value="">Select category</option></select></label>
+              <label class="local-part-remarks">Remarks<textarea name="remarks" rows="1" maxlength="2000" placeholder="Enter remarks for local part..."></textarea></label>
+              <div class="actions local-part-actions">
+                <button id="localPartSaveBtn" class="btn primary" type="button"><span aria-hidden="true">▣</span> Save Local Part</button>
                 <button id="localPartClearBtn" class="btn light" type="button">Clear</button>
                 <span id="localPartFormMessage" class="form-message" aria-live="polite"></span>
               </div>
             </form>
 
-            <section class="local-part-history">
-              <div class="card-head">
-                <h2>Local Part History</h2>
-                <div class="actions"><button id="localPartHistoryRefreshBtn" class="btn light" type="button">Refresh</button></div>
-              </div>
+            <details class="local-part-history-disclosure">
+              <summary>Local Part History</summary>
+              <section class="local-part-history">
+                <div class="card-head">
+                  <h2>Local Part History</h2>
+                  <div class="actions"><button id="localPartHistoryRefreshBtn" class="btn light" type="button">Refresh</button></div>
+                </div>
               <form id="localPartHistoryFilters" class="filter-grid local-part-history-filters">
                 <label>Dealer<select name="dealerCode" class="dealerSelect"></select></label>
                 <label>From Date<input name="fromDate" type="date"></label>
@@ -384,7 +390,8 @@
                 <span id="localPartPageInfo">Page 1 of 1</span>
                 <button id="localPartNextPage" class="btn light" type="button" disabled>Next</button>
               </div>
-            </section>
+              </section>
+            </details>
           </div>
 
           <div id="barcodeEntry" class="subview active">
@@ -1766,9 +1773,9 @@
   <script src="/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="/sku-bin-picker.css?v=20261008-sku-v10">
   <script src="/js/sku-bin-picker.js?v=20261008-sku-v10"></script>
-  <link rel="stylesheet" href="/smart-part-search.css?v=20261009-scan-manual-tabs-v2">
-  <script src="/js/smart-part-search.js?v=20261009-scan-manual-tabs-v2"></script>
-  <script src="/ui.js?v=20261009-scan-manual-tabs-v2"></script>
+  <link rel="stylesheet" href="/smart-part-search.css?v=20261009-scan-manual-tabs-v3">
+  <script src="/js/smart-part-search.js?v=20261009-scan-manual-tabs-v3"></script>
+  <script src="/ui.js?v=20261009-scan-manual-tabs-v3"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

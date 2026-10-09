@@ -65,7 +65,21 @@ body.view-active-scan #barcodeEntry h3 { margin: 0 !important; font-size: 14px !
 .manual-entry-tab:disabled { opacity: .5; cursor: not-allowed; }
 .manual-entry-tab-panel[hidden] { display: none !important; }
 .local-part-tab-panel #localPartEntry { margin: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
-.local-part-tab-panel .local-part-history { margin-top: 12px; }
+.local-part-entry-heading { display: flex; align-items: center; gap: 8px; padding: 2px 0 7px; margin-bottom: 7px; border-bottom: 1px solid #ccefdc; color: #008b49; }
+.local-part-entry-icon { font-size: 18px; line-height: 1; }
+.local-part-entry-heading strong { display: block; font-size: 12px; }
+.local-part-entry-heading small { display: block; margin-top: 2px; color: #47657a; font-size: 9px; }
+#barcodeEntry .local-part-tab-panel .local-part-form { display: grid !important; grid-template-columns: 1.1fr 1.7fr .9fr .9fr .9fr 1.2fr; gap: 6px !important; align-items: end !important; padding: 7px !important; border: 1px solid #bdebd0 !important; border-radius: 8px !important; background: linear-gradient(115deg, #f1fff7, #e7f9ef) !important; }
+#barcodeEntry .local-part-tab-panel .local-part-form label { display: block !important; margin: 0 !important; color: #091b28 !important; font-size: 9px !important; font-weight: 700 !important; }
+#barcodeEntry .local-part-tab-panel .local-part-form input:not([type="hidden"]), #barcodeEntry .local-part-tab-panel .local-part-form select, #barcodeEntry .local-part-tab-panel .local-part-form textarea { width: 100% !important; min-width: 0 !important; height: 24px !important; min-height: 24px !important; margin-top: 3px !important; padding: 3px 6px !important; border: 1px solid #d3dfe4 !important; border-radius: 5px !important; background: #fff !important; color: #172531 !important; font-size: 9px !important; line-height: 1.2 !important; }
+#barcodeEntry .local-part-tab-panel .local-part-form textarea { resize: vertical !important; }
+#barcodeEntry .local-part-tab-panel .local-part-form .local-part-remarks { grid-column: span 2 !important; }
+#barcodeEntry .local-part-tab-panel .local-part-form .local-part-actions { grid-column: span 4 !important; display: flex !important; align-items: center !important; justify-content: flex-start !important; gap: 6px !important; margin: 0 !important; }
+#barcodeEntry .local-part-tab-panel .local-part-form .local-part-actions .btn { min-height: 26px !important; height: 26px !important; padding: 4px 10px !important; font-size: 9px !important; }
+#barcodeEntry .local-part-tab-panel #localPartSaveBtn { background: #08a74f !important; border-color: #08a74f !important; color: #fff !important; }
+#barcodeEntry .local-part-tab-panel .local-part-history-disclosure { margin-top: 7px; }
+#barcodeEntry .local-part-tab-panel .local-part-history-disclosure > summary { cursor: pointer; color: #087f46; font-size: 10px; font-weight: 700; }
+.local-part-tab-panel .local-part-history { margin-top: 8px; }
 .local-part-tab-panel .local-part-history .table-wrap { max-height: 210px; overflow: auto; }
 body.view-active-scan #barcodeEntry #barcodeRaw { width: 100% !important; height: 42px !important; min-height: 42px !important; resize: none !important; padding: 9px 14px !important; border: 1px solid #0078ee !important; border-radius: 5px !important; background: white !important; color: #132541 !important; font-size: 16px !important; line-height: 22px !important; }
 body.view-active-scan #barcodeEntry .barcode-manual-panel label { display: block !important; margin: 0 !important; color: #0a1530 !important; font-size: 12px !important; font-weight: 600 !important; }
@@ -121,8 +135,8 @@ body.view-active-scan #scan:has(#barcodeEntry.active) #scanHistoryPagination .bt
   #barcodeEntry .manual-entry-tabs { width: 100%; }
   #barcodeEntry .manual-entry-tab { flex: 1; }
   #barcodeEntry .local-part-tab-panel .local-part-form { grid-template-columns: minmax(0, 1fr) !important; }
-  #barcodeEntry .local-part-tab-panel .local-part-form .span-2,
-  #barcodeEntry .local-part-tab-panel .local-part-form .span-3 { grid-column: auto !important; }
+  #barcodeEntry .local-part-tab-panel .local-part-form .local-part-remarks,
+  #barcodeEntry .local-part-tab-panel .local-part-form .local-part-actions { grid-column: auto !important; }
   #barcodeEntry .local-part-tab-panel .local-part-history-filters { grid-template-columns: minmax(0, 1fr) !important; }
 }
 
