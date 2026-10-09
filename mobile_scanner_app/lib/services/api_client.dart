@@ -8,7 +8,7 @@ import '../models/scan_record.dart';
 import '../models/session.dart';
 import 'settings_store.dart';
 
-const mobileAppVersionName = 'Daksh Scan Lite v1.2.17';
+const mobileAppVersionName = 'Daksh Scan Lite v1.2.19';
 
 class ApiException implements Exception {
   ApiException(this.message,
@@ -229,14 +229,16 @@ class ApiClient {
     int limit = 10,
   }) async {
     final q = query.trim().toUpperCase();
-    if (q.length < 2) return [];
+    if (q.isEmpty) return [];
     final params = <String, String>{
       'q': q,
       'dealerCode': dealerCode.trim().toUpperCase(),
-      'limit': limit.toString(),
+      'limit': limit.clamp(1, 10).toString(),
     };
     final data = await _request(
-      '/api/mobile/master-search?${Uri(queryParameters: params).query}',
+      '/api/parts/suggestions?${Uri(queryParameters: params).query}',
+      fast: true,
+      timeout: const Duration(seconds: 5),
     );
     final rows = (data['parts'] ?? data['suggestions'] ?? []) as List<dynamic>;
     return rows

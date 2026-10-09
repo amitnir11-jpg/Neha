@@ -18,6 +18,7 @@ import '../services/settings_store.dart';
 import '../services/sync_service.dart';
 import '../utils/scan_parser.dart';
 import '../widgets/status_chip.dart';
+import '../widgets/smart_part_field.dart';
 import 'pending_sync_screen.dart';
 import 'settings_screen.dart';
 
@@ -1756,10 +1757,6 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
   late final TextEditingController _partController;
   late final TextEditingController _qtyController;
   late final TextEditingController _binController;
-  Timer? _suggestTimer;
-  List<Map<String, dynamic>> _suggestions = [];
-  bool _loadingSuggestions = false;
-  String _suggestionError = '';
   String _selectedDescription = '';
 
   @override
@@ -1772,7 +1769,6 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
 
   @override
   void dispose() {
-    _suggestTimer?.cancel();
     _partController.dispose();
     _qtyController.dispose();
     _binController.dispose();
@@ -1784,76 +1780,6 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     if (value == upper) return;
     controller.value = TextEditingValue(
         text: upper, selection: TextSelection.collapsed(offset: upper.length));
-  }
-
-  void _onPartChanged(String value) {
-    _uppercase(_partController, value);
-    final query = _upper(value);
-    _selectedDescription = '';
-    _suggestTimer?.cancel();
-    if (query.length < 2) {
-      setState(() {
-        _suggestions = [];
-        _loadingSuggestions = false;
-        _suggestionError = '';
-      });
-      return;
-    }
-    setState(() {
-      _loadingSuggestions = true;
-      _suggestionError = '';
-    });
-    // Keep typing responsive while still coalescing fast key strokes into one
-    // request. The server response, rather than the old long debounce, is now
-    // the main part of the suggestion wait.
-    _suggestTimer = Timer(const Duration(milliseconds: 100), () {
-      _loadSuggestions(query);
-    });
-  }
-
-  Future<void> _loadSuggestions(String query) async {
-    try {
-      final rows = await ApiClient(widget.settings).masterSearchParts(
-        query: query,
-        dealerCode: widget.dealerCode,
-        limit: 8,
-      );
-      if (!mounted || _upper(_partController.text) != query) return;
-      setState(() {
-        _suggestions = rows;
-        _loadingSuggestions = false;
-        _suggestionError = '';
-      });
-    } catch (error) {
-      if (!mounted || _upper(_partController.text) != query) return;
-      setState(() {
-        _suggestions = [];
-        _loadingSuggestions = false;
-        _suggestionError = 'Part suggestions unavailable';
-      });
-    }
-  }
-
-  void _pickSuggestion(Map<String, dynamic> part) {
-    final partNumber = _upper(part['partNumber'] ?? part['partNo']);
-    final description =
-        (part['partDescription'] ?? part['partName'] ?? '').toString().trim();
-    final suggestedBin = _upper(part['binLocation'] ?? part['bin']);
-    if (partNumber.isEmpty) return;
-    _suggestTimer?.cancel();
-    _partController.value = TextEditingValue(
-      text: partNumber,
-      selection: TextSelection.collapsed(offset: partNumber.length),
-    );
-    if (_upper(_binController.text).isEmpty && suggestedBin.isNotEmpty) {
-      _binController.text = suggestedBin;
-    }
-    setState(() {
-      _selectedDescription = description;
-      _suggestions = [];
-      _loadingSuggestions = false;
-      _suggestionError = '';
-    });
   }
 
   void _submit() {
@@ -1878,91 +1804,20 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text('${widget.scanType} Manual Entry'),
+      scrollable: true,
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          TextField(
+          SmartPartField(
             controller: _partController,
-            textCapitalization: TextCapitalization.characters,
-            decoration: const InputDecoration(labelText: 'Part Number'),
-            onChanged: _onPartChanged,
+            scopeKey: widget.dealerCode,
+            search: (query) => ApiClient(widget.settings).masterSearchParts(
+              query: query, dealerCode: widget.dealerCode, limit: 10),
+            onSelected: (part) => setState(() {
+              _selectedDescription = (part['partDescription'] ?? '').toString();
+            }),
+            onEdited: () => _selectedDescription = '',
           ),
-          if (_loadingSuggestions) ...[
-            const SizedBox(height: 6),
-            const LinearProgressIndicator(minHeight: 2),
-          ],
-          if (_selectedDescription.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                _selectedDescription,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-          ],
-          if (_suggestionError.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                _suggestionError,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-          if (_suggestions.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 230),
-              child: Material(
-                color: Theme.of(context)
-                    .colorScheme
-                    .surfaceVariant
-                    .withOpacity(0.45),
-                borderRadius: BorderRadius.circular(10),
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: _suggestions.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final part = _suggestions[index];
-                    final partNumber =
-                        _upper(part['partNumber'] ?? part['partNo']);
-                    final description =
-                        (part['partDescription'] ?? part['partName'] ?? '')
-                            .toString()
-                            .trim();
-                    final model = (part['model'] ?? '').toString().trim();
-                    final mrp = (part['mrp'] ?? '').toString().trim();
-                    final subtitle = [
-                      if (description.isNotEmpty) description,
-                      if (model.isNotEmpty) model,
-                      if (mrp.isNotEmpty && mrp != '0') 'MRP $mrp',
-                    ].join(' | ');
-                    return ListTile(
-                      dense: true,
-                      title: Text(
-                        partNumber,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                      subtitle: subtitle.isEmpty
-                          ? null
-                          : Text(
-                              subtitle,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                      onTap: () => _pickSuggestion(part),
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
           const SizedBox(height: 10),
           TextField(
             controller: _qtyController,

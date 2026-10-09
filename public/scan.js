@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20261008-bin-input-v11';
+  const APP_VERSION = '20261009-smart-search-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -3812,38 +3812,22 @@
   }
 
   function bindManualSearch() {
-    let timer = null;
-    byId('manualPartNumber').addEventListener('input', (event) => {
-      const input = event.target;
-      input.value = upper(input.value);
-      clearTimeout(timer);
-      timer = setTimeout(async () => {
-        const q = upper(input.value);
-        if (q.length < 2 || !state.session?.token) {
-          updateManualSuggestionList([]);
-          return;
-        }
-        try {
-          const params = new URLSearchParams({
-            q,
-            dealerCode: activeDealerCode(),
-            limit: '5'
-          });
-          const data = await api(`/api/mobile/master-search?${params.toString()}`);
-          const parts = Array.isArray(data.parts) ? data.parts : Array.isArray(data.suggestions) ? data.suggestions : [];
-          updateManualSuggestionList(parts);
-          const exact = parts.find((part) => upper(part.partNumber || part.partNo || part.part || '') === q);
-          if (exact) {
-            byId('manualMrp').value = Number(exact.mrp || 0) > 0 ? String(exact.mrp) : '';
-            if (byId('manualDlc')) byId('manualDlc').value = Number(exact.dlc || 0) > 0 ? String(exact.dlc) : '';
-          } else {
-            byId('manualMrp').value = '';
-            if (byId('manualDlc')) byId('manualDlc').value = '';
-          }
-        } catch (_) {
-          updateManualSuggestionList([]);
-        }
-      }, 220);
+    const input = byId('manualPartNumber');
+    window.SmartPartSearch.bind(input, {
+      getScope: () => `${state.session?.token || ''}|${activeDealerCode()}|${activeAuditId()}`,
+      isEnabled: () => Boolean(state.session?.token),
+      fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: activeDealerCode(), limit: '10' })}`, { ...options, timeoutMs: 5000 }),
+      onSelect: (part) => {
+        input.value = upper(part.partNumber);
+        byId('manualMrp').value = Number(part.mrp) > 0 ? String(part.mrp) : '';
+        if (byId('manualDlc')) byId('manualDlc').value = Number(part.dlc) > 0 ? String(part.dlc) : '';
+        byId('manualPartDetails').textContent = [part.partDescription, part.category].filter(Boolean).join(' · ');
+      }
+    });
+    input.addEventListener('input', () => {
+      byId('manualMrp').value = '';
+      if (byId('manualDlc')) byId('manualDlc').value = '';
+      byId('manualPartDetails').textContent = '';
     });
   }
 
@@ -3868,6 +3852,7 @@
     byId('manualRegdNo').value = '';
     byId('manualJobCardNo').value = '';
     byId('partSuggestions').innerHTML = '';
+    byId('manualPartDetails').textContent = '';
     if (state.manualRaw) {
       byId('manualRawPreview').hidden = false;
       byId('manualRawPreview').textContent = `Captured code: ${parseRawPreview(state.manualRaw)}`;
@@ -3886,6 +3871,7 @@
     const dialog = byId('manualDialog');
     if (dialog.open) dialog.close();
     byId('partSuggestions').innerHTML = '';
+    byId('manualPartDetails').textContent = '';
     byId('manualRawPreview').hidden = true;
     if (state.manualResumeAfterClose) {
       state.manualResumeAfterClose = false;

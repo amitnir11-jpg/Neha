@@ -29,7 +29,7 @@ const { applyCacheHeaders, getCachedResponse } = require('../utils/safeCache');
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'daksh_inventory_secret';
 const MOBILE_APP_VERSION = 'Daksh Scan Lite v1.2.17';
-const WEB_SCANNER_BUILD = '20261008-bin-input-v11';
+const WEB_SCANNER_BUILD = '20261009-smart-search-v1';
 const INVALID_PART_MESSAGE = 'Invalid part number - not found in master catalogue';
 const MOBILE_SCAN_SELECT = [
   'uniqueScanId scanId syncKey qrFingerprint rawUpiHash',
@@ -563,81 +563,7 @@ router.get('/sync-status', auth.requireAuth, async (req, res) => {
   }
 });
 
-router.get('/master-search', auth.requireAuth, async (req, res) => {
-  try {
-    return await sendCachedJson(res, 'search', req.query, async (normalizedQuery) => {
-      const q = upper(normalizedQuery.q || normalizedQuery.partNumber || normalizedQuery.part || '');
-      const dealerCode = upper(normalizedQuery.dealerCode || '');
-      const limit = Math.min(Math.max(Number(normalizedQuery.limit || 10), 1), 25);
-      if (!q || q.length < 2) return { success: true, count: 0, parts: [], suggestions: [] };
-      const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const partNumberLookup = /^(?=.*[0-9])[A-Z0-9._/-]+$/i.test(q);
-      const regex = new RegExp(`${partNumberLookup ? '^' : ''}${safeQ}`, 'i');
-      const [dealerParts, catalogueParts] = await Promise.all([
-        MasterPart.find({
-          $or: partNumberLookup
-            ? [{ normalizedPartNumber: regex }, { partNumber: regex }]
-            : [
-                { normalizedPartNumber: regex },
-                { partNumber: regex },
-                { partDescription: regex },
-                { partName: regex }
-              ]
-        }).sort({ dealerCode: -1, partNumber: 1 }).limit(limit).lean(),
-        MasterCatalogue.find({
-          $or: partNumberLookup
-            ? [{ normalizedPartNumber: regex }, { partNumber: regex }]
-            : [
-                { normalizedPartNumber: regex },
-                { partNumber: regex },
-                { partDescription: regex },
-                { partName: regex }
-              ]
-        }).sort({ partNumber: 1 }).limit(limit).lean()
-      ]);
-      // Search results already contain the master records needed for these
-      // suggestions. Resolving every candidate through getPricesFromPartMaster
-      // added two more database queries (and sometimes two legacy fallbacks)
-      // to every keystroke. Normalize and rank the returned records directly.
-      const recordsByPart = new Map();
-      dealerParts.map((record) => ({ record, source: 'MASTER_PART' }))
-        .concat(catalogueParts.map((record) => ({ record, source: 'MASTER_CATALOGUE' })))
-        .forEach(({ record, source }) => {
-        const partNumber = normalizePartNumber(record.normalizedPartNumber || record.partNumber || record.partNo || record.part);
-        if (!partNumber) return;
-        const candidates = recordsByPart.get(partNumber) || [];
-        candidates.push({ source, record });
-        recordsByPart.set(partNumber, candidates);
-      });
-      const parts = Array.from(recordsByPart, ([partNumber, records]) =>
-        pickBestPriceRecord(records, dealerCode))
-        .filter(Boolean)
-        .sort((a, b) => Number(b.partNumber === q) - Number(a.partNumber === q) || a.partNumber.localeCompare(b.partNumber))
-        .slice(0, limit)
-        .map((price) => ({
-          id: price.sourceRecord && price.sourceRecord._id,
-          partNumber: price.partNumber,
-          partNo: price.partNumber,
-          partDescription: price.description,
-          partName: price.description,
-          productCategory: price.category,
-          category: price.category,
-          mrp: price.mrp,
-          dlc: price.dlc,
-          model: price.model,
-          year: price.year,
-          manufacturingYear: price.manufacturingYear,
-          productGroup: price.productGroup,
-          partSubGroup: price.partSubGroup,
-          binLocation: price.binLocation,
-          bin: price.bin
-        }));
-      return { success: true, count: parts.length, parts, suggestions: parts };
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
+router.get('/master-search', auth.requireAuth, require('../services/PartSuggestionService').suggestionsHandler);
 
 router.get('/validate-part', auth.requireAuth, async (req, res) => {
   try {

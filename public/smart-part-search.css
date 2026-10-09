@@ -1,0 +1,14 @@
+.smart-part-menu {
+  position: fixed; z-index: 100000; overflow-y: auto; overscroll-behavior: contain;
+  background: #fff; color: #172b4d; border: 1px solid #bbcee5; border-radius: 8px;
+  box-shadow: 0 6px 24px #142e5030; box-sizing: border-box; touch-action: pan-y;
+}
+.smart-part-menu[hidden] { display: none !important; }
+.smart-part-option {
+  display: flex; flex-direction: column; gap: 3px; width: 100%; min-height: 48px;
+  padding: 10px 12px; border: 0; border-bottom: 1px solid #e7edf4; background: #fff;
+  color: inherit; text-align: left; font: inherit; cursor: pointer;
+}
+.smart-part-option:hover, .smart-part-option[aria-selected="true"] { background: #e8f2ff; }
+.smart-part-option span { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.smart-part-status { padding: 10px 12px; font-size: 12px; color: #53657c; }

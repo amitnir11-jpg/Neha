@@ -9,7 +9,7 @@
   <title>Daksh Scan</title>
   <link rel="icon" href="/brand/favicon.ico" type="image/x-icon">
   <link rel="apple-touch-icon" sizes="512x512" href="/brand/app-icon.png">
-  <link rel="stylesheet" href="/scan.css?v=20261008-bin-input-v11">
+  <link rel="stylesheet" href="/scan.css?v=20261009-smart-search-v1">
   <link rel="stylesheet" href="/css/select-system.css?v=20260908-enterprise-select-v3">
 </head>
 <body class="scan-page">
@@ -225,6 +225,7 @@
         <input id="manualPartNumber" name="partNumber" autocapitalize="characters" required placeholder="Enter part number">
       </label>
       <div id="partSuggestions" class="suggestions"></div>
+      <p id="manualPartDetails" class="field-message" aria-live="polite"></p>
 
       <div class="field-grid narrow">
         <label id="manualQtyWrap" class="field">
@@ -312,6 +313,8 @@
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <link rel="stylesheet" href="/sku-bin-picker.css?v=20261008-sku-v10">
   <script src="/js/sku-bin-picker.js?v=20261008-sku-v10"></script>
-  <script src="/scan.js?v=20261008-hero-dupe-v1"></script>
+  <link rel="stylesheet" href="/smart-part-search.css?v=20261009-smart-search-v1">
+  <script src="/js/smart-part-search.js?v=20261009-smart-search-v1"></script>
+  <script src="/scan.js?v=20261009-smart-search-v1"></script>
 </body>
 </html>

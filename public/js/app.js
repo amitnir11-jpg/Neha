@@ -1160,36 +1160,6 @@
     await loadInventory();
   }
 
-  async function searchParts(q, target) {
-    if (!q || q.length < 1) {
-      target.style.display = 'none';
-      target.innerHTML = '';
-      return;
-    }
-    const data = await api(`/api/master/search?q=${encodeURIComponent(q)}&limit=12`);
-    const parts = data.parts || [];
-    target.innerHTML = parts.map((part) => `
-      <div class="suggestion-item" data-part='${escapeHtml(JSON.stringify(part))}'>
-        <strong>${escapeHtml(part.partNo)}</strong>
-        <span>${escapeHtml(part.partDescription || part.partName)} | ${escapeHtml(part.bin || part.binLocation || '')}</span>
-      </div>
-    `).join('');
-    target.style.display = parts.length ? 'block' : 'none';
-    $$('.suggestion-item', target).forEach((item) => {
-      item.addEventListener('click', () => {
-        const part = JSON.parse(item.dataset.part);
-        $('#partInput').value = part.partNo || '';
-        $('#partNameInput').value = part.partDescription || part.partName || '';
-        $('#modelInput').value = part.model || '';
-        $('#yearInput').value = part.year || '';
-        $('#categoryInput').value = part.category || '';
-        $('#mrpInput').value = part.mrp || 0;
-        $('#dlcInput').value = part.dlc || 0;
-        $('#binInput').value = part.bin || '';
-        target.style.display = 'none';
-      });
-    });
-  }
 
   async function loadMasterSearch() {
     const q = $('#masterSearchInput').value.trim();
@@ -1390,12 +1360,19 @@
       }
     });
 
-    let partTimer;
-    $('#partInput').addEventListener('input', (event) => {
-      clearTimeout(partTimer);
-      partTimer = setTimeout(() => {
-        searchParts(event.target.value.trim(), $('#partSuggestions')).catch((error) => toast(error.message, 'error'));
-      }, 180);
+    window.SmartPartSearch.bind($('#partInput'), {
+      getScope: () => `${state.token}|${$('#scanDealerSelect')?.value || ''}`,
+      fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: $('#scanDealerSelect')?.value || '', limit: '10' })}`, options),
+      onSelect: (part) => {
+        for (const [id, value] of Object.entries({ partNameInput: part.partDescription, modelInput: part.model, yearInput: part.year, categoryInput: part.category, mrpInput: part.mrp, dlcInput: part.dlc })) {
+          if ($('#' + id)) $('#' + id).value = value ?? '';
+        }
+      }
+    });
+    window.SmartPartSearch.bind($('#masterSearchInput'), {
+      getScope: () => `${state.token}|${$('#dashboardDealerFilter')?.value || ''}`,
+      fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: $('#dashboardDealerFilter')?.value || '', limit: '10' })}`, options),
+      onSelect: () => loadMasterSearch().catch(error => toast(error.message, 'error'))
     });
 
     $('#auditForm').addEventListener('submit', async (event) => {
@@ -2097,6 +2074,10 @@
   async function initReport() {
     if (!requireSession()) return;
     setUserChrome();
+    window.SmartPartSearch.bind($('#reportFilterForm input[name="partNumber"]'), {
+      getScope: () => `${state.token}|${$('#reportDealerFilter')?.value || ''}`,
+      fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: $('#reportDealerFilter')?.value || '', limit: '10' })}`, options)
+    });
     initReportEvents();
     await loadReportDealers();
     await loadLegacyReportFilterSettings();

@@ -465,6 +465,7 @@ function isDealerScopedRequest(req) {
     '/api/audit-backup',
     '/api/audit',
     '/api/master-parts',
+    '/api/parts',
     '/api/master'
   ].includes(base);
 }

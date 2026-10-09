@@ -4898,7 +4898,7 @@
     const partInput = $('.partSuggestInput', form);
     if (partInput) partInput.value = part.partNumber || part.partNo || '';
     ['partName', 'bin', 'mrp', 'dlc', 'category'].forEach((key) => {
-      if (form.id === 'manualScanForm' && key === 'bin') return;
+      if (key === 'bin') return; // A master suggestion never selects an inventory source bin.
       const node = `[data-fill="${key}"]`;
       const input = $(node, form) || $(`[name="${key}"]`, form);
       if (input) {
@@ -4911,44 +4911,33 @@
   }
 
   function bindSuggestions() {
-    $$('.partSuggestInput').forEach((input) => {
-      let timer;
-      let requestSequence = 0;
-      input.addEventListener('input', () => {
-        clearTimeout(timer);
-        const sequence = ++requestSequence;
-        const q = input.value.trim();
-        const wrap = input.closest('.suggest-wrap');
-        const menu = $('.suggest-menu', wrap);
-        if (q.length < 3) {
-          menu.style.display = 'none';
-          menu.innerHTML = '';
-          return;
-        }
-        timer = setTimeout(async () => {
-          try {
-            const data = await api(`/api/master/parts/suggest?q=${encodeURIComponent(q)}&limit=8`);
-            if (sequence !== requestSequence || input.value.trim() !== q) return;
-            const parts = data.suggestions || data.parts || [];
-            menu.innerHTML = parts.map((part) => `
-              <div class="suggest-item" data-part="${escapeHtml(JSON.stringify(part))}">
-                <strong>${partLink(part.partNumber || part.partNo)}</strong>
-                <span>${escapeHtml(part.partDescription || part.partName)} | ${escapeHtml(part.productCategory || part.category)} | MRP ${escapeHtml(money(part.mrp))} | DLC ${escapeHtml(money(part.dlc))}</span>
-              </div>
-            `).join('');
-            menu.style.display = parts.length ? 'block' : 'none';
-            $$('.suggest-item', menu).forEach((item) => {
-              item.addEventListener('click', () => {
-                fillPart(input.closest('form'), JSON.parse(item.dataset.part));
-                menu.style.display = 'none';
-              });
-            });
-          } catch (error) {
-            if (sequence === requestSequence) toast(error.message, 'error');
+    const bindFields = () => {
+      $$('input[name="part"], input[name="partNumber"], #binTransferPartSearch, #validatorMapPartNumber, #binLabelPartSearch').forEach((input) => {
+        if (input.closest('#localPartForm, #localPartHistoryFilters')) return;
+        const form = input.closest('form');
+        const dealer = () => cleanDealerCode(form?.elements.dealerCode?.value || currentDealerCode() || activeDealerId());
+        window.SmartPartSearch.bind(input, {
+          getScope: () => `${state.token || ''}|${dealer()}`,
+          isEnabled: () => Boolean(state.token),
+          fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: dealer(), limit: '10' })}`, { ...options, timeoutMs: 5000 }),
+          onSelect: (part) => {
+            if (input.classList.contains('partSuggestInput')) {
+              fillPart(form, { ...part, partName: part.partDescription, partNo: part.partNumber });
+            }
+            if (input.id === 'binTransferPartSearch') filterRenderedBinTransferParts();
+            if (input.id === 'binLabelPartSearch') renderBinLabelParts(state.binLabelParts || []);
+            if (input.id === 'partMasterSearchInput') loadParts().catch(error => toast(error.message, 'error'));
+          },
+          onResults: (parts, q) => {
+            if (input.id !== 'barcodePartNumber') return;
+            const exact = parts.find(part => part.partNumber.toUpperCase() === q);
+            if (exact) fillPart(form, { ...exact, partName: exact.partDescription });
           }
-        }, 180);
+        });
       });
-    });
+    };
+    bindFields();
+    new MutationObserver(bindFields).observe(document.body, { childList: true, subtree: true });
   }
 
   function bindUppercaseInputs() {
@@ -4967,77 +4956,7 @@
     });
   }
 
-  function bindMasterSearchSuggestions() {
-    const input = $('#partMasterSearchInput');
-    if (!input) return;
-    const menu = $('.master-suggest-menu', input.closest('.suggest-wrap'));
-    let timer;
-    let activeIndex = -1;
-    let searchSequence = 0;
-    const chooseItem = async (item) => {
-      if (!item) return;
-      const part = JSON.parse(item.dataset.part);
-      input.value = part.partNumber || part.partNo || '';
-      menu.style.display = 'none';
-      activeIndex = -1;
-      await loadParts();
-    };
-    const setActive = (index) => {
-      const items = $$('.master-suggest-item', menu);
-      activeIndex = Math.max(-1, Math.min(index, items.length - 1));
-      items.forEach((item, itemIndex) => item.classList.toggle('active', itemIndex === activeIndex));
-      if (items[activeIndex]) items[activeIndex].scrollIntoView({ block: 'nearest' });
-    };
-    input.addEventListener('input', () => {
-      clearTimeout(timer);
-      timer = setTimeout(async () => {
-        const q = input.value.trim();
-        const sequence = ++searchSequence;
-        if (!q) {
-          menu.style.display = 'none';
-          menu.innerHTML = '';
-          if (!hasPartSearchFilter()) clearPartSearch();
-          return;
-        }
-        try {
-          const data = await api(`/api/master/parts/suggest?q=${encodeURIComponent(q)}&limit=20`);
-          if (sequence !== searchSequence || input.value.trim() !== q) return;
-          const parts = data.suggestions || data.parts || [];
-          menu.innerHTML = parts.map((part) => `
-            <div class="suggest-item master-suggest-item" data-part="${escapeHtml(JSON.stringify(part))}">
-              <strong>${partLink(part.partNumber || part.partNo)} <span>| ${escapeHtml(part.partDescription || part.partName || '')}</span></strong>
-              <span>${escapeHtml(part.productCategory || part.category || '-')} | ${escapeHtml(part.model || '-')} | ${escapeHtml(part.year || part.manufacturingYear || '-')} | MRP ${escapeHtml(money(part.mrp))} | DLC ${escapeHtml(money(part.dlc))}</span>
-            </div>
-          `).join('');
-          menu.style.display = parts.length ? 'block' : 'none';
-          activeIndex = -1;
-          $$('.master-suggest-item', menu).forEach((item) => {
-            item.addEventListener('mousedown', (event) => event.preventDefault());
-            item.addEventListener('click', () => chooseItem(item).catch((error) => toast(error.message, 'error')));
-          });
-        } catch (error) {
-          if (sequence === searchSequence && error.name !== 'AbortError') toast(error.message, 'error');
-        }
-      }, 160);
-    });
-    input.addEventListener('keydown', (event) => {
-      const items = $$('.master-suggest-item', menu);
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        setActive(activeIndex + 1);
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        setActive(activeIndex <= 0 ? items.length - 1 : activeIndex - 1);
-      } else if (event.key === 'Enter' && items.length && activeIndex >= 0) {
-        event.preventDefault();
-        chooseItem(items[activeIndex]).catch((error) => toast(error.message, 'error'));
-      } else if (event.key === 'Escape') {
-        menu.style.display = 'none';
-        activeIndex = -1;
-      }
-    });
-    input.addEventListener('blur', () => setTimeout(() => { menu.style.display = 'none'; }, 180));
-  }
+  function bindMasterSearchSuggestions() { /* Bound by the shared component. */ }
 
   async function refreshScanViews() {
     if (state.scanRefreshInFlight) {
@@ -12514,21 +12433,6 @@
     return true;
   }
 
-  async function refreshBarcodePartDetails(partNumber = '') {
-    const form = $('#barcodeScanForm');
-    const part = normalizePartText(partNumber || form?.elements.part.value || '');
-    if (!form || !validPartText(part)) return;
-    const dealer = form.elements.dealerCode.value;
-    try {
-      const master = await validatePartAgainstMaster(part, dealer);
-      if (normalizePartText(form.elements.part.value) !== part || form.elements.dealerCode.value !== dealer) return;
-      if (master) fillPart(form, master);
-      else ['partName', 'category', 'mrp', 'dlc'].forEach((name) => { form.elements[name].value = ''; });
-    } catch (error) {
-      console.warn('[SCAN] Part details lookup failed', error.message);
-    }
-  }
-
   async function saveBarcodeManualScan() {
     const form = $('#barcodeScanForm');
     if (!form || state.barcodeAutoSaving) return;
@@ -13063,9 +12967,9 @@
       clearTimeout(state.binValidationTimer);
       state.binValidationTimer = setTimeout(() => validateBarcodeSourceBin().catch(console.warn), 250);
     });
-    $('#barcodePartNumber')?.addEventListener('input', (event) => {
-      clearTimeout(event.target.lookupTimer);
-      event.target.lookupTimer = setTimeout(() => refreshBarcodePartDetails(), 400);
+    $('#barcodePartNumber')?.addEventListener('input', () => {
+      const form = $('#barcodeScanForm');
+      ['partName', 'category', 'mrp', 'dlc'].forEach(name => { form.elements[name].value = ''; });
     });
     $('#barcodePartNumber')?.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;

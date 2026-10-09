@@ -484,6 +484,7 @@ module.exports = {
   partListLookup,
   partLookup,
   pickBestPriceRecord,
+  mergePriceRecordCandidates,
   priceFromPartMasterRecord,
   requirePartMasterPrice,
   scanWithPartMasterPrice,
