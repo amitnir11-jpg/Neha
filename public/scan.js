@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20261009-scan-manual-tabs-v1';
+  const APP_VERSION = '20261009-scan-manual-tabs-v2';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -3856,6 +3856,9 @@
       .forEach((field) => { field.disabled = state.manualEntryLocal; });
     qsa('#mobileLocalPartPanel input, #mobileLocalPartPanel select, #mobileLocalPartPanel textarea')
       .forEach((field) => { field.disabled = !state.manualEntryLocal; });
+    if (state.manualEntryLocal && !byId('localPartBinLocation').value) {
+      byId('localPartBinLocation').value = byId('manualBinLocation').value || loadActiveBin();
+    }
     byId('manualSaveScanBtn').hidden = state.manualEntryLocal;
     byId('mobileSaveLocalPartBtn').hidden = !state.manualEntryLocal;
     if (!state.manualEntryLocal) renderModeFields();
@@ -3874,6 +3877,8 @@
         method: 'POST',
         body: {
           dealerCode: activeDealerCode(),
+          binLocation: upper(byId('localPartBinLocation').value),
+          category: clean(byId('localPartCategory').value),
           partNumber: upper(byId('localPartNumber').value),
           partDescription: clean(byId('localPartDescription').value),
           quantity: byId('localPartQuantity').value,

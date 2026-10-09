@@ -737,6 +737,8 @@ model LocalPartEntry {
   partNumber           String
   normalizedPartNumber String
   partDescription      String
+  binLocation          String?
+  category             String?
   quantity             Decimal   @db.Decimal(18, 3)
   mrp                  Decimal   @db.Decimal(18, 2)
   dlc                  Decimal   @db.Decimal(18, 2)

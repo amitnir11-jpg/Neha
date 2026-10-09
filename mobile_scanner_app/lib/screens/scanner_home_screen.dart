@@ -1762,6 +1762,7 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
   late final TextEditingController _qtyController;
   late final TextEditingController _binController;
   late final TextEditingController _localPartController;
+  late final TextEditingController _localCategoryController;
   late final TextEditingController _localQtyController;
   late final TextEditingController _descriptionController;
   late final TextEditingController _mrpController;
@@ -1779,6 +1780,7 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     _qtyController = TextEditingController(text: '1');
     _binController = TextEditingController(text: _upper(widget.fallbackBin));
     _localPartController = TextEditingController();
+    _localCategoryController = TextEditingController();
     _localQtyController = TextEditingController(text: '1.000');
     _descriptionController = TextEditingController();
     _mrpController = TextEditingController();
@@ -1792,6 +1794,7 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     _qtyController.dispose();
     _binController.dispose();
     _localPartController.dispose();
+    _localCategoryController.dispose();
     _localQtyController.dispose();
     _descriptionController.dispose();
     _mrpController.dispose();
@@ -1834,11 +1837,11 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     final mrp = _mrpController.text.trim();
     final dlc = _dlcController.text.trim();
     final description = _descriptionController.text.trim();
-    if (part.isEmpty || description.isEmpty ||
+    if (part.isEmpty || _upper(_binController.text).isEmpty || description.isEmpty ||
         (double.tryParse(quantity) ?? 0) <= 0 ||
         (double.tryParse(mrp) ?? -1) < 0 ||
         (double.tryParse(dlc) ?? -1) < 0) {
-      setState(() => _error = 'Enter part, description, positive quantity, MRP and DLC.');
+      setState(() => _error = 'Enter bin, part, description, positive quantity, MRP and DLC.');
       return;
     }
     setState(() {
@@ -1848,11 +1851,13 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     try {
       await ApiClient(widget.settings).createLocalPart(
         dealerCode: widget.dealerCode,
+        binLocation: _upper(_binController.text),
         partNumber: part,
         partDescription: description,
         quantity: quantity,
         mrp: mrp,
         dlc: dlc,
+        category: _localCategoryController.text,
         remarks: _remarksController.text,
       );
       if (mounted) Navigator.pop(context, const _LocalPartSaved());
@@ -1918,6 +1923,13 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
             ),
           ] else ...[
             TextField(
+              controller: _binController,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(labelText: 'Bin Location *'),
+              onChanged: (value) => _uppercase(_binController, value),
+            ),
+            const SizedBox(height: 8),
+            TextField(
               controller: _localPartController,
               textCapitalization: TextCapitalization.characters,
               decoration: const InputDecoration(labelText: 'Part Number'),
@@ -1948,6 +1960,11 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
                 decoration: const InputDecoration(labelText: 'DLC'),
               )),
             ]),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _localCategoryController,
+              decoration: const InputDecoration(labelText: 'Category (optional)'),
+            ),
             const SizedBox(height: 8),
             TextField(
               controller: _remarksController,

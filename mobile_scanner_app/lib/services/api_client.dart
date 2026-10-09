@@ -253,15 +253,19 @@ class ApiClient {
 
   Future<Map<String, dynamic>> createLocalPart({
     required String dealerCode,
+    required String binLocation,
     required String partNumber,
     required String partDescription,
     required String quantity,
     required String mrp,
     required String dlc,
+    String category = '',
     String remarks = '',
   }) =>
       _request('/api/local-parts', method: 'POST', body: {
         'dealerCode': dealerCode.trim().toUpperCase(),
+        'binLocation': binLocation.trim().toUpperCase(),
+        'category': category.trim(),
         'partNumber': partNumber.trim().toUpperCase(),
         'partDescription': partDescription.trim(),
         'quantity': quantity.trim(),

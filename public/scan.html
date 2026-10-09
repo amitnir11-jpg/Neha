@@ -263,6 +263,7 @@
       </div>
 
       <div id="mobileLocalPartPanel" role="tabpanel" aria-labelledby="mobileLocalPartTab" hidden>
+        <label class="field"><span>Bin Location *</span><input id="localPartBinLocation" name="localPartBinLocation" maxlength="120" autocapitalize="characters" required disabled></label>
         <label class="field"><span>Part Number *</span><input id="localPartNumber" name="localPartNumber" maxlength="120" autocapitalize="characters" required disabled></label>
         <label class="field"><span>Part Description *</span><input id="localPartDescription" name="localPartDescription" maxlength="500" required disabled></label>
         <div class="field-grid narrow">
@@ -270,6 +271,7 @@
           <label class="field"><span>MRP *</span><input id="localPartMrp" name="localPartMrp" inputmode="decimal" type="number" min="0" step="0.01" required disabled></label>
           <label class="field"><span>DLC *</span><input id="localPartDlc" name="localPartDlc" inputmode="decimal" type="number" min="0" step="0.01" required disabled></label>
         </div>
+        <label class="field"><span>Category</span><input id="localPartCategory" name="localPartCategory" maxlength="120" disabled></label>
         <label class="field"><span>Remarks</span><textarea id="localPartRemarks" name="localPartRemarks" maxlength="2000" rows="2" placeholder="Optional" disabled></textarea></label>
         <p id="localPartMessage" class="field-message" aria-live="polite"></p>
       </div>

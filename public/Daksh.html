@@ -29,7 +29,7 @@
   <link rel="stylesheet" href="/css/app-controls.css?v=20260908-enterprise-controls-v2">
   <link rel="stylesheet" href="/dashboard-layout.css?v=20260928-dashboard-dealer-picker-v2">
   <link rel="stylesheet" href="/compact-layout.css?v=20260921-global-density-v2">
-  <link rel="stylesheet" href="/barcode-workspace.css?v=20261009-scan-manual-tabs-v1">
+  <link rel="stylesheet" href="/barcode-workspace.css?v=20261009-scan-manual-tabs-v2">
 </head>
 <body class="app-booting">
   <script>
@@ -339,11 +339,13 @@
               <input name="id" type="hidden">
               <label id="localPartDealerField" hidden>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
               <label>Reference Audit ID<input name="referenceAuditId" id="localPartReferenceAuditId" readonly placeholder="Captured automatically"></label>
+              <label>Bin Location<input name="binLocation" maxlength="120" autocomplete="off" required placeholder="Selected scan bin"></label>
               <label>Part Number<input name="partNumber" autocomplete="off" maxlength="120" required></label>
               <label>Quantity<input name="quantity" type="number" min="0.001" step="0.001" value="1.000" required></label>
               <label>MRP<input name="mrp" type="number" min="0" step="0.01" required></label>
               <label>DLC<input name="dlc" type="number" min="0" step="0.01" required></label>
               <label class="span-2">Part Description<input name="partDescription" maxlength="500" autocomplete="off" required></label>
+              <label>Category<input name="category" maxlength="120" autocomplete="off"></label>
               <label>Staff / Entered By<input name="enteredByName" id="localPartEnteredBy" readonly></label>
               <label class="span-3">Remarks<textarea name="remarks" rows="3" maxlength="2000" placeholder="Optional remarks"></textarea></label>
               <div class="actions span-3">
@@ -373,8 +375,8 @@
               </div>
               <div class="table-wrap local-part-history-wrap">
                 <table id="localPartHistoryTable" class="local-part-history-table">
-                  <thead><tr><th>Entry Date</th><th>Entry Time</th><th>Dealer Code</th><th>Reference Audit ID</th><th>Part Number</th><th>Part Description</th><th>Quantity</th><th>MRP</th><th>Total MRP Value</th><th>DLC</th><th>Total DLC Value</th><th>Entered By</th><th>Remarks</th><th>Status</th><th>Edit</th><th>Delete</th></tr></thead>
-                  <tbody id="localPartHistoryRows"><tr><td colspan="16" class="muted">Open Local Part to load history</td></tr></tbody>
+                  <thead><tr><th>Entry Date</th><th>Entry Time</th><th>Dealer Code</th><th>Reference Audit ID</th><th>Bin Location</th><th>Part Number</th><th>Part Description</th><th>Category</th><th>Quantity</th><th>MRP</th><th>Total MRP Value</th><th>DLC</th><th>Total DLC Value</th><th>Entered By</th><th>Remarks</th><th>Status</th><th>Edit</th><th>Delete</th></tr></thead>
+                  <tbody id="localPartHistoryRows"><tr><td colspan="18" class="muted">Open Local Part to load history</td></tr></tbody>
                 </table>
               </div>
               <div class="pagination local-part-pagination">
@@ -411,11 +413,12 @@
                 <label>Device ID<input name="deviceId" id="barcodeDeviceId" readonly></label>
                 <label class="barcode-beep"><span aria-hidden="true">◖))</span><span id="barcodeBeepLabel">Beep: ON</span><input id="barcodeBeep" type="checkbox" role="switch" aria-label="Scan beep" checked></label>
               </div>
+            </form>
               <div class="barcode-entry-panels">
                 <section class="barcode-input-panel" aria-labelledby="barcodeInputTitle">
                   <div class="barcode-panel-title"><span aria-hidden="true">▥</span><div><h3 id="barcodeInputTitle">Scan Barcode / QR</h3><p>Scan part barcode or QR code after selecting bin location</p></div></div>
-                  <label class="barcode-raw-label"><span class="sr-only">Barcode or QR code</span><textarea name="rawScan" id="barcodeRaw" rows="1" autocomplete="off" placeholder="Scan barcode or QR here..."></textarea></label>
-                  <div class="actions"><button class="btn primary barcode-save" type="submit">Save Scan (Enter)</button><button class="btn light" type="button" id="clearBarcodeScan">↻ &nbsp; Clear</button></div>
+                  <label class="barcode-raw-label"><span class="sr-only">Barcode or QR code</span><textarea form="barcodeScanForm" name="rawScan" id="barcodeRaw" rows="1" autocomplete="off" placeholder="Scan barcode or QR here..."></textarea></label>
+                  <div class="actions"><button class="btn primary barcode-save" type="submit" form="barcodeScanForm">Save Scan (Enter)</button><button class="btn light" type="button" id="clearBarcodeScan">↻ &nbsp; Clear</button></div>
                   <div class="barcode-scan-feedback"><span id="barcodeAutoSaveStatus" class="live-pill green-dot">Auto Save: ON</span><span id="barcodeReadyStatus" class="live-pill green-dot" aria-live="polite">Ready for Scan</span></div>
                 </section>
                 <section class="barcode-manual-panel" aria-labelledby="barcodeManualTitle">
@@ -426,26 +429,26 @@
                   </div>
                   <div id="regularPartEntryTab" class="manual-entry-tab-panel" role="tabpanel" aria-labelledby="regularPartTab">
                   <div class="barcode-manual-fields">
-                    <label>Part Number <span class="required-mark">*</span><div class="suggest-wrap"><input name="part" id="barcodePartNumber" class="partSuggestInput" autocomplete="off" placeholder="Enter part number"><div class="suggest-menu"></div></div></label>
-                    <label>Quantity <span class="required-mark">*</span><input name="qty" type="number" min="0.001" step="any" value="1" required></label>
-                    <label>Regd No<input name="regdNo" autocomplete="off" placeholder="Enter Regd No"></label>
-                    <label>Job Card No<input name="jobCardNo" autocomplete="off" placeholder="Enter Job Card No"></label>
-                    <button id="saveBarcodeManualScan" class="btn primary" type="button">Save Manual Scan</button>
+                    <label>Part Number <span class="required-mark">*</span><div class="suggest-wrap"><input form="barcodeScanForm" name="part" id="barcodePartNumber" class="partSuggestInput" autocomplete="off" placeholder="Enter part number"><div class="suggest-menu"></div></div></label>
+                    <label>Quantity <span class="required-mark">*</span><input form="barcodeScanForm" name="qty" type="number" min="0.001" step="any" value="1" required></label>
+                    <label>Regd No<input form="barcodeScanForm" name="regdNo" autocomplete="off" placeholder="Enter Regd No"></label>
+                    <label>Job Card No<input form="barcodeScanForm" name="jobCardNo" autocomplete="off" placeholder="Enter Job Card No"></label>
+                    <button id="saveBarcodeManualScan" class="btn primary" type="button" form="barcodeScanForm">Save Manual Scan</button>
+                    <button id="clearBarcodeManualEntry" class="btn light" type="button">Clear</button>
                   </div>
                   <small id="barcodePartLocationStatus" class="muted" aria-live="polite"></small>
                   <div class="barcode-details-title"><strong>Part Details</strong> <span>(Auto-filled after scan or part entry)</span></div>
                   <div class="barcode-part-details">
-                    <label>Part Description<input name="partName" data-fill="partName" readonly placeholder="Auto filled from scan"></label>
-                    <label>Category<input name="category" data-fill="category" readonly placeholder="Auto filled"></label>
-                    <label>MRP (₹)<input name="mrp" data-fill="mrp" readonly placeholder="0.00"></label>
-                    <label>DLC (₹)<input name="dlc" data-fill="dlc" readonly placeholder="0.00"></label>
+                    <label>Part Description<input form="barcodeScanForm" name="partName" data-fill="partName" readonly placeholder="Auto filled from scan"></label>
+                    <label>Category<input form="barcodeScanForm" name="category" data-fill="category" readonly placeholder="Auto filled"></label>
+                    <label>MRP (₹)<input form="barcodeScanForm" name="mrp" data-fill="mrp" readonly placeholder="0.00"></label>
+                    <label>DLC (₹)<input form="barcodeScanForm" name="dlc" data-fill="dlc" readonly placeholder="0.00"></label>
                   </div>
                   </div>
+                  <div id="localPartEntryTab" class="manual-entry-tab-panel local-part-tab-panel" role="tabpanel" aria-labelledby="localPartTab" hidden></div>
                 </section>
               </div>
             <p id="scanPartSummary" class="scan-part-summary" role="status" hidden></p>
-            </form>
-            <div id="localPartEntryTab" class="manual-entry-tab-panel local-part-tab-panel" role="tabpanel" aria-labelledby="localPartTab" hidden></div>
           </div>
 
           <div id="mobileSync" class="subview" hidden inert aria-hidden="true">
@@ -1763,9 +1766,9 @@
   <script src="/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="/sku-bin-picker.css?v=20261008-sku-v10">
   <script src="/js/sku-bin-picker.js?v=20261008-sku-v10"></script>
-  <link rel="stylesheet" href="/smart-part-search.css?v=20261009-scan-manual-tabs-v1">
-  <script src="/js/smart-part-search.js?v=20261009-scan-manual-tabs-v1"></script>
-  <script src="/ui.js?v=20261009-scan-manual-tabs-v1"></script>
+  <link rel="stylesheet" href="/smart-part-search.css?v=20261009-scan-manual-tabs-v2">
+  <script src="/js/smart-part-search.js?v=20261009-scan-manual-tabs-v2"></script>
+  <script src="/ui.js?v=20261009-scan-manual-tabs-v2"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

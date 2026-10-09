@@ -123,9 +123,11 @@ function verifyStaticIsolation() {
   assert.match(localRoute, /invalidateLocalPartCaches/);
   assert.match(reportsRoute, /router\.get\('\/local-parts', auth\.requireAuth, localPartsRoute\.reportHandler\)/);
 
-  const scanTabs = section(html, '<div class="subtabs">', '</div>');
-  assert.ok(scanTabs.indexOf('data-subview="manualEntry"') < scanTabs.indexOf('data-subview="localPartEntry"'), 'Local Part tab must follow Manual Entry');
-  assert.ok(scanTabs.indexOf('data-subview="localPartEntry"') < scanTabs.indexOf('data-subview="barcodeEntry"'), 'Local Part tab must be immediately after Manual Entry');
+  assert.match(html, /id="regularPartTab"[\s\S]*id="localPartTab"/);
+  assert.ok(html.indexOf('id="barcodeEntry"') < html.indexOf('id="regularPartEntryTab"') && html.indexOf('id="regularPartEntryTab"') < html.indexOf('id="localPartEntryTab"'), 'Local Part tab panel must remain alongside Regular Part inside the barcode manual panel');
+  assert.match(html, /id="localPartForm"[\s\S]*name="binLocation"[\s\S]*name="category"/);
+  assert.match(ui, /binLocation:\s*cleanDealerCode\(values\.binLocation\)/);
+  assert.match(ui, /category:\s*clean\(values\.category\)/);
   assert.match(html, /<option value="local-parts">Local Parts Report<\/option>/);
   assert.match(ui, /socket\.on\('local-parts:update'/);
   assert.ok(!section(ui, "socket.on('local-parts:update'", "socket.on('mrp:updated'").includes('queueRealtimeReportRefresh'), 'Local Part realtime event must not refresh normal reports');
@@ -200,6 +202,8 @@ async function verifyDatabaseIsolation() {
   });
   const basePayload = {
     dealerCode,
+    binLocation: '1',
+    category: 'TEST CATEGORY',
     referenceAuditId: 'CLIENT-SUPPLIED-AUDIT-MUST-BE-IGNORED',
     partNumber: `  ${partNumber.toLowerCase()}  `,
     partDescription: 'Locally sourced test part',
@@ -293,7 +297,8 @@ async function verifyDatabaseIsolation() {
     assert.strictEqual(localReport.statusCode, 200);
     assert.strictEqual(localReport.body.type, 'local-parts');
     assert.strictEqual(localReport.body.totalRows, 2, 'Local Parts Report must contain saved rows');
-    assert.strictEqual(localReport.body.columns.length, 17, 'Local Parts Report must expose all required columns');
+    assert.strictEqual(localReport.body.columns.length, 19, 'Local Parts Report must expose all required columns');
+    assert.ok(localReport.body.rows.every((entry) => entry.binLocation === '1' && entry.category === 'TEST CATEGORY'), 'Local Part records and report retain bin/category');
 
     const excelReport = responseCapture();
     await localPartsRouter.reportHandler({

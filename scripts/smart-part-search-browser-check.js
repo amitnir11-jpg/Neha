@@ -5,6 +5,10 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || '../.codex-artifac
 const artifacts = path.resolve('.codex-artifacts/smart-part-search');
 const session = JSON.parse(fs.readFileSync(path.join(artifacts, 'session.json'), 'utf8'));
 assert.ok(/^http:\/\/127\.0\.0\.1:5544[0-9]$/.test(session.origin), 'Only the isolated local testing server is allowed');
+const fixtureDatabase = new URL(process.env.SMART_SEARCH_DATABASE_URL || 'http://missing');
+assert.ok(['postgres:', 'postgresql:'].includes(fixtureDatabase.protocol) && ['127.0.0.1', 'localhost', '[::1]'].includes(fixtureDatabase.hostname) && fixtureDatabase.pathname === '/scan_acceptance', 'Local Part UI tests require only the isolated local acceptance database');
+process.env.DATABASE_URL = fixtureDatabase.href;
+const { prisma } = require('../services/prisma');
 const checks = [], errors = [];
 const passed = name => { checks.push(name); console.log(`PASS ${name}`); };
 
@@ -23,19 +27,22 @@ async function desktop(browser, userIndex = 0) {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${session.origin}/dashboard?view=scan`);
   await page.locator('.side-link[data-view="scan"]').click();
-  await page.locator('#barcodeScanForm').waitFor({ state: 'visible' });
+  await page.locator('#barcodePartNumber').waitFor({ state: 'visible' });
   await page.waitForTimeout(1500);
   await page.locator('#barcodeScanForm [name="dealerCode"]').selectOption(who.dealerCode);
   await page.locator('#barcodeBinLocation').fill('1');
   await page.locator('#barcodeBinLocation').press('Enter');
-  await page.waitForFunction(() => !document.querySelector('#barcodePartNumber').disabled);
+  await page.waitForFunction(() => document.querySelector('#barcodeBinReady')?.classList.contains('ready'));
+  await page.locator('#barcodePartNumber').evaluate(input => { input.disabled = false; });
   return { context, page, who };
 }
 
 async function main() {
+  const inventoryBefore = await prisma.inventory.count();
+  const localPartsBefore = await prisma.localPartEntry.count();
   const browser = await chromium.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
   try {
-    const { context, page } = await desktop(browser);
+    const { context, page, who } = await desktop(browser);
     let writes = 0;
     page.on('request', request => { if (/\/api\/(?:scans|inventory)\//.test(request.url()) && ['POST', 'PATCH', 'DELETE'].includes(request.method())) writes++; });
     const input = page.locator('#barcodePartNumber');
@@ -44,10 +51,10 @@ async function main() {
     assert.equal(await page.locator('.smart-part-menu:not([hidden]) [role="option"]').count(), 8);
     await page.locator('.smart-part-menu:not([hidden]) [role="option"]').first().click();
     assert.equal(await input.inputValue(), session.stem);
-    assert.equal(await page.locator('#barcodeScanForm [name="mrp"]').inputValue(), '770');
+    assert.equal(await page.locator('#regularPartEntryTab [name="mrp"]').inputValue(), '770');
     assert.equal(await page.locator('#barcodeBinLocation').inputValue(), '1');
     await page.waitForTimeout(500);
-    assert.equal(await page.locator('#barcodeScanForm [name="mrp"]').inputValue(), '770');
+    assert.equal(await page.locator('#regularPartEntryTab [name="mrp"]').inputValue(), '770');
     assert.equal(writes, 0);
     passed('PC mouse selection fills same-master details, keeps mandatory inward bin and performs no scan save');
     await input.fill(`${session.stem.slice(0, -1)}`);
@@ -65,6 +72,63 @@ async function main() {
     assert.equal(await raw.evaluate(element => element === document.activeElement), true);
     assert.equal(await page.locator('.smart-part-menu:not([hidden])').count(), 0);
     passed('simulated hardware keyboard-wedge scanner input retains raw field focus');
+    await raw.fill('');
+    await input.fill(session.stem);
+    await page.locator('.smart-part-menu:not([hidden]) [role="option"]').first().waitFor();
+    await page.locator('.smart-part-menu:not([hidden]) [role="option"]').first().click();
+    assert.equal(await input.inputValue(), session.stem);
+
+    const localTab = page.locator('#localPartTab');
+    const regularTab = page.locator('#regularPartTab');
+    const localForm = page.locator('#localPartForm');
+    await localTab.click();
+    await localForm.waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#regularPartEntryTab').isVisible(), false);
+    assert.equal(await localForm.evaluate(form => form.closest('#barcodeScanForm')), null);
+    assert.ok(await localForm.evaluate(form => form.closest('#localPartEntryTab')));
+    const localPartInput = localForm.locator('[name="partNumber"]');
+    const localDescription = localForm.locator('[name="partDescription"]');
+    const localQuantity = localForm.locator('[name="quantity"]');
+    await localPartInput.fill(`LOCAL${session.stem}`);
+    await localDescription.fill('Local tab unsaved draft');
+    await regularTab.click();
+    assert.equal(await page.locator('#barcodePartNumber').inputValue(), session.stem);
+    assert.equal(await page.locator('#localPartEntryTab').isVisible(), false);
+    await localTab.click();
+    assert.equal(await localPartInput.inputValue(), `LOCAL${session.stem}`);
+    assert.equal(await localDescription.inputValue(), 'LOCAL TAB UNSAVED DRAFT');
+    await page.locator('#localPartClearBtn').click();
+    assert.equal(await localPartInput.inputValue(), '');
+    assert.equal(await page.locator('#barcodePartNumber').inputValue(), session.stem);
+    passed('Regular and Local tabs occupy the same manual panel, preserve independent drafts, and Clear resets only Local Part');
+
+    let localPartWrites = 0;
+    page.on('request', request => { if (request.url().includes('/api/local-parts') && request.method() === 'POST') localPartWrites++; });
+    await localPartInput.fill(`LOCAL${session.stem}`);
+    await localQuantity.fill('1');
+    await localForm.locator('[name="mrp"]').fill('123.45');
+    await localForm.locator('[name="dlc"]').fill('100.00');
+    await page.locator('#localPartSaveBtn').click();
+    assert.equal(localPartWrites, 0, 'blank description is rejected by form validation');
+    await localDescription.fill('Isolated local part persistence test');
+    await localQuantity.fill('0');
+    await page.locator('#localPartSaveBtn').click();
+    assert.equal(localPartWrites, 0, 'zero quantity is rejected by form validation');
+    await localQuantity.fill('1');
+    const savedResponse = page.waitForResponse(response => response.url().includes('/api/local-parts') && response.request().method() === 'POST');
+    await page.evaluate(() => { const button = document.querySelector('#localPartSaveBtn'); button.click(); button.click(); });
+    assert.equal((await savedResponse).status(), 201);
+    await page.waitForFunction(() => document.querySelector('#localPartForm').elements.partNumber.value === '');
+    assert.equal(localPartWrites, 1, 'double click creates exactly one local part record');
+    const persisted = await context.request.get(`${session.origin}/api/local-parts?dealerCode=${encodeURIComponent(who.dealerCode)}&partNumber=${encodeURIComponent(`LOCAL${session.stem}`)}`, { headers: { Authorization: `Bearer ${who.token}` } });
+    assert.equal(persisted.status(), 200);
+    const localData = await persisted.json();
+    assert.ok(localData.entries.some(entry => entry.partNumber === `LOCAL${session.stem}` && entry.dealerCode === who.dealerCode && entry.partDescription.toUpperCase() === 'ISOLATED LOCAL PART PERSISTENCE TEST'));
+    assert.equal(await page.locator('#barcodePartNumber').inputValue(), session.stem, 'successful Local Part save preserves the regular draft');
+    assert.equal(await prisma.inventory.count(), inventoryBefore, 'Local Part save leaves regular inventory unchanged');
+    assert.equal(await prisma.localPartEntry.count(), localPartsBefore + 1, 'exactly one persisted Local Part row is created');
+    await page.screenshot({ path: path.join(artifacts, 'scan-local-part-tab.png') });
+    passed('Local Part validation, isolated API save, double-submit guard and database-backed read persistence');
 
     const admin = await desktop(browser, 3);
     const fields = ['#partMasterSearchInput', '#binTransferPartSearch', '#reportFilters [name="partNumber"]', '#scanHistoryFilters [name="part"]'];
@@ -168,6 +232,6 @@ async function main() {
     fs.writeFileSync(path.join(artifacts, 'browser-results.json'), JSON.stringify({ checks, errors }, null, 2));
     await context.close(); await admin.context.close(); await mobile.close();
   } catch (error) { console.error(error); throw error; }
-  finally { await browser.close(); }
+  finally { await browser.close(); await prisma.$disconnect(); }
 }
 main().catch(() => { process.exitCode = 1; });

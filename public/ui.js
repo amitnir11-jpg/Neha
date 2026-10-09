@@ -264,8 +264,17 @@
     localPartRows: [],
     localPartFilterTimer: null
   };
-  const $ = (selector, root = document) => root.querySelector(selector);
-  const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+  const $ = (selector, root = document) => {
+    const found = root.querySelector(selector);
+    if (found || root.id !== 'barcodeScanForm') return found;
+    return Array.from(root.elements || []).find((field) => field.matches?.(selector)) || null;
+  };
+  const $$ = (selector, root = document) => {
+    const found = Array.from(root.querySelectorAll(selector));
+    if (root.id !== 'barcodeScanForm') return found;
+    const controls = Array.from(root.elements || []).filter((field) => field.matches?.(selector));
+    return Array.from(new Set(found.concat(controls)));
+  };
 
   // The Print Bin Label dealer select gets one scoped SVG chevron from
   // /js/select-system.js; the Select Bin(s) trigger owns its own single icon.
@@ -1706,10 +1715,12 @@
     const form = $('#localPartForm');
     if (!form) return;
     const dealerCode = options.dealerCode || localPartSelectedDealer(form) || selectedScanDealerCode() || currentDealerCode();
+    const selectedBin = cleanDealerCode($('#barcodeBinLocation')?.value || '');
     form.reset();
     state.localPartEditingId = '';
     $('[name="id"]', form).value = '';
     $('[name="quantity"]', form).value = '1.000';
+    $('[name="binLocation"]', form).value = selectedBin;
     if (dealerCode) setDealerSelectValue($('[name="dealerCode"]', form), dealerCode);
     syncLocalPartFormIdentity();
     const button = $('#localPartSaveBtn');
@@ -1756,8 +1767,10 @@
         <td>${escapeHtml(row.entryTime || '')}</td>
         <td>${escapeHtml(row.dealerCode || '')}</td>
         <td>${escapeHtml(row.referenceAuditId || '-')}</td>
+      <td>${escapeHtml(row.binLocation || '-')}</td>
         <td>${escapeHtml(row.partNumber || '')}</td>
         <td>${escapeHtml(row.partDescription || '')}</td>
+      <td>${escapeHtml(row.category || '-')}</td>
         <td data-type="number">${escapeHtml(localPartQuantity(row.quantity))}</td>
         <td data-type="number">${escapeHtml(money2(row.mrp))}</td>
         <td data-type="number">${escapeHtml(money2(row.totalMrpValue))}</td>
@@ -1769,7 +1782,7 @@
         <td>${canManage && row.status !== 'DELETED' ? `<button class="btn light local-part-edit" type="button" data-id="${escapeHtml(row.id)}">Edit</button>` : '-'}</td>
         <td>${canManage && row.status !== 'DELETED' ? `<button class="btn danger-soft local-part-delete" type="button" data-id="${escapeHtml(row.id)}">Delete</button>` : '-'}</td>
       </tr>
-    `).join('') || '<tr><td colspan="16" class="muted">No Local Part entries found for selected filter</td></tr>';
+    `).join('') || '<tr><td colspan="18" class="muted">No Local Part entries found for selected filter</td></tr>';
     const summary = data.summary || {};
     setText('localPartTotalQuantity', localPartQuantity(summary.grandTotalQuantity));
     setText('localPartTotalMrpValue', money2(summary.grandTotalMrpValue || 0));
@@ -1804,6 +1817,8 @@
     return {
       dealerCode: cleanDealerCode(values.dealerCode),
       partNumber: clean(values.partNumber).toUpperCase(),
+      binLocation: cleanDealerCode(values.binLocation),
+      category: clean(values.category),
       quantity: clean(values.quantity),
       mrp: clean(values.mrp),
       dlc: clean(values.dlc),
@@ -1855,6 +1870,8 @@
     $('[name="id"]', form).value = state.localPartEditingId;
     setDealerSelectValue($('[name="dealerCode"]', form), entry.dealerCode || '');
     $('[name="referenceAuditId"]', form).value = entry.referenceAuditId || '';
+    $('[name="binLocation"]', form).value = entry.binLocation || '';
+    $('[name="category"]', form).value = entry.category || '';
     $('[name="partNumber"]', form).value = entry.partNumber || '';
     $('[name="quantity"]', form).value = localPartQuantity(entry.quantity);
     $('[name="mrp"]', form).value = Number(entry.mrp || 0).toFixed(2);
@@ -4914,7 +4931,7 @@
     const bindFields = () => {
       $$('input[name="part"], input[name="partNumber"], #binTransferPartSearch, #validatorMapPartNumber, #binLabelPartSearch').forEach((input) => {
         if (input.closest('#localPartForm, #localPartHistoryFilters')) return;
-        const form = input.closest('form');
+        const form = input.form || input.closest('form');
         const dealer = () => cleanDealerCode(form?.elements.dealerCode?.value || currentDealerCode() || activeDealerId());
         const scanEntrySearch = Boolean(input.classList.contains('partSuggestInput') || input.closest('#scanHistoryFilters'));
         window.SmartPartSearch.bind(input, {
@@ -12421,6 +12438,9 @@
     const localForm = $('#localPartForm');
     if (localForm.elements.dealerCode.value !== dealerCode) resetLocalPartForm({ dealerCode });
     setDealerSelectValue(localForm.elements.dealerCode, dealerCode);
+    if (!localForm.elements.binLocation.value && form.elements.binLocation.value) {
+      localForm.elements.binLocation.value = cleanDealerCode(form.elements.binLocation.value);
+    }
     syncLocalPartFormIdentity();
     const scope = `${dealerCode}|${activeAuditIdForScope()}`;
     if (state.localPartScanScope !== scope) {
@@ -12440,7 +12460,7 @@
     else if (wasLocal) setManualEntryTab('regular', { initialize: false });
     const panel = $('#localPartEntry');
     if (!panel) return;
-    const barcodeInput = $('.barcode-input-panel', form);
+    const barcodeInput = $('#barcodeEntry .barcode-input-panel');
     if (barcodeInput) barcodeInput.hidden = local;
     const workflow = $('#barcodeEntry .barcode-workflow');
     if (workflow) workflow.hidden = local;
@@ -12590,7 +12610,7 @@
       if (rawInput) rawInput.value = '';
       $('[name="part"]', form).value = '';
       $('[name="qty"]', form).value = 1;
-      $$('.suggest-menu', form).forEach((menu) => { menu.innerHTML = ''; menu.style.display = 'none'; });
+    $$('.suggest-menu', $('#regularPartEntryTab')).forEach((menu) => { menu.innerHTML = ''; menu.style.display = 'none'; });
     } else {
       fillBarcodePartFromRaw();
     }
@@ -13050,6 +13070,16 @@
     });
     $('#barcodeBeep')?.addEventListener('change', (event) => setText('barcodeBeepLabel', event.target.checked ? 'Beep: ON' : 'Beep: OFF'));
     $('#saveBarcodeManualScan')?.addEventListener('click', () => saveBarcodeManualScan().catch((error) => toast(error.message, 'error')));
+    $('#clearBarcodeManualEntry')?.addEventListener('click', () => {
+      const form = $('#barcodeScanForm');
+      form.elements.part.value = '';
+      form.elements.qty.value = '1';
+      form.elements.regdNo.value = '';
+      form.elements.jobCardNo.value = '';
+      ['partName', 'category', 'mrp', 'dlc'].forEach((name) => { form.elements[name].value = ''; });
+      $$('.suggest-menu', $('#regularPartEntryTab')).forEach((menu) => { menu.innerHTML = ''; menu.style.display = 'none'; });
+      $('#barcodePartLocationStatus').textContent = '';
+    });
     $('#clearBarcodeScan')?.addEventListener('click', () => {
       clearTimeout($('#barcodeRaw').autoSaveTimer);
       resetBarcodeScanFields($('#barcodeScanForm'));
@@ -13275,7 +13305,7 @@
       }
     });
     $('#barcodeRaw').addEventListener('change', () => scheduleBarcodeAutosave(35));
-    ['regdNo', 'jobCardNo'].forEach(name => $(`#barcodeScanForm [name="${name}"]`)?.addEventListener('change', () => scheduleBarcodeAutosave(35)));
+    ['regdNo', 'jobCardNo'].forEach(name => $('#barcodeScanForm').elements[name]?.addEventListener('change', () => scheduleBarcodeAutosave(35)));
     $$('.scan-type-button').forEach((button) => {
       button.addEventListener('click', () => {
         const select = $('#barcodeScanForm [name="type"]');
@@ -13316,9 +13346,10 @@
     $('#quickActionManualEntry')?.addEventListener('click', () => {
       openView('scan');
       setTimeout(() => {
-        const nextField = $('#barcodeScanForm [name="part"]')?.disabled
+        const partField = $('#barcodeScanForm').elements.part;
+        const nextField = partField?.disabled
           ? $('#barcodeBinLocation')
-          : $('#barcodeScanForm [name="part"]');
+          : partField;
         nextField?.focus();
       }, 0);
     });
