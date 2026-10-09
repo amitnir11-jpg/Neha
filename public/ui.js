@@ -9720,11 +9720,15 @@
 
   function binTransferCriteria(form = activeBinTransferForm()) {
     const sourceSelect = $('[name="sourceBin"], [name="fromBin"]', form);
-    const selectedBins = sourceSelect?.multiple ? Array.from(sourceSelect.selectedOptions).map((option) => option.value) : [];
+    const selectedBins = sourceSelect?.multiple ? Array.from(sourceSelect.selectedOptions).map((option) => option.value).filter(Boolean) : [];
+    const selectAll = selectedBins.includes('ALL');
+    const validBins = sourceSelect ? Array.from(sourceSelect.options).filter((option) => option.value && option.value !== 'ALL').map((option) => option.value) : [];
+    const fromBins = selectAll ? validBins : selectedBins.filter((bin) => bin !== 'ALL');
     return {
       dealerCode: cleanDealerCode($('[name="dealerCode"]', form)?.value || ''),
-      fromBins: selectedBins.length && !selectedBins.includes('ALL') ? selectedBins : [],
-      fromBin: selectedBins.includes('ALL') ? 'ALL' : selectedBins.length === 1 ? selectedBins[0] : selectedBins.join(','),
+      fromBins,
+      allSourceBins: selectAll,
+      fromBin: selectAll ? 'ALL' : fromBins.length === 1 ? fromBins[0] : fromBins.join(','),
       toBin: $('[name="destinationBin"], [name="toBin"]', form)?.value || ''
     };
   }
@@ -9733,16 +9737,20 @@
     if (!select) return;
     const picker = select.closest('.bin-transfer-source-picker');
     if (!picker) return;
-    const chosen = Array.from(select.selectedOptions).map((option) => option.value);
+    const chosen = Array.from(select.selectedOptions).map((option) => option.value).filter(Boolean);
     const allOption = $('.bin-transfer-source-all', picker);
     const list = $('.bin-transfer-source-options', picker);
-    const bins = Array.from(select.options).filter((option) => option.value !== 'ALL');
-    if (allOption) allOption.checked = chosen.includes('ALL') || (bins.length > 0 && bins.every((option) => chosen.includes(option.value)));
+    const bins = Array.from(select.options).filter((option) => option.value && option.value !== 'ALL');
+    const everyBinSelected = bins.length > 0 && bins.every((option) => chosen.includes('ALL') || chosen.includes(option.value));
+    const someBinsSelected = chosen.includes('ALL') || bins.some((option) => chosen.includes(option.value));
+    if (allOption) {
+      allOption.checked = everyBinSelected;
+      allOption.indeterminate = someBinsSelected && !everyBinSelected;
+    }
     if (list) list.innerHTML = bins.map((option) => `<label class="bin-transfer-source-option"><input type="checkbox" data-source-bin="${escapeHtml(option.value)}" ${chosen.includes('ALL') || chosen.includes(option.value) ? 'checked' : ''}> ${escapeHtml(option.textContent)}</label>`).join('');
     const trigger = $('.bin-transfer-source-trigger', picker);
-    if (trigger) {
-      trigger.textContent = chosen.includes('ALL') || (bins.length && chosen.length === bins.length) ? 'All bins' : chosen.length ? `${chosen.length} bin${chosen.length === 1 ? '' : 's'} selected` : 'Select source bins';
-    }
+    const value = $('.bin-transfer-source-value', trigger);
+    if (value) value.textContent = chosen.includes('ALL') || everyBinSelected ? 'All Bins Selected' : chosen.length ? `${chosen.length} Selected` : 'Select source bins';
   }
 
   function setSourceBins(select, values) {
@@ -9934,7 +9942,7 @@
     }
     setBinTransferLoading('Loading bin locations...');
     const data = await api(`/api/bin-transfer/bins?dealerCode=${encodeURIComponent(dealerCode)}`);
-    const fromOptions = sourceBinOptionList(data.allBins || data.bins || data.sourceBins || []);
+    const fromOptions = sourceBinOptionList(data.bins || data.sourceBins || []);
     $$('.bin-transfer-from').forEach((select) => {
       select.innerHTML = fromOptions.replace('<option value="ALL">All</option>', '<option value="ALL">All bins</option>');
       setSourceBins(select, ['ALL']);
@@ -9953,21 +9961,20 @@
   }
 
   async function loadBinTransferParts(form = activeBinTransferForm()) {
-    const { dealerCode, fromBin } = binTransferCriteria(form);
+    const { dealerCode, fromBin, fromBins, allSourceBins } = binTransferCriteria(form);
     const partNumber = String($('[name="partNumber"]', form)?.value || '').trim();
-    if (!dealerCode || (!fromBin && !partNumber)) {
-      renderBinTransferParts([], 'Select Dealer Code, or enter Part Number to find available bin.');
+    if (!dealerCode || !fromBins.length) {
+      renderBinTransferParts([], 'Select one or more Source Bins to view available parts.');
       return;
     }
     $('#binTransferPartsRows').innerHTML = '<tr><td colspan="10" class="muted">Loading parts...</td></tr>';
     setText('binTransferPartsCount', 'Loading...');
-    const { fromBins } = binTransferCriteria(form);
     if (fromBins.length === 1) {
       await loadBinTransferDestinationBins(dealerCode, fromBin, selectedMainDestinationBin()).catch((error) => console.warn('DESTINATION_BINS_LOAD_FAILED', error));
     }
     const query = new URLSearchParams({ dealerCode });
-    if (fromBins.length) fromBins.forEach((bin) => query.append('sourceBins', bin));
-    else if (fromBin.toUpperCase() === 'ALL') query.set('sourceBin', 'ALL');
+    if (allSourceBins) query.set('sourceBin', 'ALL');
+    else fromBins.forEach((bin) => query.append('sourceBins', bin));
     if (partNumber) query.set('partNumber', partNumber);
     const data = await api(`/api/bin-transfer/parts?${query.toString()}`);
     const responseParts = normalizeBinTransferPartsResponse(data);
@@ -10052,10 +10059,12 @@
 
     setBinTransferSubmitDisabled(true);
     try {
+      const transferRequestId = window.crypto?.randomUUID?.() || `BTREQ-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       await api('/api/bin-transfer/transfer', {
         method: 'POST',
         body: {
           dealerCode,
+          transferRequestId,
           sourceBin: fromBin,
           destinationBin: selectedMainDestinationBin(),
           selectedParts: selectedParts.map((part) => ({
@@ -13466,6 +13475,29 @@
           .catch((error) => toast(error.message, 'error'));
       });
     });
+    document.addEventListener('pointerdown', (event) => {
+      $$('.bin-transfer-source-picker').forEach((picker) => {
+        if (picker.contains(event.target)) return;
+        const menu = $('.bin-transfer-source-menu', picker);
+        const trigger = $('.bin-transfer-source-trigger', picker);
+        if (menu && !menu.hidden) {
+          menu.hidden = true;
+          trigger?.setAttribute('aria-expanded', 'false');
+        }
+      });
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      $$('.bin-transfer-source-picker').forEach((picker) => {
+        const menu = $('.bin-transfer-source-menu', picker);
+        const trigger = $('.bin-transfer-source-trigger', picker);
+        if (menu && !menu.hidden) {
+          menu.hidden = true;
+          trigger?.setAttribute('aria-expanded', 'false');
+          trigger?.focus();
+        }
+      });
+    });
     $$('.bin-transfer-to').forEach((select) => {
       select.addEventListener('change', () => {
         $$('.bin-transfer-to').forEach((toSelect) => {
@@ -13488,18 +13520,23 @@
     $('#binTransferShowPartsBtn')?.addEventListener('click', () => {
       loadBinTransferParts($('#binTransferForm')).catch((error) => toast(error.message, 'error'));
     });
-    $('#binTransferPartSearch')?.addEventListener('input', () => filterRenderedBinTransferParts());
+    let sourceBinSearchTimer = null;
+    $('#binTransferPartSearch')?.addEventListener('input', () => {
+      clearTimeout(sourceBinSearchTimer);
+      sourceBinSearchTimer = setTimeout(() => loadBinTransferParts($('#binTransferForm')).catch((error) => toast(error.message, 'error')), 220);
+    });
     $('#binTransferShowHistoryBtn')?.addEventListener('click', () => loadBinTransferHistory().catch((error) => toast(error.message, 'error')));
     $('#binTransferExportHistoryBtn')?.addEventListener('click', () => {
       const query = queryFromForm($('#binTransferHistoryFilters'));
       downloadGet(`/api/bin-transfer/history${query ? `?${query}&` : '?'}format=excel`, 'Daksh_Bin_Transfer_History.xlsx').catch((error) => toast(error.message, 'error'));
     });
     $('#binTransferExportPartsBtn')?.addEventListener('click', () => {
-      const { dealerCode, fromBin, fromBins } = binTransferCriteria($('#binTransferForm'));
+      const { dealerCode, fromBin, fromBins, allSourceBins } = binTransferCriteria($('#binTransferForm'));
       const partNumber = $('#binTransferPartSearch')?.value || '';
-      if (!dealerCode || (!fromBin && !partNumber)) return toast('Dealer and Source Bin or Part Number required', 'error');
+      if (!dealerCode || !fromBins.length) return toast('Select one or more Source Bins before exporting parts.', 'error');
       const query = new URLSearchParams({ dealerCode, format: 'excel' });
-      if (fromBins.length) fromBins.forEach((bin) => query.append('sourceBins', bin));
+      if (allSourceBins) query.set('sourceBin', 'ALL');
+      else if (fromBins.length) fromBins.forEach((bin) => query.append('sourceBins', bin));
       else if (fromBin) query.set('sourceBin', fromBin);
       if (partNumber) query.set('partNumber', partNumber);
       downloadGet(`/api/bin-transfer/parts?${query.toString()}`, 'Daksh_Bin_Transfer_Parts.xlsx').catch((error) => toast(error.message, 'error'));

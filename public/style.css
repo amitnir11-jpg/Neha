@@ -5869,12 +5869,19 @@ body:not(.dashboard-view-active) .topbar {
 .bin-transfer-source-field { min-width: 0; color: #344054; font-size: 12px; font-weight: 600; }
 .bin-transfer-source-field > span { display: block; margin-bottom: 4px; }
 .bin-transfer-source-picker { position: relative; }
-.bin-transfer-source-trigger { width: 100%; min-height: 36px; padding: 8px 34px 8px 12px; border: 1px solid #cfd8e3; border-radius: 4px; background: #fff; color: #101828; text-align: left; font: inherit; cursor: pointer; }
+.bin-transfer-source-trigger { position: relative; width: 100%; min-height: 36px; padding: 8px 34px 8px 12px; border: 1px solid #cfd8e3; border-radius: 4px; background: #fff; color: #101828; text-align: left; font: inherit; cursor: pointer; }
+.bin-transfer-source-value { min-width: 0; flex: 1; text-align: left; }
+.bin-transfer-source-chevron { width: 7px; height: 7px; margin: -4px 3px 0 10px; flex: 0 0 7px; border-right: 1.5px solid #667085; border-bottom: 1.5px solid #667085; transform: rotate(45deg); }
 .bin-transfer-source-menu { position: absolute; z-index: 30; top: calc(100% + 2px); left: 0; right: 0; max-height: 240px; overflow: auto; border: 1px solid #98a2b3; border-radius: 3px; background: #fff; box-shadow: 0 4px 12px #10182826; }
 .bin-transfer-source-option { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 5px 10px; color: #101828; cursor: pointer; }
 .bin-transfer-source-option:hover { background: #f2f4f7; }
 .bin-transfer-source-option:first-child { border-bottom: 1px solid #dfe5ec; font-weight: 700; }
 .bin-transfer-source-option input { margin: 0; }
+
+@media (max-width: 640px) {
+  .bin-transfer-source-field, .bin-transfer-source-picker, .bin-transfer-source-trigger { width: 100%; }
+  .bin-transfer-source-menu { max-height: min(50vh, 280px); }
+}
 
 .view.active {
   padding: 18px 20px;

@@ -114,7 +114,7 @@ const REPORT_SCAN_SELECT = [
   'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin returnedToBin sourceBin sourceFittedScanId regdNo jobCardNo isFitted fittedQty fittedLocation fittedStatus billedAt returnedAt status type scanType',
   'upiId upiNo dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi',
   'deviceId deviceName userId loginId staffName userName role timestamp scanTime createdAt serverReceivedAt',
-  'syncStatus synced isSynced scanStatus source scanMode warnings remarks masterFound masterMatch isMasterMatched',
+  'syncStatus synced isSynced scanStatus isReversed reversedAt source scanMode warnings remarks masterFound masterMatch isMasterMatched',
   'priceHistoryId pricePeriodFrom pricePeriodTo pricePeriodMatched pricePeriodStatus'
 ].join(' ');
 const CATEGORY_ALLOCATION_SCAN_SELECT = [

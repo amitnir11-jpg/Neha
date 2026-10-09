@@ -429,9 +429,10 @@ function fieldCompareSql(field, sample, mirrorFields = MIRROR_FIELDS) {
 function regexSql(field, regex, options = '', mirrorFields = MIRROR_FIELDS) {
   const pattern = regex instanceof RegExp ? regex.source : String(regex || '');
   const flags = regex instanceof RegExp ? regex.flags : String(options || 'i');
+  const text = fieldTextSql(field, mirrorFields);
   return flags.includes('i')
-    ? Prisma.sql`${fieldTextSql(field, mirrorFields)} ~* ${pattern}`
-    : Prisma.sql`${fieldTextSql(field, mirrorFields)} ~ ${pattern}`;
+    ? Prisma.sql`COALESCE(${text}, '') ~* ${pattern}`
+    : Prisma.sql`COALESCE(${text}, '') ~ ${pattern}`;
 }
 
 function scalarText(value) {

@@ -24,6 +24,9 @@ function stockUnitQuantity(scan = {}) {
 
 function activeStockTransaction(scan = {}) {
   return scan.isDeleted !== true && !scan.deletedAt && scan.isDuplicate !== true
+    && scan.isReversed !== true && !scan.reversedAt
+    && !['REVERSED', 'VOIDED'].includes(String(scan.status || '').toUpperCase())
+    && !['REVERSED', 'VOIDED'].includes(String(scan.scanStatus || '').toUpperCase())
     && !['FAILED', 'REJECTED', 'DUPLICATE', 'DUPLICATE_BLOCKED'].includes(String(scan.syncStatus || '').toUpperCase())
     && !['REJECTED', 'DUPLICATE', 'DUPLICATE_BLOCKED'].includes(String(scan.scanStatus || '').toUpperCase())
     && !scan.isLocalPart && stockMovementType(scan) !== 'LOCAL_PART';

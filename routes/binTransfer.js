@@ -131,17 +131,32 @@ async function resolveTransferAuditId(dealerCode, requestedAuditId = '') {
   return clean(scope.auditId === '__NO_AUDIT_SELECTED__' ? '' : scope.auditId);
 }
 
-async function groupedParts(dealerCode, fromBin = '', auditId = '') {
-  const sourceBin = /^all$/i.test(clean(fromBin)) ? '' : clean(fromBin).toUpperCase();
+async function groupedParts(dealerCode, fromBin = '', auditId = '', options = {}) {
+  const sourceBins = (options.sourceBins || (fromBin ? [fromBin] : []))
+    .map(upper).filter((bin) => bin && bin !== 'ALL');
   if (!clean(dealerCode)) return [];
   const currentAuditId = clean(auditId) || await resolveTransferAuditId(dealerCode);
   if (!currentAuditId) return [];
   const scope = { dealerCode: upper(dealerCode), auditId: currentAuditId };
-  const reportCompatibleFilter = applyTransactionScanFilter({ dealerCode: scope.dealerCode, auditId: scope.auditId });
-  const records = await Inventory.find(reportCompatibleFilter).sort({ timestamp: -1, createdAt: -1 }).lean();
+  const filter = applyTransactionScanFilter({ dealerCode: scope.dealerCode, auditId: scope.auditId });
+  const clauses = [];
+  if (sourceBins.length) {
+    const binPatterns = sourceBins.map(binRegex);
+    clauses.push({ $or: ['binLocation', 'bin', 'currentBin', 'stockDeductedFromBin', 'sourceBin', 'returnedToBin']
+      .map((field) => ({ [field]: { $in: binPatterns } })) });
+  }
+  if (options.partNumber) {
+    const partPattern = new RegExp(escapeRegExp(options.partNumber), 'i');
+    clauses.push({ $or: PART_NUMBER_FIELDS.map((field) => ({ [field]: { $regex: partPattern } })) });
+  }
+  if (clauses.length) filter.$and = (filter.$and || []).concat(clauses);
+  const records = await Inventory.find(filter)
+    .select('dealerCode auditId uniqueScanId scanId syncKey clientScanId clientSyncKey qrFingerprint rawUpiHash normalizedPartNumber partNumber part partNo extractedPartNumber partDescription partName description productCategory category dlc currentCatalogueDLC mrp valuationMRP currentCatalogueMRP masterFound masterMatch isMasterMatched warnings remarks scanType movementType type qty quantity fittedQty fittedStatus status scanStatus syncStatus isDeleted deletedAt isReversed reversedAt isDuplicate isLocalPart binLocation bin currentBin stockDeductedFromBin sourceBin returnedToBin timestamp createdAt')
+    .sort({ timestamp: -1, createdAt: -1 }).lean();
   return calculateInventoryLedger(records, { scope }).binBreakdown
     .filter((row) => Number(row.availableQty) > 0
-      && (!sourceBin || upper(row.binLocation) === sourceBin))
+      && (!sourceBins.length || sourceBins.includes(upper(row.binLocation)))
+      && (!options.partNumber || normalizePart(row.partNumber).includes(normalizePart(options.partNumber))))
     .map((row) => publicPart({
       partNumber: row.partNumber,
       partDescription: row.partDescription,
@@ -223,7 +238,7 @@ function groupedBinLabelItems(parts = [], settings = {}) {
   return items;
 }
 
-async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, toBin, partNumber, qty, transferType, req }) {
+async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, toBin, partNumber, qty, transferType, transferRequestId = '', req }) {
   const cleanPart = normalizePart(partNumber);
   const requestedQty = Number(qty);
   if (!dealerCode) throw new Error('Dealer required');
@@ -237,8 +252,18 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
   if (netAvailableQty <= 0) throw new Error('No available qty found for selected part in Source Bin');
   if (requestedQty > netAvailableQty) throw new Error('Qty cannot be greater than available qty');
 
-  const reportCompatibleFilter = applyTransactionScanFilter({ dealerCode, auditId });
-  const ledgerRows = await Inventory.find(reportCompatibleFilter).sort({ timestamp: -1, createdAt: -1 }).lean();
+  const reportCompatibleFilter = applyTransactionScanFilter({
+    dealerCode,
+    auditId,
+    $and: [
+      { $or: PART_NUMBER_FIELDS.map((field) => ({ [field]: cleanPart })) },
+      { $or: ['binLocation', 'bin', 'currentBin', 'stockDeductedFromBin', 'sourceBin', 'returnedToBin']
+        .map((field) => ({ [field]: binRegex(fromBin) })) }
+    ]
+  });
+  const ledgerRows = await Inventory.find(reportCompatibleFilter)
+    .select('dealerCode auditId normalizedPartNumber partNumber part partNo extractedPartNumber masterFound masterMatch isMasterMatched warnings remarks scanType movementType type qty quantity fittedQty fittedStatus status scanStatus syncStatus isDeleted deletedAt isReversed reversedAt isDuplicate binLocation bin currentBin stockDeductedFromBin sourceBin returnedToBin upiCode upiNo upiId dlc currentCatalogueDLC mrp valuationMRP currentCatalogueMRP timestamp createdAt partDescription partName')
+    .sort({ timestamp: -1, createdAt: -1 }).lean();
   const records = ledgerRows.filter((record) => {
     const recordPart = normalizePart(firstNonBlankValue(record, PART_NUMBER_FIELDS));
     const recordType = stockMovementType(record);
@@ -263,7 +288,7 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
 
     if (recordQty <= remaining) {
       await Inventory.updateOne(
-        { _id: record._id },
+        { _id: record._id, dealerCode: upper(dealerCode), auditId },
         { $set: {
           binLocation: toBin,
           bin: toBin,
@@ -277,7 +302,7 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
     } else {
       const movedQty = remaining;
       await Inventory.updateOne(
-        { _id: record._id },
+        { _id: record._id, dealerCode: upper(dealerCode), auditId },
         { $set: { qty: recordQty - movedQty, quantity: recordQty - movedQty } }
       );
       const clone = { ...record };
@@ -306,6 +331,7 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
 
   const history = await BinTransferHistory.create({
     transferId: `BT-${Date.now()}-${randomUUID().slice(0, 8).toUpperCase()}`,
+    ...(transferRequestId ? { transferRequestId } : {}),
     dealerCode,
     auditId,
     fromBin,
@@ -328,6 +354,42 @@ async function transferPart(input) {
   // PostgreSQL serializable transactions also make concurrent availability
   // checks retry against the newly committed stock state.
   return withDatabaseTransaction(() => transferPartInTransaction(input));
+}
+
+async function transferPartsAtomically({ dealerCode, auditId = '', transfers = [], transferType = 'multiple', transferRequestId = '', req }) {
+  return withDatabaseTransaction(async () => {
+    if (transferRequestId) {
+      const prior = await BinTransferHistory.findOne({ dealerCode: upper(dealerCode), auditId, transferRequestId }).lean();
+      if (prior) {
+        const error = new Error('This transfer request has already been processed. Refresh the parts list before trying again.');
+        error.status = 409;
+        throw error;
+      }
+    }
+    const { fromBins, toBins } = await dealerBins(upper(dealerCode), auditId);
+    const destinationSet = new Set((toBins.length ? toBins : fromBins).map((bin) => upper(bin.binCode)));
+    for (const item of transfers) {
+      if (!destinationSet.has(upper(item.toBin))) throw new Error(`Destination bin ${item.toBin} is not available for dealer ${upper(dealerCode)}`);
+    }
+    const history = [];
+    for (const item of transfers) {
+      history.push(await transferPartInTransaction({
+        ...item,
+        dealerCode: upper(dealerCode),
+        auditId,
+        transferType,
+        transferRequestId,
+        req
+      }));
+    }
+    return history;
+  });
+}
+
+function publishTransferRefresh(req, dealerCode, auditId) {
+  invalidateCache({ tags: ['inventory', 'scans', 'reports', 'dashboard', 'reconciliation', 'bins'], scope: { dealerCode, auditId } });
+  req.io?.emit('scan:saved');
+  req.io?.emit('reports:update', { reason: 'bin-transfer', dealerCode, auditId });
 }
 
 async function dealerBins(dealerCode, auditId = '') {
@@ -420,11 +482,9 @@ router.get('/bins', auth.requireAuth, async (req, res) => {
     // A source bin must contain positive available stock. Master-only bins
     // remain valid destinations, but should not appear as transferable stock.
     const bins = binData.fromBins;
-    const activityRows = await Inventory.find(applyTransactionScanFilter({ dealerCode, auditId }))
-      .select('binLocation bin currentBin stockDeductedFromBin sourceBin returnedToBin scanType type movementType')
-      .lean();
-    const activityBins = activityRows.map((row) => stockMovementBin(row)).filter(Boolean);
-    const allBins = compactBins([...binData.toBins, ...binData.fromBins, ...activityBins]);
+    // Source bins are the live ledger result only. Master and historical
+    // activity locations are destinations or audit history, never source stock.
+    const allBins = bins;
     const sourceKey = upper(req.query.sourceBin || req.query.fromBin);
     const destinationBins = binData.toBins.length
       ? binData.toBins.filter((bin) => upper(bin.binCode) !== sourceKey).map((bin) => bin.binCode)
@@ -535,16 +595,11 @@ router.get('/parts', auth.requireAuth, async (req, res) => {
     const fromBins = requestedBins.length ? requestedBins : (singleBin && !/^all$/i.test(singleBin) ? [singleBin] : []);
     const partNumber = normalizePart(req.query.partNumber);
     if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer required' });
-    if (!fromBins.length && !partNumber && !/^all$/i.test(singleBin)) {
-      return res.status(400).json({ success: false, message: 'Source Bin or Part Number is required' });
+    if (!fromBins.length && !/^all$/i.test(singleBin)) {
+      return res.status(400).json({ success: false, message: 'Select one or more Source Bins first' });
     }
     const auditId = await resolveTransferAuditId(dealerCode, req.query.auditId);
-    const binFilter = fromBins.length ? new Set(fromBins.map(upper)) : null;
-    const parts = (await groupedParts(dealerCode, '', auditId)).filter((part) => {
-      if (binFilter && !binFilter.has(upper(part.currentBin))) return false;
-      if (!partNumber) return true;
-      return normalizePart(part.partNumber).includes(partNumber);
-    });
+    const parts = await groupedParts(dealerCode, '', auditId, { sourceBins: fromBins, partNumber });
     if (req.query.format === 'excel') {
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet('Available Scanned Parts');
@@ -719,23 +774,15 @@ router.post('/transfer', auth.requireAuth, async (req, res) => {
       if (transfer.fromBin.toUpperCase() === transfer.toBin.toUpperCase()) return res.status(400).json({ success: false, message: `Source and destination bin cannot be same for ${transfer.partNumber}` });
     }
 
-    const history = [];
-    for (const part of transfers) {
-      history.push(await transferPart({
-        dealerCode,
-        auditId,
-        fromBin: part.fromBin,
-        toBin: part.toBin,
-        partNumber: part.partNumber,
-        qty: part.qty,
-        transferType: fullBinTransfer ? 'bulk' : transfers.length > 1 ? 'multiple' : 'single',
-        req
-      }));
-    }
-    req.io.emit('scan:saved');
+    const history = await transferPartsAtomically({
+      dealerCode, auditId, transfers,
+      transferType: fullBinTransfer ? 'bulk' : transfers.length > 1 ? 'multiple' : 'single',
+      transferRequestId: clean(req.body.transferRequestId), req
+    });
+    publishTransferRefresh(req, dealerCode, auditId);
     return res.json({ success: true, message: 'Bin transfer completed', transferredCount: history.length, history });
   } catch (error) {
-    return res.status(400).json({ success: false, message: error.message });
+    return res.status(error.status || 400).json({ success: false, message: error.message });
   }
 });
 
@@ -793,20 +840,15 @@ router.post('/single', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = upper(req.body.dealerCode);
     const auditId = await resolveTransferAuditId(dealerCode, req.body.auditId);
-    const history = await transferPart({
-      dealerCode,
-      auditId,
-      fromBin: clean(req.body.sourceBin || req.body.fromBin),
-      toBin: clean(req.body.destinationBin || req.body.toBin),
-      partNumber: req.body.partNumber,
-      qty: req.body.qty,
-      transferType: 'single',
-      req
+    const history = await transferPartsAtomically({
+      dealerCode, auditId,
+      transfers: [{ fromBin: clean(req.body.sourceBin || req.body.fromBin), toBin: clean(req.body.destinationBin || req.body.toBin), partNumber: req.body.partNumber, qty: req.body.qty }],
+      transferType: 'single', transferRequestId: clean(req.body.transferRequestId), req
     });
-    req.io.emit('scan:saved');
-    return res.json({ success: true, message: 'Bin transfer completed', history });
+    publishTransferRefresh(req, dealerCode, auditId);
+    return res.json({ success: true, message: 'Bin transfer completed', history: history[0] });
   } catch (error) {
-    return res.status(400).json({ success: false, message: error.message });
+    return res.status(error.status || 400).json({ success: false, message: error.message });
   }
 });
 
@@ -818,23 +860,20 @@ router.post('/multiple', auth.requireAuth, async (req, res) => {
     const toBin = clean(req.body.destinationBin || req.body.toBin);
     const parts = Array.isArray(req.body.parts) ? req.body.parts : [];
     if (!parts.length) return res.status(400).json({ success: false, message: 'Select at least one part' });
-    const history = [];
-    for (const part of parts) {
-      history.push(await transferPart({
-        dealerCode,
-        auditId,
-        fromBin,
-        toBin,
+    const history = await transferPartsAtomically({
+      dealerCode, auditId,
+      transfers: parts.map((part) => ({
+        fromBin: clean(part.sourceBin || part.fromBin || part.currentBin || fromBin),
+        toBin: clean(part.destinationBin || part.toBin || toBin),
         partNumber: part.partNumber || part,
-        qty: part.qty || part.availableQty || 1,
-        transferType: 'multiple',
-        req
-      }));
-    }
-    req.io.emit('scan:saved');
+        qty: part.qty ?? part.availableQty ?? 1
+      })),
+      transferType: 'multiple', transferRequestId: clean(req.body.transferRequestId), req
+    });
+    publishTransferRefresh(req, dealerCode, auditId);
     return res.json({ success: true, message: 'Selected parts transferred', transferredCount: history.length, history });
   } catch (error) {
-    return res.status(400).json({ success: false, message: error.message });
+    return res.status(error.status || 400).json({ success: false, message: error.message });
   }
 });
 
@@ -846,23 +885,15 @@ router.post('/bulk', auth.requireAuth, async (req, res) => {
     const toBin = clean(req.body.destinationBin || req.body.toBin);
     const parts = await groupedParts(dealerCode, fromBin, auditId);
     if (!parts.length) return res.status(400).json({ success: false, message: 'No scanned parts found in selected From Bin' });
-    const history = [];
-    for (const part of parts) {
-      history.push(await transferPart({
-        dealerCode,
-        auditId,
-        fromBin,
-        toBin,
-        partNumber: part.partNumber,
-        qty: part.availableQty,
-        transferType: 'bulk',
-        req
-      }));
-    }
-    req.io.emit('scan:saved');
+    const history = await transferPartsAtomically({
+      dealerCode, auditId,
+      transfers: parts.map((part) => ({ fromBin, toBin, partNumber: part.partNumber, qty: part.availableQty })),
+      transferType: 'bulk', transferRequestId: clean(req.body.transferRequestId), req
+    });
+    publishTransferRefresh(req, dealerCode, auditId);
     return res.json({ success: true, message: 'Full bin transferred', transferredCount: history.length, history });
   } catch (error) {
-    return res.status(400).json({ success: false, message: error.message });
+    return res.status(error.status || 400).json({ success: false, message: error.message });
   }
 });
 
