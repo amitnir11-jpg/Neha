@@ -5866,6 +5866,16 @@ body:not(.dashboard-view-active) .topbar {
   backdrop-filter: none;
 }
 
+.bin-transfer-source-field { min-width: 0; color: #344054; font-size: 12px; font-weight: 600; }
+.bin-transfer-source-field > span { display: block; margin-bottom: 4px; }
+.bin-transfer-source-picker { position: relative; }
+.bin-transfer-source-trigger { width: 100%; min-height: 36px; padding: 8px 34px 8px 12px; border: 1px solid #cfd8e3; border-radius: 4px; background: #fff; color: #101828; text-align: left; font: inherit; cursor: pointer; }
+.bin-transfer-source-menu { position: absolute; z-index: 30; top: calc(100% + 2px); left: 0; right: 0; max-height: 240px; overflow: auto; border: 1px solid #98a2b3; border-radius: 3px; background: #fff; box-shadow: 0 4px 12px #10182826; }
+.bin-transfer-source-option { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 5px 10px; color: #101828; cursor: pointer; }
+.bin-transfer-source-option:hover { background: #f2f4f7; }
+.bin-transfer-source-option:first-child { border-bottom: 1px solid #dfe5ec; font-weight: 700; }
+.bin-transfer-source-option input { margin: 0; }
+
 .view.active {
   padding: 18px 20px;
   gap: 14px;

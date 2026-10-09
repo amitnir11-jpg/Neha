@@ -636,7 +636,7 @@
             </div>
             <form id="binTransferForm" class="filter-grid compact-filter">
               <label>Dealer Code<select name="dealerCode" id="binTransferDealer" class="dealerSelect bin-transfer-dealer" required></select></label>
-              <label>Source Bin<select name="sourceBin" id="binTransferFromBin" class="bin-transfer-from"><option value="ALL">All</option></select></label>
+              <div class="bin-transfer-source-field"><span>Source Bin</span><div class="bin-transfer-source-picker"><button type="button" class="bin-transfer-source-trigger" aria-expanded="false">Select source bins</button><div class="bin-transfer-source-menu" hidden><label class="bin-transfer-source-option"><input type="checkbox" class="bin-transfer-source-all"> Select All</label><div class="bin-transfer-source-options"></div></div><select name="sourceBin" id="binTransferFromBin" class="bin-transfer-from" multiple hidden><option value="ALL">All</option></select></div></div>
               <label>Destination Bin<select name="destinationBin" id="binTransferToBin" class="bin-transfer-to"></select></label>
               <label>Part Number Search<input name="partNumber" id="binTransferPartSearch" placeholder="Enter part number to find bin"></label>
               <button id="binTransferShowPartsBtn" class="btn primary" type="button">Show Parts</button>

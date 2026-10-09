@@ -530,14 +530,18 @@ router.post('/delete-stock', auth.requireAuth, auth.requireAdmin, async (req, re
 router.get('/parts', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = upper(req.query.dealerCode);
-    const fromBin = /^all$/i.test(clean(req.query.binLocation || req.query.sourceBin || req.query.fromBin)) ? '' : clean(req.query.binLocation || req.query.sourceBin || req.query.fromBin);
+    const requestedBins = arrayInput(req.query.sourceBins || req.query.bins);
+    const singleBin = clean(req.query.binLocation || req.query.sourceBin || req.query.fromBin);
+    const fromBins = requestedBins.length ? requestedBins : (singleBin && !/^all$/i.test(singleBin) ? [singleBin] : []);
     const partNumber = normalizePart(req.query.partNumber);
     if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer required' });
-    if (!fromBin && !partNumber && !/^all$/i.test(clean(req.query.sourceBin || req.query.fromBin || req.query.binLocation))) {
+    if (!fromBins.length && !partNumber && !/^all$/i.test(singleBin)) {
       return res.status(400).json({ success: false, message: 'Source Bin or Part Number is required' });
     }
     const auditId = await resolveTransferAuditId(dealerCode, req.query.auditId);
-    const parts = (await groupedParts(dealerCode, fromBin, auditId)).filter((part) => {
+    const binFilter = fromBins.length ? new Set(fromBins.map(upper)) : null;
+    const parts = (await groupedParts(dealerCode, '', auditId)).filter((part) => {
+      if (binFilter && !binFilter.has(upper(part.currentBin))) return false;
       if (!partNumber) return true;
       return normalizePart(part.partNumber).includes(partNumber);
     });
