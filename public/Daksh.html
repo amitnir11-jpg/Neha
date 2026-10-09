@@ -29,7 +29,7 @@
   <link rel="stylesheet" href="/css/app-controls.css?v=20260908-enterprise-controls-v2">
   <link rel="stylesheet" href="/dashboard-layout.css?v=20260928-dashboard-dealer-picker-v2">
   <link rel="stylesheet" href="/compact-layout.css?v=20260921-global-density-v2">
-  <link rel="stylesheet" href="/barcode-workspace.css?v=20261008-local-part-mode-v13">
+  <link rel="stylesheet" href="/barcode-workspace.css?v=20261009-scan-manual-tabs-v1">
 </head>
 <body class="app-booting">
   <script>
@@ -399,7 +399,15 @@
               <div class="barcode-context-row">
                 <label>Dealer <span class="required-mark">*</span><select name="dealerCode" class="dealerSelect" required></select></label>
                 <label id="barcodeBinLabel">Source Bin Location <span class="required-mark">*</span><div class="inline-field"><input name="binLocation" id="barcodeBinLocation" list="barcodeBinOptions" autocomplete="off" placeholder="Select, type or scan bin" required><button class="btn light icon-btn" id="clearBarcodeBin" type="button" title="Clear Bin Location" aria-label="Clear Bin Location">×</button></div><datalist id="barcodeBinOptions"></datalist><small>Enter / Scan bin first <b>(Mandatory)</b></small></label>
-                <label>Scan Type <span class="required-mark">*</span><select name="type"><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option><option value="LOCAL_PART">LOCAL PART</option></select></label>
+                <label class="scan-type-field">Scan Type <span class="required-mark">*</span>
+                  <span class="scan-type-switch" role="group" aria-label="Scan Type">
+                    <button class="scan-type-button active" type="button" data-scan-type="INWARD" aria-pressed="true">↑ &nbsp; INWARD</button>
+                    <button class="scan-type-button" type="button" data-scan-type="OUTWARD" aria-pressed="false">↓ &nbsp; OUTWARD</button>
+                    <button class="scan-type-button" type="button" data-scan-type="DAMAGE" aria-pressed="false">⚠ &nbsp; DAMAGE</button>
+                    <button class="scan-type-button" type="button" data-scan-type="FITTED" aria-pressed="false">🔧 &nbsp; FITTED</button>
+                  </span>
+                  <select name="type" class="scan-type-native-select" aria-label="Scan Type"><option>INWARD</option><option>OUTWARD</option><option>FITTED</option><option>DAMAGE</option><option value="LOCAL_PART">LOCAL PART</option></select>
+                </label>
                 <label>Device ID<input name="deviceId" id="barcodeDeviceId" readonly></label>
                 <label class="barcode-beep"><span aria-hidden="true">◖))</span><span id="barcodeBeepLabel">Beep: ON</span><input id="barcodeBeep" type="checkbox" role="switch" aria-label="Scan beep" checked></label>
               </div>
@@ -412,6 +420,11 @@
                 </section>
                 <section class="barcode-manual-panel" aria-labelledby="barcodeManualTitle">
                   <div class="barcode-panel-title"><span aria-hidden="true">✎</span><div><h3 id="barcodeManualTitle">Manual Entry (Enter Part Details)</h3><p>Use manual entry if barcode is not available</p></div></div>
+                  <div class="manual-entry-tabs" role="tablist" aria-label="Part entry type">
+                    <button id="regularPartTab" class="manual-entry-tab active" type="button" role="tab" aria-selected="true" aria-controls="regularPartEntryTab">Regular Part</button>
+                    <button id="localPartTab" class="manual-entry-tab" type="button" role="tab" aria-selected="false" aria-controls="localPartEntryTab">Local Part</button>
+                  </div>
+                  <div id="regularPartEntryTab" class="manual-entry-tab-panel" role="tabpanel" aria-labelledby="regularPartTab">
                   <div class="barcode-manual-fields">
                     <label>Part Number <span class="required-mark">*</span><div class="suggest-wrap"><input name="part" id="barcodePartNumber" class="partSuggestInput" autocomplete="off" placeholder="Enter part number"><div class="suggest-menu"></div></div></label>
                     <label>Quantity <span class="required-mark">*</span><input name="qty" type="number" min="0.001" step="any" value="1" required></label>
@@ -427,10 +440,12 @@
                     <label>MRP (₹)<input name="mrp" data-fill="mrp" readonly placeholder="0.00"></label>
                     <label>DLC (₹)<input name="dlc" data-fill="dlc" readonly placeholder="0.00"></label>
                   </div>
+                  </div>
                 </section>
               </div>
             <p id="scanPartSummary" class="scan-part-summary" role="status" hidden></p>
             </form>
+            <div id="localPartEntryTab" class="manual-entry-tab-panel local-part-tab-panel" role="tabpanel" aria-labelledby="localPartTab" hidden></div>
           </div>
 
           <div id="mobileSync" class="subview" hidden inert aria-hidden="true">
@@ -1748,9 +1763,9 @@
   <script src="/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="/sku-bin-picker.css?v=20261008-sku-v10">
   <script src="/js/sku-bin-picker.js?v=20261008-sku-v10"></script>
-  <link rel="stylesheet" href="/smart-part-search.css?v=20261009-smart-search-v1">
-  <script src="/js/smart-part-search.js?v=20261009-smart-search-v1"></script>
-  <script src="/ui.js?v=20261009-smart-search-v1"></script>
+  <link rel="stylesheet" href="/smart-part-search.css?v=20261009-scan-manual-tabs-v1">
+  <script src="/js/smart-part-search.js?v=20261009-scan-manual-tabs-v1"></script>
+  <script src="/ui.js?v=20261009-scan-manual-tabs-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

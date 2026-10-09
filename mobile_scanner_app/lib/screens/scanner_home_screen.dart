@@ -1164,7 +1164,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   }
 
   Future<void> _openManualEntry() async {
-    final draft = await showDialog<_ScanDraft>(
+    final result = await showDialog<Object?>(
       context: context,
       builder: (_) => _ManualEntryDialog(
         scanType: _scanType,
@@ -1173,7 +1173,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         dealerCode: _dealerCode,
       ),
     );
-    if (draft != null) await _handleDraft(draft, source: 'manual');
+    if (result is _ScanDraft) {
+      await _handleDraft(result, source: 'manual');
+    } else if (result is _LocalPartSaved && mounted) {
+      _setStatus('Local Part saved separately from regular stock', Colors.green);
+    }
   }
 
   Future<void> _openPendingSync() async {
@@ -1757,7 +1761,16 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
   late final TextEditingController _partController;
   late final TextEditingController _qtyController;
   late final TextEditingController _binController;
+  late final TextEditingController _localPartController;
+  late final TextEditingController _localQtyController;
+  late final TextEditingController _descriptionController;
+  late final TextEditingController _mrpController;
+  late final TextEditingController _dlcController;
+  late final TextEditingController _remarksController;
   String _selectedDescription = '';
+  String _error = '';
+  bool _localPart = false;
+  bool _savingLocalPart = false;
 
   @override
   void initState() {
@@ -1765,6 +1778,12 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     _partController = TextEditingController();
     _qtyController = TextEditingController(text: '1');
     _binController = TextEditingController(text: _upper(widget.fallbackBin));
+    _localPartController = TextEditingController();
+    _localQtyController = TextEditingController(text: '1.000');
+    _descriptionController = TextEditingController();
+    _mrpController = TextEditingController();
+    _dlcController = TextEditingController();
+    _remarksController = TextEditingController();
   }
 
   @override
@@ -1772,6 +1791,12 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     _partController.dispose();
     _qtyController.dispose();
     _binController.dispose();
+    _localPartController.dispose();
+    _localQtyController.dispose();
+    _descriptionController.dispose();
+    _mrpController.dispose();
+    _dlcController.dispose();
+    _remarksController.dispose();
     super.dispose();
   }
 
@@ -1786,7 +1811,10 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     final part = _upper(_partController.text);
     final bin = _upper(_binController.text);
     final qty = int.tryParse(_qtyController.text.trim()) ?? 1;
-    if (part.isEmpty || bin.isEmpty || qty <= 0) return;
+    if (part.isEmpty || bin.isEmpty || qty <= 0) {
+      setState(() => _error = 'Enter a part, bin and quantity greater than zero.');
+      return;
+    }
     Navigator.pop(
       context,
       _ScanDraft(
@@ -1800,6 +1828,43 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     );
   }
 
+  Future<void> _saveLocalPart() async {
+    final part = _upper(_localPartController.text);
+    final quantity = _localQtyController.text.trim();
+    final mrp = _mrpController.text.trim();
+    final dlc = _dlcController.text.trim();
+    final description = _descriptionController.text.trim();
+    if (part.isEmpty || description.isEmpty ||
+        (double.tryParse(quantity) ?? 0) <= 0 ||
+        (double.tryParse(mrp) ?? -1) < 0 ||
+        (double.tryParse(dlc) ?? -1) < 0) {
+      setState(() => _error = 'Enter part, description, positive quantity, MRP and DLC.');
+      return;
+    }
+    setState(() {
+      _error = '';
+      _savingLocalPart = true;
+    });
+    try {
+      await ApiClient(widget.settings).createLocalPart(
+        dealerCode: widget.dealerCode,
+        partNumber: part,
+        partDescription: description,
+        quantity: quantity,
+        mrp: mrp,
+        dlc: dlc,
+        remarks: _remarksController.text,
+      );
+      if (mounted) Navigator.pop(context, const _LocalPartSaved());
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Local Part could not be saved. Check the connection and try again.');
+    } finally {
+      if (mounted) setState(() => _savingLocalPart = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -1807,40 +1872,111 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
       scrollable: true,
       content: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SmartPartField(
-            controller: _partController,
-            scopeKey: widget.dealerCode,
-            search: (query) => ApiClient(widget.settings).masterSearchParts(
-              query: query, dealerCode: widget.dealerCode, limit: 10),
-            onSelected: (part) => setState(() {
-              _selectedDescription = (part['partDescription'] ?? '').toString();
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(value: false, label: Text('Regular Part')),
+              ButtonSegment(value: true, label: Text('Local Part')),
+            ],
+            selected: {_localPart},
+            onSelectionChanged: (selection) => setState(() {
+              _localPart = selection.first;
+              _error = '';
             }),
-            onEdited: () => _selectedDescription = '',
           ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _qtyController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Qty'),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _binController,
-            textCapitalization: TextCapitalization.characters,
-            decoration: const InputDecoration(labelText: 'Bin Location'),
-            onChanged: (value) => _uppercase(_binController, value),
-          ),
+          const SizedBox(height: 12),
+          if (!_localPart) ...[
+            SmartPartField(
+              controller: _partController,
+              scopeKey: widget.dealerCode,
+              search: (query) => ApiClient(widget.settings).masterSearchParts(
+                  query: query, dealerCode: widget.dealerCode, limit: 8),
+              onSelected: (part) => setState(() {
+                _selectedDescription = (part['partDescription'] ?? '').toString();
+              }),
+              onEdited: () => _selectedDescription = '',
+            ),
+            if (_selectedDescription.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(_selectedDescription,
+                    style: Theme.of(context).textTheme.bodySmall),
+              ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _qtyController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Qty'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _binController,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(labelText: 'Bin Location'),
+              onChanged: (value) => _uppercase(_binController, value),
+            ),
+          ] else ...[
+            TextField(
+              controller: _localPartController,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(labelText: 'Part Number'),
+              onChanged: (value) => _uppercase(_localPartController, value),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _descriptionController,
+              decoration: const InputDecoration(labelText: 'Part Description'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _localQtyController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Quantity'),
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(child: TextField(
+                controller: _mrpController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'MRP'),
+              )),
+              const SizedBox(width: 10),
+              Expanded(child: TextField(
+                controller: _dlcController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'DLC'),
+              )),
+            ]),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _remarksController,
+              maxLines: 2,
+              decoration: const InputDecoration(labelText: 'Remarks (optional)'),
+            ),
+          ],
+          if (_error.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(_error, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            ),
         ],
       ),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel')),
-        FilledButton(onPressed: _submit, child: const Text('Save')),
+        FilledButton(
+          onPressed: _savingLocalPart ? null : (_localPart ? _saveLocalPart : _submit),
+          child: Text(_savingLocalPart ? 'Saving…' : (_localPart ? 'Save Local Part' : 'Save')),
+        ),
       ],
     );
   }
+}
+
+class _LocalPartSaved {
+  const _LocalPartSaved();
 }
 
 class _ScanDraft {

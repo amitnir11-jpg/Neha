@@ -9,7 +9,7 @@
   <title>Daksh Scan</title>
   <link rel="icon" href="/brand/favicon.ico" type="image/x-icon">
   <link rel="apple-touch-icon" sizes="512x512" href="/brand/app-icon.png">
-  <link rel="stylesheet" href="/scan.css?v=20261009-smart-search-v1">
+  <link rel="stylesheet" href="/scan.css?v=20261009-scan-manual-tabs-v1">
   <link rel="stylesheet" href="/css/select-system.css?v=20260908-enterprise-select-v3">
 </head>
 <body class="scan-page">
@@ -215,6 +215,13 @@
 
       <p id="manualNote" class="field-message">Manual entry uses the same sync pipeline as camera scans.</p>
 
+      <div class="manual-entry-tabs mobile-manual-entry-tabs" role="tablist" aria-label="Part entry type">
+        <button id="mobileRegularPartTab" class="manual-entry-tab active" type="button" role="tab" aria-selected="true" aria-controls="mobileRegularPartPanel">Regular Part</button>
+        <button id="mobileLocalPartTab" class="manual-entry-tab" type="button" role="tab" aria-selected="false" aria-controls="mobileLocalPartPanel">Local Part</button>
+      </div>
+
+      <div id="mobileRegularPartPanel" role="tabpanel" aria-labelledby="mobileRegularPartTab">
+
       <label id="manualBinWrap" class="field">
         <span>Source Bin Location *</span>
         <input id="manualBinLocation" name="binLocation" list="activeBinOptions" autocapitalize="characters" placeholder="Enter source bin after part lookup">
@@ -253,12 +260,26 @@
         <span>Job Card No</span>
         <input id="manualJobCardNo" name="jobCardNo" autocapitalize="characters" placeholder="Job card no">
       </label>
+      </div>
+
+      <div id="mobileLocalPartPanel" role="tabpanel" aria-labelledby="mobileLocalPartTab" hidden>
+        <label class="field"><span>Part Number *</span><input id="localPartNumber" name="localPartNumber" maxlength="120" autocapitalize="characters" required disabled></label>
+        <label class="field"><span>Part Description *</span><input id="localPartDescription" name="localPartDescription" maxlength="500" required disabled></label>
+        <div class="field-grid narrow">
+          <label class="field"><span>Quantity *</span><input id="localPartQuantity" name="localPartQuantity" inputmode="decimal" type="number" min="0.001" step="0.001" value="1.000" required disabled></label>
+          <label class="field"><span>MRP *</span><input id="localPartMrp" name="localPartMrp" inputmode="decimal" type="number" min="0" step="0.01" required disabled></label>
+          <label class="field"><span>DLC *</span><input id="localPartDlc" name="localPartDlc" inputmode="decimal" type="number" min="0" step="0.01" required disabled></label>
+        </div>
+        <label class="field"><span>Remarks</span><textarea id="localPartRemarks" name="localPartRemarks" maxlength="2000" rows="2" placeholder="Optional" disabled></textarea></label>
+        <p id="localPartMessage" class="field-message" aria-live="polite"></p>
+      </div>
 
       <div id="manualRawPreview" class="raw-preview" hidden></div>
 
       <div class="dialog-actions">
         <button id="manualCancelBtn" class="btn btn-secondary" type="button">Cancel</button>
-        <button class="btn btn-primary" type="submit">Save Scan</button>
+        <button id="manualSaveScanBtn" class="btn btn-primary" type="submit">Save Scan</button>
+        <button id="mobileSaveLocalPartBtn" class="btn btn-primary" type="button" hidden>Save Local Part</button>
       </div>
     </form>
   </dialog>
@@ -313,8 +334,8 @@
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <link rel="stylesheet" href="/sku-bin-picker.css?v=20261008-sku-v10">
   <script src="/js/sku-bin-picker.js?v=20261008-sku-v10"></script>
-  <link rel="stylesheet" href="/smart-part-search.css?v=20261009-smart-search-v1">
-  <script src="/js/smart-part-search.js?v=20261009-smart-search-v1"></script>
-  <script src="/scan.js?v=20261009-smart-search-v1"></script>
+  <link rel="stylesheet" href="/smart-part-search.css?v=20261009-scan-manual-tabs-v1">
+  <script src="/js/smart-part-search.js?v=20261009-scan-manual-tabs-v1"></script>
+  <script src="/scan.js?v=20261009-scan-manual-tabs-v1"></script>
 </body>
 </html>

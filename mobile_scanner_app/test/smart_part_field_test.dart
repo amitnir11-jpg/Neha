@@ -46,12 +46,15 @@ void main() {
     await tester.pump();
     expect(queries, ['20K']);
     expect(find.text('20K211S'), findsOneWidget);
-    await tester.tap(find.byType(ListTile));
+    expect(find.textContaining('CHAIN SPROCKET TEST'), findsOneWidget);
+    expect(find.textContaining('770'), findsNothing);
+    await tester.tap(find.text('20K211S'));
     await tester.pump();
     expect(controller.text, '20K211S');
     expect(selections, 1);
-    expect(find.byType(ListTile), findsNothing);
-    expect(find.textContaining('MRP ₹770.00'), findsOneWidget);
+    expect(find.text('20K211S'), findsNothing);
+    expect(find.textContaining('CHAIN SPROCKET TEST'), findsNothing);
+    expect(find.textContaining('770'), findsNothing);
     expect(tester.testTextInput.isVisible, true);
   });
 
@@ -91,7 +94,7 @@ void main() {
     await tester.enterText(find.byType(TextField), '');
     pending.complete([part]);
     await tester.pump();
-    expect(find.byType(ListTile), findsNothing);
+    expect(find.text('20K211S'), findsNothing);
   });
 
   testWidgets('network failure leaves the input usable and retry succeeds',

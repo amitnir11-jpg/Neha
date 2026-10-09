@@ -7,6 +7,7 @@
     if (!input || instances.has(input)) return instances.get(input);
     const menu = document.createElement('div');
     menu.className = 'smart-part-menu';
+    if (options.layout === 'columns') menu.classList.add('smart-part-menu-columns');
     menu.id = `smart-part-menu-${++nextId}`;
     menu.setAttribute('role', 'listbox');
     menu.setAttribute('aria-label', 'Matching master parts');
@@ -27,7 +28,12 @@
       const viewport = root.visualViewport;
       const top = viewport?.offsetTop || 0;
       const bottom = top + (viewport?.height || root.innerHeight);
-      const below = Math.max(0, bottom - rect.bottom - 8);
+      const avoid = options.avoidSelector ? document.querySelector(options.avoidSelector) : null;
+      const avoidRect = avoid?.getBoundingClientRect();
+      const safeBottom = avoidRect && avoidRect.top > rect.bottom
+        ? Math.min(bottom, avoidRect.top - 8)
+        : bottom;
+      const below = Math.max(0, safeBottom - rect.bottom - 8);
       const above = Math.max(0, rect.top - top - 8);
       const flip = below < 100 && above > below;
       const height = Math.min(300, flip ? above : below);
@@ -63,7 +69,7 @@
 
     function render(parts, message = '') {
       displayedScope = scope();
-      rows = parts.slice(0, 10);
+      rows = parts.slice(0, Math.max(1, Math.min(10, Number(options.maxResults) || 10)));
       active = -1;
       input.removeAttribute('aria-activedescendant');
       menu.replaceChildren();
@@ -78,7 +84,9 @@
         const number = document.createElement('strong');
         number.textContent = part.partNumber;
         const details = document.createElement('span');
-        details.textContent = [part.partDescription, Number(part.mrp) > 0 ? `MRP ₹${Number(part.mrp).toFixed(2)}` : ''].filter(Boolean).join(' · ');
+        details.textContent = options.displayPrice === false
+          ? (part.partDescription || '')
+          : [part.partDescription, Number(part.mrp) > 0 ? `MRP ₹${Number(part.mrp).toFixed(2)}` : ''].filter(Boolean).join(' · ');
         button.append(number, details);
         button.addEventListener('pointerdown', event => event.preventDefault());
         button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); choose(index); });
@@ -110,7 +118,7 @@
         try {
           const data = await options.fetchSuggestions(q, { signal: requestController.signal });
           if (version !== sequence || input.value.trim().toUpperCase() !== q || dealerScope !== scope() || document.activeElement !== input) return;
-          render(data.suggestions || [], (data.suggestions || []).length ? '' : 'No matching master parts');
+          render(data.suggestions || [], (data.suggestions || []).length ? '' : (options.noResultsMessage || 'No matching master parts'));
           options.onResults?.(data.suggestions || [], q);
         } catch (error) {
           if (version !== sequence || dealerScope !== scope() || (error.name === 'AbortError' && !timedOut) || document.activeElement !== input) return;

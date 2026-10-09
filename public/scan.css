@@ -1691,4 +1691,11 @@ body {
 .scan-inventory-summary > div { display: grid; gap: 4px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
 .scan-inventory-summary span { font-size: 11px; color: var(--muted); }
 
+.mobile-manual-entry-tabs { display: flex; gap: 4px; margin: 8px 0 14px; border-bottom: 1px solid #dce7f3; }
+.mobile-manual-entry-tabs .manual-entry-tab { flex: 1; min-height: 36px; border: 1px solid transparent; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font-weight: 700; }
+.mobile-manual-entry-tabs .manual-entry-tab.active { border-color: #dce7f3; border-bottom-color: #fff; background: #fff; color: #1767bd; }
+#mobileLocalPartPanel[hidden] { display: none !important; }
+#mobileLocalPartPanel .field-grid { margin-top: 8px; }
+#localPartMessage { color: var(--danger); }
+
 .scan-part-summary { padding: 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }

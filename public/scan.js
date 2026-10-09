@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20261009-smart-search-v1';
+  const APP_VERSION = '20261009-scan-manual-tabs-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -136,6 +136,7 @@
     smartBinPromptResolver: null,
     duplicateAlertOpen: false,
     manualRaw: '',
+    manualEntryLocal: false,
     pendingSourcePart: '',
     manualResumeAfterClose: false,
     manualMode: loadMode(),
@@ -3816,7 +3817,11 @@
     window.SmartPartSearch.bind(input, {
       getScope: () => `${state.session?.token || ''}|${activeDealerCode()}|${activeAuditId()}`,
       isEnabled: () => Boolean(state.session?.token),
-      fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: activeDealerCode(), limit: '10' })}`, { ...options, timeoutMs: 5000 }),
+      maxResults: 8,
+      displayPrice: false,
+      layout: 'columns',
+      noResultsMessage: 'No matching part found.',
+      fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: activeDealerCode(), limit: '8' })}`, { ...options, timeoutMs: 5000 }),
       onSelect: (part) => {
         input.value = upper(part.partNumber);
         byId('manualMrp').value = Number(part.mrp) > 0 ? String(part.mrp) : '';
@@ -3831,6 +3836,62 @@
     });
   }
 
+  function setManualEntryType(local) {
+    state.manualEntryLocal = Boolean(local);
+    const regularPanel = byId('mobileRegularPartPanel');
+    const localPanel = byId('mobileLocalPartPanel');
+    const regularTab = byId('mobileRegularPartTab');
+    const localTab = byId('mobileLocalPartTab');
+    if (regularPanel) regularPanel.hidden = state.manualEntryLocal;
+    if (localPanel) localPanel.hidden = !state.manualEntryLocal;
+    if (regularTab) {
+      regularTab.classList.toggle('active', !state.manualEntryLocal);
+      regularTab.setAttribute('aria-selected', String(!state.manualEntryLocal));
+    }
+    if (localTab) {
+      localTab.classList.toggle('active', state.manualEntryLocal);
+      localTab.setAttribute('aria-selected', String(state.manualEntryLocal));
+    }
+    qsa('#mobileRegularPartPanel input, #mobileRegularPartPanel select, #mobileRegularPartPanel textarea')
+      .forEach((field) => { field.disabled = state.manualEntryLocal; });
+    qsa('#mobileLocalPartPanel input, #mobileLocalPartPanel select, #mobileLocalPartPanel textarea')
+      .forEach((field) => { field.disabled = !state.manualEntryLocal; });
+    byId('manualSaveScanBtn').hidden = state.manualEntryLocal;
+    byId('mobileSaveLocalPartBtn').hidden = !state.manualEntryLocal;
+    if (!state.manualEntryLocal) renderModeFields();
+  }
+
+  async function saveMobileLocalPart() {
+    if (!state.session?.token) { toast('Please login first', 'error'); return; }
+    const form = byId('manualForm');
+    if (!form.reportValidity()) return;
+    const button = byId('mobileSaveLocalPartBtn');
+    const message = byId('localPartMessage');
+    button.disabled = true;
+    message.textContent = 'Saving Local Part...';
+    try {
+      const result = await api('/api/local-parts', {
+        method: 'POST',
+        body: {
+          dealerCode: activeDealerCode(),
+          partNumber: upper(byId('localPartNumber').value),
+          partDescription: clean(byId('localPartDescription').value),
+          quantity: byId('localPartQuantity').value,
+          mrp: byId('localPartMrp').value,
+          dlc: byId('localPartDlc').value,
+          remarks: clean(byId('localPartRemarks').value)
+        }
+      });
+      closeManualDialog();
+      toast(result.message || 'Local Part saved separately from regular stock', 'success');
+    } catch (error) {
+      message.textContent = error.message || 'Local Part could not be saved';
+      toast(message.textContent, 'error');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function openManualDialog({ rawText = '', autoPartNumber = '', title = '', decodeMetadata = null } = {}) {
     if (!ensureScanSession()) return;
     const dialog = byId('manualDialog');
@@ -3843,6 +3904,7 @@
     renderModeMeta();
     renderModeFields();
     byId('manualForm').reset();
+    setManualEntryType(false);
     byId('manualTitle').textContent = title || (state.mode === 'FITTED' ? 'Complete fitted details' : state.mode === 'VERIFICATION' ? 'Verification entry' : 'Add scan manually');
     byId('manualPartNumber').value = upper(autoPartNumber || state.pendingSourcePart || parsePartCandidate(rawText));
     byId('manualQty').value = '1';
@@ -4077,7 +4139,11 @@
     });
     byId('manualCancelBtn').addEventListener('click', () => closeManualDialog());
     byId('manualCloseBtn').addEventListener('click', () => closeManualDialog());
+    byId('mobileRegularPartTab').addEventListener('click', () => setManualEntryType(false));
+    byId('mobileLocalPartTab').addEventListener('click', () => setManualEntryType(true));
+    byId('mobileSaveLocalPartBtn').addEventListener('click', () => { void saveMobileLocalPart(); });
     byId('manualForm').addEventListener('submit', (event) => {
+      if (state.manualEntryLocal) { event.preventDefault(); return; }
       void submitManual(event);
     });
     byId('smartBinSuggestionDialog')?.addEventListener('cancel', (event) => event.preventDefault());

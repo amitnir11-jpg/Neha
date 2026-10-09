@@ -8,7 +8,7 @@ import '../models/scan_record.dart';
 import '../models/session.dart';
 import 'settings_store.dart';
 
-const mobileAppVersionName = 'Daksh Scan Lite v1.2.19';
+const mobileAppVersionName = 'Daksh Scan Lite v1.2.20';
 
 class ApiException implements Exception {
   ApiException(this.message,
@@ -250,6 +250,25 @@ class ApiClient {
             .isNotEmpty)
         .toList();
   }
+
+  Future<Map<String, dynamic>> createLocalPart({
+    required String dealerCode,
+    required String partNumber,
+    required String partDescription,
+    required String quantity,
+    required String mrp,
+    required String dlc,
+    String remarks = '',
+  }) =>
+      _request('/api/local-parts', method: 'POST', body: {
+        'dealerCode': dealerCode.trim().toUpperCase(),
+        'partNumber': partNumber.trim().toUpperCase(),
+        'partDescription': partDescription.trim(),
+        'quantity': quantity.trim(),
+        'mrp': mrp.trim(),
+        'dlc': dlc.trim(),
+        'remarks': remarks.trim(),
+      });
 
   Future<UserSession> login({
     required String username,

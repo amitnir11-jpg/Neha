@@ -12,3 +12,9 @@
 .smart-part-option:hover, .smart-part-option[aria-selected="true"] { background: #e8f2ff; }
 .smart-part-option span { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .smart-part-status { padding: 10px 12px; font-size: 12px; color: #53657c; }
+.smart-part-menu-columns .smart-part-option { display: grid; grid-template-columns: minmax(105px, .34fr) minmax(0, 1fr); align-items: center; gap: 12px; min-height: 42px; padding: 8px 10px; }
+.smart-part-menu-columns .smart-part-option strong { min-width: 0; overflow-wrap: anywhere; }
+.smart-part-menu-columns .smart-part-option span { min-width: 0; color: #53657c; }
+@media (max-width: 520px) {
+  .smart-part-menu-columns .smart-part-option { grid-template-columns: minmax(90px, .4fr) minmax(0, 1fr); gap: 8px; padding: 8px; }
+}

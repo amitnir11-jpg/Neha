@@ -4916,13 +4916,25 @@
         if (input.closest('#localPartForm, #localPartHistoryFilters')) return;
         const form = input.closest('form');
         const dealer = () => cleanDealerCode(form?.elements.dealerCode?.value || currentDealerCode() || activeDealerId());
+        const scanEntrySearch = Boolean(input.classList.contains('partSuggestInput') || input.closest('#scanHistoryFilters'));
         window.SmartPartSearch.bind(input, {
           getScope: () => `${state.token || ''}|${dealer()}`,
           isEnabled: () => Boolean(state.token),
-          fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: dealer(), limit: '10' })}`, { ...options, timeoutMs: 5000 }),
+          fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: dealer(), limit: scanEntrySearch ? '8' : '10' })}`, { ...options, timeoutMs: 5000 }),
+          ...(scanEntrySearch ? {
+            maxResults: 8,
+            displayPrice: false,
+            layout: 'columns',
+            noResultsMessage: 'No matching part found.',
+            ...(input.id === 'barcodePartNumber' ? { avoidSelector: '#saveBarcodeManualScan' } : {})
+          } : {}),
           onSelect: (part) => {
             if (input.classList.contains('partSuggestInput')) {
               fillPart(form, { ...part, partName: part.partDescription, partNo: part.partNumber });
+            }
+            if (input.closest('#scanHistoryFilters')) {
+              state.scanHistoryPage = 1;
+              loadScanHistory().catch(error => toast(error.message, 'error'));
             }
             if (input.id === 'binTransferPartSearch') filterRenderedBinTransferParts();
             if (input.id === 'binLabelPartSearch') renderBinLabelParts(state.binLabelParts || []);
@@ -12338,6 +12350,7 @@
 
   function updateBarcodeWorkspace(form = $('#barcodeScanForm')) {
     if (!form) return;
+    syncScanTypeButtons(form.elements.type.value);
     updateLocalPartScanMode(form);
     if (form.elements.type.value === 'LOCAL_PART') return;
     const bin = cleanDealerCode(form.elements.binLocation.value || '');
@@ -12374,22 +12387,69 @@
     setText('barcodeCurrentBin', bin || '—');
   }
 
+  function syncScanTypeButtons(value) {
+    const current = String(value || '').toUpperCase();
+    $$('.scan-type-button').forEach((button) => {
+      const active = button.dataset.scanType === current;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+  }
+
+  function setManualEntryTab(tab, options = {}) {
+    const local = tab === 'local';
+    const entry = $('#localPartEntry');
+    const localPane = $('#localPartEntryTab');
+    const regularPane = $('#regularPartEntryTab');
+    const form = $('#barcodeScanForm');
+    $('#regularPartTab')?.classList.toggle('active', !local);
+    $('#regularPartTab')?.setAttribute('aria-selected', String(!local));
+    $('#localPartTab')?.classList.toggle('active', local);
+    $('#localPartTab')?.setAttribute('aria-selected', String(local));
+    if (regularPane) regularPane.hidden = local;
+    if (localPane) localPane.hidden = !local;
+    if (entry && local && localPane && entry.parentElement !== localPane) localPane.appendChild(entry);
+    if (entry && !local && entry.parentElement === localPane) $('#barcodeEntry')?.before(entry);
+    if (entry) {
+      entry.hidden = !local;
+      entry.inert = !local;
+      entry.setAttribute('aria-hidden', String(!local));
+      entry.classList.toggle('active', local);
+    }
+    if (!local || options.initialize === false || !form || !entry) return;
+    const dealerCode = form.elements.dealerCode.value;
+    const localForm = $('#localPartForm');
+    if (localForm.elements.dealerCode.value !== dealerCode) resetLocalPartForm({ dealerCode });
+    setDealerSelectValue(localForm.elements.dealerCode, dealerCode);
+    syncLocalPartFormIdentity();
+    const scope = `${dealerCode}|${activeAuditIdForScope()}`;
+    if (state.localPartScanScope !== scope) {
+      state.localPartScanScope = scope;
+      const filter = $('#localPartHistoryFilters [name="dealerCode"]');
+      if (filter) setDealerSelectValue(filter, dealerCode);
+      if (dealerCode) loadLocalPartHistory({ page: 1 }).catch(error => toast(error.message, 'error'));
+    }
+  }
+
   function updateLocalPartScanMode(form) {
     const local = form.elements.type.value === 'LOCAL_PART';
+    const wasLocal = form.dataset.localPartScanMode === 'true';
+    form.dataset.localPartScanMode = String(local);
+    if ($('#regularPartTab')) $('#regularPartTab').disabled = local;
+    if (local) setManualEntryTab('local', { initialize: false });
+    else if (wasLocal) setManualEntryTab('regular', { initialize: false });
     const panel = $('#localPartEntry');
     if (!panel) return;
-    if (local && panel.parentElement !== $('#barcodeEntry')) $('#barcodeEntry').appendChild(panel);
-    panel.hidden = !local;
-    panel.inert = !local;
-    panel.setAttribute('aria-hidden', String(!local));
-    panel.classList.toggle('active', local);
-    const inputs = $('.barcode-entry-panels', form);
-    if (inputs) inputs.hidden = local;
+    const barcodeInput = $('.barcode-input-panel', form);
+    if (barcodeInput) barcodeInput.hidden = local;
     const workflow = $('#barcodeEntry .barcode-workflow');
     if (workflow) workflow.hidden = local;
     const history = $('#scan .scan-history-card');
     if (history) history.hidden = local;
-    if (!local) { state.localPartScanScope = ''; return; }
+    if (!local) {
+      if ($('#localPartTab')?.getAttribute('aria-selected') !== 'true') state.localPartScanScope = '';
+      return;
+    }
     clearTimeout(form.elements.rawScan.autoSaveTimer);
     form.elements.rawScan.disabled = true;
     form.elements.binLocation.disabled = true;
@@ -13162,6 +13222,8 @@
         form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       }
     });
+    $('#regularPartTab')?.addEventListener('click', () => setManualEntryTab('regular'));
+    $('#localPartTab')?.addEventListener('click', () => setManualEntryTab('local'));
     $('#localPartClearBtn')?.addEventListener('click', () => resetLocalPartForm());
     $('#localPartForm [name="dealerCode"]')?.addEventListener('change', syncLocalPartFormIdentity);
     $('#localPartForm [name="partNumber"]')?.addEventListener('blur', (event) => {
@@ -13214,6 +13276,14 @@
     });
     $('#barcodeRaw').addEventListener('change', () => scheduleBarcodeAutosave(35));
     ['regdNo', 'jobCardNo'].forEach(name => $(`#barcodeScanForm [name="${name}"]`)?.addEventListener('change', () => scheduleBarcodeAutosave(35)));
+    $$('.scan-type-button').forEach((button) => {
+      button.addEventListener('click', () => {
+        const select = $('#barcodeScanForm [name="type"]');
+        if (!select || select.value === button.dataset.scanType) return;
+        select.value = button.dataset.scanType;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    });
     $$('#manualScanForm [name="type"], #barcodeScanForm [name="type"]').forEach((select) => {
       updateScanTypeFields(select.closest('form'));
       select.addEventListener('change', () => {

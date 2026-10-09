@@ -31,7 +31,6 @@ class _SmartPartFieldState extends State<SmartPartField> {
   int _active = -1;
   List<PartSuggestion> _parts = [];
   String _message = '';
-  PartSuggestion? _selected;
 
   @override
   void initState() {
@@ -58,7 +57,6 @@ class _SmartPartFieldState extends State<SmartPartField> {
       _timer?.cancel();
       _parts = [];
       _message = '';
-      _selected = null;
     }
   }
 
@@ -79,7 +77,6 @@ class _SmartPartFieldState extends State<SmartPartField> {
     setState(() {
       _parts = [];
       _message = '';
-      _selected = null;
       _active = -1;
     });
     if (query.isEmpty) return;
@@ -91,8 +88,8 @@ class _SmartPartFieldState extends State<SmartPartField> {
             scope != widget.scopeKey ||
             !_focus.hasFocus) return;
         setState(() {
-          _parts = parts.take(10).toList();
-          _message = _parts.isEmpty ? 'No matching master parts' : '';
+          _parts = parts.take(8).toList();
+          _message = _parts.isEmpty ? 'No matching part found.' : '';
         });
       } catch (_) {
         if (!mounted ||
@@ -116,7 +113,6 @@ class _SmartPartFieldState extends State<SmartPartField> {
         selection: TextSelection.collapsed(offset: number.length));
     _focus.requestFocus();
     setState(() {
-      _selected = part;
       _parts = [];
       _message = '';
       _active = -1;
@@ -143,11 +139,7 @@ class _SmartPartFieldState extends State<SmartPartField> {
   }
 
   String _details(PartSuggestion part) {
-    final mrp = double.tryParse('${part['mrp']}') ?? 0;
-    return [
-      (part['partDescription'] ?? '').toString(),
-      if (mrp > 0) 'MRP ₹${mrp.toStringAsFixed(2)}'
-    ].where((text) => text.isNotEmpty).join(' · ');
+    return (part['partDescription'] ?? '').toString();
   }
 
   @override
@@ -180,22 +172,42 @@ class _SmartPartFieldState extends State<SmartPartField> {
                       keyboardDismissBehavior:
                           ScrollViewKeyboardDismissBehavior.manual,
                       itemCount: _parts.length,
-                      itemBuilder: (context, index) => ListTile(
-                            dense: true,
-                            selected: index == _active,
-                            title: Text('${_parts[index]['partNumber']}'),
-                            subtitle: Text(_details(_parts[index]),
-                                maxLines: 2, overflow: TextOverflow.ellipsis),
+                      itemBuilder: (context, index) => InkWell(
                             onTap: () => _choose(_parts[index]),
+                            child: Container(
+                              color: index == _active
+                                  ? Theme.of(context).colorScheme.primaryContainer
+                                  : null,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 118,
+                                    child: Text(
+                                      '${_parts[index]['partNumber']}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w700),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      _details(_parts[index]),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           )),
                 )),
           if (_message.isNotEmpty)
             Padding(
                 padding: const EdgeInsets.only(top: 6), child: Text(_message)),
-          if (_selected != null)
-            Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(_details(_selected!))),
         ]);
   }
 }

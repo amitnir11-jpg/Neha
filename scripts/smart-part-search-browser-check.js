@@ -4,7 +4,7 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || '../.codex-artifacts/browser-tools/node_modules/playwright');
 const artifacts = path.resolve('.codex-artifacts/smart-part-search');
 const session = JSON.parse(fs.readFileSync(path.join(artifacts, 'session.json'), 'utf8'));
-assert.ok(/^http:\/\/127\.0\.0\.1:55441$/.test(session.origin), 'Only the isolated local testing server is allowed');
+assert.ok(/^http:\/\/127\.0\.0\.1:5544[0-9]$/.test(session.origin), 'Only the isolated local testing server is allowed');
 const checks = [], errors = [];
 const passed = name => { checks.push(name); console.log(`PASS ${name}`); };
 
@@ -22,7 +22,9 @@ async function desktop(browser, userIndex = 0) {
   page.setDefaultTimeout(20000);
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${session.origin}/dashboard?view=scan`);
-  await page.waitForFunction(() => window.__DAKSH_DASHBOARD_BOOT__?.markers.some(marker => marker.label === 'DOMContentLoaded startup complete'));
+  await page.locator('.side-link[data-view="scan"]').click();
+  await page.locator('#barcodeScanForm').waitFor({ state: 'visible' });
+  await page.waitForTimeout(1500);
   await page.locator('#barcodeScanForm [name="dealerCode"]').selectOption(who.dealerCode);
   await page.locator('#barcodeBinLocation').fill('1');
   await page.locator('#barcodeBinLocation').press('Enter');
@@ -39,7 +41,7 @@ async function main() {
     const input = page.locator('#barcodePartNumber');
     await input.fill(session.stem.toLowerCase());
     await page.locator('.smart-part-menu:not([hidden]) [role="option"]').first().waitFor();
-    assert.equal(await page.locator('.smart-part-menu:not([hidden]) [role="option"]').count(), 10);
+    assert.equal(await page.locator('.smart-part-menu:not([hidden]) [role="option"]').count(), 8);
     await page.locator('.smart-part-menu:not([hidden]) [role="option"]').first().click();
     assert.equal(await input.inputValue(), session.stem);
     assert.equal(await page.locator('#barcodeScanForm [name="mrp"]').inputValue(), '770');

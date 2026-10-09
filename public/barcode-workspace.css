@@ -35,7 +35,15 @@ body.view-active-scan #barcodeScanForm label { display: block !important; margin
 body.view-active-scan #barcodeScanForm input:not([type="checkbox"]), body.view-active-scan #barcodeScanForm select { width: 100% !important; min-width: 0 !important; height: 34px !important; margin-top: 4px !important; padding: 6px 10px !important; font-size: 12px !important; border: 1px solid #cdd8e9 !important; border-radius: 5px !important; background: #fff !important; color: #101c32 !important; }
 #barcodeEntry .required-mark, #barcodeEntry #barcodeBinLabel small { color: #e80016 !important; }
 #barcodeEntry #barcodeBinLabel small { display: block !important; font-size: 10px !important; margin-top: 3px !important; }
-#barcodeEntry .barcode-context-row { display: grid !important; grid-template-columns: 1.15fr 1.5fr .8fr 1.5fr .7fr !important; gap: 16px !important; align-items: start !important; margin-bottom: 10px !important; }
+#barcodeEntry .barcode-context-row { display: grid !important; grid-template-columns: 1.05fr 1.25fr 1.8fr 1.15fr .65fr !important; gap: 12px !important; align-items: start !important; margin-bottom: 10px !important; }
+.scan-type-field { position: relative !important; }
+.scan-type-native-select { display: none !important; }
+.scan-type-switch { display: flex !important; flex-wrap: nowrap !important; gap: 5px !important; margin-top: 4px !important; }
+body.view-active-scan #barcodeScanForm .scan-type-button { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 1 1 0 !important; min-width: 0 !important; height: 34px !important; min-height: 34px !important; padding: 4px 6px !important; border: 1px solid #d5deeb !important; border-radius: 6px !important; background: #fff !important; color: #465979 !important; font-size: 10px !important; font-weight: 700 !important; white-space: nowrap !important; }
+body.view-active-scan #barcodeScanForm .scan-type-button[data-scan-type="INWARD"].active { border-color: #9de5bf !important; background: #e9fbf1 !important; color: #078746 !important; }
+body.view-active-scan #barcodeScanForm .scan-type-button[data-scan-type="OUTWARD"].active { border-color: #a5d9ff !important; background: #edf8ff !important; color: #0875c9 !important; }
+body.view-active-scan #barcodeScanForm .scan-type-button[data-scan-type="DAMAGE"].active { border-color: #ffc3c7 !important; background: #fff2f3 !important; color: #d52937 !important; }
+body.view-active-scan #barcodeScanForm .scan-type-button[data-scan-type="FITTED"].active { border-color: #d0c0ff !important; background: #f4f0ff !important; color: #6940c8 !important; }
 #barcodeEntry .inline-field { position: relative !important; }
 body.view-active-scan #barcodeScanForm #clearBarcodeBin { position: absolute !important; right: 2px !important; top: 5px !important; height: 30px !important; min-height: 0 !important; width: 30px !important; padding: 0 !important; background: transparent !important; border: 0 !important; color: #53627d !important; font-size: 20px !important; }
 body.view-active-scan #barcodeScanForm #barcodeBinLabel.source-bin-missing input { border-color: #ff3344 !important; background: #fff6f6 !important; }
@@ -51,6 +59,14 @@ body.view-active-scan #barcodeEntry #barcodeBeep:checked { background: #0078ee !
 #barcodeEntry .barcode-panel-title > span { color: #0078ee !important; font-size: 30px !important; line-height: 1 !important; }
 body.view-active-scan #barcodeEntry h3 { margin: 0 !important; font-size: 14px !important; line-height: 1.2 !important; }
 #barcodeEntry .barcode-panel-title p { margin: 4px 0 0 !important; color: #53627d !important; font-size: 11px !important; }
+.manual-entry-tabs { display: flex; gap: 4px; margin: 0 0 8px; border-bottom: 1px solid #dce7f3; }
+.manual-entry-tab { min-height: 30px !important; padding: 5px 12px !important; border: 1px solid transparent !important; border-radius: 5px 5px 0 0 !important; background: transparent !important; color: #53627d !important; font-size: 11px !important; font-weight: 700 !important; }
+.manual-entry-tab.active { border-color: #dce7f3 !important; border-bottom-color: #f9fcff !important; background: #f9fcff !important; color: #0078ee !important; }
+.manual-entry-tab:disabled { opacity: .5; cursor: not-allowed; }
+.manual-entry-tab-panel[hidden] { display: none !important; }
+.local-part-tab-panel #localPartEntry { margin: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.local-part-tab-panel .local-part-history { margin-top: 12px; }
+.local-part-tab-panel .local-part-history .table-wrap { max-height: 210px; overflow: auto; }
 body.view-active-scan #barcodeScanForm #barcodeRaw { width: 100% !important; height: 42px !important; min-height: 42px !important; resize: none !important; padding: 9px 14px !important; border: 1px solid #0078ee !important; border-radius: 5px !important; background: white !important; color: #132541 !important; font-size: 16px !important; line-height: 22px !important; }
 #barcodeEntry .barcode-input-panel > .actions { margin-top: 10px !important; }
 body.view-active-scan #barcodeScanForm .btn { min-height: 32px !important; height: 34px !important; padding: 7px 12px !important; font-size: 12px !important; }
@@ -98,6 +114,14 @@ body.view-active-scan #scan:has(#barcodeEntry.active) #scanHistoryPagination .bt
   #barcodeEntry .barcode-context-row { grid-template-columns: 1fr 1fr !important; }
   body.view-active-scan #scan:has(#barcodeEntry.active) .barcode-workspace-head { align-items: flex-start !important; flex-direction: column !important; }
   body.view-active-scan #scan:has(#barcodeEntry.active) #scanHistoryFilters { grid-template-columns: 1fr 1fr !important; }
+}
+@media (max-width: 640px) {
+  #barcodeEntry .manual-entry-tabs { width: 100%; }
+  #barcodeEntry .manual-entry-tab { flex: 1; }
+  #barcodeEntry .local-part-tab-panel .local-part-form { grid-template-columns: minmax(0, 1fr) !important; }
+  #barcodeEntry .local-part-tab-panel .local-part-form .span-2,
+  #barcodeEntry .local-part-tab-panel .local-part-form .span-3 { grid-column: auto !important; }
+  #barcodeEntry .local-part-tab-panel .local-part-history-filters { grid-template-columns: minmax(0, 1fr) !important; }
 }
 
 body.view-active-scan #scan:has(#barcodeEntry.active) #scanHistoryFilters .scan-history-filter-actions { grid-column: auto !important; flex-wrap: nowrap !important; }

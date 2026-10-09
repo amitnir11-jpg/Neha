@@ -88,17 +88,17 @@ async function main() {
   let suggestion;
   for (let attempt = 0; attempt < 15; attempt++) {
     ui = nodes();
-    suggestion = ui.find(node => (node['content-desc'] || '').startsWith(session.stem) && (node['content-desc'] || '').includes('770'));
+    suggestion = ui.find(node => (node['content-desc'] || '').startsWith(session.stem) && (node['content-desc'] || '').includes('CHAIN SPROCKET'));
     if (suggestion) break;
     await pause(250);
   }
   screenshot('android-suggestions-keyboard.png');
-  assert.ok(suggestion, 'APK receives the same exact master part and MRP as the web API');
+  assert.ok(suggestion, 'APK receives the same master part and description as the web API');
   const currentInput = ui.find(node => node.hint === 'Part Number');
   assert.ok(suggestion.bounds[1] >= currentInput.bounds[3], 'Suggestions are below the native input');
   const keyboard = run('shell', 'dumpsys', 'input_method');
   assert.match(keyboard, /(?:mInputShown=true|isInputViewShown=true|mIsInputViewShown=true|inputShown=true)/);
-  passed('native touch dropdown shows the same part/description/MRP directly below the input with the soft keyboard open');
+  passed('native touch dropdown shows the same part/description directly below the input with the soft keyboard open');
   tap(suggestion);
   await pause(200);
   ui = nodes();
