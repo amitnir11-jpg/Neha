@@ -21,7 +21,7 @@ function responseStub() {
     json(value) { this.payload = value; return this; } };
 }
 
-test('sample scan appears in Bin Transfer and stock report, then disappears after committed deletion and refresh event', async () => {
+for (const role of ['admin', 'audit_user']) test(`${role}: sample scan appears in Bin Transfer and stock report, then disappears after committed deletion and refresh event`, async () => {
   const saved = {
     inventoryFind: Inventory.find,
     inventoryFindByIdAndUpdate: Inventory.findByIdAndUpdate,
@@ -72,7 +72,7 @@ test('sample scan appears in Bin Transfer and stock report, then disappears afte
     assert.deepEqual(beforeReport.binBreakdown.map((part) => [part.partNumber, part.binLocation, part.availableQty]), [['ABC123', 'A1', 1]]);
 
     const emitted = [];
-    const req = { user: { role: 'admin', username: 'tester', name: 'Test Admin' }, body: { reason: 'test cleanup' },
+    const req = { user: { role, username: 'tester', name: 'Test User', dealerAccess: ['11646'] }, body: { reason: 'test cleanup' },
       io: { emit(event) {
         if (event === 'scan:deleted' || event === 'reports:update') assert.equal(committed, true, `${event} fires after commit`);
         emitted.push(event);

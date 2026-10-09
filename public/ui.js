@@ -4556,7 +4556,11 @@
   }
 
   function canEditScanDetails(scan = {}) {
-    return Boolean(scan && isAdminUser() && scan.isDeleted !== true);
+    return Boolean(scan && canModifyScanHistory() && scan.isDeleted !== true);
+  }
+
+  function canModifyScanHistory() {
+    return Boolean(state.user && (isAdminUser() || normalizeUiRole(state.user.role) === 'audit_user'));
   }
 
   function scanHistoryRecord(scanId = '') {
@@ -4719,7 +4723,7 @@
     const editBinOption = canEditDetails && ['INWARD', 'OUTWARD', 'DAMAGE'].includes(scanType)
       ? '<option value="edit-bin">Edit Bin Location</option>'
       : '';
-    const outwardOption = canEditDetails && scanType === 'INWARD'
+    const outwardOption = isAdminUser() && canEditDetails && scanType === 'INWARD'
       ? '<option value="mark-outward">Mark Outward</option>'
       : '';
     const editOption = canEditDetails
@@ -4730,7 +4734,7 @@
     const fittedOptions = isAdminUser() && fittedPending
       ? '<option value="fitted-billed">Mark Fitted as Billed</option><option value="fitted-return">Return Fitted Part to Bin</option>'
       : '';
-    const deleteOption = isAdminUser() ? '<option value="delete">Delete Row</option>' : '';
+    const deleteOption = canEditDetails ? '<option value="delete">Delete Row</option>' : '';
     const actionDropdown = editOption || fittedOptions || deleteOption
       ? `<select class="app-action-dropdown scan-row-action" data-id="${escapeHtml(id)}" data-details-edit="${canEditDetails ? 'true' : 'false'}" data-return-bin="${escapeHtml(scan.stockDeductedFromBin || scan.binLocation || scan.bin || '')}" aria-label="Scan row action"><option value="">Edit / Delete</option>${editOption}${fittedOptions}${deleteOption}</select>`
       : '<span class="muted">No action</span>';
@@ -11158,7 +11162,7 @@
     const deleteDetails = lastDeleteDetails();
     const scan = scanHistoryRecord(id) || scanHistoryDeleteReference(id);
     try {
-      await api(`/api/admin/scans/${encodeURIComponent(id)}`, { method: 'DELETE', body: deleteDetails });
+      await api(`/api/scans/${encodeURIComponent(id)}`, { method: 'DELETE', body: { ...deleteDetails, dealerCode: scan.dealerCode, auditId: scan.auditId } });
     } catch (error) {
       throw deleteFailureError(error);
     }

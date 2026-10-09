@@ -17,6 +17,7 @@ const VerificationLog = require('../models/VerificationLog');
 const AuditLog = require('../models/AuditLog');
 const auth = require('./auth');
 const scanModification = require('../services/ScanModificationService');
+const { requireScanModification, assertScanModificationAccess } = require('../utils/scanModificationAccess');
 const { stockMovementQuantity } = require('../utils/stockQuantity');
 const { loadPartStock } = require('../services/StockCalculationService');
 const { withDatabaseTransaction } = require('../services/prisma');
@@ -1589,6 +1590,18 @@ function manualDuplicatePayload(existing = {}, requestedQty = 1) {
   };
 }
 
+function editedScanRemainingQty(scan, qty, scanType) {
+  if (scanType !== 'INWARD') return 0;
+  if (normalizeScanType(scan.scanType || scan.type) !== 'INWARD') return qty;
+  const usedQty = Math.max(0, numberValue(scan.qty ?? scan.quantity, 0) - remainingQtyValue(scan));
+  if (qty < usedQty) {
+    const error = new Error('Quantity cannot be less than stock already used. Reverse the dependent activity first.');
+    error.status = 409;
+    throw error;
+  }
+  return qty - usedQty;
+}
+
 async function addManualQuantity(existing = {}, input = {}, req) {
   if (!req || !req.user) return { error: 'Authentication required.' };
   const addQty = Math.abs(numberValue(firstValue(input, ['qty', 'quantity', 'count']), 0));
@@ -1608,6 +1621,9 @@ async function addManualQuantity(existing = {}, input = {}, req) {
     }
   };
   const nextQtyExpression = { $add: [currentQtyExpression, addQty] };
+  const nextRemainingExpression = { $add: [{
+    $convert: { input: { $ifNull: ['$remainingQty', { $ifNull: ['$qty', '$quantity'] }] }, to: 'double', onError: 0, onNull: 0 }
+  }, addQty] };
   let before = await Inventory.findById(existing._id).lean();
   if (!before) return { error: 'Existing manual scan record was not found.' };
   if (before.isDeleted === true) return { error: 'Deleted scans must be restored before quantity can be changed.' };
@@ -1626,6 +1642,8 @@ async function addManualQuantity(existing = {}, input = {}, req) {
           normalizedPartNumber: partNumber,
           qty: nextQtyExpression,
           quantity: nextQtyExpression,
+          remainingQty: nextRemainingExpression,
+          activeInventory: true,
           ...priceFields,
           finalInventoryValue: { $multiply: [nextQtyExpression, masterMrp] },
           lastManualAddRequestId: requestId,
@@ -2424,7 +2442,8 @@ async function updateScanDetails(req, res) {
     update.type = scanType;
     update.movementType = movementTypeValue({ scanType });
     update.activeInventory = activeInventoryValue({ ...scan, ...update, scanType });
-    update.remainingQty = remainingQtyValue({ ...scan, ...update, scanType });
+    update.remainingQty = editedScanRemainingQty(scan, qty, scanType);
+    update.activeInventory = scanType === 'INWARD' && update.remainingQty > 0;
     const updated = await scanModification.updateScan(scan, update, req, { action: 'UPDATE' });
     const actor = req.user || {};
     await AuditLog.create({
@@ -3178,6 +3197,7 @@ async function updateScanDetails(req, res) {
   try {
     const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
     if (!scan) return res.status(404).json({ success: false, message: 'Scan record not found' });
+    assertScanModificationAccess(req, scan);
 
     const oldPartNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part || '');
     const partNumber = normalizePartNumber(firstValue(req.body || {}, ['partNumber', 'part', 'partNo']) || oldPartNumber);
@@ -3250,7 +3270,8 @@ async function updateScanDetails(req, res) {
     update.type = scanType;
     update.movementType = movementTypeValue({ scanType });
     update.activeInventory = activeInventoryValue({ ...scan, ...update, scanType });
-    update.remainingQty = remainingQtyValue({ ...scan, ...update, scanType });
+    update.remainingQty = editedScanRemainingQty(scan, qty, scanType);
+    update.activeInventory = scanType === 'INWARD' && update.remainingQty > 0;
     const updated = await scanModification.updateScan(scan, update, req, { action: 'UPDATE' });
     const actor = req.user || {};
     await AuditLog.create({
@@ -4204,7 +4225,18 @@ router.post('/process-scan', auth.requireAuth, processScanRequest);
 router.post('/scan', auth.requireAuth, processScanRequest);
 router.post('/manual', auth.requireAuth, processScanRequest);
 router.post('/', auth.requireAuth, processScanRequest);
-router.patch('/:scanId/details', auth.requireAuth, auth.requireAdmin, updateScanDetails);
+router.patch('/:scanId/details', auth.requireAuth, requireScanModification, updateScanDetails);
+router.delete('/:scanId', auth.requireAuth, requireScanModification, async (req, res) => {
+  try {
+    const result = await scanModification.softDeleteScans(scanLookupFilter(req.params.scanId), req);
+    if (!result.deletedCount) return res.status(404).json({ success: false, message: 'Scan record not found' });
+    await refreshInventoryUpiScopes(result.rows);
+    invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
+    return res.json({ success: true, deletedCount: result.deletedCount });
+  } catch (error) {
+    return res.status(error.status || 500).json({ success: false, message: error.message });
+  }
+});
 router.patch('/:scanId/mrp', auth.requireAuth, auth.requireAdmin, updateManualMrp);
 router.post('/:scanId/mark-outward', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {

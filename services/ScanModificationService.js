@@ -2,6 +2,7 @@ const Inventory = require('../models/Inventory');
 const ScanAuditLog = require('../models/ScanAuditLog');
 const AuditLog = require('../models/AuditLog');
 const BinTransferHistory = require('../models/BinTransferHistory');
+const { assertScanModificationAccess } = require('../utils/scanModificationAccess');
 const { activeInventoryValue, remainingQtyValue, upiCodeValue } = require('../utils/inventoryMovementState');
 const { stockMovementType, stockMovementBin, activeStockTransaction } = require('../utils/stockQuantity');
 const { invalidateCache } = require('../utils/safeCache');
@@ -229,7 +230,7 @@ async function saveAuditOrRollback(before, after, req, reason, remarks, action, 
 
 async function updateScan(scan, update, req, options = {}) {
   if (!inDatabaseTransaction()) return withDatabaseTransaction(() => updateScan(scan, update, req, options));
-  assertAdmin(req);
+  assertScanModificationAccess(req, scan);
   if (scan && (scan.isDeleted === true || clean(scan.status).toUpperCase() === 'DELETED')) {
     const error = new Error('Deleted scans must be restored before they can be modified.');
     error.status = 409;
@@ -260,9 +261,10 @@ async function updateScan(scan, update, req, options = {}) {
 
 async function softDeleteScans(filter, req, options = {}) {
   if (!inDatabaseTransaction()) return withDatabaseTransaction(() => softDeleteScans(filter, req, options));
-  assertAdmin(req);
+  assertScanModificationAccess(req);
   const { reason, remarks } = requireReason(modificationBody(req, options));
   const rows = await Inventory.find({ ...(filter || {}), isDeleted: { $ne: true }, deletedAt: null }).lean();
+  rows.forEach(row => assertScanModificationAccess(req, row));
   for (const row of rows) {
     const dependencies = await findInwardDependencies(row, rows);
     if (dependencies.length) {

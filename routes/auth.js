@@ -235,6 +235,7 @@ async function requireAuth(req, res, next) {
       if (!audit || !['ACTIVE', 'IN_PROGRESS', 'OPEN'].includes(status)) {
         return res.status(423).json({ success: false, code: 'AUDIT_NOT_WRITABLE', message: 'Changes are allowed only while the selected audit is ACTIVE.' });
       }
+      req.authorizedAuditId = String(audit.auditId || audit._id || '');
     }
     const matrixError = matrixAccessError(req.user, req);
     if (matrixError) return res.status(403).json({ success: false, message: matrixError });
