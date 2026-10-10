@@ -99,7 +99,7 @@ let bluetoothScanQueue = Promise.resolve();
 const realtimeDashboardTimers = new Map();
 
 function scanDebug(...args) {
-  if (SCAN_VERBOSE_LOGS) void args;
+  if (SCAN_VERBOSE_LOGS) console.info('[SCAN_DEBUG]', ...args);
 }
 
 async function sendCachedJson(res, namespace, query, builder, options = {}) {
@@ -2665,6 +2665,14 @@ async function saveScanRequest(req, res) {
     const qtyInput = firstValue(req.body, ['qty', 'quantity', 'count']);
     const quantityResolution = resolveScanQuantity(parsed, qtyInput);
     const preQty = quantityResolution.quantity;
+    scanDebug('[SCAN QTY] API normalized', {
+      partNumber: part,
+      dealerCode,
+      encodedQuantity: parsed.quantityProvided ? parsed.qty : null,
+      clientQuantity: qtyInput ?? null,
+      resolvedQuantity: preQty,
+      quantitySource: quantityResolution.encoded ? 'encoded' : qtyInput !== undefined ? 'request' : 'default'
+    });
     if (quantityResolution.error) {
       return res.status(400).json({ success: false, message: quantityResolution.error });
     }
@@ -3157,6 +3165,14 @@ async function saveScanRequest(req, res) {
       throw error;
     }
 
+    scanDebug('[SCAN QTY] database persisted', {
+      id: scan._id,
+      partNumber: scan.partNumber,
+      dealerCode: scan.dealerCode,
+      scanType: scan.scanType,
+      qty: scan.qty,
+      quantity: scan.quantity
+    });
     scanDebug('[SCAN TIME] saved PostgreSQL timestamp verified', {
       id: scan._id,
       partNumber: scan.partNumber,
@@ -3169,7 +3185,15 @@ async function saveScanRequest(req, res) {
         savedTime: scan.timestamp || scan.createdAt
       })
     });
-    scanDebug('[MANUAL SCAN] DB insert success', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode, scanType: scan.scanType, deviceId: scan.deviceId });
+    scanDebug('[MANUAL SCAN] DB insert success', {
+      id: scan._id,
+      partNumber: scan.partNumber,
+      dealerCode: scan.dealerCode,
+      scanType: scan.scanType,
+      qty: scan.qty,
+      quantity: scan.quantity,
+      deviceId: scan.deviceId
+    });
     scanDebug('SAVED_VALID_SCAN', { id: scan._id, partNumber: scan.partNumber, dealerCode: scan.dealerCode });
     scanDebug("Matched category:", scan.category || '');
     scanDebug("Matched partDescription:", scan.partDescription || scan.partName || '');
@@ -3494,6 +3518,14 @@ async function saveScanRequest(req, res) {
     const qtyInput = firstValue(req.body, ['qty', 'quantity', 'count']);
     const quantityResolution = resolveScanQuantity(parsed, qtyInput);
     const preQty = quantityResolution.quantity;
+    scanDebug('[SCAN QTY] API normalized', {
+      partNumber: part,
+      dealerCode,
+      encodedQuantity: parsed.quantityProvided ? parsed.qty : null,
+      clientQuantity: qtyInput ?? null,
+      resolvedQuantity: preQty,
+      quantitySource: quantityResolution.encoded ? 'encoded' : qtyInput !== undefined ? 'request' : 'default'
+    });
     if (quantityResolution.error) {
       return res.status(400).json({ success: false, message: quantityResolution.error });
     }

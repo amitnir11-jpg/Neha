@@ -56,6 +56,7 @@ assert.equal(uniqueReportScans(exactRetryScans).length, 1, 'same exact scan requ
 
 const reportsRoute = fs.readFileSync(path.join(__dirname, '..', 'routes', 'reports.js'), 'utf8');
 assert.match(reportsRoute, /ACTUAL STOCK VALUE \(DLC\)'?, key: 'finalInventoryValue'/, 'reports must expose the row-level DLC value');
-assert.match(reportsRoute, /target\.finalInventoryValue = money\(target\.qty \* Number\(target\.dlc \|\| 0\)\)/, 'bin-wise rows must calculate qty x DLC');
+assert.match(reportsRoute, /finalInventoryValue: money\(qty \* dlc\)/, 'bin-wise stock rows must calculate available quantity x DLC');
+assert.match(reportsRoute, /row\.finalInventoryValue = money\(row\.qty \* Number\(entry\.dlc \|\| row\.dlc \|\| 0\)\)/, 'local-part additions must recalculate total quantity x DLC');
 
 console.log('Report scan quantity regression checks passed.');

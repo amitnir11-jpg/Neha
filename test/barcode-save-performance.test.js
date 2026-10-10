@@ -25,7 +25,7 @@ function scannerHarness(options = {}) {
     regdNo: node('#barcodeScanForm [name="regdNo"]'), jobCardNo: node('#barcodeScanForm [name="jobCardNo"]')
   };
   const context = {
-    $: node, state: { barcodeCaptureQueue: [], barcodeAutoSaving: false, barcodeLastRaw: '', barcodeLastAt: 0 },
+    $: node, $$: () => [], state: { barcodeCaptureQueue: [], barcodeAutoSaving: false, barcodeLastRaw: '', barcodeLastAt: 0 },
     normalizePartText: value => String(value).trim().toUpperCase(),
     Date: { now: () => clock },
     setTimeout(callback, delay) { const id = ++timerId; timers.set(id, { callback, at: clock + delay }); return id; },

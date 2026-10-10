@@ -74,14 +74,28 @@ function extract(file, start, end) {
 function workspaceHarness() {
   const nodes = new Map();
   function node(selector) {
-    if (!nodes.has(selector)) nodes.set(selector, { textContent: '', disabled: false, setAttribute() {}, classList: {
-      flags: new Set(), toggle(name, enabled) { if (enabled) this.flags.add(name); else this.flags.delete(name); }
-    } });
+    if (!nodes.has(selector)) nodes.set(selector, { textContent: '', disabled: false, attributes: {},
+      setAttribute(name, value) { this.attributes[name] = value; },
+      getAttribute(name) { return this.attributes[name] ?? null; },
+      classList: {
+        flags: new Set(),
+        add(name) { this.flags.add(name); },
+        remove(name) { this.flags.delete(name); },
+        toggle(name, enabled) { if (enabled) this.flags.add(name); else this.flags.delete(name); }
+      }
+    });
     return nodes.get(selector);
   }
-  const buttons = [{ disabled: false }, { disabled: false }];
-  const form = { elements: Object.fromEntries(['type', 'binLocation', 'part', 'rawScan', 'dealerCode', 'regdNo', 'jobCardNo'].map(name => [name, { value: '', disabled: false }])) };
+  const buttons = ['INWARD', 'OUTWARD', 'FITTED'].map(scanType => ({
+    disabled: false,
+    dataset: { scanType },
+    attributes: {},
+    classList: { toggle(name, enabled) { this[name] = enabled; } },
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }));
+  const form = { dataset: {}, elements: Object.fromEntries(['type', 'binLocation', 'part', 'rawScan', 'dealerCode', 'regdNo', 'jobCardNo'].map(name => [name, { value: '', disabled: false }])) };
   form.elements.dealerCode.value = 'D01';
+  nodes.set('#barcodeScanForm', form);
   const state = {};
   const context = vm.createContext({ state, $: node, $$: () => buttons, cleanDealerCode: value => String(value).trim().toUpperCase(), setText() {} });
   vm.runInContext(extract('public/ui.js', 'function updateBarcodeWorkspace(', 'function acceptBarcodeBinQr('), context);

@@ -200,6 +200,7 @@ test('manual duplicate and request-identity checks run concurrently', async () =
     'async function scanPolicyResult(',
     'async function lockUpiIdentity(',
     {
+      require,
       clean: value => String(value || '').trim(),
       duplicatePolicy: {
         globalUpiKey: () => 'key',

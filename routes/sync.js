@@ -645,8 +645,7 @@ function logSync(stage, details = {}) {
   if (!SYNC_VERBOSE_LOGS) return;
   const safeDetails = { ...details };
   if (Array.isArray(safeDetails.sample)) safeDetails.sample = safeDetails.sample.slice(0, 3);
-  void stage;
-  void safeDetails;
+  console.info('[SCAN_SYNC]', JSON.stringify({ stage, ...safeDetails }));
 }
 
 async function logMasterValidationFailure(scan = {}, reason = INVALID_PART_MESSAGE) {
@@ -1752,6 +1751,10 @@ async function saveNormalizedScan(scan, req, options = {}) {
     extractedPartNumber: scan.partNumber,
     partNumber: scan.partNumber,
     dealerCode: scan.dealerCode,
+    encodedQuantity: scan.parsed?.quantityProvided ? scan.parsed.qty : null,
+    clientQuantity: scan.source?.quantity ?? scan.source?.qty ?? null,
+    resolvedQuantity: scan.quantity,
+    quantitySource: scan.quantitySource,
     syncKey: scan.syncKey,
     scanId: scan.uniqueScanId
   });
@@ -2380,7 +2383,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
     };
   }
 
-  logSync('DB insert success', { id: doc._id, deviceId: doc.deviceId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, syncKey: doc.syncKey });
+  logSync('DB insert success', { id: doc._id, deviceId: doc.deviceId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, qty: doc.qty, quantity: doc.quantity, syncKey: doc.syncKey });
   logSync('saved valid scan', { id: doc._id, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'mobile' });
   scheduleUpiStateRefreshAfterResponse(doc, req);
   markPerf('inventoryStateQueued');
@@ -3207,12 +3210,19 @@ async function pushHandler(req, res) {
           scanId: doc.uniqueScanId,
           partNumber: doc.partNumber,
           dealerCode: doc.dealerCode,
+          qty: doc.qty,
+          quantity: doc.quantity,
           syncKey: doc.syncKey
         }))
       });
       try {
         const result = await Inventory.bulkWrite(operations, { ordered: false });
         insertedCount = result.insertedCount || 0;
+        logSync('DB insert success', {
+          collection: Inventory.collection.name,
+          insertedCount,
+          sample: insertDocs.map((doc) => ({ scanId: doc.uniqueScanId, partNumber: doc.partNumber, dealerCode: doc.dealerCode, qty: doc.qty, quantity: doc.quantity }))
+        });
       } catch (error) {
         const writeErrors = error.writeErrors || error.result?.result?.writeErrors || [];
         for (const writeError of writeErrors) {
