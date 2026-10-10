@@ -9384,6 +9384,8 @@
     if (!dealer) return toast('Dealer not found', 'error');
     const form = $('#dealerModalForm');
     form.reset();
+    $('#dealerModalMessage').hidden = true;
+    $('#dealerModalMessage').textContent = '';
     $('[name="mode"]', form).value = 'edit';
     $('[name="dealerCode"]', form).value = dealer.dealerCode || '';
     $('[name="dealerCode"]', form).readOnly = true;
@@ -9395,11 +9397,14 @@
     $('#dealerModalTitle').textContent = 'Edit Dealer';
     $('button[type="submit"]', form).textContent = 'Update Dealer';
     $('#dealerModal').classList.remove('hidden');
+    $('[name="dealerName"]', form).focus();
   }
 
   function openAddDealerModal() {
     const form = $('#dealerModalForm');
     form.reset();
+    $('#dealerModalMessage').hidden = true;
+    $('#dealerModalMessage').textContent = '';
     $('[name="mode"]', form).value = 'add';
     $('[name="dealerCode"]', form).readOnly = false;
     $('[name="active"]', form).value = 'true';
@@ -14214,10 +14219,21 @@
     $('#dealerModalForm')?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
+      const submitButton = $('button[type="submit"]', form);
+      const messageNode = $('#dealerModalMessage');
       const payload = formObject(form);
       const mode = payload.mode;
       payload.active = payload.active !== 'false';
       delete payload.mode;
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = mode === 'edit' ? 'Updating Dealer…' : 'Saving Dealer…';
+      }
+      if (messageNode) {
+        messageNode.hidden = true;
+        messageNode.textContent = '';
+        messageNode.className = 'form-message';
+      }
       try {
         if (mode === 'edit') {
           const code = cleanDealerCode(payload.dealerCode);
@@ -14233,7 +14249,17 @@
         await loadDealers({ force: true });
       } catch (error) {
         const message = error.status === 409 || /dealer code already exists/i.test(error.message || '') ? 'Dealer Code already exists.' : error.message || 'Dealer could not be saved.';
+        if (messageNode) {
+          messageNode.textContent = message;
+          messageNode.className = 'form-message error';
+          messageNode.hidden = false;
+        }
         toast(message, 'error');
+      } finally {
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.textContent = mode === 'edit' ? 'Update Dealer' : 'Save Dealer';
+        }
       }
     });
     $('#dealerFilterForm')?.addEventListener('submit', (event) => { event.preventDefault(); state.dealerMasterPage = 1; renderDealerMaster(); });

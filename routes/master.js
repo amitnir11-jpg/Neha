@@ -902,15 +902,24 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
     }, { new: true, runValidators: true });
     if (!dealer) return res.status(404).json({ success: false, message: 'Dealer not found' });
     if (auditUser) {
-      const access = await auth.userDealerAccessCodes(auditUser);
-      if (!access.includes(dealerCode)) {
-        auditUser.dealerAccess = [...new Set([...access, dealerCode])];
-        await auditUser.save();
-        await auth.syncUserDealerMappings(auditUser._id, auditUser.dealerAccess);
+      try {
+        const access = await auth.userDealerAccessCodes(auditUser);
+        if (!access.includes(dealerCode)) {
+          auditUser.dealerAccess = [...new Set([...access, dealerCode])];
+          await auditUser.save();
+          await auth.syncUserDealerMappings(auditUser._id, auditUser.dealerAccess);
+        }
+      } catch (error) {
+        console.error('[DEALER_EDIT] Dealer saved, but audit-user access sync failed:', error.message || error);
       }
     }
 
-    const activeAudit = await getActiveAudit({ dealerCode });
+    let activeAudit = null;
+    try {
+      activeAudit = await getActiveAudit({ dealerCode });
+    } catch (error) {
+      console.error('[DEALER_EDIT] Dealer saved, but active audit lookup failed:', error.message || error);
+    }
     if (activeAudit) {
       const auditUpdate = { dealerName, brand, location };
       if (auditUser) {
@@ -922,12 +931,17 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
         auditUpdate.auditorUsername = '';
         auditUpdate.auditorName = '';
       }
-      await Audit.updateOne({ _id: activeAudit._id }, { $set: auditUpdate });
+      try {
+        await Audit.updateOne({ _id: activeAudit._id }, { $set: auditUpdate });
+      } catch (error) {
+        console.error('[DEALER_EDIT] Dealer saved, but active-audit details sync failed:', error.message || error);
+      }
     }
-    req.io.emit('dealers:update');
     invalidateMasterCaches();
-    res.json({ success: true, dealer, activeAudit: activeAudit ? publicAudit({ ...activeAudit, dealerName, brand, location, auditUserId: auditUser ? String(auditUser._id) : '', auditorUsername: auditUser ? (auditUser.username || '') : '', auditorName: auditUser ? (auditUser.name || auditUser.username || '') : '' }) : null });
+    req.io?.emit('dealers:update');
+    res.json({ success: true, dealer: dealer.toObject ? dealer.toObject() : dealer });
   } catch (error) {
+    console.error('[DEALER_EDIT] Update request failed:', error);
     res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
