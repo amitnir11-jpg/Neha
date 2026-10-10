@@ -551,6 +551,17 @@ function parseQueryLikeText(rawScan) {
   return data;
 }
 
+function positiveEncodedQuantity(value) {
+  const text = String(value === undefined || value === null ? '' : value).trim();
+  if (!/^\d{1,7}$/.test(text)) return undefined;
+  const quantity = Number(text);
+  return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : undefined;
+}
+
+function encodedQuantityError() {
+  return 'Invalid or unsupported encoded quantity; manual review required.';
+}
+
 function parseRawScan(rawScan) {
   const raw = String(rawScan || '').trim();
   if (!raw) {
@@ -559,6 +570,8 @@ function parseRawScan(rawScan) {
       upiNo: '',
       upiId: '',
       qty: undefined,
+      quantityProvided: false,
+      quantityError: '',
       mrp: undefined,
       mrpProvided: false,
       dlc: undefined,
@@ -576,7 +589,9 @@ function parseRawScan(rawScan) {
     const parsedJson = JSON.parse(raw);
     if (parsedJson && typeof parsedJson === 'object' && !Array.isArray(parsedJson)) {
       const jsonPart = upper(firstValue(parsedJson, ['partNumber', 'partNo', 'part', 'sku', 'itemCode', 'item', 'p']));
-      const jsonQty = optionalNumber(firstValue(parsedJson, ['qty', 'quantity', 'q']));
+      const jsonQtyKey = Object.keys(parsedJson).find((key) => ['qty', 'quantity', 'q'].includes(key.toLowerCase()));
+      const quantityProvided = jsonQtyKey !== undefined;
+      const jsonQty = quantityProvided ? positiveEncodedQuantity(parsedJson[jsonQtyKey]) : undefined;
       const jsonMrp = optionalNumber(firstValue(parsedJson, ['mrp', 'price']));
       const jsonDlc = optionalNumber(firstValue(parsedJson, ['dlc', 'cost', 'dealerPrice']));
       const jsonScanType = upper(firstValue(parsedJson, ['type', 'scanType', 'movement']));
@@ -585,7 +600,9 @@ function parseRawScan(rawScan) {
         part: normalizePartNumber(jsonPart),
         upiNo: jsonUpi,
         upiId: jsonUpi,
-        qty: jsonQty !== undefined ? jsonQty : 1,
+        qty: quantityProvided ? jsonQty : 1,
+        quantityProvided,
+        quantityError: quantityProvided && jsonQty === undefined ? encodedQuantityError() : '',
         mrp: jsonMrp,
         mrpProvided: jsonMrp !== undefined,
         dlc: jsonDlc,
@@ -610,6 +627,8 @@ function parseRawScan(rawScan) {
       upiId: upper(parsedScan.upiId || ''),
       part: normalizePartNumber(parsedScan.partNumber),
       qty: parsedScan.quantity || 1,
+      quantityProvided: parsedScan.type === 'UPI',
+      quantityError: '',
       mrp: undefined,
       mrpProvided: false,
       dlc: undefined,
@@ -621,6 +640,28 @@ function parseRawScan(rawScan) {
       userName: '',
       type: '',
       qrParsed: parsedScan.type === 'UPI',
+      rawScan: raw
+    };
+  }
+  const looksLikeSlashBarcode = raw.includes('/') && !/^[a-z][a-z0-9+.-]*:\/\//i.test(raw);
+  if (parsedScan.type === 'HERO_QR' || (looksLikeSlashBarcode && parsedScan.type !== 'HERO_SKU_LABEL')) {
+    return {
+      part: normalizePartNumber(parsedScan.partNumber || ''),
+      upiNo: upper(parsedScan.upiId || ''),
+      upiId: upper(parsedScan.upiId || ''),
+      qty: undefined,
+      quantityProvided: true,
+      quantityError: encodedQuantityError(),
+      mrp: undefined,
+      mrpProvided: false,
+      dlc: undefined,
+      dlcProvided: false,
+      bin: '',
+      dealerCode: '',
+      auditId: '',
+      staffName: '',
+      userName: '',
+      type: '',
       rawScan: raw
     };
   }
@@ -639,7 +680,10 @@ function parseRawScan(rawScan) {
     part = upper(simpleTokens[0]);
   }
 
-  const qty = numberValue(getFirst(data, ['qty', 'quantity', 'q']), undefined);
+  const quantityKey = ['qty', 'quantity', 'q'].find((key) => Object.prototype.hasOwnProperty.call(data, key));
+  const quantityProvided = quantityKey !== undefined;
+  const quantityRaw = quantityProvided ? data[quantityKey] : undefined;
+  const qty = quantityProvided ? positiveEncodedQuantity(quantityRaw) : undefined;
   const mrpRaw = getFirst(data, ['mrp', 'price']);
   const dlcRaw = getFirst(data, ['dlc', 'cost', 'dealerprice']);
   const mrp = optionalNumber(mrpRaw);
@@ -656,7 +700,9 @@ function parseRawScan(rawScan) {
     part,
     upiNo,
     upiId: upiNo,
-    qty,
+    qty: quantityProvided ? qty : undefined,
+    quantityProvided,
+    quantityError: quantityProvided && qty === undefined ? encodedQuantityError() : '',
     mrp,
     mrpProvided: mrp !== undefined,
     dlc,
@@ -668,6 +714,23 @@ function parseRawScan(rawScan) {
     userName: staffName,
     type,
     rawScan: raw
+  };
+}
+
+function resolveScanQuantity(parsed = {}, requestedQuantity, fallback = 1) {
+  if (parsed.quantityError) {
+    return { quantity: NaN, encoded: true, invalidRequest: false, error: parsed.quantityError };
+  }
+  if (parsed.quantityProvided) {
+    return { quantity: parsed.qty, encoded: true, invalidRequest: false, error: '' };
+  }
+  const requestProvided = requestedQuantity !== undefined && requestedQuantity !== null && String(requestedQuantity).trim() !== '';
+  const candidate = requestProvided ? optionalNumber(requestedQuantity) : optionalNumber(parsed.qty);
+  return {
+    quantity: candidate !== undefined ? candidate : fallback,
+    encoded: false,
+    invalidRequest: requestProvided && candidate === undefined,
+    error: ''
   };
 }
 
@@ -2600,11 +2663,12 @@ async function saveScanRequest(req, res) {
     );
     const manualEntryMode = isManualEntryMode(req.body, rawScanText, upiId);
     const qtyInput = firstValue(req.body, ['qty', 'quantity', 'count']);
-    const qtyCandidate = qtyInput !== undefined && qtyInput !== null && String(qtyInput).trim() !== ''
-      ? optionalNumber(qtyInput)
-      : optionalNumber(parsed.qty);
-    const preQty = qtyCandidate !== undefined ? qtyCandidate : 1;
-    if (qtyInput !== undefined && qtyInput !== null && String(qtyInput).trim() !== '' && qtyCandidate === undefined) {
+    const quantityResolution = resolveScanQuantity(parsed, qtyInput);
+    const preQty = quantityResolution.quantity;
+    if (quantityResolution.error) {
+      return res.status(400).json({ success: false, message: quantityResolution.error });
+    }
+    if (quantityResolution.invalidRequest) {
       return res.status(400).json({ success: false, message: 'Quantity must be numeric.' });
     }
     if (!(Number(preQty) > 0)) {
@@ -3428,11 +3492,12 @@ async function saveScanRequest(req, res) {
     );
     const manualEntryMode = isManualEntryMode(req.body, rawScanText, upiId);
     const qtyInput = firstValue(req.body, ['qty', 'quantity', 'count']);
-    const qtyCandidate = qtyInput !== undefined && qtyInput !== null && String(qtyInput).trim() !== ''
-      ? optionalNumber(qtyInput)
-      : optionalNumber(parsed.qty);
-    const preQty = qtyCandidate !== undefined ? qtyCandidate : 1;
-    if (qtyInput !== undefined && qtyInput !== null && String(qtyInput).trim() !== '' && qtyCandidate === undefined) {
+    const quantityResolution = resolveScanQuantity(parsed, qtyInput);
+    const preQty = quantityResolution.quantity;
+    if (quantityResolution.error) {
+      return res.status(400).json({ success: false, message: quantityResolution.error });
+    }
+    if (quantityResolution.invalidRequest) {
       return res.status(400).json({ success: false, message: 'Quantity must be numeric.' });
     }
     if (!(Number(preQty) > 0)) {
@@ -4484,11 +4549,13 @@ router.post('/sync', auth.requireAuth, async (req, res) => {
         const dealer = dealerCode ? await Dealer.findOne({ dealerCode }).lean() : null;
         const auditId = String(item.auditId || (dealer ? dealer.currentAuditId : '') || '').trim();
         const qtyInput = firstValue(item, ['qty', 'quantity', 'count']);
-        const qtyCandidate = qtyInput !== undefined && qtyInput !== null && String(qtyInput).trim() !== ''
-          ? optionalNumber(qtyInput)
-          : optionalNumber(parsed.qty);
-        const finalQty = qtyCandidate !== undefined ? qtyCandidate : 1;
-        if (qtyInput !== undefined && qtyInput !== null && String(qtyInput).trim() !== '' && qtyCandidate === undefined) {
+        const quantityResolution = resolveScanQuantity(parsed, qtyInput);
+        const finalQty = quantityResolution.quantity;
+        if (quantityResolution.error) {
+          failed.push({ uniqueScanId, message: quantityResolution.error, item });
+          continue;
+        }
+        if (quantityResolution.invalidRequest) {
           failed.push({ uniqueScanId, message: 'Quantity must be numeric.', item });
           continue;
         }
@@ -5368,6 +5435,7 @@ router.post('/delete-all', auth.requireAuth, auth.requireAdmin, async (req, res)
 
 module.exports = router;
 module.exports.parseRawScan = parseRawScan;
+module.exports.resolveScanQuantity = resolveScanQuantity;
 module.exports.buildListQuery = buildListQuery;
 module.exports.testScanClause = testScanClause;
 module.exports.applyTestScanMode = applyTestScanMode;

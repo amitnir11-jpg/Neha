@@ -1089,12 +1089,11 @@ function normalizeScan(item = {}) {
   const upiNo = upiId;
   const syncKey = clean(item.syncKey || inventory.buildSyncKey({ dealerCode, upiId, partNumber, scanType, timestamp }));
   const requestedQuantity = firstValue(item, ['quantity', 'qty', 'count']);
-  const quantity = inventory.numberValue(
-    requestedQuantity !== undefined && requestedQuantity !== null && String(requestedQuantity).trim() !== ''
-      ? requestedQuantity
-      : parsed.qty,
-    1
-  );
+  const quantityResolution = inventory.resolveScanQuantity(parsed, requestedQuantity);
+  // A unique UPI represents one physical unit. Keep that rule for ordinary
+  // UPI scans while allowing an explicitly encoded quantity on fixed D labels.
+  const uniqueUpiScan = Boolean(upiId) && scanSource !== 'manual' && !parsed.quantityProvided;
+  const quantity = uniqueUpiScan ? 1 : quantityResolution.quantity;
   const idSource = scanSource === 'manual'
     ? { deviceId: item.deviceId }
     : { ...item, deviceId: item.deviceId };
@@ -1151,6 +1150,8 @@ function normalizeScan(item = {}) {
     binSelectionMode: upper(item.binSelectionMode),
     stockDeductedFromBin: upper(item.stockDeductedFromBin),
     quantity,
+    barcodeError: quantityResolution.error,
+    quantitySource: quantityResolution.encoded ? 'encoded' : requestedQuantity !== '' && requestedQuantity != null ? 'request' : 'default',
     mrp: undefined,
     mrpProvided: false,
     dlc: undefined,
@@ -1737,6 +1738,15 @@ async function saveNormalizedScan(scan, req, options = {}) {
       scanId: scan.uniqueScanId
     }));
   };
+  if (scan.barcodeError) {
+    logSync('scan rejected', {
+      reason: scan.barcodeError,
+      partNumber: scan.partNumber,
+      encodedQuantityProvided: Boolean(scan.parsed?.quantityProvided),
+      scanId: scan.uniqueScanId
+    });
+    return { status: 'failed', httpStatus: 400, scan, error: scan.barcodeError };
+  }
   logSync('server scan received', {
     deviceId: scan.deviceId,
     extractedPartNumber: scan.partNumber,

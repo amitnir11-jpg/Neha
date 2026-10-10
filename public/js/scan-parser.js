@@ -36,6 +36,30 @@
     return candidates.find((index) => masterSet.has(normalizePartToken(tokens[index]))) ?? candidates[0] ?? -1;
   }
 
+  function parseFixedDBarcode(raw, tokens) {
+    if (tokens[0]?.toUpperCase() !== 'D' || ![8, 11].includes(tokens.length)) return null;
+    const partIndex = tokens.length === 11 ? 3 : 4;
+    const partNumber = normalizePartToken(tokens[partIndex]);
+    const rawQuantity = clean(tokens[partIndex + 1]);
+    const upiId = normalizePartToken(tokens[partIndex - 1]);
+    const valid = isLikelyPartToken(partNumber) && isQuantityToken(rawQuantity);
+    return {
+      success: valid,
+      reason: valid ? '' : 'INVALID_QTY',
+      type: 'HERO_QR',
+      rawUpi: raw,
+      rawQr: raw,
+      normalizedQr: tokens.map((segment) => normalizePartToken(segment)).join('/'),
+      partNumber,
+      upiId,
+      uniqueId: upiId,
+      rawScan: raw,
+      fields: tokens,
+      quantity: valid ? Number.parseInt(rawQuantity, 10) : 0,
+      rawQuantity
+    };
+  }
+
   function parseScanValue(rawValue, masterLookup = []) {
     const raw = clean(rawValue);
     if (!raw) {
@@ -55,6 +79,11 @@
     }
 
     const tokens = raw.split('/').map((field) => clean(field));
+    const fixedDBarcode = parseFixedDBarcode(raw, tokens);
+    if (fixedDBarcode) {
+      if (fixedDBarcode.success) fixedDBarcode.type = 'UPI';
+      return fixedDBarcode;
+    }
     const skuLabel = parseHeroSkuLabel(raw);
     if (skuLabel) return { success: true, type: 'HERO_SKU_LABEL', rawUpi: null, rawQr: null,
       normalizedQr: normalizeDecodedValue(raw), rawScan: raw, fields: tokens, quantity: 1,

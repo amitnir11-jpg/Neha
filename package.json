@@ -1,6 +1,6 @@
 {
   "name": "daksh-inventory-v2",
-  "version": "2.0.45",
+  "version": "2.0.46",
   "description": "Advanced part inventory audit software with Railway PostgreSQL, Prisma, Socket.IO, Excel, PDF, email, backup, and device sync.",
   "main": "server.js",
   "scripts": {
@@ -13,7 +13,8 @@
     "offline": "node server.js",
     "start:api": "node server.js",
     "start:web": "node scripts/web-server.js",
-    "test": "npm run test:camera && npm run test:barcode && npm run test:reports && node scripts/master-price-logic-check.js && node scripts/stock-valuation-check.js && node scripts/category-alignment-check.js && node scripts/duplicate-upi-check.js && node scripts/part-bin-duplicate-check.js && node --test test/report-performance.test.js && node scripts/report-scan-quantity-check.js && node scripts/scan-movement-calculation-check.js && node scripts/cache-safety-check.js && node scripts/prisma-mirror-types-check.js && node scripts/mobile-scanner-regression-check.js && node scripts/dealer-stock-template-check.js && node scripts/local-parts-isolation-check.js && node --test test/network-discovery.test.js",
+    "test": "npm run test:camera && npm run test:qr-quantity && npm run test:barcode && npm run test:reports && node scripts/master-price-logic-check.js && node scripts/stock-valuation-check.js && node scripts/category-alignment-check.js && node scripts/duplicate-upi-check.js && node scripts/part-bin-duplicate-check.js && node --test test/report-performance.test.js && node scripts/report-scan-quantity-check.js && node scripts/scan-movement-calculation-check.js && node scripts/cache-safety-check.js && node scripts/prisma-mirror-types-check.js && node scripts/mobile-scanner-regression-check.js && node scripts/dealer-stock-template-check.js && node scripts/local-parts-isolation-check.js && node --test test/network-discovery.test.js",
+    "test:qr-quantity": "node --test test/upi-part-extraction.test.js",
     "test:barcode": "node --test test/barcode-save-performance.test.js test/manual-save-performance.test.js test/request-performance.test.js test/dashboard-scan-refresh.test.js test/dashboard-aggregation.test.js test/prisma-slow-query.test.js test/scan-history-outward.test.js test/scan-save-performance.test.js test/scan-outward-summary.test.js test/scan-flow-stock.test.js",
     "test:network": "node --test test/network-discovery.test.js",
     "test:scan:acceptance": "node scripts/scan-stock-acceptance.js",

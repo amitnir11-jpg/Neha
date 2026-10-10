@@ -2,9 +2,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
 const vm = require('node:vm');
-const { parseScanValue } = require('../utils/scanParser');
+const { parseScanValue, parseScannedCode } = require('../utils/scanParser');
 const { parseSlashDelimitedUpi } = require('../utils/inventoryValueEngine');
 const { normalizeScan } = require('../routes/sync');
+const productionFailures = require('./fixtures/qr-quantity-production-failures.json');
 
 const cases = [
   ['D/132/HE5B0199510/EBHPE5EQTWD4/44831KVH900S      /001/20170505125743/00', { part: '44831KVH900S', qty: 1, uniqueId: 'EBHPE5EQTWD4' }],
@@ -67,6 +68,46 @@ test('server scan normalization overrides a stale mobile part candidate with the
     assert.equal(normalized.partNumber, expected.part, `server must use QR part field from ${raw}`);
     assert.equal(normalized.upiId, expected.uniqueId, `server must retain QR UPI from ${raw}`);
     assert.equal(normalized.quantity, expected.qty, `server must retain quantity from ${raw}`);
+  }
+});
+
+test('all 24 production failure rows keep the encoded quantity through API normalization', () => {
+  assert.equal(productionFailures.length, 24);
+  for (const row of productionFailures) {
+    const parsed = parseScanValue(row.rawBarcode);
+    assert.equal(parsed.success, true, `Excel row ${row.sourceExcelRow} must parse`);
+    assert.equal(parsed.partNumber, row.partNumber, `Excel row ${row.sourceExcelRow} part must match`);
+    assert.equal(parsed.quantity, row.expectedQuantity, `Excel row ${row.sourceExcelRow} encoded quantity must match`);
+    const cameraDecoded = parseScannedCode(row.rawBarcode, 'QR_CODE');
+    assert.equal(cameraDecoded.success, true, `Excel row ${row.sourceExcelRow} must decode from camera input`);
+    assert.equal(cameraDecoded.partNumber, row.partNumber, `Excel row ${row.sourceExcelRow} camera part must match`);
+    assert.equal(cameraDecoded.quantity, row.expectedQuantity, `Excel row ${row.sourceExcelRow} camera quantity must match`);
+    const normalized = normalizeScan({
+      source: 'mobile',
+      rawBarcode: row.rawBarcode,
+      partNumber: row.partNumber,
+      quantity: row.reportedQuantity,
+      dealerCode: row.dealer,
+      binLocation: row.bin,
+      scanType: row.scanType
+    });
+    assert.equal(normalized.quantity, row.expectedQuantity, `Excel row ${row.sourceExcelRow} stale client quantity must not win`);
+    assert.equal(normalized.rawScanString, row.rawBarcode, `Excel row ${row.sourceExcelRow} must preserve original spaces`);
+    assert.equal(row.expectedQuantity - row.reportedQuantity, row.undercountQuantity);
+  }
+});
+
+test('invalid encoded quantities are rejected instead of falling back to a submitted quantity of one', () => {
+  for (const raw of [
+    'D/UPI123/UPISEQ/PART-100/000000/0000010.00/AAB/1/G/000/00',
+    'D/UPI123/UPISEQ/PART-100/BAD/0000010.00/AAB/1/G/000/00',
+    '{"partNumber":"PART-100","quantity":"bad"}',
+    'part=PART-100|qty=bad'
+  ]) {
+    const normalized = normalizeScan({ source: 'mobile', rawScan: raw, quantity: 1, dealerCode: 'D01' });
+    assert.equal(normalized.quantitySource, 'encoded');
+    assert.ok(normalized.barcodeError);
+    assert.ok(Number.isNaN(normalized.quantity));
   }
 });
 
