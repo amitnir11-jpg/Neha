@@ -195,7 +195,7 @@ function normalizeInput(payload = {}) {
     partNumber,
     normalizedPartNumber: normalizePartNumber(partNumber),
     partDescription: requiredText(payload.partDescription, 'Part Description', 500),
-    binLocation: optionalText(payload.binLocation, 120),
+    binLocation: requiredText(payload.binLocation, 'Bin Location', 120),
     category: optionalText(payload.category, 120),
     quantity: decimalValue(payload.quantity, 'Quantity', 3, { positive: true }),
     mrp: decimalValue(payload.mrp, 'MRP', 2),

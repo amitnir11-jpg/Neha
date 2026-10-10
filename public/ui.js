@@ -1723,6 +1723,7 @@
     $('[name="mrp"]', form).value = '0.00';
     $('[name="dlc"]', form).value = '0.00';
     $('[name="binLocation"]', form).value = selectedBin;
+    $('[name="partNumber"]', form).disabled = !selectedBin;
     if (dealerCode) setDealerSelectValue($('[name="dealerCode"]', form), dealerCode);
     syncLocalPartFormIdentity();
     const button = $('#localPartSaveBtn');
@@ -1732,7 +1733,7 @@
       message.className = 'form-message';
       message.textContent = '';
     }
-    if (options.focus === true) requestAnimationFrame(() => $('[name="partNumber"]', form)?.focus({ preventScroll: true }));
+    if (options.focus === true) requestAnimationFrame(() => (selectedBin ? $('[name="partNumber"]', form) : $('[name="binLocation"]', form))?.focus({ preventScroll: true }));
   }
 
   async function loadLocalPartCategories() {
@@ -12462,6 +12463,8 @@
     if (!localForm.elements.binLocation.value && form.elements.binLocation.value) {
       localForm.elements.binLocation.value = cleanDealerCode(form.elements.binLocation.value);
     }
+    const localPartNumber = localForm.elements.partNumber;
+    if (localPartNumber) localPartNumber.disabled = !clean(localForm.elements.binLocation.value);
     syncLocalPartFormIdentity();
     const scope = `${dealerCode}|${activeAuditIdForScope()}`;
     if (state.localPartScanScope !== scope) {
@@ -12470,7 +12473,7 @@
       if (filter) setDealerSelectValue(filter, dealerCode);
       if (dealerCode) loadLocalPartHistory({ page: 1 }).catch(error => toast(error.message, 'error'));
     }
-    if (options.focus !== false) requestAnimationFrame(() => $('[name="partNumber"]', localForm)?.focus({ preventScroll: true }));
+    if (options.focus !== false) requestAnimationFrame(() => (localPartNumber?.disabled ? localForm.elements.binLocation : localPartNumber)?.focus({ preventScroll: true }));
   }
 
   function updateLocalPartScanMode(form) {
@@ -12505,6 +12508,10 @@
     const dealerCode = form.elements.dealerCode.value;
     const localForm = $('#localPartForm');
     if (localForm.elements.dealerCode.value !== dealerCode) resetLocalPartForm({ dealerCode });
+    if (!localForm.elements.binLocation.value && form.elements.binLocation.value) {
+      localForm.elements.binLocation.value = cleanDealerCode(form.elements.binLocation.value);
+    }
+    if (localForm.elements.partNumber) localForm.elements.partNumber.disabled = !clean(localForm.elements.binLocation.value);
     setDealerSelectValue(localForm.elements.dealerCode, dealerCode);
     syncLocalPartFormIdentity();
     const scope = `${dealerCode}|${activeAuditIdForScope()}`;
@@ -13278,6 +13285,10 @@
     $('#localPartTab')?.addEventListener('click', () => setManualEntryTab('local'));
     $('#localPartClearBtn')?.addEventListener('click', () => resetLocalPartForm({ focus: true }));
     $('#localPartForm [name="dealerCode"]')?.addEventListener('change', syncLocalPartFormIdentity);
+    $('#localPartForm [name="binLocation"]')?.addEventListener('input', (event) => {
+      const partNumber = $('#localPartForm [name="partNumber"]');
+      if (partNumber) partNumber.disabled = !clean(event.target.value);
+    });
     $('#localPartForm [name="partNumber"]')?.addEventListener('blur', (event) => {
       event.target.value = clean(event.target.value).toUpperCase();
     });

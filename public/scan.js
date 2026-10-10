@@ -3859,6 +3859,7 @@
     if (state.manualEntryLocal && !byId('localPartBinLocation').value) {
       byId('localPartBinLocation').value = byId('manualBinLocation').value || loadActiveBin();
     }
+    byId('localPartNumber').disabled = state.manualEntryLocal && !clean(byId('localPartBinLocation').value);
     byId('manualSaveScanBtn').hidden = state.manualEntryLocal;
     byId('mobileSaveLocalPartBtn').hidden = !state.manualEntryLocal;
     if (!state.manualEntryLocal) renderModeFields();
@@ -4130,6 +4131,10 @@
     });
     byId('manualBinLocation').addEventListener('change', (event) => {
       if (state.mode === 'INWARD') void validateInwardBin(event.target.value, { createIfMissing: true });
+    });
+    byId('localPartBinLocation').addEventListener('input', (event) => {
+      event.target.value = upper(event.target.value);
+      byId('localPartNumber').disabled = !clean(event.target.value);
     });
     byId('activeBinLocation').addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;

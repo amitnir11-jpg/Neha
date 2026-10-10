@@ -343,7 +343,7 @@
               <input name="id" type="hidden">
               <label id="localPartDealerField" hidden>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
               <input name="referenceAuditId" id="localPartReferenceAuditId" type="hidden">
-              <input name="binLocation" type="hidden" required>
+              <label>Bin Location <span class="required-mark">*</span><input name="binLocation" autocomplete="off" maxlength="120" required placeholder="Enter bin location first"></label>
               <input name="enteredByName" id="localPartEnteredBy" type="hidden">
               <label>Part Number <span class="required-mark">*</span><input name="partNumber" autocomplete="off" maxlength="120" required placeholder="Enter part number"></label>
               <label>Part Description <span class="required-mark">*</span><input name="partDescription" maxlength="500" autocomplete="off" required placeholder="Enter part description"></label>

@@ -1046,7 +1046,7 @@ function selectRows(data, type) {
         scanByBinPart.set(key, scan);
       }
     });
-    return ledger.binBreakdown.map((stock) => {
+    const rows = ledger.binBreakdown.map((stock) => {
       const scan = scanByBinPart.get(`${stock.binLocation}::${stock.partNumber}`) || {};
       const mrp = Number(scan.currentCatalogueMRP || scanValueRow(scan).valuationMRP || stock.mrp || 0);
       const dlc = Number(scanDlc(scan) || stock.dlc || 0);
@@ -1079,7 +1079,45 @@ function selectRows(data, type) {
         lastScanTime: scan.timestamp || scan.createdAt || '',
         deviceId: scan.deviceId || ''
       };
-    }).sort((a, b) => String(a.bin).localeCompare(String(b.bin)) || String(a.partNumber).localeCompare(String(b.partNumber)));
+    });
+    (Array.isArray(data.localPartEntries) ? data.localPartEntries : []).forEach((entry) => {
+      const dealerCode = String(entry.dealerCode || '').trim().toUpperCase();
+      const bin = String(entry.binLocation || '').trim().toUpperCase();
+      const partNumber = String(entry.normalizedPartNumber || entry.partNumber || '').trim().toUpperCase();
+      if (!dealerCode || !bin || !partNumber) return;
+      const quantity = Number(entry.quantity || 0);
+      const row = rows.find((item) => String(item.dealerCode || '').toUpperCase() === dealerCode
+        && String(item.bin || '').toUpperCase() === bin
+        && String(item.partNumber || '').toUpperCase() === partNumber);
+      if (row) {
+        row.qty = Number(row.qty || 0) + quantity;
+        row.availableQty = row.qty;
+        row.physicalBinQty = Number(row.physicalBinQty || 0) + quantity;
+        row.actualAuditQty = row.qty;
+        row.totalDealerStockQty = row.qty;
+        row.finalInventoryValue = money(row.qty * Number(entry.dlc || row.dlc || 0));
+        row.totalDlcValue = row.finalInventoryValue;
+        row.mrpValueReference = money(row.qty * Number(entry.mrp || row.mrp || 0));
+        row.totalMrpValue = row.mrpValueReference;
+      } else {
+        const mrp = Number(entry.mrp || 0);
+        const dlc = Number(entry.dlc || 0);
+        rows.push({
+          dealerCode, bin, binLocation: bin, partNumber,
+          partDescription: entry.partDescription || '',
+          productCategory: canonicalizePartCategory(entry.category || ''),
+          mrp, dlc, qty: quantity, availableQty: quantity,
+          physicalBinQty: quantity, actualAuditQty: quantity,
+          fittedWorkshopQty: 0, totalDealerStockQty: quantity,
+          finalInventoryValue: money(quantity * dlc),
+          totalDlcValue: money(quantity * dlc),
+          mrpValueReference: money(quantity * mrp),
+          totalMrpValue: money(quantity * mrp),
+          scanType: 'LOCAL PART', fittedQty: 0, fittedStatus: 'Not Fitted'
+        });
+      }
+    });
+    return rows.sort((a, b) => String(a.bin).localeCompare(String(b.bin)) || String(a.partNumber).localeCompare(String(b.partNumber)));
   }
 
   if (type === 'user-dealer-wise') {
@@ -3493,6 +3531,15 @@ async function handleReport(req, res, type, title) {
     }
     const rowOriented = ['valid-scans', 'raw-upi'].includes(type);
     const data = await reportModule.buildReportData(rowOriented ? { ...query, ...rowReportScanWindow(query) } : query);
+    if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') {
+      const localQuery = {
+        ...query,
+        fromDate: query.fromDate || query.from,
+        toDate: query.toDate || query.to
+      };
+      const localParts = await localPartsRoute.buildReportData(localQuery, req.user);
+      data.localPartEntries = localParts.entries || [];
+    }
     const rows = selectRows(data, type);
     const totals = reportTotals(data.scans || [], { visibleRows: rows.length });
     if (query.format === 'excel') return sendExcel(res, title, rows, type, query);
