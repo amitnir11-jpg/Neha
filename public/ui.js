@@ -14218,7 +14218,14 @@
     });
     ['#closeDealerModalBtn', '#cancelDealerModalBtn'].forEach((selector) => $(selector)?.addEventListener('click', closeDealerModal));
     $('#dealerModal')?.addEventListener('click', (event) => { if (event.target.id === 'dealerModal') closeDealerModal(); });
-    $('#dealerModalForm')?.addEventListener('submit', async (event) => {
+    const dealerModalForm = $('#dealerModalForm');
+    const dealerModalSubmit = $('button[type="submit"]', dealerModalForm);
+    dealerModalSubmit?.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (!dealerModalForm.reportValidity()) return;
+      dealerModalForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    dealerModalForm?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
       const submitButton = $('button[type="submit"]', form);
@@ -14232,8 +14239,8 @@
         submitButton.textContent = mode === 'edit' ? 'Updating Dealer…' : 'Saving Dealer…';
       }
       if (messageNode) {
-        messageNode.hidden = true;
-        messageNode.textContent = '';
+        messageNode.hidden = false;
+        messageNode.textContent = mode === 'edit' ? 'Saving dealer and linked records…' : 'Saving dealer…';
         messageNode.className = 'form-message';
       }
       try {

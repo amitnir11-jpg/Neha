@@ -15,7 +15,7 @@ const { auditWorkflowStatus, getActiveAudit, publicAudit } = require('../utils/a
 const normalizer = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
-const { withDatabaseTransaction, Prisma } = require('../services/prisma');
+const { withDatabaseTransaction, Prisma, getPrismaClient } = require('../services/prisma');
 const registry = require('../models/registry');
 
 const router = express.Router();
@@ -27,6 +27,28 @@ let dealerListCache = { expiresAt: 0, dealers: [] };
 function invalidateMasterCaches(scope = {}, tags = ['master', 'catalogue', 'search', 'report', 'dashboard', 'dealer', 'bin', 'audit']) {
   dealerListCache = { expiresAt: 0, dealers: [] };
   invalidateCache({ tags, scope });
+}
+
+async function migrateDealerCodeReferences(fromCode, toCode) {
+  const modelsWithDealerCode = Prisma.dmmf.datamodel.models
+    .filter((model) => model.fields.some((field) => field.name === 'dealerCode'));
+  for (const schemaModel of modelsWithDealerCode) {
+    const model = registry[schemaModel.name];
+    if (!model || model === Dealer) continue;
+    const table = `"${String(model.collection.name).replace(/"/g, '""')}"`;
+    const hasData = schemaModel.fields.some((field) => field.name === 'data');
+    const hasUpdatedAt = schemaModel.fields.some((field) => field.name === 'updatedAt');
+    const dataAssignment = hasData
+      ? Prisma.sql`, "data" = jsonb_set(COALESCE("data"::jsonb, '{}'::jsonb), '{dealerCode}', to_jsonb(${toCode}::text), true)`
+      : Prisma.empty;
+    const updatedAtAssignment = hasUpdatedAt ? Prisma.sql`, "updatedAt" = NOW()` : Prisma.empty;
+    const dataFilter = hasData ? Prisma.sql` OR "data"->>'dealerCode' = ${fromCode}` : Prisma.empty;
+    await getPrismaClient().$executeRaw(Prisma.sql`
+      UPDATE ${Prisma.raw(table)}
+      SET "dealerCode" = ${toCode}${dataAssignment}${updatedAtAssignment}
+      WHERE "dealerCode" = ${fromCode}${dataFilter}
+    `);
+  }
 }
 
 async function cachedMasterResponse(res, namespace, query, builder, options = {}) {
@@ -907,13 +929,7 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
       }
 
       if (dealerCode !== previousDealerCode) {
-        const modelsWithDealerCode = Prisma.dmmf.datamodel.models
-          .filter((model) => model.fields.some((field) => field.name === 'dealerCode'))
-          .map((model) => registry[model.name])
-          .filter((model) => model && model !== Dealer);
-        for (const model of modelsWithDealerCode) {
-          await model.updateMany({ dealerCode: previousDealerCode }, { $set: { dealerCode } });
-        }
+        await migrateDealerCodeReferences(previousDealerCode, dealerCode);
       }
 
       return Dealer.findOneAndUpdate({ dealerCode: previousDealerCode }, {
