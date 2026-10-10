@@ -877,8 +877,6 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
     const dealerCode = normalizePart(req.params.dealerCode);
     const dealerName = String(req.body.dealerName || '').trim();
     if (!dealerCode || !dealerName) return res.status(400).json({ success: false, message: 'Dealer name is required' });
-    const dealer = await Dealer.findOne({ dealerCode });
-    if (!dealer) return res.status(404).json({ success: false, message: 'Dealer not found' });
 
     const auditUserId = String(req.body.auditUserId || '').trim();
     let auditUser = null;
@@ -889,20 +887,20 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
       }
     }
 
-    dealer.dealerName = dealerName;
-    dealer.brand = String(req.body.brand || '').trim();
-    dealer.location = String(req.body.location || '').trim();
-    dealer.active = req.body.active !== false;
-    if (auditUser) {
-      dealer.auditUserId = String(auditUser._id);
-      dealer.auditorUsername = auditUser.username || '';
-      dealer.auditorName = auditUser.name || auditUser.username || '';
-    } else {
-      dealer.auditUserId = '';
-      dealer.auditorUsername = '';
-      dealer.auditorName = '';
-    }
-    await dealer.save();
+    const brand = String(req.body.brand || '').trim();
+    const location = String(req.body.location || '').trim();
+    const active = req.body.active !== false && String(req.body.active).toLowerCase() !== 'false';
+    const dealer = await Dealer.findOneAndUpdate({ dealerCode }, {
+      dealerCode,
+      dealerName,
+      brand,
+      location,
+      active,
+      auditUserId: auditUser ? String(auditUser._id) : '',
+      auditorUsername: auditUser ? (auditUser.username || '') : '',
+      auditorName: auditUser ? (auditUser.name || auditUser.username || '') : ''
+    }, { new: true, runValidators: true });
+    if (!dealer) return res.status(404).json({ success: false, message: 'Dealer not found' });
     if (auditUser) {
       const access = await auth.userDealerAccessCodes(auditUser);
       if (!access.includes(dealerCode)) {
@@ -914,7 +912,7 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
 
     const activeAudit = await getActiveAudit({ dealerCode });
     if (activeAudit) {
-      const auditUpdate = { dealerName, brand: dealer.brand || '', location: dealer.location || '' };
+      const auditUpdate = { dealerName, brand, location };
       if (auditUser) {
         auditUpdate.auditUserId = String(auditUser._id);
         auditUpdate.auditorUsername = auditUser.username || '';
@@ -928,9 +926,9 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
     }
     req.io.emit('dealers:update');
     invalidateMasterCaches();
-    res.json({ success: true, dealer, activeAudit: activeAudit ? publicAudit({ ...activeAudit, dealerName, brand: dealer.brand || '', location: dealer.location || '', ...(auditUser ? { auditUserId: String(auditUser._id), auditorUsername: auditUser.username || '', auditorName: auditUser.name || auditUser.username || '' } : {}) }) : null });
+    res.json({ success: true, dealer, activeAudit: activeAudit ? publicAudit({ ...activeAudit, dealerName, brand, location, auditUserId: auditUser ? String(auditUser._id) : '', auditorUsername: auditUser ? (auditUser.username || '') : '', auditorName: auditUser ? (auditUser.name || auditUser.username || '') : '' }) : null });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
