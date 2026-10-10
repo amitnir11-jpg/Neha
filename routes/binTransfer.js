@@ -12,10 +12,11 @@ const { formatIstDateTime } = require('../utils/time');
 const { calculateInventoryLedger, resolveCurrentAudit } = require('../services/InventoryCalculationService');
 const { applyTransactionScanFilter } = require('./inventory');
 const { stockMovementType, stockMovementBin, activeStockTransaction } = require('../utils/stockQuantity');
-const { withDatabaseTransaction } = require('../services/prisma');
+const { withDatabaseTransaction, Prisma, getPrismaClient } = require('../services/prisma');
 const scanModification = require('../services/ScanModificationService');
 const { invalidateCache } = require('../utils/safeCache');
 const { firstNonBlankValue } = require('../utils/binTransfer');
+const { normalizePartNumber } = require('../utils/normalize');
 
 const router = express.Router();
 
@@ -153,7 +154,7 @@ async function groupedParts(dealerCode, fromBin = '', auditId = '', options = {}
   const records = await Inventory.find(filter)
     .select('dealerCode auditId uniqueScanId scanId syncKey clientScanId clientSyncKey qrFingerprint rawUpiHash normalizedPartNumber partNumber part partNo extractedPartNumber partDescription partName description productCategory category dlc currentCatalogueDLC mrp valuationMRP currentCatalogueMRP masterFound masterMatch isMasterMatched warnings remarks scanType movementType type qty quantity fittedQty fittedStatus status scanStatus syncStatus isDeleted deletedAt isReversed reversedAt isDuplicate isLocalPart binLocation bin currentBin stockDeductedFromBin sourceBin returnedToBin timestamp createdAt')
     .sort({ timestamp: -1, createdAt: -1 }).lean();
-  return calculateInventoryLedger(records, { scope }).binBreakdown
+  const scanParts = calculateInventoryLedger(records, { scope }).binBreakdown
     .filter((row) => Number(row.availableQty) > 0
       && (!sourceBins.length || sourceBins.includes(upper(row.binLocation)))
       && (!options.partNumber || normalizePart(row.partNumber).includes(normalizePart(options.partNumber))))
@@ -165,6 +166,42 @@ async function groupedParts(dealerCode, fromBin = '', auditId = '', options = {}
       currentBin: row.binLocation,
       dealerCode: scope.dealerCode
     }));
+  const localWhere = {
+    dealerCode: scope.dealerCode,
+    referenceAuditId: scope.auditId,
+    status: 'ACTIVE',
+    deletedAt: null,
+    binLocation: { not: '' }
+  };
+  if (sourceBins.length) localWhere.OR = sourceBins.map((bin) => ({ binLocation: { equals: bin, mode: 'insensitive' } }));
+  if (options.partNumber) localWhere.normalizedPartNumber = { contains: normalizePartNumber(options.partNumber) };
+  const localRows = await getPrismaClient().localPartEntry.findMany({ where: localWhere });
+  const byBinPart = new Map();
+  scanParts.forEach((part) => byBinPart.set(`${upper(part.currentBin)}::${normalizePart(part.partNumber)}`, { ...part }));
+  localRows.forEach((entry) => {
+    const bin = upper(entry.binLocation);
+    const partNumber = entry.partNumber || entry.normalizedPartNumber;
+    const key = `${bin}::${normalizePart(partNumber)}`;
+    const previous = byBinPart.get(key);
+    const quantity = Number(entry.quantity || 0);
+    if (previous) {
+      previous.availableQty = Number(previous.availableQty || 0) + quantity;
+      previous.quantity = previous.availableQty;
+      return;
+    }
+    byBinPart.set(key, publicPart({
+      partNumber,
+      partDescription: entry.partDescription,
+      category: entry.category,
+      availableQty: quantity,
+      currentBin: bin,
+      dealerCode: scope.dealerCode
+    }));
+  });
+  return Array.from(byBinPart.values())
+    .filter((part) => Number(part.availableQty) > 0
+      && (!sourceBins.length || sourceBins.includes(upper(part.currentBin)))
+      && (!options.partNumber || normalizePart(part.partNumber).includes(normalizePart(options.partNumber))));
 }
 
 function selectedLabelKey(item = {}) {
@@ -273,9 +310,19 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
   }).sort((a, b) => new Date(a.timestamp || a.createdAt || 0) - new Date(b.timestamp || b.createdAt || 0));
 
   const movableQty = records.reduce((sum, record) => sum + Number(record.qty || record.quantity || 0), 0);
-  if (requestedQty > movableQty) throw new Error('Qty cannot be greater than available qty');
+  const localPartDb = getPrismaClient();
+  const localRows = await localPartDb.localPartEntry.findMany({
+    where: {
+      dealerCode: upper(dealerCode), referenceAuditId: auditId || null,
+      normalizedPartNumber: normalizePartNumber(cleanPart), binLocation: { equals: upper(fromBin), mode: 'insensitive' },
+      status: 'ACTIVE', deletedAt: null
+    },
+    orderBy: { createdAt: 'asc' }
+  });
+  const localQty = localRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+  if (requestedQty > movableQty + localQty) throw new Error('Qty cannot be greater than available qty');
 
-  let remaining = requestedQty;
+  let remaining = Math.min(requestedQty, movableQty);
   let partDescription = '';
   const sourceScanIds = [];
   const movedScanIds = [];
@@ -328,6 +375,30 @@ async function transferPartInTransaction({ dealerCode, auditId = '', fromBin, to
       remaining = 0;
     }
   }
+
+  remaining = requestedQty - Math.min(requestedQty, movableQty);
+  for (const row of localRows) {
+    if (remaining <= 0) break;
+    const rowQty = Number(row.quantity || 0);
+    if (rowQty <= 0) continue;
+    partDescription = partDescription || row.partDescription || '';
+    const moveQty = Math.min(rowQty, remaining);
+    const localId = `LOCAL-${row.id}`;
+    sourceScanIds.push(localId);
+    if (moveQty >= rowQty) {
+      await localPartDb.localPartEntry.update({ where: { id: row.id }, data: { binLocation: upper(toBin) } });
+      movedScanIds.push(localId);
+    } else {
+      await localPartDb.localPartEntry.update({ where: { id: row.id }, data: { quantity: new Prisma.Decimal(rowQty - moveQty) } });
+      const { id, createdAt, updatedAt, ...localData } = row;
+      const movedRow = await localPartDb.localPartEntry.create({
+        data: { ...localData, binLocation: upper(toBin), quantity: new Prisma.Decimal(moveQty) }
+      });
+      movedScanIds.push(`LOCAL-${movedRow.id}`);
+    }
+    remaining -= moveQty;
+  }
+  if (remaining > 0) throw new Error('Available quantity changed. Refresh the parts list and try again.');
 
   const history = await BinTransferHistory.create({
     transferId: `BT-${Date.now()}-${randomUUID().slice(0, 8).toUpperCase()}`,
