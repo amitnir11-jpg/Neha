@@ -20,7 +20,7 @@ const socketScript = `window.fixtureSocket={connected:true,handlers:{},on(event,
 const server = http.createServer((req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
   if (pathname === '/socket.io/socket.io.js') { res.setHeader('Content-Type','text/javascript'); res.end(socketScript); return; }
-  if (pathname === '/config.js') { res.setHeader('Content-Type','text/javascript'); res.end('window.DAKSH_CONFIG={appVersion:"2.0.45"};'); return; }
+  if (pathname === '/config.js') { res.setHeader('Content-Type','text/javascript'); res.end('window.DAKSH_CONFIG={appVersion:"2.0.47"};'); return; }
   const file = path.resolve('public', pathname === '/dashboard' ? 'Daksh.html' : `.${pathname}`);
   if (!file.startsWith(path.resolve('public') + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); res.end(); return; }
   res.setHeader('Content-Type', ({'.css':'text/css','.js':'text/javascript','.html':'text/html','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon'})[path.extname(file)] || 'application/octet-stream');

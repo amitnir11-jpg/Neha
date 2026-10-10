@@ -8,6 +8,7 @@ const { parseRawScan, resolveScanQuantity } = require('../routes/inventory');
 const { normalizeScan } = require('../routes/sync');
 const productionFailures = require('./fixtures/qr-quantity-production-failures.json');
 const report12Failures = require('./fixtures/qr-quantity-report12-failures.json');
+const report14Failures = require('./fixtures/qr-quantity-report14-failures.json');
 
 const cases = [
   ['D/132/HE5B0199510/EBHPE5EQTWD4/44831KVH900S      /001/20170505125743/00', { part: '44831KVH900S', qty: 1, uniqueId: 'EBHPE5EQTWD4' }],
@@ -121,6 +122,35 @@ test('all 24 Raw UPI Report 12 rows parse their encoded quantities through scann
     });
     assert.equal(normalized.quantity, row.expectedQuantity, `Excel row ${row.sourceExcelRow} API quantity must match the QR`);
     assert.equal(normalized.rawScanString, row.rawBarcode, `Excel row ${row.sourceExcelRow} barcode padding must be preserved`);
+    assert.equal(row.expectedQuantity - row.reportedQuantity, row.difference);
+  }
+});
+
+test('all 20 Raw UPI Report 14 failures resolve to the quantity encoded in their original QR', () => {
+  assert.equal(report14Failures.length, 20);
+  for (const row of report14Failures) {
+    const parsed = parseScanValue(row.rawBarcode);
+    assert.equal(parsed.success, true, `Excel row ${row.sourceExcelRow} must parse`);
+    assert.equal(parsed.partNumber, row.partNumber, `Excel row ${row.sourceExcelRow} part must match`);
+    assert.equal(parsed.quantity, row.expectedQuantity, `Excel row ${row.sourceExcelRow} QR quantity must match`);
+
+    const normalized = normalizeScan({
+      source: row.source.toLowerCase(),
+      rawBarcode: row.rawBarcode,
+      partNumber: row.partNumber,
+      quantity: row.reportedQuantity,
+      dealerCode: row.dealer,
+      binLocation: row.bin,
+      scanType: row.scanType
+    });
+    assert.equal(normalized.quantity, row.expectedQuantity, `Excel row ${row.sourceExcelRow} API quantity must match`);
+    assert.equal(normalized.rawScanString, row.rawBarcode, `Excel row ${row.sourceExcelRow} must retain the original QR`);
+
+    const parsedForSave = parseRawScan(row.rawBarcode);
+    const resolved = resolveScanQuantity(parsedForSave, row.reportedQuantity);
+    assert.equal(parsedForSave.quantityProvided, true, `Excel row ${row.sourceExcelRow} must mark quantity encoded`);
+    assert.equal(resolved.quantity, row.expectedQuantity, `Excel row ${row.sourceExcelRow} save quantity must match the QR`);
+    assert.equal(resolved.encoded, true);
     assert.equal(row.expectedQuantity - row.reportedQuantity, row.difference);
   }
 });

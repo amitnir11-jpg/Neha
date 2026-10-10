@@ -1,6 +1,6 @@
 /* eslint-disable no-restricted-globals */
 (function () {
-  const APP_VERSION = '2.0.45';
+  const APP_VERSION = '2.0.47';
   const CACHE_NAME = `daksh-static-${APP_VERSION}`;
   const STATIC_EXTENSIONS = new Set([
     '.css',
