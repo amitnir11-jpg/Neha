@@ -16,6 +16,15 @@
     return Number.isInteger(qty) && qty >= 1 && qty <= 999999;
   }
 
+  function resolveDecodedQuantity(parsed, fallback = 1, verification = false) {
+    if (verification) return 1;
+    if (parsed?.type === 'UPI' || parsed?.type === 'HERO_QR') {
+      return parsed.success && Number.isInteger(parsed.quantity) && parsed.quantity > 0 ? parsed.quantity : 0;
+    }
+    const requested = Number(fallback);
+    return Number.isFinite(requested) && requested > 0 ? requested : 1;
+  }
+
   function isLikelyPartToken(value) {
     const token = normalizePartToken(value);
     if (!token || token === 'D' || /^\d+$/.test(token)) return false;
@@ -223,7 +232,7 @@
   }
 
   const cameraBarcodeFormats = ['QR_CODE', 'CODE_128', 'CODE_39', 'CODE_93', 'EAN_13', 'EAN_8', 'UPC_A', 'UPC_E', 'ITF', 'CODABAR', 'RSS_14', 'DATA_MATRIX', 'AZTEC', 'PDF_417'];
-  const api = { cameraBarcodeFormats, clean, normalizePartToken, parseScanValue, parseScannedCode, parseHeroSkuLabel, parseHeroLegacyOneDLabel, normalizeDecodedValue, normalizeBarcodeFormat, isQuantityToken, isLikelyPartToken, resolveHeroPartIndex };
+  const api = { cameraBarcodeFormats, clean, normalizePartToken, parseScanValue, parseScannedCode, parseHeroSkuLabel, parseHeroLegacyOneDLabel, normalizeDecodedValue, normalizeBarcodeFormat, isQuantityToken, isLikelyPartToken, resolveHeroPartIndex, resolveDecodedQuantity };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.DakshScanParser = api;
   global.scanParser = api;

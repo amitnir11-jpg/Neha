@@ -2454,6 +2454,10 @@
     const timestamp = nowIso();
     const scanType = currentScanType();
     const part = normalizeText(partNumber || parsePartCandidate(rawText));
+    const parsedRaw = window.DakshScanParser?.parseScanValue(rawText);
+    const scanQuantity = window.DakshScanParser?.resolveDecodedQuantity
+      ? window.DakshScanParser.resolveDecodedQuantity(parsedRaw, qty, scanType === 'VERIFICATION')
+      : (scanType === 'VERIFICATION' ? 1 : (Number(qty) > 0 ? Number(qty) : 1));
     const scanId = `SCAN-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`.toUpperCase();
     const uniqueLocalId = scanId;
     const sourceType = manual ? 'manual' : 'mobile';
@@ -2476,8 +2480,8 @@
       partNumber: part,
       normalizedPartNumber: part,
       part: part,
-      qty: scanType === 'VERIFICATION' || extractUpiIdFromText({ rawScanString: rawText }) ? 1 : Number(qty || 1) || 1,
-      quantity: scanType === 'VERIFICATION' || extractUpiIdFromText({ rawScanString: rawText }) ? 1 : Number(qty || 1) || 1,
+      qty: scanQuantity,
+      quantity: scanQuantity,
       mrp: undefined,
       dlc: undefined,
       manualMRP: undefined,
@@ -2502,7 +2506,7 @@
       type: scanType,
       movementType: scanType,
       activeInventory: scanType === 'INWARD',
-      remainingQty: scanType === 'INWARD' ? Math.abs(Number(qty || 1) || 1) : 0,
+      remainingQty: scanType === 'INWARD' ? scanQuantity : 0,
       scanSource: sourceType,
       source: { source: sourceType, scanSource: sourceType },
       entryMode: manual ? 'manual' : 'camera',

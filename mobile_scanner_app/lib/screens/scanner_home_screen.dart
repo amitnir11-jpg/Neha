@@ -736,6 +736,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
 
       var resolvedBin = currentBin;
       var resolvedPart = draft.partNumber;
+      var resolvedQuantity = draft.quantity;
       var metadata = <String, dynamic>{};
       final captureMode = _scanType;
       if (source != 'manual' && _online) {
@@ -744,6 +745,10 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
           final resolved = await api.resolveCode(draft.rawValue, draft.barcodeFormat, dealerCode: _dealerCode);
           final parsed = Map<String, dynamic>.from(resolved['parsedCode'] as Map? ?? {});
           resolvedPart = '${parsed['partNumber'] ?? ''}';
+          final decodedQuantity = parsed['quantity'];
+          if (parsed['type'] == 'HERO_QR' && decodedQuantity is num && decodedQuantity.toInt() > 0) {
+            resolvedQuantity = decodedQuantity.toInt();
+          }
           metadata['parsedCode'] = parsed;
           final master = Map<String, dynamic>.from(resolved['master'] as Map? ?? {});
           metadata['partDescription'] = master['partDescription'] ?? master['partName'] ?? '';
@@ -819,7 +824,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
         localId: localId,
         rawValue: draft.rawValue,
         partNumber: resolvedPart,
-        quantity: draft.quantity,
+        quantity: resolvedQuantity,
         binLocation: resolvedBin,
         scanType: _scanType,
         dealerCode: _dealerCode,

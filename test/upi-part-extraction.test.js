@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
 const vm = require('node:vm');
-const { parseScanValue, parseScannedCode } = require('../utils/scanParser');
+const { parseScanValue, parseScannedCode, resolveDecodedQuantity } = require('../utils/scanParser');
 const { parseSlashDelimitedUpi } = require('../utils/inventoryValueEngine');
 const { parseRawScan, resolveScanQuantity } = require('../routes/inventory');
 const { normalizeScan } = require('../routes/sync');
@@ -208,6 +208,18 @@ test('fixed D barcode quantity parsing handles 1, 2, 4, 5, 10, 20, 50 and 100 un
     assert.equal(normalized.quantity, quantity);
     assert.equal(normalized.rawScanString, raw);
   }
+});
+
+test('scan record quantity resolution preserves encoded UPI quantities over the unit-serial fallback', () => {
+  for (const quantity of [1, 2, 4, 5, 10, 20, 50, 100]) {
+    const raw = `D/TEST0000000001/TESTUPI000001/PARTNUMBER      /${String(quantity).padStart(6, '0')}/0000010.00/AAB/1/G/000/00`;
+    const parsed = parseScanValue(raw);
+    assert.equal(resolveDecodedQuantity(parsed, 1), quantity);
+  }
+  const invalid = parseScanValue('D/UPI123/UPISEQ/PART-100/BAD/0000010.00/AAB/1/G/000/00');
+  assert.equal(resolveDecodedQuantity(invalid, 1), 0, 'malformed encoded UPI quantity must not become one');
+  assert.equal(resolveDecodedQuantity(parseScanValue('PART-100'), 7), 7, 'manual/non-UPI quantity fallback remains supported');
+  assert.equal(resolveDecodedQuantity(parseScanValue('D/TEST0000000001/TESTUPI000001/PARTNUMBER      /000100/0000010.00/AAB/1/G/000/00'), 100, true), 1, 'verification scans remain unit valued');
 });
 
 test('invalid encoded quantities are rejected instead of falling back to a submitted quantity of one', () => {
