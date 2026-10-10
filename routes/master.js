@@ -15,6 +15,8 @@ const { auditWorkflowStatus, getActiveAudit, publicAudit } = require('../utils/a
 const normalizer = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
+const { withDatabaseTransaction, Prisma } = require('../services/prisma');
+const registry = require('../models/registry');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -874,9 +876,14 @@ router.post('/dealers', auth.requireAuth, auth.requireAdmin, async (req, res) =>
 
 router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
-    const dealerCode = normalizePart(req.params.dealerCode);
+    const previousDealerCode = normalizePart(req.params.dealerCode);
+    const dealerCode = normalizePart(req.body.dealerCode);
     const dealerName = String(req.body.dealerName || '').trim();
-    if (!dealerCode || !dealerName) return res.status(400).json({ success: false, message: 'Dealer name is required' });
+    if (!previousDealerCode || !dealerCode || !dealerName) return res.status(400).json({ success: false, message: 'Dealer code and dealer name are required' });
+
+    if (dealerCode !== previousDealerCode && await Dealer.findOne({ dealerCode })) {
+      return res.status(409).json({ success: false, message: 'Dealer code already exists' });
+    }
 
     const auditUserId = String(req.body.auditUserId || '').trim();
     let auditUser = null;
@@ -890,22 +897,44 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
     const brand = String(req.body.brand || '').trim();
     const location = String(req.body.location || '').trim();
     const active = req.body.active !== false && String(req.body.active).toLowerCase() !== 'false';
-    const dealer = await Dealer.findOneAndUpdate({ dealerCode }, {
-      dealerCode,
-      dealerName,
-      brand,
-      location,
-      active,
-      auditUserId: auditUser ? String(auditUser._id) : '',
-      auditorUsername: auditUser ? (auditUser.username || '') : '',
-      auditorName: auditUser ? (auditUser.name || auditUser.username || '') : ''
-    }, { new: true, runValidators: true });
+    const dealer = await withDatabaseTransaction(async () => {
+      const existing = await Dealer.findOne({ dealerCode: previousDealerCode });
+      if (!existing) return null;
+      if (dealerCode !== previousDealerCode && await Dealer.findOne({ dealerCode })) {
+        const conflict = new Error('Dealer code already exists');
+        conflict.status = 409;
+        throw conflict;
+      }
+
+      if (dealerCode !== previousDealerCode) {
+        const modelsWithDealerCode = Prisma.dmmf.datamodel.models
+          .filter((model) => model.fields.some((field) => field.name === 'dealerCode'))
+          .map((model) => registry[model.name])
+          .filter((model) => model && model !== Dealer);
+        for (const model of modelsWithDealerCode) {
+          await model.updateMany({ dealerCode: previousDealerCode }, { $set: { dealerCode } });
+        }
+      }
+
+      return Dealer.findOneAndUpdate({ dealerCode: previousDealerCode }, {
+        dealerCode,
+        dealerName,
+        brand,
+        location,
+        active,
+        auditUserId: auditUser ? String(auditUser._id) : '',
+        auditorUsername: auditUser ? (auditUser.username || '') : '',
+        auditorName: auditUser ? (auditUser.name || auditUser.username || '') : ''
+      }, { new: true, runValidators: true });
+    });
     if (!dealer) return res.status(404).json({ success: false, message: 'Dealer not found' });
     if (auditUser) {
       try {
         const access = await auth.userDealerAccessCodes(auditUser);
-        if (!access.includes(dealerCode)) {
-          auditUser.dealerAccess = [...new Set([...access, dealerCode])];
+        const updatedAccess = access.map((code) => code === previousDealerCode ? dealerCode : code);
+        if (!updatedAccess.includes(dealerCode)) updatedAccess.push(dealerCode);
+        if (JSON.stringify(access) !== JSON.stringify(updatedAccess)) {
+          auditUser.dealerAccess = [...new Set(updatedAccess)];
           await auditUser.save();
           await auth.syncUserDealerMappings(auditUser._id, auditUser.dealerAccess);
         }
@@ -942,7 +971,8 @@ router.put('/dealers/:dealerCode', auth.requireAuth, auth.requireAdmin, async (r
     res.json({ success: true, dealer: dealer.toObject ? dealer.toObject() : dealer });
   } catch (error) {
     console.error('[DEALER_EDIT] Update request failed:', error);
-    res.status(error.status || 500).json({ success: false, message: error.message });
+    const duplicateCode = error.code === 'P2002' || /unique constraint/i.test(error.message || '');
+    res.status(error.status || (duplicateCode ? 409 : 500)).json({ success: false, message: duplicateCode ? 'Dealer code conflicts with existing dealer data' : error.message });
   }
 });
 

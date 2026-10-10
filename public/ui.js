@@ -9388,7 +9388,8 @@
     $('#dealerModalMessage').textContent = '';
     $('[name="mode"]', form).value = 'edit';
     $('[name="dealerCode"]', form).value = dealer.dealerCode || '';
-    $('[name="dealerCode"]', form).readOnly = true;
+    $('[name="dealerCode"]', form).readOnly = false;
+    form.dataset.originalDealerCode = cleanDealerCode(dealer.dealerCode || '');
     $('[name="dealerName"]', form).value = dealer.dealerName || '';
     $('[name="brand"]', form).value = dealer.brand || '';
     $('[name="location"]', form).value = dealer.location || '';
@@ -9406,6 +9407,7 @@
     $('#dealerModalMessage').hidden = true;
     $('#dealerModalMessage').textContent = '';
     $('[name="mode"]', form).value = 'add';
+    delete form.dataset.originalDealerCode;
     $('[name="dealerCode"]', form).readOnly = false;
     $('[name="active"]', form).value = 'true';
     $('#dealerModalTitle').textContent = 'Add New Dealer';
@@ -14236,8 +14238,8 @@
       }
       try {
         if (mode === 'edit') {
-          const code = cleanDealerCode(payload.dealerCode);
-          await api(`/api/master/dealers/${encodeURIComponent(code)}`, { method: 'PUT', body: payload });
+          const originalCode = cleanDealerCode(form.dataset.originalDealerCode || payload.dealerCode);
+          await api(`/api/master/dealers/${encodeURIComponent(originalCode)}`, { method: 'PUT', body: payload });
           toast('Dealer details updated successfully.');
         } else {
           await api('/api/master/dealers', { method: 'POST', body: payload });
