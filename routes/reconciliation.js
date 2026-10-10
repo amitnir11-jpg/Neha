@@ -32,6 +32,9 @@ const POSITIVE_SCAN_TYPES = ['INWARD', 'AUDIT'];
 const NEGATIVE_SCAN_TYPES = ['OUTWARD', 'FITTED', 'DAMAGE'];
 const UPLOAD_ERROR_LIMIT = 250;
 const PREVIEW_LIMIT = 500;
+// DealerStock rows contain 34 bound columns. Keep each INSERT below PostgreSQL's
+// 32,767 bind-parameter limit while leaving room for schema additions.
+const DEALER_STOCK_UPLOAD_BATCH_SIZE = 500;
 const ACCEPTED_SCAN_STATUSES = ['ACCEPTED', 'SUPERVISOR_APPROVED', 'OUTWARD_DONE'];
 const MASTER_NOT_FOUND_LABEL = 'UNKNOWN PART / MASTER NOT FOUND';
 
@@ -652,8 +655,8 @@ async function saveDealerStockRecords(records = [], onProgress = () => {}) {
   const now = new Date();
   let insertedCount = 0;
   let updatedCount = 0;
-  for (let index = 0; index < records.length; index += 1000) {
-    const chunk = records.slice(index, index + 1000).map((record) => ({
+  for (let index = 0; index < records.length; index += DEALER_STOCK_UPLOAD_BATCH_SIZE) {
+    const chunk = records.slice(index, index + DEALER_STOCK_UPLOAD_BATCH_SIZE).map((record) => ({
       ...record,
       updatedAt: now
     }));
@@ -1643,10 +1646,13 @@ async function uploadDealerStockHandler(req, res) {
     }));
     const writeResult = await saveDealerStockRecords(records, (processed, total) => sendProgress('processing', processed, total));
     markPerf('bulkSaveMs');
-    const previewPrices = await getPricesFromPartMaster(records.map((record) => record.partNumber), scope.dealerCode);
-    const pricedStock = pricedDealerStockRows(records, previewPrices);
+    // Re-read the scoped stock after upsert so split uploads accumulate into
+    // the dealer's complete stock and the upload summary reflects that total.
+    const savedStock = await DealerStock.find({ dealerCode: scope.dealerCode, auditId: scope.auditId }).lean();
+    const previewPrices = await getPricesFromPartMaster(savedStock.map((record) => record.partNumber), scope.dealerCode);
+    const pricedStock = pricedDealerStockRows(savedStock, previewPrices);
     const preview = pricedStock.slice(0, 100);
-    const summary = dealerStockSummaryFromPublicRows(pricedStock, records.length, preview.length);
+    const summary = dealerStockSummaryFromPublicRows(pricedStock, savedStock.length, preview.length);
     markPerf('pricingAndSummaryMs');
     await emitReconciliationChanged(req, 'dealer-stock-uploaded', {
       dealerCode: scope.dealerCode,
@@ -1662,8 +1668,8 @@ async function uploadDealerStockHandler(req, res) {
         inputRows: rows.length,
         acceptedRows: records.length,
         skippedRows: parsed.skippedCount || 0,
-        batchSize: 1000,
-        batches: Math.ceil(records.length / 1000)
+        batchSize: DEALER_STOCK_UPLOAD_BATCH_SIZE,
+        batches: Math.ceil(records.length / DEALER_STOCK_UPLOAD_BATCH_SIZE)
       }));
     }
     return res.json({
@@ -1683,7 +1689,7 @@ async function uploadDealerStockHandler(req, res) {
       lineRange: summary.lineRange,
       preview,
       columns: parsed.columns,
-      message: `Saved ${records.length} row(s) for ${scope.dealerCode} / ${scope.auditId}. Line range ${summary.lineRange.text}. Skipped ${parsed.skippedCount || parsed.errorRows.length} row(s).`
+      message: `Saved ${records.length} row(s) for ${scope.dealerCode} / ${scope.auditId}. Dealer stock now contains ${savedStock.length} part line(s), total quantity ${summary.dmsStock}. Line range ${summary.lineRange.text}. Skipped ${parsed.skippedCount || parsed.errorRows.length} row(s).`
     });
   } catch (error) {
     return res.status(error.statusCode || 500).json({ success: false, message: error.message, reconciliation: error.reconciliation });
