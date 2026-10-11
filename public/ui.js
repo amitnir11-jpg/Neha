@@ -1239,6 +1239,7 @@
 
   function roleDisplayName(role) {
     const normalized = normalizeUiRole(role);
+    if (normalized === 'super_admin') return 'Super Admin';
     if (normalized === 'admin') return 'Administrator';
     if (normalized === 'mobile_user') return 'Mobile User';
     if (['audit_user', 'staff', 'scanner', 'supervisor', 'outward_counter'].includes(normalized)) return 'Audit User';
@@ -11965,7 +11966,7 @@
     form.elements.name.value = user.name || '';
     form.elements.username.value = user.username || '';
     form.elements.email.value = user.email || '';
-    form.elements.role.value = ['admin', 'audit_user', 'mobile_user'].includes(user.role) ? user.role : 'audit_user';
+    form.elements.role.value = ['super_admin', 'admin', 'audit_user', 'mobile_user'].includes(user.role) ? user.role : 'audit_user';
     renderDealerAccessOptions();
     setMultiSelectValues(form.elements.dealerAccess, user.dealerAccess || []);
     form.elements.password.value = '';
