@@ -2047,9 +2047,11 @@ function normalizeAuditPackSelection(payload = {}) {
   COMPLETE_AUDIT_PACK_EXTRA_OPTIONS.forEach((item) => {
     extras[item.key] = payload[item.key] === true || payload[item.key] === 'true' || payload[item.key] === 1 || payload[item.key] === '1';
   });
+  const auditId = clean(payload.auditId || payload.audit || '');
   return {
     dealerCode: selectedDealerCode(payload),
-    auditId: clean(payload.auditId || payload.audit || ''),
+    auditId,
+    _includeAllAudits: !auditId,
     fromDate: clean(payload.fromDate || payload.from || ''),
     toDate: clean(payload.toDate || payload.to || ''),
     includeSummary: payload.includeSummary !== false && payload.includeSummary !== 'false',
@@ -2559,7 +2561,9 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
   }
 
   let reportData = await reportModule.buildReportData(normalized);
-  const resolvedAuditId = clean(normalized.auditId || reportData.selectedAudit?.auditId || reportData.selectedDealer?.currentAuditId || (Array.isArray(reportData.audits) && reportData.audits[0] ? reportData.audits[0].auditId : ''));
+  const resolvedAuditId = normalized._includeAllAudits
+    ? ''
+    : clean(normalized.auditId || reportData.selectedAudit?.auditId || reportData.selectedDealer?.currentAuditId || (Array.isArray(reportData.audits) && reportData.audits[0] ? reportData.audits[0].auditId : ''));
   const resolvedQuery = resolvedAuditId
     ? { ...normalized, auditId: resolvedAuditId }
     : normalized;
@@ -2569,7 +2573,8 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     reconciliationRoute.buildMovementAnalysisReport(resolvedQuery)
   ]);
   const selectedDealer = reportData.selectedDealer || {};
-  const selectedAudit = reportData.selectedAudit
+  const selectedAudit = normalized._includeAllAudits ? {}
+    : reportData.selectedAudit
     || (resolvedQuery.auditId && Array.isArray(reportData.audits)
       ? reportData.audits.find((audit) => audit && clean(audit.auditId) === clean(resolvedQuery.auditId))
       : null)

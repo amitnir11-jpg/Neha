@@ -7198,9 +7198,11 @@
     const settings = syncAuditPackSettingsFromDom();
     delete payload.reportType;
     payload.dealerCode = auditPackDealerCode();
-    payload.auditId = String(payload.auditId || (state.activeAudit && state.activeAudit.auditId) || '').trim();
-    payload.fromDate = String(payload.fromDate || (state.activeAudit && (state.activeAudit.auditStartDate || state.activeAudit.auditDate)) || '').trim();
-    payload.toDate = String(payload.toDate || (state.activeAudit && (state.activeAudit.auditClosedDate || state.activeAudit.auditEndDate)) || '').trim();
+    // Keep the pack dealer-wide unless the user explicitly chose audit/date
+    // filters; an empty filter should match individual dealer-wide reports.
+    payload.auditId = String(payload.auditId || '').trim();
+    payload.fromDate = String(payload.fromDate || '').trim();
+    payload.toDate = String(payload.toDate || '').trim();
     payload.includeSummary = true;
     payload.reports = settings.reports;
     AUDIT_PACK_EXTRA_OPTIONS.forEach((item) => {

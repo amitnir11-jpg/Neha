@@ -147,6 +147,13 @@ async function sendCachedDownload(res, namespace, query, builder, options = {}) 
 
 async function resolveReportAuditQuery(query = {}) {
   const resolved = normalizeReportQuery(query);
+  // Complete audit packs without an explicitly selected audit should match
+  // dealer-wide report downloads instead of silently narrowing to the active
+  // audit, which may have no scans yet.
+  if (query._includeAllAudits === true || query._includeAllAudits === 'true') {
+    resolved.auditId = '';
+    return resolved;
+  }
   const auditHint = reportQueryValue(query.auditId || query.audit || resolved.auditId || '');
   if (auditHint && auditHint.toLowerCase() !== 'active') {
     resolved.auditId = auditHint;
