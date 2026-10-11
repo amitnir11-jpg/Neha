@@ -63,6 +63,15 @@
 #scanEditModal .scan-edit-reason-field {
   display: grid;
   gap: 7px;
+  grid-area: 3 / 1 / 4 / 2;
+}
+
+#scanEditModal .scan-edit-form > label.span-2 {
+  grid-area: 3 / 2 / 4 / 4 !important;
+}
+
+#scanEditModal .scan-edit-actions {
+  grid-row: 4;
 }
 
 #scanEditModal .scan-edit-reasons {
@@ -135,6 +144,9 @@
   body[class*="view-active-"] #scanEditModal .scan-edit-form > .span-2,
   body[class*="view-active-"] #scanEditModal .scan-edit-form > .span-3,
   body[class*="view-active-"] #scanEditModal .scan-edit-actions { grid-column: 1 / -1 !important; }
+  body[class*="view-active-"] #scanEditModal .scan-edit-form > .span-2 { grid-area: auto !important; }
+  body[class*="view-active-"] #scanEditModal .scan-edit-reason-field,
+  body[class*="view-active-"] #scanEditModal .scan-edit-actions { grid-row: auto; }
   #scanEditModal .scan-edit-reasons { max-height: min(312px, 36dvh); }
   #scanEditModal .scan-edit-form > label textarea { min-height: 112px; }
   #scanEditModal .scan-edit-actions { flex-wrap: wrap; }
