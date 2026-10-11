@@ -16,7 +16,7 @@
 
 #scanEditModal .scan-edit-form {
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-  align-items: start;
+  align-items: start !important;
   gap: 14px 16px;
   max-height: min(620px, calc(100dvh - 190px));
   overflow-x: hidden;
