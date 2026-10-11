@@ -12,6 +12,7 @@ const Bin = require('../models/Bin');
 const Device = require('../models/Device');
 const SyncLog = require('../models/SyncLog');
 const Audit = require('../models/Audit');
+const cleanup = require('../services/PermanentDealerCleanupService');
 const auth = require('../routes/auth');
 const { matchesFilter } = require('../models/prismaModel');
 
@@ -24,7 +25,7 @@ test('authenticated APIs isolate pending scans, mobile totals and bin modificati
   t.after(() => originals.forEach(([model, method, original]) => { model[method] = original; }));
   const rows = ['D-A', 'D-B'].map(dealerCode => ({ _id: dealerCode, dealerCode, partNumber: 'SAME-PART', binCode: 'SAME-BIN', syncStatus: 'pending', isSynced: false }));
   const query = value => ({ lean: async () => value, sort() { return this; }, limit() { return this; }, select() { return this; } });
-  replace(User, 'findOne', filter => query({ _id: filter._id, username: filter._id, role: filter._id === 'admin' ? 'admin' : 'mobile_user', dealerAccess: ['D-A'], approved: true, isActive: true }));
+  replace(User, 'findOne', filter => query({ _id: filter._id, username: filter._id, role: filter._id === 'super' ? 'super_admin' : filter._id === 'admin' ? 'admin' : 'mobile_user', dealerAccess: ['D-A'], approved: true, isActive: true }));
   replace(Mapping, 'find', () => query([{ dealerId: 'D-A' }]));
   replace(Dealer, 'findOne', filter => query(['D-A', 'D-B'].includes(filter.dealerCode) ? { _id: `primary-${filter.dealerCode}`, dealerCode: filter.dealerCode, active: true } : null));
   replace(Inventory, 'find', filter => query(rows.filter(row => matchesFilter(row, filter))));
@@ -49,6 +50,12 @@ test('authenticated APIs isolate pending scans, mobile totals and bin modificati
   app.use('/api/mobile', require('../routes/mobile'));
   app.use('/api/bin-master', require('../routes/binMaster'));
   app.use('/api/audit', require('../routes/audit'));
+  app.use('/api/admin-delete', require('../routes/adminDelete'));
+  const cleanupTargets = [];
+  replace(cleanup, 'previewDealer', async dealerId => {
+    cleanupTargets.push(dealerId);
+    return { dealer: { id: dealerId, dealerCode: 'D-B' }, counts: {} };
+  });
   const reports = express.Router();
   reports.post('/probe', auth.requireAuth, (req, res) => res.json({ dealer: req.authorizedDealer, filters: req.body.filters }));
   app.use('/api/reports', reports);
@@ -88,6 +95,16 @@ test('authenticated APIs isolate pending scans, mobile totals and bin modificati
   const data = await scoped.json();
   assert.equal(data.dealer.id, 'primary-D-A');
   assert.equal(data.filters.dealerCode, 'D-A');
+  const targetId = '77c08150-e409-4017-a772-7e3c0740f260';
+  // The cleanup target is an immutable ID, distinct from the header dealer.
+  const preview = await request('/api/admin-delete/permanent-cleanup/preview?dealerCode=D-A', 'super', 'POST', { dealerId: targetId });
+  assert.equal(preview.status, 200);
+  assert.equal((await preview.json()).dealer.id, targetId);
+  for (const role of ['admin', 'mobile']) {
+    const denied = await request('/api/admin-delete/permanent-cleanup/preview', role, 'POST', { dealerId: targetId });
+    assert.equal(denied.status, 403);
+  }
+  assert.deepEqual(cleanupTargets, [targetId], 'only a Super Admin reaches the cleanup preview');
 });
 
 test('late frontend responses are rejected after A to B to A switching', async () => {
@@ -128,6 +145,12 @@ test('queued request bodies keep their original dealer after the selection chang
   assert.equal(body.activeDealerId, 'D-A');
   assert.equal(new URL(path, 'http://localhost').searchParams.get('dealerCode'), 'D-A');
   assert.equal(context.withActiveDealerBody({ qty: 1 }).dealerCode, 'D-B');
+  const cleanupPath = '/api/admin-delete/permanent-cleanup/preview';
+  const cleanupBody = { dealerId: 'immutable-primary-key' };
+  assert.equal(context.withActiveDealerQuery(cleanupPath, cleanupBody), cleanupPath);
+  assert.equal(context.withActiveDealerBody(cleanupBody, cleanupPath), cleanupBody);
+  assert.equal(Object.hasOwn(cleanupBody, 'dealerCode'), false);
+  assert.equal(context.shouldAttachDealerScope('/api/admin-delete/permanent-cleanup/execute'), false);
 });
 
 test('scanner registration and heartbeat resolve only their original dealer audit', async () => {

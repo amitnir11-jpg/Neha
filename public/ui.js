@@ -888,6 +888,7 @@
     const dealerCode = activeDealerId();
     if (!dealerCode) return false;
     const url = new URL(String(path || ''), window.location.origin);
+    if (/^\/api\/admin-delete\/permanent-cleanup\/(?:dealers|preview|execute)$/.test(url.pathname)) return false;
     if (!url.pathname.startsWith('/api/')) return false;
     return !/^\/api\/auth\//.test(url.pathname) && url.pathname !== '/api/health';
   }
@@ -904,7 +905,8 @@
     return isAbsolute ? url.href : `${url.pathname}${url.search}${url.hash}`;
   }
 
-  function withActiveDealerBody(body) {
+  function withActiveDealerBody(body, path = '') {
+    if (/^\/api\/admin-delete\/permanent-cleanup\/(?:preview|execute)(?:\?|$)/.test(path)) return body;
     if (!body) return body;
     const dealerCode = activeDealerId();
     if (!dealerCode) return body;
@@ -950,7 +952,7 @@
       && /^\/api\/scans\/(?:dashboard(?:\/product-group-summary(?:\/details)?)?|live|recent)(?:\?|$)/.test(path);
     const { timeoutMs = dashboardRead ? 30000 : statusRead ? 15000 : 0, ...fetchOptions } = options;
     const headers = fetchOptions.headers ? { ...fetchOptions.headers } : {};
-    const requestBody = fetchOptions.body ? withActiveDealerBody(fetchOptions.body) : fetchOptions.body;
+    const requestBody = fetchOptions.body ? withActiveDealerBody(fetchOptions.body, path) : fetchOptions.body;
     const requestPath = apiUrl(withActiveDealerQuery(path, requestBody));
     const isFormData = requestBody instanceof FormData;
     if (!isFormData) headers['Content-Type'] = 'application/json';

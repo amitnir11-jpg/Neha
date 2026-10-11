@@ -460,7 +460,15 @@ async function activeDealersForUser(user = {}) {
   }));
 }
 
+function isPermanentCleanupRequest(req = {}) {
+  // These Super Admin routes resolve their target by immutable primary key.
+  // A dealerId here is not an alias for the dashboard's dealer code.
+  return String(req.baseUrl || '').toLowerCase() === '/api/admin-delete'
+    && ['/permanent-cleanup/dealers', '/permanent-cleanup/preview', '/permanent-cleanup/execute'].includes(String(req.path || '').toLowerCase());
+}
+
 function extractRequestDealer(req) {
+  if (isPermanentCleanupRequest(req)) return '';
   const firstScan = Array.isArray(req.body) ? req.body[0] : null;
   let scanIdentity = req.body?.scanIdentity;
   if (typeof scanIdentity === 'string') {
@@ -477,6 +485,7 @@ function extractRequestDealer(req) {
 }
 
 function extractRequestDealerCodes(req = {}) {
+  if (isPermanentCleanupRequest(req)) return [];
   const values = [];
   const add = (source) => {
     if (!source || typeof source !== 'object') return;
@@ -514,7 +523,7 @@ function isDealerScopedRequest(req) {
   if (base === '/api/master' && ['/dealers', '/filters', '/suggestions'].includes(path)) return false;
   if (base === '/api/dealers' && req.method === 'GET') return false;
   if (base === '/api/bin-transfer' && path === '/dealers' && req.method === 'GET') return false;
-  if (base === '/api/admin-delete' && (path === '/dealers' || path.startsWith('/permanent-cleanup/'))) return false;
+  if ((base === '/api/admin-delete' && path === '/dealers') || isPermanentCleanupRequest(req)) return false;
   if (base === '/api/mobile' && req.method === 'GET' && ['/dealers', '/config'].includes(path)) return false;
   return [
     '/api/scans',
