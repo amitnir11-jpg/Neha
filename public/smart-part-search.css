@@ -15,8 +15,8 @@
 .smart-part-option:focus-visible { outline: 2px solid #7ab3ff; outline-offset: -2px; }
 .smart-part-option strong { min-width: 0; color: #1d2f49; font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .smart-part-option span { min-width: 0; color: #53657c; font-size: 13px; font-weight: 400; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
-body[class*="view-active-"] .smart-part-menu .smart-part-option,
-body[data-page="dashboard"] .smart-part-menu .smart-part-option {
+body[class*="view-active-"] .smart-part-menu button.smart-part-option,
+body[data-page="dashboard"] .smart-part-menu button.smart-part-option {
   display: flex !important;
   flex-direction: column !important;
   align-items: flex-start !important;
@@ -43,14 +43,14 @@ body[data-page="dashboard"] .smart-part-menu .smart-part-option {
   white-space: normal !important;
   overflow-wrap: anywhere !important;
 }
-body[class*="view-active-"] .smart-part-menu .smart-part-option:last-child,
-body[data-page="dashboard"] .smart-part-menu .smart-part-option:last-child { border-bottom: 0 !important; }
-body[class*="view-active-"] .smart-part-menu .smart-part-option:hover,
-body[class*="view-active-"] .smart-part-menu .smart-part-option:focus-visible,
-body[class*="view-active-"] .smart-part-menu .smart-part-option[aria-selected="true"],
-body[data-page="dashboard"] .smart-part-menu .smart-part-option:hover,
-body[data-page="dashboard"] .smart-part-menu .smart-part-option:focus-visible,
-body[data-page="dashboard"] .smart-part-menu .smart-part-option[aria-selected="true"] {
+body[class*="view-active-"] .smart-part-menu button.smart-part-option:last-child,
+body[data-page="dashboard"] .smart-part-menu button.smart-part-option:last-child { border-bottom: 0 !important; }
+body[class*="view-active-"] .smart-part-menu button.smart-part-option:hover,
+body[class*="view-active-"] .smart-part-menu button.smart-part-option:focus-visible,
+body[class*="view-active-"] .smart-part-menu button.smart-part-option[aria-selected="true"],
+body[data-page="dashboard"] .smart-part-menu button.smart-part-option:hover,
+body[data-page="dashboard"] .smart-part-menu button.smart-part-option:focus-visible,
+body[data-page="dashboard"] .smart-part-menu button.smart-part-option[aria-selected="true"] {
   background: #e8f2ff !important;
   color: #1d2f49 !important;
 }
