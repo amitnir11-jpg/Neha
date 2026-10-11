@@ -202,51 +202,29 @@ function actorSnapshot(actor = {}) {
   };
 }
 
-function assertSecondFactor({ actor, currentPassword, backupReference, backupRestoreTested, reason, exactDealerCode, secondConfirmation, operation }, dealer) {
+function assertCleanupConfirmation({ actor, confirmed }) {
   if (!actorSnapshot(actor).actorUserId || String(actor.role || '').toLowerCase() !== 'super_admin') {
     throw new CleanupError('Only a Super Admin may permanently clean up a dealer.', 403, 'SUPER_ADMIN_REQUIRED');
   }
-  if (!String(currentPassword || '')) throw new CleanupError('Re-enter the Super Admin password to continue.', 401, 'FRESH_AUTH_REQUIRED');
-  if (cleanCode(exactDealerCode) !== cleanCode(dealer.dealerCode)) throw new CleanupError('Typed dealer code does not exactly match the selected dealer.', 400, 'DEALER_CODE_CONFIRMATION_MISMATCH');
-  const expectedPhrase = operationPhrase(dealer.dealerCode, operation);
-  if (String(secondConfirmation || '').trim() !== expectedPhrase) {
-    throw new CleanupError(`Type ${expectedPhrase} in the second confirmation field.`, 400, 'SECOND_CONFIRMATION_MISMATCH');
+  if (confirmed !== true) {
+    throw new CleanupError('Confirm that you want to permanently delete the selected dealer data.', 400, 'CLEANUP_CONFIRMATION_REQUIRED');
   }
-  if (!String(backupReference || '').trim() || String(backupReference).trim().length < 8) {
-    throw new CleanupError('Enter the reference for the verified, restorable database backup.', 400, 'BACKUP_REFERENCE_REQUIRED');
-  }
-  if (backupRestoreTested !== true) throw new CleanupError('Confirm that the backup was restored successfully in a test environment.', 400, 'BACKUP_RESTORE_TEST_REQUIRED');
-  if (String(reason || '').trim().length < 12) throw new CleanupError('Enter a cleanup reason of at least 12 characters.', 400, 'CLEANUP_REASON_REQUIRED');
-}
-
-function operationPhrase(dealerCode, operation) {
-  return `${operation === 'DELETE_DATA' ? 'DELETE DATA' : 'DELETE DEALER'} ${cleanCode(dealerCode)}`;
 }
 
 async function runDealerCleanup(input) {
   const {
     dealerId, previewToken, operation, actor, requestIp,
-    currentPassword, backupReference, backupRestoreTested,
-    reason, exactDealerCode, secondConfirmation
+    confirmed
   } = input || {};
   if (!['DELETE_DATA', 'DELETE_DEALER'].includes(operation)) throw new CleanupError('Unknown cleanup operation.', 400, 'CLEANUP_OPERATION_INVALID');
+  assertCleanupConfirmation({ actor, confirmed });
   const freshActor = await User.findOne({ _id: actor?.id || actor?._id }).lean();
-  if (!freshActor || String(freshActor.role || '').toLowerCase() !== 'super_admin' || freshActor.active === false || freshActor.isActive === false) {
+  if (!freshActor || String(freshActor.role || '').toLowerCase() !== 'super_admin' || freshActor.active === false || freshActor.isActive === false || freshActor.approved === false) {
     throw new CleanupError('An active Super Admin account is required.', 403, 'SUPER_ADMIN_REQUIRED');
   }
-  const passwordHashes = [freshActor.passwordHash, freshActor.password].filter(Boolean);
-  let passwordValid = false;
-  for (const stored of passwordHashes) {
-    if (/^\$2[aby]\$/.test(String(stored))) passwordValid = await require('bcryptjs').compare(String(currentPassword || ''), String(stored));
-    else passwordValid = String(currentPassword || '') === String(stored);
-    if (passwordValid) break;
-  }
-  if (!passwordValid) throw new CleanupError('Super Admin password was not verified.', 401, 'FRESH_AUTH_FAILED');
-
   const dealer = await findDealerById(dealerId);
   const dealerCode = cleanCode(dealer.dealerCode);
   const dealerName = String(dealer.dealerName || dealer.name || dealerCode);
-  assertSecondFactor({ actor, currentPassword, backupReference, backupRestoreTested, reason, exactDealerCode, secondConfirmation, operation }, { ...dealer, dealerCode });
   const initialCounts = await impactCounts(dealerCode);
   verifyPreviewToken(previewToken, { dealerId: dealer._id || dealer.id, dealerCode, counts: initialCounts });
   const jobId = crypto.randomUUID();
@@ -282,10 +260,10 @@ async function runDealerCleanup(input) {
           targetDealerName: dealerName,
           operation,
           status: 'RUNNING',
-          reason: String(reason).trim(),
+          reason: operation === 'DELETE_DEALER' ? 'Super Admin confirmed dealer and data deletion.' : 'Super Admin confirmed dealer data deletion.',
           ...actorInfo,
-          backupReference: String(backupReference).trim(),
-          backupRestoreTested: true,
+          backupReference: '',
+          backupRestoreTested: false,
           requestIp: String(requestIp || '').slice(0, 128),
           recordCounts: lockedCounts,
           startedAt: new Date()

@@ -1233,15 +1233,6 @@
                   <div class="actions span-3 admin-delete-actions"><button id="permanentCleanupPreviewBtn" class="btn primary" type="button">Preview Delete Impact</button><button id="permanentDeleteDataBtn" class="btn danger-soft" type="button" disabled>Delete All Dealer Data</button><button id="permanentDeleteDealerBtn" class="btn danger" type="button" disabled>Permanently Delete Dealer &amp; All Data</button></div>
                 </form>
                 <div id="permanentCleanupPreview" class="cleanup-impact muted">Select a dealer by database ID, then preview its impact.</div>
-                <div id="permanentCleanupConfirm" class="cleanup-confirm hidden">
-                  <label>Fresh Super Admin password<input id="permanentCleanupPassword" type="password" autocomplete="current-password"></label>
-                  <label>Type the exact dealer code<input id="permanentCleanupCode" autocomplete="off"></label>
-                  <label>Second confirmation<input id="permanentCleanupPhrase" placeholder="DELETE DEALER CODE" autocomplete="off"></label>
-                  <label>Verified backup reference<input id="permanentCleanupBackup" placeholder="Backup ID or immutable storage reference"></label>
-                  <label class="cleanup-checkbox"><input id="permanentCleanupBackupTested" type="checkbox"> I restored this backup successfully in a separate test environment</label>
-                  <label class="span-3">Reason<textarea id="permanentCleanupReason" rows="2" minlength="12" placeholder="Explain why this dealer is being permanently cleaned up"></textarea></label>
-                  <div class="actions span-3"><button id="permanentCleanupExecuteBtn" class="btn danger" type="button">Confirm Permanent Cleanup</button><button id="permanentCleanupCancelBtn" class="btn light" type="button">Cancel</button></div>
-                </div>
                 <div id="permanentCleanupResult" role="status" aria-live="polite"></div>
               </div>
             </section>
@@ -1795,7 +1786,7 @@
   <script src="/js/sku-bin-picker.js?v=20261008-sku-v10"></script>
   <link rel="stylesheet" href="/smart-part-search.css?v=20261009-scan-manual-tabs-v3">
   <script src="/js/smart-part-search.js?v=20261009-scan-manual-tabs-v3"></script>
-  <script src="/ui.js?v=20261011-cleanup-dealer-context-v6"></script>
+  <script src="/ui.js?v=20261011-single-cleanup-confirm-v7"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>
