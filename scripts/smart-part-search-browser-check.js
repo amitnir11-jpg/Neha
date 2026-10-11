@@ -58,7 +58,7 @@ async function main() {
       textAlign: getComputedStyle(element).textAlign,
       minHeight: getComputedStyle(element).minHeight
     }));
-    assert.ok(popupBox.width >= inputBox.width && popupBox.width <= 361, 'manual autocomplete stays compact beside the input');
+    assert.ok(popupBox.width >= inputBox.width && popupBox.width <= 345, 'manual autocomplete stays compact beside the input');
     assert.equal(optionStyle.display, 'flex');
     assert.equal(optionStyle.alignItems, 'flex-start');
     assert.equal(optionStyle.textAlign, 'left');

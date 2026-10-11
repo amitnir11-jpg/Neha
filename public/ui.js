@@ -5052,7 +5052,7 @@
             maxResults: 5,
             displayPrice: false,
             widthMode: input.id === 'barcodePartNumber' ? 'wide' : 'input',
-            maxWidth: input.id === 'barcodePartNumber' ? 360 : 560,
+            maxWidth: input.id === 'barcodePartNumber' ? 344 : 560,
             debounceMs: 180,
             noResultsMessage: 'No matching part found.',
             ...(input.id === 'barcodePartNumber' ? { avoidSelector: '#saveBarcodeManualScan' } : {})
