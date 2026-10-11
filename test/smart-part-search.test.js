@@ -75,7 +75,9 @@ test('web, mobile web and Android all call canonical suggestions with no stock s
   const scan = fs.readFileSync('public/scan.js', 'utf8');
   assert.match(scan, /widthMode: 'panel'/);
   const ui = fs.readFileSync('public/ui.js', 'utf8');
-  assert.match(ui, /widthMode: input\.closest\('#scanHistoryFilters'\) \? 'wide'/);
+  assert.match(ui, /widthMode: input\.id === 'barcodePartNumber' \? 'wide' : 'input'/);
+  assert.match(ui, /maxWidth: input\.id === 'barcodePartNumber' \? 360 : 560/);
+  assert.match(styles, /\.smart-part-menu \.smart-part-option/);
   const auth = fs.readFileSync('routes/auth.js', 'utf8');
   const scoped = auth.slice(auth.indexOf('function isDealerScopedRequest('), auth.indexOf('async function validateUserDealerAccess('));
   assert.ok(scoped.includes("'/api/parts'"));

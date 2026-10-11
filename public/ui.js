@@ -5051,9 +5051,8 @@
           ...(scanEntrySearch ? {
             maxResults: 5,
             displayPrice: false,
-            widthMode: input.closest('#scanHistoryFilters') ? 'wide' : input.id === 'barcodePartNumber' ? 'panel' : 'input',
-            widthSelector: input.id === 'barcodePartNumber' ? '#regularPartEntryTab' : undefined,
-            maxWidth: 560,
+            widthMode: input.id === 'barcodePartNumber' ? 'wide' : 'input',
+            maxWidth: input.id === 'barcodePartNumber' ? 360 : 560,
             debounceMs: 180,
             noResultsMessage: 'No matching part found.',
             ...(input.id === 'barcodePartNumber' ? { avoidSelector: '#saveBarcodeManualScan' } : {})

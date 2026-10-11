@@ -48,7 +48,21 @@ async function main() {
     const input = page.locator('#barcodePartNumber');
     await input.fill(session.stem.toLowerCase());
     await page.locator('.smart-part-menu:not([hidden]) [role="option"]').first().waitFor();
-    assert.equal(await page.locator('.smart-part-menu:not([hidden]) [role="option"]').count(), 5);
+    const manualMenu = page.locator('.smart-part-menu:not([hidden])');
+    assert.equal(await manualMenu.locator('[role="option"]').count(), 5);
+    const inputBox = await input.boundingBox();
+    const popupBox = await manualMenu.boundingBox();
+    const optionStyle = await manualMenu.locator('[role="option"]').first().evaluate(element => ({
+      display: getComputedStyle(element).display,
+      alignItems: getComputedStyle(element).alignItems,
+      textAlign: getComputedStyle(element).textAlign,
+      minHeight: getComputedStyle(element).minHeight
+    }));
+    assert.ok(popupBox.width >= inputBox.width && popupBox.width <= 361, 'manual autocomplete stays compact beside the input');
+    assert.equal(optionStyle.display, 'flex');
+    assert.equal(optionStyle.alignItems, 'flex-start');
+    assert.equal(optionStyle.textAlign, 'left');
+    assert.ok(Number.parseFloat(optionStyle.minHeight) >= 58, 'each suggestion has room for its part number and description');
     await page.locator('.smart-part-menu:not([hidden]) [role="option"]').first().click();
     assert.equal(await input.inputValue(), session.stem);
     assert.equal(await page.locator('#regularPartEntryTab [name="mrp"]').inputValue(), '770');
@@ -168,6 +182,18 @@ async function main() {
       assert.equal(await field.inputValue(), session.stem);
     }
     passed('actual Part Master, Bin Transfer, reconciliation and inventory report screens return the same selected part and MRP');
+
+    await admin.page.locator('.side-link[data-view="scan"]').click();
+    const historyPart = admin.page.locator('#scanHistoryFilters input[name="part"]');
+    await historyPart.waitFor({ state: 'visible' });
+    await historyPart.fill(session.stem);
+    const historyMenu = admin.page.locator('.smart-part-menu:not([hidden])');
+    await historyMenu.locator('[role="option"]').first().waitFor();
+    const historyInputBox = await historyPart.boundingBox();
+    const historyPopupBox = await historyMenu.boundingBox();
+    assert.ok(Math.abs(historyPopupBox.width - historyInputBox.width) < 2, 'history autocomplete matches its search field width');
+    await historyMenu.locator('[role="option"]').first().click();
+    passed('scan history autocomplete stays aligned to its search field');
 
     const mobileWho = session.users[1];
     const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
