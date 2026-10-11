@@ -271,6 +271,13 @@ function requireAdmin(req, res, next) {
   return next();
 }
 
+function requireSuperAdmin(req, res, next) {
+  if (!req.user || normalizeRole(req.user.role) !== 'super_admin') {
+    return res.status(403).json({ success: false, message: 'Super Admin permission required.' });
+  }
+  return next();
+}
+
 function sessionIsCurrent(claims = {}, user = {}) {
   if (!user.passwordChangedAt || !claims.iat) return true;
   return Number(claims.iat) >= Math.ceil(new Date(user.passwordChangedAt).getTime() / 1000);
@@ -1145,6 +1152,7 @@ module.exports = router;
 module.exports.optionalAuth = optionalAuth;
 module.exports.requireAuth = requireAuth;
 module.exports.requireAdmin = requireAdmin;
+module.exports.requireSuperAdmin = requireSuperAdmin;
 module.exports.matrixAccessError = matrixAccessError;
 module.exports.cleanPublicUser = cleanPublicUser;
 module.exports.createUserFromPayload = createUserFromPayload;

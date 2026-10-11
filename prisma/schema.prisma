@@ -401,6 +401,7 @@ model Dealer {
   key                  String?
   reportName           String?
   currentAuditId       String?
+  cleanupStatus        String?
   timestamp            DateTime?
   scanTime             DateTime?
   time                 DateTime?
@@ -1552,4 +1553,46 @@ model LicenseAdminAudit {
   @@index([licenseId, createdAt])
   @@index([adminSubject, createdAt])
   @@map("license_admin_audits")
+}
+
+// Durable tombstone blocks delayed offline sync from recreating deleted dealers.
+model DeletedDealer {
+  id               String   @id @default(cuid())
+  targetDealerId   String
+  targetDealerCode String   @unique
+  targetDealerName String?
+  deleteJobId      String   @unique
+  deletedAt        DateTime @default(now())
+
+  @@index([targetDealerId])
+  @@map("deleteddealers")
+}
+
+// Independent receipt deliberately survives deletion of the dealer account.
+model PermanentDealerCleanupAudit {
+  id                  String    @id @default(cuid())
+  jobId               String    @unique
+  targetDealerId      String
+  targetDealerCode    String
+  targetDealerName    String
+  operation           String
+  status              String
+  reason              String
+  actorUserId         String
+  actorUsername       String
+  actorName           String
+  actorRole           String
+  backupReference     String
+  backupRestoreTested Boolean
+  requestIp           String
+  recordCounts        Json      @default("{}")
+  errorMessage        String?
+  startedAt           DateTime  @default(now())
+  completedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([targetDealerId, startedAt])
+  @@index([status, startedAt])
+  @@map("permanentdealercleanupaudits")
 }

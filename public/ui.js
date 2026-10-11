@@ -3353,6 +3353,7 @@
     const roleName = roleDisplayName(state.user && state.user.role);
     const role = normalizeUiRole(state.user && state.user.role);
     const isAdmin = ['admin', 'super_admin'].includes(role);
+    const isSuperAdmin = role === 'super_admin';
     const limitedRole = ['audit_user', 'mobile_user'].includes(role);
     const canViewReports = state.user?.permissions?.canViewReports !== false;
     const loginName = userLoginName();
@@ -3384,6 +3385,7 @@
     const binSequenceTabButton = $('.bin-transfer-tab[data-bin-transfer-tab="binSequenceTab"]');
     if (binSequenceTabButton) binSequenceTabButton.classList.toggle('hidden', limitedRole);
     $$('.admin-only').forEach((node) => node.classList.toggle('hidden', !isAdmin));
+    $$('.super-admin-only').forEach((node) => node.classList.toggle('hidden', !isSuperAdmin));
     const operationalViews = new Set(['dashboard', 'scan', 'binTransfer', 'reports', 'master']);
     $$('.side-link').forEach((node) => {
       node.classList.toggle('hidden', limitedRole && !operationalViews.has(node.dataset.view));
@@ -11409,6 +11411,81 @@
     return payload;
   }
 
+  let permanentCleanupPreviewData = null;
+
+  async function loadPermanentCleanupDealers() {
+    const select = $('#permanentCleanupDealer');
+    if (!select) return;
+    const data = await api('/api/admin-delete/permanent-cleanup/dealers');
+    const selected = select.value;
+    select.innerHTML = '<option value="">Select exact dealer</option>' + (data.dealers || []).map((dealer) =>
+      `<option value="${escapeHtml(dealer.id)}" ${dealer.cleanupStatus === 'DELETING' ? 'disabled' : ''}>${escapeHtml(dealer.dealerCode)} — ${escapeHtml(dealer.dealerName)}${dealer.cleanupStatus === 'DELETING' ? ' (cleanup locked)' : ''}</option>`
+    ).join('');
+    if (Array.from(select.options).some((option) => option.value === selected)) select.value = selected;
+  }
+
+  function renderPermanentCleanupPreview(data) {
+    const target = $('#permanentCleanupPreview');
+    if (!target) return;
+    const { dealer, counts } = data;
+    const rows = Object.entries(counts.perTable || {}).filter(([key, value]) => Number(value) > 0 && !['uniqueParts', 'uniqueUpiRecords'].includes(key));
+    const labels = {
+      scanRecords: 'Scan and inventory rows', uniqueParts: 'Unique parts', uniqueUpiRecords: 'Unique UPI records',
+      upiRecords: 'Inventory rows with UPI', binsAndLocations: 'Bin locations and mappings', binTransfers: 'Bin transfers',
+      dealerStockUploads: 'Uploaded dealer stock rows', mobileSyncRecords: 'Mobile sync records', devices: 'Devices',
+      linkedUsers: 'Users with this dealer assignment', totalOperationalRecords: 'Total dealer records'
+    };
+    const summary = ['scanRecords', 'uniqueParts', 'uniqueUpiRecords', 'binsAndLocations', 'binTransfers', 'dealerStockUploads', 'mobileSyncRecords', 'devices', 'linkedUsers', 'totalOperationalRecords'];
+    target.classList.remove('muted');
+    target.innerHTML = `<h3>Impact for ${escapeHtml(dealer.dealerCode)} — ${escapeHtml(dealer.dealerName)}</h3><div class="cleanup-count-grid">${summary.map((key) => `<div><span>${escapeHtml(labels[key] || key)}</span><strong>${Number(counts[key] || 0).toLocaleString()}</strong></div>`).join('')}</div><details><summary>All scoped table counts (${rows.length} non-empty tables)</summary><ul>${rows.map(([key, value]) => `<li>${escapeHtml(key)}: ${Number(value).toLocaleString()}</li>`).join('') || '<li>No operational rows found.</li>'}</ul></details><p>Shared Part Master rows are excluded. User accounts are retained; only this dealer assignment is removed.</p>`;
+  }
+
+  async function previewPermanentCleanup() {
+    const dealerId = $('#permanentCleanupDealer')?.value;
+    if (!dealerId) throw new Error('Select a dealer first.');
+    const data = await api('/api/admin-delete/permanent-cleanup/preview', { method: 'POST', body: { dealerId } });
+    permanentCleanupPreviewData = data;
+    renderPermanentCleanupPreview(data);
+    $('#permanentDeleteDataBtn').disabled = false;
+    $('#permanentDeleteDealerBtn').disabled = false;
+    $('#permanentCleanupConfirm').classList.add('hidden');
+    setText('permanentCleanupResult', '');
+  }
+
+  async function executePermanentCleanup(operation) {
+    if (!permanentCleanupPreviewData) throw new Error('Preview the dealer impact again before cleanup.');
+    const { dealer, previewToken } = permanentCleanupPreviewData;
+    const permanent = operation === 'DELETE_DEALER';
+    if (!(await confirmDeleteAction(`${permanent ? 'Permanently delete the dealer account and' : 'Permanently delete'} all ${Number(permanentCleanupPreviewData.counts.totalOperationalRecords || 0).toLocaleString()} scoped records for ${dealer.dealerCode} — ${dealer.dealerName}?`))) return;
+    const payload = {
+      dealerId: dealer.id, previewToken, operation,
+      currentPassword: $('#permanentCleanupPassword').value,
+      exactDealerCode: $('#permanentCleanupCode').value,
+      secondConfirmation: $('#permanentCleanupPhrase').value,
+      backupReference: $('#permanentCleanupBackup').value,
+      backupRestoreTested: $('#permanentCleanupBackupTested').checked,
+      reason: $('#permanentCleanupReason').value
+    };
+    const button = $('#permanentCleanupExecuteBtn');
+    button.disabled = true;
+    button.textContent = 'Cleanup running…';
+    try {
+      const result = await api('/api/admin-delete/permanent-cleanup/execute', { method: 'POST', body: payload });
+      setText('permanentCleanupResult', `Cleanup succeeded. Job ${result.jobId}. Removed ${Object.values(result.deletedCounts || {}).reduce((sum, n) => sum + Number(n || 0), 0).toLocaleString()} rows. ${result.dealerDeleted ? 'Dealer account retired.' : 'Dealer account retained and unlocked.'}`);
+      permanentCleanupPreviewData = null;
+      $('#permanentCleanupConfirm').classList.add('hidden');
+      $('#permanentDeleteDataBtn').disabled = true;
+      $('#permanentDeleteDealerBtn').disabled = true;
+      if (result.dealerDeleted) $('#permanentCleanupDealer').value = '';
+      await loadPermanentCleanupDealers();
+      await loadDealers({ force: true });
+      await refreshAfterDelete();
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Confirm Permanent Cleanup';
+    }
+  }
+
   function selectedAdminDeleteIds() {
     return Array.from(state.adminDeleteSelectedIds || []).filter(Boolean);
   }
@@ -11613,6 +11690,8 @@
     $$('.admin-delete-tab').forEach((button) => button.classList.toggle('active', button.dataset.adminDeleteTab === tab));
     $('#dealerDeletePanel')?.classList.toggle('active', tab === 'dealer');
     $('#locationDeletePanel')?.classList.toggle('active', tab === 'location');
+    $('#permanentCleanupPanel')?.classList.toggle('active', tab === 'permanent');
+    if (tab === 'permanent') loadPermanentCleanupDealers().catch((error) => toast(error.message, 'error'));
   }
 
   function setMultiSelectValues(select, values = []) {
@@ -14469,6 +14548,29 @@
       await loadScanHistory();
     });
     $$('.admin-delete-tab').forEach((button) => button.addEventListener('click', () => switchAdminDeleteTab(button.dataset.adminDeleteTab)));
+    $('#permanentCleanupDealer')?.addEventListener('change', () => {
+      permanentCleanupPreviewData = null;
+      $('#permanentCleanupPreview').innerHTML = 'Preview the selected dealer to calculate affected record counts.';
+      $('#permanentCleanupPreview').classList.add('muted');
+      $('#permanentCleanupConfirm').classList.add('hidden');
+      $('#permanentDeleteDataBtn').disabled = true;
+      $('#permanentDeleteDealerBtn').disabled = true;
+    });
+    $('#permanentCleanupPreviewBtn')?.addEventListener('click', () => previewPermanentCleanup().catch((error) => toast(error.message, 'error')));
+    $('#permanentDeleteDataBtn')?.addEventListener('click', () => {
+      $('#permanentCleanupConfirm').classList.remove('hidden');
+      $('#permanentCleanupConfirm').dataset.operation = 'DELETE_DATA';
+      $('#permanentCleanupPhrase').placeholder = 'DELETE DATA ' + (permanentCleanupPreviewData?.dealer?.dealerCode || 'CODE');
+      $('#permanentCleanupPhrase').value = '';
+    });
+    $('#permanentDeleteDealerBtn')?.addEventListener('click', () => {
+      $('#permanentCleanupConfirm').classList.remove('hidden');
+      $('#permanentCleanupConfirm').dataset.operation = 'DELETE_DEALER';
+      $('#permanentCleanupPhrase').placeholder = 'DELETE DEALER ' + (permanentCleanupPreviewData?.dealer?.dealerCode || 'CODE');
+      $('#permanentCleanupPhrase').value = '';
+    });
+    $('#permanentCleanupExecuteBtn')?.addEventListener('click', () => executePermanentCleanup($('#permanentCleanupConfirm').dataset.operation).catch((error) => toast(error.message, 'error')));
+    $('#permanentCleanupCancelBtn')?.addEventListener('click', () => $('#permanentCleanupConfirm').classList.add('hidden'));
     $('#dealerDeleteDealer')?.addEventListener('change', () => {
       state.adminDeleteRows = [];
       state.adminDeleteSelectedIds = new Set();

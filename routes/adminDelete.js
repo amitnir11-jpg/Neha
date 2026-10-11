@@ -10,8 +10,48 @@ const auth = require('./auth');
 const inventory = require('./inventory');
 const scanModification = require('../services/ScanModificationService');
 const { normalizePartNumber } = require('../utils/normalize');
+const permanentCleanup = require('../services/PermanentDealerCleanupService');
+const { getPrismaClient } = require('../services/prisma');
 
 const router = express.Router();
+
+function sendCleanupError(res, error) {
+  const status = Number(error.status) || 500;
+  res.status(status).json({ success: false, code: error.code || 'CLEANUP_FAILED', message: error.message || 'Dealer cleanup failed.' });
+}
+
+router.get('/permanent-cleanup/dealers', auth.requireAuth, auth.requireSuperAdmin, async (_req, res) => {
+  try {
+    const dealers = await getPrismaClient().dealer.findMany({
+      orderBy: { dealerCode: 'asc' },
+      select: { id: true, data: true, dealerCode: true, cleanupStatus: true }
+    });
+    res.json({ success: true, dealers: dealers.map((dealer) => ({
+      id: String(dealer.id), dealerCode: dealer.dealerCode || '',
+      dealerName: dealer.data?.dealerName || dealer.data?.name || dealer.dealerCode || '',
+      cleanupStatus: dealer.cleanupStatus || null
+    })) });
+  } catch (error) { sendCleanupError(res, error); }
+});
+
+router.post('/permanent-cleanup/preview', auth.requireAuth, auth.requireSuperAdmin, async (req, res) => {
+  try {
+    res.json({ success: true, ...(await permanentCleanup.previewDealer(req.body?.dealerId)) });
+  } catch (error) { sendCleanupError(res, error); }
+});
+
+router.post('/permanent-cleanup/execute', auth.requireAuth, auth.requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await permanentCleanup.runDealerCleanup({
+      ...req.body,
+      actor: req.user,
+      requestIp: req.ip
+    });
+    req.io?.emit('scan:deleted');
+    req.io?.emit('stats:update');
+    res.json({ success: true, ...result });
+  } catch (error) { sendCleanupError(res, error); }
+});
 
 function dealerCode(value) {
   return inventory.normalizeDealerCode(value);

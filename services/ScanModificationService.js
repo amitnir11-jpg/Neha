@@ -169,9 +169,15 @@ async function findInwardDependencies(scan, rowsBeingDeleted = []) {
   });
   const scanId = scanIdentifier(scan);
   const relatedTransfers = transfers.filter((transfer) => {
-    const time = new Date(transfer.transferredAt || transfer.timestamp || transfer.createdAt || 0).getTime();
-    const linked = [transfer.sourceScanIds, transfer.movedScanIds].some((ids) => Array.isArray(ids) && ids.map(clean).includes(scanId));
-    return time >= scanTime && (linked || clean(transfer.fromBin).toUpperCase() === bin || clean(transfer.toBin).toUpperCase() === bin);
+    // Generic PostgreSQL-backed log models keep transfer-only fields in `data`;
+    // inspect that payload as well as legacy flattened Mongo-style rows.
+    const details = transfer.data && typeof transfer.data === 'object' ? transfer.data : {};
+    const time = new Date(transfer.transferredAt || details.transferredAt || transfer.timestamp || transfer.createdAt || 0).getTime();
+    const linked = [transfer.sourceScanIds, transfer.movedScanIds, details.sourceScanIds, details.movedScanIds]
+      .some((ids) => Array.isArray(ids) && ids.map(clean).includes(scanId));
+    const fromBin = transfer.fromBin || details.fromBin;
+    const toBin = transfer.toBin || details.toBin;
+    return time >= scanTime && (linked || clean(fromBin).toUpperCase() === bin || clean(toBin).toUpperCase() === bin);
   });
   return [
     ...laterMovements.map((row) => `${stockMovementType(row)} scan ${scanIdentifier(row)}`),
