@@ -12,6 +12,13 @@ async function ensureActiveDealerBin(dealerCode, binLocation, dependencies = {})
   const binCode = normalizeBin(binLocation);
   if (!dealer || !binCode) throw new Error('Dealer code and bin location are required.');
 
+  // Most scan sessions repeatedly confirm a bin that is already active. Avoid
+  // opening a serializable transaction for that read-only hot path.
+  const current = await BinModel.findOne({ dealerCode: dealer, binCode }).lean();
+  if (current?.active !== false && current) {
+    return { bin: current, created: false, reactivated: false };
+  }
+
   try {
     return await runTransaction(async () => {
       let bin = await BinModel.findOne({ dealerCode: dealer, binCode }).lean();

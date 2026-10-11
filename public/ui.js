@@ -149,6 +149,7 @@
     scanRefreshTimer: null,
     scanRefreshInFlight: false,
     scanRefreshQueued: false,
+    scanBinValidationRequests: new Map(),
     deviceRefreshTimer: null,
     lastRealtimeAt: 0,
     dashboardFallbackBusy: false,
@@ -12533,6 +12534,19 @@
     if (requestId === state.partSummaryRequestId && dealerCode === scanStockDealerCode()) renderPartStockSummary(summary);
   }
 
+  function ensureScanBinReady(dealerCode, binLocation) {
+    const key = `${dealerCode}|${cleanDealerCode(binLocation)}`;
+    const pending = state.scanBinValidationRequests.get(key);
+    if (pending) return pending;
+    const request = api('/api/scans/set-bin', { method: 'POST', body: {
+      dealerCode, auditId: activeAuditIdForScope(), binLocation: cleanDealerCode(binLocation)
+    } }).finally(() => {
+      if (state.scanBinValidationRequests.get(key) === request) state.scanBinValidationRequests.delete(key);
+    });
+    state.scanBinValidationRequests.set(key, request);
+    return request;
+  }
+
   async function validateManualSourceBin(form = $('#manualScanForm')) {
     if (!form || form.elements.type.value !== 'INWARD') return;
     const binLocation = cleanDealerCode(form.elements.bin.value);
@@ -12543,9 +12557,7 @@
     updateScanTypeFields(form);
     if (!binLocation || !dealerCode) return;
     try {
-      const result = await api('/api/scans/set-bin', { method: 'POST', body: {
-        dealerCode, auditId: activeAuditIdForScope(), binLocation
-      } });
+      const result = await ensureScanBinReady(dealerCode, binLocation);
       if (`${form.elements.dealerCode.value}|${cleanDealerCode(form.elements.bin.value)}` !== key) return;
       state.validatedManualBin = result.valid ? key : '';
       updateScanTypeFields(form);
@@ -12564,9 +12576,7 @@
     updateBarcodeWorkspace(form);
     if (!binLocation || !dealerCode) return;
     try {
-      const result = await api('/api/scans/set-bin', { method: 'POST', body: {
-        dealerCode, auditId: activeAuditIdForScope(), binLocation
-      } });
+      const result = await ensureScanBinReady(dealerCode, binLocation);
       if (`${form.elements.dealerCode.value}|${cleanDealerCode(form.elements.binLocation.value)}` !== key) return;
       state.validatedBarcodeBin = result.valid ? key : '';
       updateBarcodeWorkspace(form);
