@@ -24,7 +24,7 @@ test('stalled decoder startup times out and successful startup cancels its timer
   assert.equal(timers.size, 0);
 });
 
-test('repeated decoder exceptions trigger recovery while undecodable frames keep scanning', async () => {
+test('decoder falls back after empty frames and recovers from repeated exceptions', async () => {
   for (const fails of [false, true]) {
     const scheduled = [];
     let recoveries = 0;
@@ -36,17 +36,24 @@ test('repeated decoder exceptions trigger recovery while undecodable frames keep
         return [];
       } }),
       document: { createElement: () => ({ getContext: () => ({ drawImage() {}, getImageData: () => ({}) }) }) },
-      performance: { now: () => 0 }, console: { warn() {} }, handleDecodeResult() {},
+      performance: { now: () => 0 }, console: { warn() {}, info() {} }, handleDecodeResult() {},
       setTimeout: callback => { scheduled.push(callback); return scheduled.length; } });
     vm.runInContext(functionSource('  async function startWasmDetection(', '  async function enableCameraFocus('), context);
     await context.startWasmDetection({ srcObject: {}, readyState: 2, videoWidth: 1280, videoHeight: 720 }, 1, async () => { recoveries++; });
     await new Promise(resolve => setImmediate(resolve));
-    for (let frame = 0; frame < 2; frame++) {
+    for (let frame = 0; frame < (fails ? 2 : 8); frame++) {
       await scheduled.shift()();
     }
-    assert.equal(reads, 3);
-    assert.equal(recoveries, fails ? 1 : 0);
-    assert.equal(scheduled.length, fails ? 0 : 1);
+    assert.equal(reads, fails ? 3 : 9);
+    assert.equal(recoveries, 1);
+    if (!fails) {
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(recoveries, 1);
+      assert.equal(scheduled.length, 1, 'primary decoder keeps assisting after fallback starts');
+      await scheduled.shift()();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(recoveries, 1, 'fallback starts only once');
+    } else assert.equal(scheduled.length, 0);
   }
 });
 

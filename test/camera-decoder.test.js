@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const reader = require('zxing-wasm/reader');
+const QRCode = require('qrcode');
+const vm = require('node:vm');
 
 // Generated barcode fixtures test symbologies, not the unidentified barcode in
 // the user's photograph. They contain deliberately known test values.
@@ -20,4 +22,20 @@ test('on-device WASM decoder reads QR and all eight required 1D symbologies', as
       { formats: ['AllReadable'], tryHarder: true, maxNumberOfSymbols: 1 });
     assert.equal(decoded[0]?.text, expected, `actual decoded ${name} raw value`);
   }
+});
+
+test('WASM camera decoder reads the exact spaced Hero QR and fields remain intact', async () => {
+  await reader.prepareZXingModule({ overrides: { wasmBinary: fs.readFileSync(path.resolve('node_modules/zxing-wasm/dist/reader/zxing_reader.wasm')) }, fireImmediately: true });
+  const raw = 'D/GHCG0000926915/HCGLDYY6KJ2T/20K1120S          /000001/0000920.00/ABL/1/G/000/0';
+  const image = await QRCode.toBuffer(raw, { width: 620, margin: 4, color: { dark: '#ffffff', light: '#000000' } });
+  const decoded = await reader.readBarcodes(image, { formats: ['AllReadable'], tryHarder: true, tryRotate: true, tryInvert: true, tryDownscale: true, tryDenoise: true, maxNumberOfSymbols: 1 });
+  assert.equal(decoded[0]?.text, raw, 'decoder returns the complete raw QR text including internal spaces');
+  const source = fs.readFileSync(path.resolve('public/js/scan-parser.js'), 'utf8');
+  const context = vm.createContext({});
+  vm.runInContext(source, context);
+  const parsed = context.DakshScanParser.parseScannedCode(decoded[0].text, decoded[0].format);
+  assert.equal(parsed.partNumber, '20K1120S');
+  assert.equal(parsed.upi, 'HCGLDYY6KJ2T');
+  assert.equal(parsed.quantity, 1);
+  assert.equal(parsed.mrp, 920);
 });

@@ -1,5 +1,5 @@
 (function () {
-  const APP_VERSION = '20261010-qr-quantity-v2';
+  const APP_VERSION = '20261011-camera-decode-recovery-v1';
   const CACHE_VERSION = APP_VERSION;
   const DB_NAME = 'daksh-fresh-scan';
   const STORE = 'queue';
@@ -1878,7 +1878,7 @@
       facingMode: { ideal: 'environment' },
       width: { ideal: 1920, min: 640 },
       height: { ideal: 1080, min: 480 },
-      frameRate: { ideal: 24, min: 12, max: 30 },
+      frameRate: { ideal: 30, min: 12, max: 30 },
       advanced: [
         { focusMode: 'continuous' },
         { exposureMode: 'continuous' },
@@ -2348,6 +2348,9 @@
     const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) throw new Error('Camera decoder canvas is unavailable');
     let failures = 0;
+    let emptyFrames = 0;
+    let fallbackRequested = false;
+    const emptyFallbackFrames = 8;
     const frame = async () => {
       if (!state.scanning || runId !== state.cameraRunId || !video.srcObject) return;
       try {
@@ -2357,10 +2360,23 @@
           canvas.height = Math.round(video.videoHeight * scale);
           context.drawImage(video, 0, 0, canvas.width, canvas.height);
           const started = performance.now();
-          const results = await reader.readBarcodes(context.getImageData(0, 0, canvas.width, canvas.height), { formats: ['AllReadable'], tryHarder: true, maxNumberOfSymbols: 1 });
+          const results = await reader.readBarcodes(context.getImageData(0, 0, canvas.width, canvas.height), {
+            formats: ['AllReadable'], tryHarder: true, tryRotate: true, tryInvert: true,
+            tryDownscale: true, tryDenoise: true, maxNumberOfSymbols: 1
+          });
           failures = 0;
           if (state.scanning && runId === state.cameraRunId && results[0]?.text) {
+            emptyFrames = 0;
             handleDecodeResult({ rawValue: results[0].text, format: results[0].format, decodeMs: performance.now() - started });
+          } else {
+            emptyFrames++;
+            if (emptyFrames >= emptyFallbackFrames && !fallbackRequested) {
+              fallbackRequested = true;
+              console.info('[SCAN_DECODER] No symbols detected; starting secondary decoder without restarting camera.');
+              Promise.resolve(onFailure?.(new Error('No symbols detected by primary decoder'))).catch(error => {
+                console.warn('[SCAN_DECODER] Secondary decoder failed:', error?.message || error);
+              });
+            }
           }
         }
       } catch (error) {
@@ -2371,7 +2387,7 @@
           return;
         }
       }
-      if (state.scanning && runId === state.cameraRunId) state.wasmTimer = setTimeout(frame, 120);
+      if (state.scanning && runId === state.cameraRunId) state.wasmTimer = setTimeout(frame, fallbackRequested ? 300 : 120);
     };
     void frame();
   }
@@ -2395,6 +2411,9 @@
       if (exposureModes.includes('continuous')) advanced.push({ exposureMode: 'continuous' });
       const whiteBalanceModes = Array.isArray(capabilities.whiteBalanceMode) ? capabilities.whiteBalanceMode : [];
       if (whiteBalanceModes.includes('continuous')) advanced.push({ whiteBalanceMode: 'continuous' });
+      if (typeof capabilities.zoom?.max === 'number' && capabilities.zoom.max > 1) {
+        advanced.push({ zoom: Math.min(1.5, capabilities.zoom.max) });
+      }
       if (advanced.length) await track.applyConstraints({ advanced });
     } catch (_) {}
   }
