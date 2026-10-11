@@ -80,3 +80,19 @@ test('web, mobile web and Android all call canonical suggestions with no stock s
   const scoped = auth.slice(auth.indexOf('function isDealerScopedRequest('), auth.indexOf('async function validateUserDealerAccess('));
   assert.ok(scoped.includes("'/api/parts'"));
 });
+
+test('scan edit reason checklist keeps a single selected reason and preserves the save field', () => {
+  const html = fs.readFileSync('public/Daksh.html', 'utf8');
+  const editForm = html.slice(html.indexOf('id="scanEditForm"'), html.indexOf('id="smartBinSuggestionModal"'));
+  assert.match(editForm, /name="reason" type="hidden"/);
+  assert.match(editForm, /id="scanEditReasonList"/);
+  assert.match(editForm, /value="Wrong bin"/);
+  assert.match(editForm, /value="Count correction"/);
+  const ui = fs.readFileSync('public/ui.js', 'utf8');
+  assert.match(ui, /function setScanEditReason\(form, reason = ''\)/);
+  assert.match(ui, /setScanEditReason\(\$\('#scanEditForm'\), reason\)/);
+  const css = fs.readFileSync('public/scan-edit-checkboxes.css', 'utf8');
+  assert.match(css, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(css, /scan-edit-reason-option/);
+  assert.match(css, /max-width: 680px/);
+});

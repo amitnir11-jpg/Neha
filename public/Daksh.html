@@ -1644,7 +1644,20 @@
         <label>DLC<input name="dlc" type="number" min="0" step="0.01" placeholder="From Part Master" readonly></label>
         <label>Bin Location<input name="binLocation" autocomplete="off"></label>
         <label>Scan Type<select name="scanType"><option value="INWARD">INWARD</option><option value="OUTWARD">OUTWARD</option><option value="FITTED">FITTED</option><option value="DAMAGE">DAMAGE</option></select></label>
-        <label>Modification Reason<select name="reason" required><option value="">Select reason</option><option>Wrong part number</option><option>Wrong quantity</option><option>Wrong bin</option><option>Wrong scan type</option><option>MRP/DLC correction</option><option>Other</option></select></label>
+        <div class="scan-edit-reason-field" role="group" aria-labelledby="scanEditReasonLabel">
+          <span id="scanEditReasonLabel">Modification Reason</span>
+          <input name="reason" type="hidden">
+          <div id="scanEditReasonList" class="scan-edit-reasons">
+            <label id="scanEditReasonPlaceholder" class="scan-edit-reason-option is-placeholder"><input type="checkbox" checked disabled><span>Select reason</span></label>
+            <label class="scan-edit-reason-option"><input type="checkbox" data-scan-edit-reason value="Count correction"><span>Count correction</span></label>
+            <label class="scan-edit-reason-option"><input type="checkbox" data-scan-edit-reason value="Wrong part number"><span>Wrong part number</span></label>
+            <label class="scan-edit-reason-option"><input type="checkbox" data-scan-edit-reason value="Wrong quantity"><span>Wrong quantity</span></label>
+            <label class="scan-edit-reason-option"><input type="checkbox" data-scan-edit-reason value="Wrong bin"><span>Wrong bin</span></label>
+            <label class="scan-edit-reason-option"><input type="checkbox" data-scan-edit-reason value="Wrong scan type"><span>Wrong scan type</span></label>
+            <label class="scan-edit-reason-option"><input type="checkbox" data-scan-edit-reason value="MRP/DLC correction"><span>MRP/DLC correction</span></label>
+            <label class="scan-edit-reason-option"><input type="checkbox" data-scan-edit-reason value="Other"><span>Other</span></label>
+          </div>
+        </div>
         <label class="span-2">Remarks<textarea name="remarks" rows="2" placeholder="Required when reason is Other"></textarea></label>
         <div class="actions span-3 scan-edit-actions">
           <button id="scanEditCancel" class="btn light" type="button">Cancel</button>
@@ -1785,8 +1798,9 @@
   <link rel="stylesheet" href="/sku-bin-picker.css?v=20261008-sku-v10">
   <script src="/js/sku-bin-picker.js?v=20261008-sku-v10"></script>
   <link rel="stylesheet" href="/smart-part-search.css?v=20261011-smart-part-search-v1">
+  <link rel="stylesheet" href="/scan-edit-checkboxes.css?v=20261011-scan-edit-checkboxes-v2">
   <script src="/js/smart-part-search.js?v=20261011-smart-part-search-v1"></script>
-  <script src="/ui.js?v=20261011-smart-part-search-v1"></script>
+  <script src="/ui.js?v=20261011-test-env-checkboxes-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

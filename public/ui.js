@@ -4771,6 +4771,16 @@
     return new Error(error?.data?.message || error?.message || 'Unable to delete scan. Please try again.');
   }
 
+  function setScanEditReason(form, reason = '') {
+    const selected = String(reason || '').trim();
+    if (form?.elements.reason) form.elements.reason.value = selected;
+    $$('#scanEditReasonList input[data-scan-edit-reason]').forEach((input) => {
+      input.checked = input.value === selected;
+    });
+    const placeholder = $('#scanEditReasonPlaceholder');
+    if (placeholder) placeholder.hidden = Boolean(selected);
+  }
+
   function openScanEditModal(scanId = '', focusField = 'partNumber') {
     const scan = scanHistoryRecord(scanId);
     if (!scan) throw new Error('Scan record not found');
@@ -4798,7 +4808,7 @@
     form.elements.dlc.value = scan.currentCatalogueDLC ?? 0;
     form.elements.binLocation.value = scan.binLocation || scan.bin || '';
     form.elements.scanType.value = ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType) ? scanType : 'INWARD';
-    if (form.elements.reason) form.elements.reason.value = focusField === 'binLocation' ? 'Wrong bin' : '';
+    setScanEditReason(form, focusField === 'binLocation' ? 'Wrong bin' : '');
     if (form.elements.remarks) form.elements.remarks.value = '';
     ['partNumber', 'quantity', 'mrp', 'dlc', 'scanType'].forEach((name) => {
       form.elements[name].disabled = focusField === 'binLocation';
@@ -13215,6 +13225,13 @@
         message.textContent = error.message || 'Part update failed';
       }
     }));
+    $('#scanEditReasonList')?.addEventListener('change', (event) => {
+      const selected = event.target.closest('input[data-scan-edit-reason]');
+      if (!selected) return;
+      const reason = selected.checked ? selected.value : '';
+      setScanEditReason($('#scanEditForm'), reason);
+      if (selected.checked) selected.focus();
+    });
     $('#scanEditClose')?.addEventListener('click', closeScanEditModal);
     $('#scanEditCancel')?.addEventListener('click', closeScanEditModal);
     $('#scanEditModal')?.addEventListener('click', (event) => {
