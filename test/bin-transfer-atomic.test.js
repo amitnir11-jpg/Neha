@@ -30,7 +30,8 @@ async function withInventoryFixtures(run) {
     binFind: Bin.find,
     historyFindOne: BinTransferHistory.findOne,
     historyCreate: BinTransferHistory.create,
-    transaction: prisma.$transaction
+    transaction: prisma.$transaction,
+    localFindMany: prisma.localPartEntry.findMany
   };
   let scans = [
     { _id: 'in-abc', dealerCode: '11646', auditId: 'AUD1', partNumber: 'ABC123', normalizedPartNumber: 'ABC123', partDescription: 'Part ABC', scanType: 'INWARD', qty: 8, quantity: 8, binLocation: '1', syncStatus: 'synced', scanStatus: 'ACCEPTED', status: 'ACCEPTED', dlc: 12, isDeleted: false, deletedAt: null },
@@ -38,6 +39,7 @@ async function withInventoryFixtures(run) {
   ];
   const history = [];
   try {
+    prisma.localPartEntry.findMany = async () => [];
     Inventory.find = (filter = {}) => query(scans.filter((scan) =>
       (!filter.dealerCode || scan.dealerCode === filter.dealerCode)
       && (!filter.auditId || scan.auditId === filter.auditId)));
@@ -67,7 +69,7 @@ async function withInventoryFixtures(run) {
     prisma.$transaction = async (work) => {
       const scanSnapshot = structuredClone(scans);
       const historySnapshot = structuredClone(history);
-      try { return await work({}); }
+      try { return await work({ localPartEntry: { findMany: async () => [] } }); }
       catch (error) { scans = scanSnapshot; history.splice(0, history.length, ...historySnapshot); throw error; }
     };
     await run({ get scans() { return scans; }, history });
@@ -79,6 +81,7 @@ async function withInventoryFixtures(run) {
     BinTransferHistory.findOne = saved.historyFindOne;
     BinTransferHistory.create = saved.historyCreate;
     prisma.$transaction = saved.transaction;
+    prisma.localPartEntry.findMany = saved.localFindMany;
   }
 }
 

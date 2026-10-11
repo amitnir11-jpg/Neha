@@ -64,7 +64,7 @@ test('older Hero 1D labels extract the Part Master candidate and retain packagin
 test('server validates exact candidates, preserves numeric barcode and rejects unknown prefix', async () => {
   const calls = [];
   const master = new Map(['32410KTC920S', '44831KVH900S', '4006381333931', '77238KTC900ZCS', '61108AACH40ZCS'].map(part => [part, { masterRecord: { partNumber: part } }]));
-  const context = vm.createContext({ module: { exports: {} }, require: name => name.includes('scanParser') ? parser : {
+  const context = vm.createContext({ module: { exports: {} }, require: name => name.includes('BarcodeDecoderService') ? require('../services/BarcodeDecoderService') : name.includes('scanParser') ? parser : {
     getPriceFromPartMaster: async (part, dealer, options) => { calls.push({ part, dealer, options }); return master.get(part) || null; }
   } });
   vm.runInContext(fs.readFileSync('services/ScannedCodeService.js', 'utf8'), context);
@@ -95,7 +95,7 @@ test('all eight supplied Hero labels decode and resolve by exact Part Master can
   const calls = [];
   const parts = [...new Set(suppliedHeroSamples.map((sample) => sample[1]))];
   const master = new Map(parts.map(part => [part, { masterRecord: { partNumber: part } }]));
-  const context = vm.createContext({ module: { exports: {} }, require: name => name.includes('scanParser') ? parser : {
+  const context = vm.createContext({ module: { exports: {} }, require: name => name.includes('BarcodeDecoderService') ? require('../services/BarcodeDecoderService') : name.includes('scanParser') ? parser : {
     getPriceFromPartMaster: async (part, dealer, options) => { calls.push({ part, dealer, options }); return master.get(part) || null; }
   } });
   vm.runInContext(fs.readFileSync('services/ScannedCodeService.js', 'utf8'), context);

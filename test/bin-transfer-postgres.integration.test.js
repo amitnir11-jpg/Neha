@@ -1,8 +1,10 @@
-const testDatabaseUrl = process.env.BIN_TRANSFER_TEST_DATABASE_URL || '';
+const testDatabaseUrl = process.env.BIN_TRANSFER_TEST_DATABASE_URL || process.env.QUANTITY_TEST_DATABASE_URL || '';
 if (testDatabaseUrl) {
   const parsed = new URL(testDatabaseUrl);
-  if (parsed.hostname !== '127.0.0.1' || parsed.port !== '55439' || parsed.pathname !== '/daksh_bin_transfer_isolated_test') {
-    throw new Error('BIN_TRANSFER_TEST_DATABASE_URL must point to the dedicated local test database on 127.0.0.1:55439.');
+  const knownTestTarget = (parsed.port === '55439' && parsed.pathname === '/daksh_bin_transfer_isolated_test')
+    || (parsed.port === '55441' && parsed.pathname === '/daksh_quantity_isolated_test');
+  if (parsed.hostname !== '127.0.0.1' || !knownTestTarget) {
+    throw new Error('PostgreSQL integration tests must point to a dedicated local test database.');
   }
   process.env.DATABASE_URL = testDatabaseUrl;
 }
@@ -12,6 +14,8 @@ const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const Inventory = require('../models/Inventory');
 const Bin = require('../models/Bin');
+const Dealer = require('../models/Dealer');
+const Audit = require('../models/Audit');
 const BinTransferHistory = require('../models/BinTransferHistory');
 const { connectDatabase, disconnectDatabase } = require('../services/prisma');
 const router = require('../routes/binTransfer');
@@ -48,6 +52,8 @@ test('PostgreSQL serializable transfers prevent overspend, preserve quantity/val
   const auditId = 'BT-ISOLATED-AUDIT';
   try {
     await connectDatabase();
+    await Dealer.create({ dealerCode, dealerName: 'Isolated bin transfer regression' });
+    await Audit.create({ dealerCode, auditId, status: 'ACTIVE', auditStartDate: new Date() });
     await Promise.all(['1', '2', '3'].map((binCode) => Bin.create({ dealerCode, binCode, active: true })));
     await Inventory.create([
       { dealerCode, auditId, uniqueScanId: `${dealerCode}-ABC`, normalizedPartNumber: 'ABC123', partNumber: 'ABC123', partDescription: 'Part ABC', scanType: 'INWARD', type: 'INWARD', qty: 5, quantity: 5, binLocation: '1', bin: '1', syncStatus: 'synced', scanStatus: 'ACCEPTED', status: 'ACCEPTED', masterFound: true, currentCatalogueDLC: 10, isDeleted: false, deletedAt: null, isDuplicate: false },
@@ -95,7 +101,9 @@ test('PostgreSQL serializable transfers prevent overspend, preserve quantity/val
       await Promise.all([
         Inventory.deleteMany({ dealerCode }),
         BinTransferHistory.deleteMany({ dealerCode }),
-        Bin.deleteMany({ dealerCode })
+        Bin.deleteMany({ dealerCode }),
+        Audit.deleteMany({ dealerCode }),
+        Dealer.deleteMany({ dealerCode })
       ]).catch(() => null);
       await disconnectDatabase();
     }

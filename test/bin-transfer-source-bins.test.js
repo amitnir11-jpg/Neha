@@ -4,6 +4,14 @@ const fs = require('node:fs');
 const Inventory = require('../models/Inventory');
 const Bin = require('../models/Bin');
 const router = require('../routes/binTransfer');
+const { prisma } = require('../services/prisma');
+// These fixtures intentionally contain scanned stock only.
+let savedLocalFindMany;
+test.beforeEach(() => {
+  savedLocalFindMany = prisma.localPartEntry.findMany;
+  prisma.localPartEntry.findMany = async () => [];
+});
+test.afterEach(() => { prisma.localPartEntry.findMany = savedLocalFindMany; });
 
 function responseStub() {
   return { payload: null, statusCode: 200,

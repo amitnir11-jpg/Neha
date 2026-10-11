@@ -504,7 +504,7 @@ async function resolveUpiCurrentLocation(scan = {}) {
 }
 
 async function prepareUpiSourceLocation(scan = {}, options = {}) {
-  if (!['OUTWARD', 'FITTED'].includes(scan.scanType)) return null;
+  if (!['OUTWARD', 'FITTED', 'DAMAGE'].includes(scan.scanType)) return null;
   // Only the server's stock-checked Scan History action may sell by part/bin.
   // This option is never read from a submitted scan or request body.
   if (scan.scanType === 'OUTWARD' && options.scanHistoryOutward === true && !upiCodeValue(scan)) return null;
@@ -515,8 +515,12 @@ async function prepareUpiSourceLocation(scan = {}, options = {}) {
   if (!location) return scan.scanType === 'OUTWARD' ? OUTWARD_SCANNED_STOCK_REQUIRED_MESSAGE : UPI_LOCATION_REQUIRED_MESSAGE;
   scan.upiNo = location.upiCode;
   scan.upiId = location.upiCode;
-  scan.qty = 1;
-  scan.quantity = 1;
+  // A standalone serial consumes its stored pack; an encoded pack must agree.
+  const sourceQuantity = Number(location.row.qty ?? location.row.quantity);
+  if (!Number.isSafeInteger(sourceQuantity) || sourceQuantity <= 0) return 'Invalid stored UPI quantity; manual review required.';
+  if (scan.parsed?.quantityProvided && Number(scan.quantity) !== sourceQuantity) return 'Encoded quantity differs from eligible UPI stock; manual review required.';
+  scan.qty = scan.quantity = sourceQuantity;
+  scan.transactionQuantity = sourceQuantity;
   if (location.partNumber) {
     scan.partNumber = location.partNumber;
     scan.normalizedPartNumber = location.partNumber;
@@ -1052,7 +1056,8 @@ function normalizeScan(item = {}) {
   const explicitScanId = clean(item.scanId || item.uniqueScanId || item.mobileScanId || item.localId);
   const clientScanId = clean(item.clientScanId || item.localId || item.mobileScanId || explicitScanId);
   const clientSyncKey = clean(item.clientSyncKey || item.localSyncKey || item.syncKey || clientScanId);
-  const rawScan = clean(firstValue(item, [
+  const rawScan = String(firstValue(item, [
+    'rawDecodedValue',
     'rawScanString',
     'rawScan',
     'rawBarcode',
@@ -1808,14 +1813,14 @@ async function saveNormalizedScan(scan, req, options = {}) {
     scan.part = decoded.partNumber;
     scan.parsedCode = { ...decoded, price: undefined };
     scan.barcodeIdentityKind = decoded.success ? decoded.identityKind : 'UNIQUE_UPI';
-    scan.quantity = scan.qty = 1;
+    if (decoded.success) require('../services/BarcodeDecoderService').applyDecodedBarcode(scan, decoded);
     scan.upiId = decoded.upi || '';
     scan.upiNo = decoded.upi || '';
     if (scan.barcodeIdentityKind === 'SKU') {
       scan.upiCode = '';
       scan.qrFingerprint = scan.rawUpiHash = scan.globalUpiKey = '';
     }
-    scan.rawScanString = decoded.normalizedValue;
+    scan.rawScanString = decoded.rawBarcode;
     scan._cameraPrice = decoded.price;
     if (process.env.SCAN_DEBUG_LOGS === 'true') console.debug('[SCAN_DECODE]', JSON.stringify({ rawValue, ...scan.parsedCode }));
   }
@@ -2159,7 +2164,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
         }
       }
       await lockUpiIdentity(scan);
-      if (['OUTWARD', 'FITTED'].includes(scan.scanType) && upiCodeValue(scan)) {
+      if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(scan.scanType) && upiCodeValue(scan)) {
         const locationError = await prepareUpiSourceLocation(scan, options);
         if (locationError || scan.binLocation !== finalBin) {
           const error = new Error(locationError || UPI_LOCATION_REQUIRED_MESSAGE);
@@ -2173,7 +2178,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
           throw error;
         }
       }
-      if (['OUTWARD', 'FITTED'].includes(scan.scanType) && !upiCodeValue(scan)) {
+      if (['OUTWARD', 'FITTED', 'DAMAGE'].includes(scan.scanType) && !upiCodeValue(scan)) {
         const stock = await inventory.availableInwardStock({ dealerCode: scan.dealerCode, auditId: scan.auditId, partNumber: scan.partNumber });
         if (Number(stock.bins.find(bin => upper(bin.binLocation) === upper(finalBin))?.availableQty || 0) < finalQty) {
           const error = new Error('Insufficient available stock in the selected source bin.');
@@ -2191,9 +2196,9 @@ async function saveNormalizedScan(scan, req, options = {}) {
         error.existing = concurrentUpiDuplicate;
         throw error;
       }
-      if (upiCodeValue(scan) && ['OUTWARD', 'FITTED'].includes(scan.scanType) && scan._upiSourceRow) {
+      if (upiCodeValue(scan) && ['OUTWARD', 'FITTED', 'DAMAGE'].includes(scan.scanType) && scan._upiSourceRow) {
         const currentBin = upper(scan._upiCurrentLocation?.binLocation || '');
-        const nextStatus = scan.scanType === 'FITTED' ? 'FITTED' : 'OUTWARD';
+        const nextStatus = scan.scanType;
         const claimed = await Inventory.findOneAndUpdate({
           _id: scan._upiSourceRow._id,
           isDeleted: { $ne: true },
@@ -2205,7 +2210,7 @@ async function saveNormalizedScan(scan, req, options = {}) {
         }, {
           $set: {
             upiStatus: nextStatus,
-            currentLocationType: scan.scanType === 'FITTED' ? 'WORKSHOP' : 'OUTWARD',
+            currentLocationType: scan.scanType === 'FITTED' ? 'WORKSHOP' : scan.scanType,
             currentBin: '',
             locationUpdatedAt: new Date(),
             locationUpdatedByScanId: scan.uniqueScanId
@@ -2239,6 +2244,12 @@ async function saveNormalizedScan(scan, req, options = {}) {
     partSubGroup: master ? master.partSubGroup || '' : clean(scan.source.partSubGroup || scan.source.productSubGroup).toUpperCase(),
     qty: finalQty,
     quantity: finalQty,
+    scanEventCount: 1,
+    encodedQuantity: scan.encodedQuantity ?? (scan.parsed?.quantityProvided ? scan.parsed.qty : null),
+    transactionQuantity: finalQty,
+    barcodeMRP: scan.barcodeMRP ?? null,
+    pricingRule: 'PART_MASTER_MRP_DLC',
+    barcodePriceMismatch: scan.barcodeMRP != null && Number(valueFields.mrp) !== scan.barcodeMRP,
     mrp: valueFields.mrp,
     scanMRP: valueFields.scanMRP,
     manualMRP: valueFields.manualMRP,
@@ -3109,6 +3120,9 @@ async function pushHandler(req, res) {
         partSubGroup: master ? master.partSubGroup || '' : '',
         qty: finalQty,
         quantity: finalQty,
+        scanEventCount: 1,
+        encodedQuantity: scan.parsed?.quantityProvided ? scan.parsed.qty : null,
+        transactionQuantity: finalQty,
         mrp: valueFields.mrp,
         scanMRP: valueFields.scanMRP,
         manualMRP: valueFields.manualMRP,

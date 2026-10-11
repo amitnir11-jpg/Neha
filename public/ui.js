@@ -5288,8 +5288,10 @@
     normalized.scanType = String(normalized.scanType || normalized.type || 'INWARD').trim().toUpperCase();
     normalized.type = normalized.scanType;
     if (isBarcodeForm && (normalized.upiId || normalized.upiNo || extractUpiIdFromText(normalized))) {
-      normalized.qty = 1;
-      normalized.quantity = 1;
+      const decoded = window.DakshScanParser.parseScannedCode(payload.rawScan);
+      if (!decoded.success) throw new Error(decoded.reason || 'Invalid barcode');
+      normalized.qty = decoded.quantity;
+      normalized.quantity = decoded.quantity;
     }
     normalized.binLocation = normalizePartText(normalized.binLocation);
     normalized.bin = normalized.binLocation;

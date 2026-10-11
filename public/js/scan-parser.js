@@ -48,10 +48,12 @@
   function parseFixedDBarcode(raw, tokens) {
     if (tokens[0]?.toUpperCase() !== 'D' || ![8, 11].includes(tokens.length)) return null;
     const partIndex = tokens.length === 11 ? 3 : 4;
-    const partNumber = normalizePartToken(tokens[partIndex]);
+    const partNumber = clean(tokens[partIndex]).toUpperCase();
     const rawQuantity = clean(tokens[partIndex + 1]);
     const upiId = normalizePartToken(tokens[partIndex - 1]);
-    const valid = isLikelyPartToken(partNumber) && isQuantityToken(rawQuantity);
+    const valid = /^[A-Z0-9][A-Z0-9._-]{2,79}$/.test(partNumber) && isQuantityToken(rawQuantity)
+      && /^[A-Z0-9._-]+$/i.test(tokens[partIndex - 1])
+      && (tokens.length === 11 ? /^\d+\.\d{2}$/.test(tokens[5]) : /^\d{14}$/.test(tokens[6]));
     return {
       success: valid,
       reason: valid ? '' : 'INVALID_QTY',
@@ -70,8 +72,8 @@
   }
 
   function parseScanValue(rawValue, masterLookup = []) {
-    const raw = clean(rawValue);
-    if (!raw) {
+    const raw = String(rawValue ?? '');
+    if (!clean(raw)) {
       return {
         success: false,
         reason: 'EMPTY_SCAN',
@@ -93,6 +95,11 @@
       if (fixedDBarcode.success) fixedDBarcode.type = 'UPI';
       return fixedDBarcode;
     }
+    if (tokens[0]?.toUpperCase() === 'D') return {
+      success: false, reason: 'UNSUPPORTED_D_FORMAT', type: 'HERO_QR',
+      rawScan: raw, rawUpi: raw, rawQr: raw, fields: tokens,
+      partNumber: '', upiId: '', quantity: 0, rawQuantity: ''
+    };
     const skuLabel = parseHeroSkuLabel(raw);
     if (skuLabel) return { success: true, type: 'HERO_SKU_LABEL', rawUpi: null, rawQr: null,
       normalizedQr: normalizeDecodedValue(raw), rawScan: raw, fields: tokens, quantity: 1,
@@ -203,10 +210,13 @@
       upi: legacyUpi[2], identityKind: 'UNIQUE_UPI', hasUniqueItemId: true };
     const legacyOneD = parseHeroLegacyOneDLabel(normalizedValue);
     if (legacyOneD) return { ...base, ...legacyOneD, success: true, type: 'HERO_LEGACY_1D', identityKind: 'SKU' };
-    const slash = parseScanValue(normalizedValue, masterLookup);
+    const slash = parseScanValue(raw, masterLookup);
     if (slash.type === 'UPI' || slash.type === 'HERO_QR') {
       return { ...base, sourceType: 'QR', success: slash.success, reason: slash.reason, type: 'HERO_QR',
         partNumber: slash.partNumber, upi: slash.upiId || null, quantity: slash.quantity,
+        rawQuantity: slash.rawQuantity, quantityProvided: true,
+        manufacturerFormat: slash.fields.length === 11 ? 'D_11' : slash.fields.length === 8 ? 'D_LEGACY_8' : 'GENERIC_SLASH',
+        mrp: slash.fields[0]?.toUpperCase() === 'D' && slash.fields.length === 11 ? Number(slash.fields[5]) : null,
         identityKind: slash.upiId ? 'UNIQUE_UPI' : 'SKU', hasUniqueItemId: Boolean(slash.upiId) };
     }
     let fields = {};
@@ -221,9 +231,12 @@
     const keyed = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key.replace(/[^A-Z0-9]/g, ''), value]));
     const part = keyed.PARTNUMBER || keyed.PARTNO || keyed.PART || keyed.PN || keyed.SKU || keyed.ITEMCODE;
     const explicitUpi = normalizeDecodedValue(keyed.UPI || keyed.UPIID || keyed.UNIQUEID || '') || null;
-    if (part) return { ...base, success: true, type: 'STRUCTURED_CODE', partNumber: normalizeDecodedValue(part),
+    const quantityProvided = Object.hasOwn(keyed, 'QTY') || Object.hasOwn(keyed, 'QUANTITY') || Object.hasOwn(keyed, 'Q');
+    const rawQuantity = keyed.QTY ?? keyed.QUANTITY ?? keyed.Q;
+    const quantityValid = !quantityProvided || isQuantityToken(rawQuantity);
+    if (part) return { ...base, success: quantityValid, reason: quantityValid ? '' : 'INVALID_QTY', type: 'STRUCTURED_CODE', partNumber: normalizeDecodedValue(part),
       upi: explicitUpi, identityKind: explicitUpi ? 'UNIQUE_UPI' : 'SKU', hasUniqueItemId: Boolean(explicitUpi),
-      quantity: Number(keyed.QTY || keyed.QUANTITY || 1) || 1 };
+      quantityProvided, rawQuantity, quantity: quantityValid ? (quantityProvided ? Number(rawQuantity) : 1) : 0 };
     // No guessed prefix/suffix removal and no similar-part substitution.
     if (/^[A-Z0-9][A-Z0-9._-]{2,79}$/.test(normalizedValue)) {
       return { ...base, success: true, type: 'DIRECT_BARCODE', partNumber: normalizedValue };

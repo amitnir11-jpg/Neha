@@ -53,6 +53,15 @@ async function processScan(input = {}, options = {}) {
   const sync = require('../routes/sync');
   const req = requestLike(options.req || {}, input);
   const normalized = sync.normalizeScan(input);
+  if (process.env.NODE_ENV === 'test' && process.env.SCAN_QUANTITY_DIAGNOSTICS === 'true') {
+    console.info('[SCAN_QUANTITY_INPUT]', JSON.stringify({
+      scanId: normalized.uniqueScanId,
+      rawQuantity: require('./BarcodeDecoderService').decodeBarcode(normalized.rawScanString).rawQuantity,
+      parsedQuantity: normalized.parsed?.qty,
+      frontendQuantity: input.quantity ?? input.qty,
+      normalizedQuantity: normalized.quantity
+    }));
+  }
   const normalizedAt = performance.now();
   scanProcessLog('info', 'incoming', {
     route: clean(req.originalUrl || req.url || '/api/scans/process'),
@@ -72,6 +81,14 @@ async function processScan(input = {}, options = {}) {
   const status = clean(result.status).toLowerCase();
   const success = status === 'synced' || status === 'verification';
   const scan = publicScan(result.scan || result.updated || normalized);
+  if (process.env.NODE_ENV === 'test' && process.env.SCAN_QUANTITY_DIAGNOSTICS === 'true') {
+    console.info('[SCAN_QUANTITY_RESULT]', JSON.stringify({
+      scanId: normalized.uniqueScanId, status,
+      acceptedQuantity: normalized.quantity,
+      storedQuantity: status === 'synced' ? result.scan?.qty : null,
+      responseQuantity: scan.qty ?? scan.quantity
+    }));
+  }
   const message = result.message || result.error || (success ? 'Scan saved successfully' : 'Scan could not be saved');
   const duplicate = status === 'duplicate' || Boolean(result.duplicate);
   const updated = Boolean(result.updated);

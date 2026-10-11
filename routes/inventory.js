@@ -553,9 +553,7 @@ function parseQueryLikeText(rawScan) {
 
 function positiveEncodedQuantity(value) {
   const text = String(value === undefined || value === null ? '' : value).trim();
-  if (!/^\d{1,7}$/.test(text)) return undefined;
-  const quantity = Number(text);
-  return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : undefined;
+  return require('../utils/scanParser').isQuantityToken(text) ? Number(text) : undefined;
 }
 
 function encodedQuantityError() {

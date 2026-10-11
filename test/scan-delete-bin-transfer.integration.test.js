@@ -24,11 +24,12 @@ function responseStub() {
 for (const role of ['admin', 'audit_user']) test(`${role}: sample scan appears in Bin Transfer and stock report, then disappears after committed deletion and refresh event`, async () => {
   const saved = {
     inventoryFind: Inventory.find,
-    inventoryFindByIdAndUpdate: Inventory.findByIdAndUpdate,
+    inventoryFindOneAndUpdate: Inventory.findOneAndUpdate,
     binFind: Bin.find,
     transferFind: BinTransferHistory.find,
     auditCreate: ScanAuditLog.create,
-    transaction: prisma.$transaction
+    transaction: prisma.$transaction,
+    localFindMany: prisma.localPartEntry.findMany
   };
   const sample = { _id: 'sample-scan-1', dealerCode: '11646', auditId: 'AUD1', partNumber: 'ABC123',
     scanType: 'INWARD', qty: 1, quantity: 1, binLocation: 'A1', syncStatus: 'synced',
@@ -43,14 +44,16 @@ for (const role of ['admin', 'audit_user']) test(`${role}: sample scan appears i
   const visibleRows = (filter) => matchesStockReport(filter, sample) ? [{ ...sample }] : [];
 
   try {
+    prisma.localPartEntry.findMany = async () => [];
     Inventory.find = (filter) => ({
       select() { return this; },
       sort() { return this; },
       async lean() { return visibleRows(filter); }
     });
-    Inventory.findByIdAndUpdate = (id, update) => ({
+    Inventory.findOneAndUpdate = (filter, update) => ({
       async lean() {
-        assert.equal(id, sample._id);
+        assert.equal(filter._id, sample._id);
+        assert.equal(filter.dealerCode, sample.dealerCode);
         Object.assign(sample, update.$set || {});
         return { ...sample };
       }
@@ -101,10 +104,11 @@ for (const role of ['admin', 'audit_user']) test(`${role}: sample scan appears i
     assert.ok(emitted.includes('reports:update'));
   } finally {
     Inventory.find = saved.inventoryFind;
-    Inventory.findByIdAndUpdate = saved.inventoryFindByIdAndUpdate;
+    Inventory.findOneAndUpdate = saved.inventoryFindOneAndUpdate;
     Bin.find = saved.binFind;
     BinTransferHistory.find = saved.transferFind;
     ScanAuditLog.create = saved.auditCreate;
     prisma.$transaction = saved.transaction;
+    prisma.localPartEntry.findMany = saved.localFindMany;
   }
 });
