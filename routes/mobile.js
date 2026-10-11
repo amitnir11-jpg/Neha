@@ -540,9 +540,9 @@ router.get('/status', auth.optionalAuth, async (req, res) => {
 router.get('/sync-status', auth.requireAuth, async (req, res) => {
   try {
     const deviceId = clean(req.query.deviceId);
-    const filter = deviceId ? { deviceId } : {};
+    const filter = { dealerCode: req.activeDealerId, ...(deviceId ? { deviceId } : {}) };
     const [device, lastLog, totalSynced, failedRecords] = await Promise.all([
-      deviceId ? Device.findOne({ deviceId }).lean() : null,
+      deviceId ? Device.findOne({ deviceId, dealerCode: req.activeDealerId }).lean() : null,
       SyncLog.findOne(filter).sort({ createdAt: -1 }).lean(),
       Inventory.countDocuments({ ...filter, $or: [{ syncStatus: 'synced' }, { synced: true }, { isSynced: true }] }),
       Inventory.countDocuments({ ...filter, syncStatus: 'failed' })

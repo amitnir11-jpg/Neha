@@ -11,7 +11,9 @@ function dashboardHarness(stalledPath) {
   const requests = [];
   let nextTimer = 0;
   const context = {
-    state: { token: 'test-user' }, Map, FormData, AbortController, console,
+    state: { token: 'test-user' }, dealerContextVersion: 0,
+    activeDealerId: () => '11688', shouldAttachDealerScope: () => false,
+    Map, FormData, AbortController, console,
     apiUrl: path => path, withActiveDealerQuery: path => path,
     withActiveDealerBody: body => body, logout: () => {},
     parseApiResponse: response => response.json(), apiErrorMessage: data => data.message,

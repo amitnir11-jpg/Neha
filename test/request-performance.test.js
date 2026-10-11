@@ -23,7 +23,9 @@ function apiHarness(fetch) {
   const end = source.indexOf('  function sanitizeDownloadFileName', start);
   let timer;
   const context = {
-    state: { token: 'user-a' }, Map, FormData, AbortController, fetch,
+    state: { token: 'user-a' }, dealerContextVersion: 0,
+    activeDealerId: () => '11688', shouldAttachDealerScope: () => false,
+    Map, FormData, AbortController, fetch,
     apiUrl: (path) => path, withActiveDealerQuery: (path) => `${path}${path.includes('?') ? '&' : '?'}activeDealerId=11688`,
     withActiveDealerBody: (body) => body,
     parseApiResponse: (response) => response.json(), apiErrorMessage: (data) => data.message,

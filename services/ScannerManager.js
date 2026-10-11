@@ -93,7 +93,8 @@ class ScannerManager {
   }
 
   async register(payload = {}, context = {}) {
-    const activeAudit = await this.activeAuditProvider();
+    const dealerCode = clean(context.req?.activeDealerId || payload.dealerCode).toUpperCase();
+    const activeAudit = dealerCode ? await this.activeAuditProvider({ dealerCode }) : null;
     const deviceId = clean(payload.deviceId || context.deviceId || crypto.randomUUID());
     const connectionMethod = inferConnectionMethod(payload);
     const deviceType = inferDeviceType(payload);
@@ -106,7 +107,7 @@ class ScannerManager {
       model: clean(payload.model || payload.userAgent || ''),
       deviceType,
       approved: payload.approved !== false,
-      dealerCode: clean(activeAudit?.dealerCode || payload.dealerCode).toUpperCase(),
+      dealerCode,
       dealerName: clean(activeAudit?.dealerName || payload.dealerName),
       auditId: clean(activeAudit?.auditId || activeAudit?._id || payload.auditId),
       userId: clean(payload.userId || context.user?.id || context.user?._id || ''),
@@ -181,14 +182,15 @@ class ScannerManager {
   async heartbeat(payload = {}, context = {}) {
     const deviceId = clean(payload.deviceId || context.deviceId);
     if (!deviceId) throw new Error('Device ID is required');
-    const activeAudit = await this.activeAuditProvider();
     const existing = await Device.findOne({ deviceId }).lean();
+    const dealerCode = clean(context.req?.activeDealerId || payload.dealerCode || existing?.dealerCode).toUpperCase();
+    const activeAudit = dealerCode ? await this.activeAuditProvider({ dealerCode }) : null;
     const patch = {
       deviceName: clean(payload.deviceName || existing?.deviceName || 'Scanner Device'),
       model: clean(payload.model || existing?.model || ''),
       deviceType: inferDeviceType(payload.deviceType ? payload : existing || payload),
       connectionMethod: inferConnectionMethod(payload.connectionMethod ? payload : existing || payload),
-      dealerCode: clean(activeAudit?.dealerCode || payload.dealerCode || existing?.dealerCode).toUpperCase(),
+      dealerCode,
       dealerName: clean(activeAudit?.dealerName || payload.dealerName || existing?.dealerName),
       auditId: clean(activeAudit?.auditId || activeAudit?._id || payload.auditId || existing?.auditId),
       serverUrl: clean(payload.serverUrl || existing?.serverUrl),
@@ -252,12 +254,12 @@ class ScannerManager {
     return device;
   }
 
-  async list() {
+  async list(scope = {}) {
     await this.markExpiredOffline();
     const cutoff = new Date(Date.now() - LIVE_WINDOW_MS);
     const [online, offline] = await Promise.all([
-      Device.find({ removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).sort({ scannerPriority: -1, lastSeen: -1 }).lean(),
-      Device.find({ removedAt: null, $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }] }).sort({ lastSeen: -1 }).limit(100).lean()
+      Device.find({ ...scope, removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).sort({ scannerPriority: -1, lastSeen: -1 }).lean(),
+      Device.find({ ...scope, removedAt: null, $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }] }).sort({ lastSeen: -1 }).limit(100).lean()
     ]);
     return {
       online: online.map((device) => this.publicDevice(device)),
@@ -275,13 +277,13 @@ class ScannerManager {
     };
   }
 
-  async summary(listed = null) {
+  async summary(listed = null, scope = {}) {
     if (!listed) await this.markExpiredOffline();
     const cutoff = new Date(Date.now() - LIVE_WINDOW_MS);
     const [onlineDevices, offlineDevices, lowBatteryDevices] = await Promise.all([
-      listed ? listed.online : Device.find({ removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).lean(),
-      Device.countDocuments({ removedAt: null, $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }] }),
-      Device.find({ removedAt: null, status: 'online', batteryPercent: { $lte: 15 } }).lean()
+      listed ? listed.online : Device.find({ ...scope, removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).lean(),
+      Device.countDocuments({ ...scope, removedAt: null, $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }] }),
+      Device.find({ ...scope, removedAt: null, status: 'online', batteryPercent: { $lte: 15 } }).lean()
     ]);
     const activeScanners = onlineDevices.filter((device) => device.deviceType !== 'web');
     return {

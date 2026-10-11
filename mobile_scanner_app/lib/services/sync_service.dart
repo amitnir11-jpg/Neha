@@ -122,7 +122,18 @@ class SyncService {
       return SyncResult(false, 'Offline', synced: 0, serverReached: false);
     }
 
-    final pending = await database.pendingScans(includeFailed: includeFailed);
+    final queued = await database.pendingScans(includeFailed: includeFailed);
+    // Each batch retains its original dealer even after the login dealer changes.
+    final batchDealer = queued.isEmpty ? '' : queued.first.dealerCode;
+    final pending = queued.where((record) => record.dealerCode == batchDealer).toList();
+    if (pending.isNotEmpty && batchDealer.trim().isEmpty) {
+      for (final record in pending) {
+        await database.updateStatus(record.localId, 'Failed',
+            errorMessage: 'Original dealer is missing. Review this scan before syncing.');
+      }
+      return SyncResult(false, 'Queued scans have no original dealer',
+          synced: 0, serverReached: false);
+    }
     if (pending.isEmpty) {
       try {
         await ApiClient(settings).health();

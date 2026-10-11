@@ -302,13 +302,14 @@ function cleanDevice(device) {
 
 async function listDevices(req, res) {
   try {
+    const scope = { dealerCode: req.activeDealerId };
     const manager = req.app.get('scannerManager');
     if (manager) {
       const [listed, activeAudit] = await Promise.all([
-        manager.list(),
-        getActiveAudit()
+        manager.list(scope),
+        getActiveAudit(scope)
       ]);
-      const summary = await manager.summary(listed);
+      const summary = await manager.summary(listed, scope);
       return res.json({
         success: true,
         activeCount: summary.connectedDevices,
@@ -329,13 +330,14 @@ async function listDevices(req, res) {
     await markExpiredDevicesOffline();
     const cutoff = liveCutoff();
     const [devices, oldDevices, activeAudit] = await Promise.all([
-      Device.find({ deviceType: 'mobile', removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).sort({ lastSeen: -1 }).lean(),
+      Device.find({ ...scope, deviceType: 'mobile', removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).sort({ lastSeen: -1 }).lean(),
       Device.find({
+        ...scope,
         deviceType: 'mobile',
         removedAt: null,
         $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }]
       }).sort({ lastSeen: -1 }).limit(50).lean(),
-      getActiveAudit()
+      getActiveAudit(scope)
     ]);
     res.json({
       success: true,

@@ -204,7 +204,7 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
     }
 
     const audit = await Audit.findOneAndUpdate(
-      { auditId },
+      { auditId, dealerCode: req.activeDealerId },
       isClosed ? { $set: payload } : { $set: payload, $unset: { auditClosedDate: '', completedAt: '', completedBy: '', completedByUserId: '', completionRemark: '' } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
@@ -234,7 +234,7 @@ router.post('/', auth.requireAuth, auth.requireAdmin, async (req, res) => {
 router.post('/:auditId/close', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const auditId = clean(req.params.auditId);
-    const currentAudit = await Audit.findOne({ auditId }).lean();
+    const currentAudit = await Audit.findOne({ auditId, dealerCode: req.activeDealerId }).lean();
     if (!currentAudit) return res.status(404).json({ success: false, message: 'Audit not found' });
     const blockers = await completionBlockers(currentAudit);
     if (hasCompletionBlockers(blockers) && req.body.confirmPending !== true) {
@@ -243,7 +243,7 @@ router.post('/:auditId/close', auth.requireAuth, auth.requireAdmin, async (req, 
     const completedAt = new Date();
     const completedByUser = req.user ? (req.user.name || req.user.username || req.user.email || '') : '';
     const audit = await Audit.findOneAndUpdate(
-      { auditId },
+      { auditId, dealerCode: req.activeDealerId },
       {
         status: 'closed',
         auditStatus: 'COMPLETED',
@@ -287,7 +287,7 @@ router.post('/:auditId/status/complete', auth.requireAuth, auth.requireAdmin, as
     const remark = clean(req.body.remark || '');
     const completedAt = new Date();
     const completedByUser = req.user ? (req.user.name || req.user.username || req.user.email || '') : 'System';
-    const audit = await Audit.findOne({ auditId });
+    const audit = await Audit.findOne({ auditId, dealerCode: req.activeDealerId });
 
     if (!audit) {
       return res.status(404).json({ success: false, message: 'Audit not found' });
@@ -308,7 +308,7 @@ router.post('/:auditId/status/complete', auth.requireAuth, auth.requireAdmin, as
 
     // Update audit status
     const updatedAudit = await Audit.findOneAndUpdate(
-      { auditId },
+      { auditId, dealerCode: req.activeDealerId },
       {
         $set: {
           auditStatus: 'COMPLETED',
@@ -348,7 +348,7 @@ router.post('/:auditId/status/reopen', auth.requireAuth, auth.requireAdmin, asyn
   try {
     const auditId = clean(req.params.auditId);
     const remark = clean(req.body.remark || '');
-    const audit = await Audit.findOne({ auditId });
+    const audit = await Audit.findOne({ auditId, dealerCode: req.activeDealerId });
 
     if (!audit) {
       return res.status(404).json({ success: false, message: 'Audit not found' });
@@ -368,7 +368,7 @@ router.post('/:auditId/status/reopen', auth.requireAuth, auth.requireAdmin, asyn
 
     // Update audit status
     const updatedAudit = await Audit.findOneAndUpdate(
-      { auditId },
+      { auditId, dealerCode: req.activeDealerId },
       {
         $set: {
           auditStatus: 'IN_PROGRESS',
@@ -413,7 +413,7 @@ router.post('/:auditId/status', auth.requireAuth, auth.requireAdmin, async (req,
     if (!['DRAFT', 'ACTIVE', 'PAUSED', 'LOCKED', 'ARCHIVED'].includes(nextStatus)) {
       return res.status(400).json({ success: false, message: 'Status must be DRAFT, ACTIVE, PAUSED, LOCKED, or ARCHIVED' });
     }
-    const audit = await Audit.findOne({ auditId });
+    const audit = await Audit.findOne({ auditId, dealerCode: req.activeDealerId });
     if (!audit) return res.status(404).json({ success: false, message: 'Audit not found' });
     if (nextStatus === 'ACTIVE') {
       const existingActive = await getActiveAudit({ dealerCode: audit.dealerCode });
@@ -436,7 +436,7 @@ router.post('/:auditId/status', auth.requireAuth, auth.requireAdmin, async (req,
       statusUpdate.lockedAt = changedAt;
     }
     const updatedAudit = await Audit.findOneAndUpdate(
-      { auditId },
+      { auditId, dealerCode: req.activeDealerId },
       {
         $set: statusUpdate,
         $unset: {

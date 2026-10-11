@@ -52,7 +52,8 @@ void main() {
     await tester.pump();
     expect(controller.text, '20K211S');
     expect(selections, 1);
-    expect(find.text('20K211S'), findsNothing);
+    // The selected value remains in EditableText; only the suggestion closes.
+    expect(find.byWidgetPredicate((widget) => widget is Text && widget.data == '20K211S'), findsNothing);
     expect(find.textContaining('CHAIN SPROCKET TEST'), findsNothing);
     expect(find.textContaining('770'), findsNothing);
     expect(tester.testTextInput.isVisible, true);

@@ -118,7 +118,16 @@ class ApiClient {
     required bool auth,
     required Duration timeout,
   }) async {
-    final uri = Uri.parse('$baseUrl$path');
+    var uri = Uri.parse('$baseUrl$path');
+    if (auth && !uri.path.startsWith('/api/auth/')) {
+      final dealer = (body?['dealerCode'] ?? uri.queryParameters['dealerCode'] ?? await settings.dealerCode).toString();
+      if (dealer.isNotEmpty) {
+        uri = uri.replace(queryParameters: {
+          ...uri.queryParameters,
+          'dealerCode': dealer,
+        });
+      }
+    }
     final headers = <String, String>{'Content-Type': 'application/json'};
     if (auth) {
       final token = await settings.token;
@@ -353,7 +362,16 @@ class ApiClient {
   Future<Map<String, dynamic>> syncBulk(List<ScanRecord> scans) async {
     final session = await settings.session;
     final deviceId = await settings.deviceId;
-    final dealerCode = await settings.dealerCode;
+    final dealerCodes = scans.map((scan) => scan.dealerCode).toSet();
+    if (dealerCodes.length != 1 || dealerCodes.first.trim().isEmpty) {
+      throw ApiException('Sync requires one original dealer per batch', retryable: false);
+    }
+    final dealerCode = dealerCodes.first;
+    final scopedSession = Map<String, dynamic>.from(session)
+      ..remove('dealerId')
+      ..remove('dealer')
+      ..remove('activeDealerId')
+      ..remove('dealerCode');
     final serverUrl = await settings.serverUrl;
     return _request(
       '/api/mobile/sync-bulk',
@@ -364,7 +382,8 @@ class ApiClient {
         'dealerCode': dealerCode,
         'appVersion': mobileAppVersionName,
         'serverUrl': serverUrl,
-        ...session,
+          ...scopedSession,
+          'activeDealerId': dealerCode,
         'scans': scans.map((scan) => scan.toApiPayload()).toList(),
       },
     );

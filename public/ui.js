@@ -868,7 +868,7 @@
   }
 
   function activeDealerId() {
-    if (isAdminUser()) return '';
+    if (isAdminUser()) return cleanDealerCode(state.dashboardDealerCode || state.activeDealerId || $('#dashboardDealerSelect')?.value || '');
     return cleanDealerCode(state.activeDealerId || storageGet(userScopedStorageKey(ACTIVE_DEALER_KEY)) || storageGet(ACTIVE_DEALER_KEY) || '');
   }
 
@@ -884,7 +884,7 @@
   }
 
   function shouldAttachDealerScope(path) {
-    if (!state.token || isAdminUser()) return false;
+    if (!state.token) return false;
     const dealerCode = activeDealerId();
     if (!dealerCode) return false;
     const url = new URL(String(path || ''), window.location.origin);
@@ -892,32 +892,35 @@
     return !/^\/api\/auth\//.test(url.pathname) && url.pathname !== '/api/health';
   }
 
-  function withActiveDealerQuery(path) {
+  function withActiveDealerQuery(path, body = null) {
     if (!shouldAttachDealerScope(path)) return path;
     const dealerCode = activeDealerId();
     const isAbsolute = /^https?:\/\//i.test(String(path || ''));
     const url = new URL(String(path || ''), window.location.origin);
-    if (!url.searchParams.get('activeDealerId')) url.searchParams.set('activeDealerId', dealerCode);
-    if (!url.searchParams.get('dealerCode')) url.searchParams.set('dealerCode', dealerCode);
+    const bodyScope = body instanceof FormData ? body.get('dealerCode') : body?.dealerCode || body?.filters?.dealerCode;
+    const intendedDealer = url.searchParams.get('activeDealerId') || url.searchParams.get('dealerId') || url.searchParams.get('dealerCode') || url.searchParams.get('dealer') || bodyScope || dealerCode;
+    if (!url.searchParams.get('activeDealerId')) url.searchParams.set('activeDealerId', intendedDealer);
+    if (!url.searchParams.get('dealerCode')) url.searchParams.set('dealerCode', intendedDealer);
     return isAbsolute ? url.href : `${url.pathname}${url.search}${url.hash}`;
   }
 
   function withActiveDealerBody(body) {
-    if (!body || isAdminUser()) return body;
+    if (!body) return body;
     const dealerCode = activeDealerId();
     if (!dealerCode) return body;
     if (body instanceof FormData) {
-      if (!body.has('activeDealerId')) body.append('activeDealerId', dealerCode);
+      if (!body.has('activeDealerId')) body.append('activeDealerId', body.get('dealerCode') || dealerCode);
       if (!body.has('dealerCode') || cleanDealerCode(body.get('dealerCode')) === 'ALL') body.set('dealerCode', dealerCode);
       return body;
     }
     if (typeof body !== 'object' || Array.isArray(body)) return body;
-    const next = { ...body, activeDealerId: body.activeDealerId || dealerCode };
+    const next = { ...body, activeDealerId: body.activeDealerId || body.dealerCode || body.filters?.dealerCode || dealerCode };
     const bodyDealer = cleanDealerCode(next.dealerCode || '');
-    if (!bodyDealer || bodyDealer === 'ALL') next.dealerCode = dealerCode;
+    if (!bodyDealer) next.dealerCode = next.activeDealerId;
     return next;
   }
 
+  let dealerContextVersion = 0;
   const pendingStatusRequests = new Map();
 
   function api(path, options = {}) {
@@ -933,14 +936,22 @@
   }
 
   async function apiRequest(path, options = {}) {
+    const contextVersion = dealerContextVersion;
+    const contextDealer = activeDealerId();
+    if (state.dealerSwitching && /^(?:POST|PUT|PATCH|DELETE)$/i.test(options.method || 'GET')
+      && /^\/api\/(?:scans|scan|inventory|local-parts|mobile|sync)(?:\/|$)/.test(path)) {
+      const error = new Error('Dealer selection is loading. Retry after it is confirmed.');
+      error.status = 409;
+      throw error;
+    }
     const statusRead = (options.method || 'GET').toUpperCase() === 'GET'
       && /^\/api\/(?:health|devices|scans\/history|sync\/status)(?:\?|$)/.test(path);
     const dashboardRead = (options.method || 'GET').toUpperCase() === 'GET'
       && /^\/api\/scans\/(?:dashboard(?:\/product-group-summary(?:\/details)?)?|live|recent)(?:\?|$)/.test(path);
     const { timeoutMs = dashboardRead ? 30000 : statusRead ? 15000 : 0, ...fetchOptions } = options;
     const headers = fetchOptions.headers ? { ...fetchOptions.headers } : {};
-    const requestPath = apiUrl(withActiveDealerQuery(path));
     const requestBody = fetchOptions.body ? withActiveDealerBody(fetchOptions.body) : fetchOptions.body;
+    const requestPath = apiUrl(withActiveDealerQuery(path, requestBody));
     const isFormData = requestBody instanceof FormData;
     if (!isFormData) headers['Content-Type'] = 'application/json';
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -972,6 +983,22 @@
         body: isFormData ? requestBody : requestBody ? JSON.stringify(requestBody) : undefined
       });
       const data = await parseApiResponse(response);
+      const savedDealer = response.headers?.get('X-Dealer-Code');
+      if (savedDealer) {
+        const expectedDealer = new URL(requestPath, window.location.origin).searchParams.get('dealerCode');
+        if (expectedDealer && cleanDealerCode(savedDealer) !== cleanDealerCode(expectedDealer)) {
+          const error = new Error('Server response belongs to a different dealer. Refresh the selected dealer.');
+          error.status = 409;
+          error.code = 'DEALER_RESPONSE_MISMATCH';
+          throw error;
+        }
+      }
+      if (shouldAttachDealerScope(path) && (contextVersion !== dealerContextVersion || contextDealer !== activeDealerId())) {
+        const error = new Error('Dealer changed while the request was running. Refresh the selected dealer.');
+        error.status = 409;
+        error.code = 'STALE_DEALER_RESPONSE';
+        throw error;
+      }
       if (data && data.invalidJson) {
         const error = new Error(data.message);
         error.status = response.status;
@@ -1504,7 +1531,17 @@
 
   function setActiveDealerId(dealerCode, options = {}) {
     const code = cleanDealerCode(dealerCode || '');
+    if (code !== activeDealerId()) {
+      dealerContextVersion += 1;
+      clearScopedLiveCaches({ clearReportCache: true });
+      pendingStatusRequests.clear();
+      const rows = $('#scanHistoryRows');
+      if (rows) rows.innerHTML = '<tr><td colspan="18">Loading selected dealer...</td></tr>';
+      const stream = $('#streamRows');
+      if (stream) stream.innerHTML = '';
+    }
     state.activeDealerId = code;
+    if (isAdminUser()) state.dashboardDealerCode = code;
     const scopedActiveDealerKey = userScopedStorageKey(ACTIVE_DEALER_KEY);
     if (code) {
       storageSet(ACTIVE_DEALER_KEY, code);
@@ -1529,6 +1566,9 @@
   }
 
   function clearScopedLiveCaches({ clearReportCache = false } = {}) {
+    state.dashboardAbortController?.abort();
+    state.reportAbortController?.abort();
+    state.scanHistoryLoadRequestId = null;
     state.barcodeServerDuplicateChecks.clear();
     state.barcodeScanLocks.clear();
     state.barcodeDuplicateLocks.clear();
@@ -13548,6 +13588,9 @@
           return;
         }
         if (select.id === 'dashboardDealerSelect' || select.id === 'dashboardAuditDealerSelect') {
+          setActiveDealerId(select.value);
+          state.dealerSwitching = true;
+          const switchVersion = dealerContextVersion;
           state.dashboardDealerCode = cleanDealerCode(select.value || '');
           ['#dashboardDealerSelect', '#dashboardAuditDealerSelect'].forEach((selector) => {
             const dashboardSelect = $(selector);
@@ -13563,7 +13606,12 @@
           const jobs = [];
           if (state.dashboardDealerCode) jobs.push(loadActiveAudit({ dealerCode: state.dashboardDealerCode, silent: true, allowMissing: true }));
           if ($('#reports')?.classList.contains('active') && isProductGroupSummaryReport()) jobs.push(loadReport({ forceRefresh: true }));
-          Promise.all(jobs.map((job) => job.catch((error) => toast(error.message, 'error'))));
+          if ($('#scan')?.classList.contains('active')) jobs.push(loadScanHistory());
+          Promise.all(jobs).then(() => {
+            if (switchVersion === dealerContextVersion) state.dealerSwitching = false;
+          }).catch((error) => {
+            toast(error.message, 'error');
+          });
           return;
         }
         if (select.closest('#binLabelForm')) {

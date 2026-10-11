@@ -3497,7 +3497,7 @@ router.get('/logs', auth.requireAuth, async (req, res) => {
 
 router.get('/pending', auth.requireAuth, async (req, res) => {
   try {
-    const records = await Inventory.find({ $and: [nonVerificationScanClause()], $or: [{ syncStatus: 'pending' }, { syncStatus: 'failed' }, { isSynced: false }] })
+    const records = await Inventory.find({ dealerCode: req.activeDealerId, $and: [nonVerificationScanClause()], $or: [{ syncStatus: 'pending' }, { syncStatus: 'failed' }, { isSynced: false }] })
       .sort({ createdAt: 1 })
       .limit(500)
       .lean();

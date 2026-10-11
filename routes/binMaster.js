@@ -178,7 +178,7 @@ router.put('/:id', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const id = clean(req.params.id);
     if (!id) return res.status(400).json({ success: false, message: 'Invalid bin id' });
-    const existing = await Bin.findById(id);
+    const existing = await Bin.findOne({ _id: id, dealerCode: req.activeDealerId });
     if (!existing) return res.status(404).json({ success: false, message: 'Bin not found' });
 
     const dealerCode = upper(req.body.dealerCode || existing.dealerCode);
@@ -194,10 +194,13 @@ router.put('/:id', auth.requireAuth, auth.requireAdmin, async (req, res) => {
     existing.binName = clean(req.body.binName || binCode) || binCode;
     existing.category = clean(req.body.category);
     existing.active = req.body.active === undefined ? existing.active !== false : req.body.active !== false;
-    await existing.save();
+    const updated = await Bin.findOneAndUpdate({ _id: id, dealerCode: req.activeDealerId }, { $set: {
+      binCode: existing.binCode, binName: existing.binName, category: existing.category, active: existing.active
+    } }, { new: true });
+    if (!updated) return res.status(404).json({ success: false, message: 'Bin not found' });
 
     req.io.emit('master:update', { dealerCode, scope: 'bins' });
-    return res.json({ success: true, bin: publicBin(existing), message: 'Bin updated' });
+    return res.json({ success: true, bin: publicBin(updated), message: 'Bin updated' });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -207,8 +210,10 @@ router.delete('/:id', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const id = clean(req.params.id);
     if (!id) return res.status(400).json({ success: false, message: 'Invalid bin id' });
-    const bin = await Bin.findByIdAndDelete(id).lean();
+    const bin = await Bin.findOne({ _id: id, dealerCode: req.activeDealerId }).lean();
     if (!bin) return res.status(404).json({ success: false, message: 'Bin not found' });
+    const deleted = await Bin.deleteOne({ _id: id, dealerCode: req.activeDealerId });
+    if (!deleted.deletedCount) return res.status(404).json({ success: false, message: 'Bin not found' });
     req.io.emit('master:update', { dealerCode: upper(bin.dealerCode), scope: 'bins' });
     return res.json({ success: true, deletedCount: 1, bin: publicBin(bin), message: 'Bin deleted' });
   } catch (error) {

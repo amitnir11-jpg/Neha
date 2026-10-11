@@ -193,6 +193,7 @@ async function requireAuth(req, res, next) {
     }
     const dealerAccess = await userDealerAccessCodes(freshUser);
     req.user = { ...publicUser({ ...freshUser, dealerAccess }), dealerAccess };
+    const scopedRequest = isDealerScopedRequest(req);
     const dealerCodes = extractRequestDealerCodes(req);
     if (dealerCodes.length > 1) {
       return res.status(400).json({ success: false, message: 'Conflicting dealer context in request. Select one dealer and retry.' });
@@ -204,6 +205,9 @@ async function requireAuth(req, res, next) {
     if (!requestedDealer && !isAdmin && dealerAccess.length === 1 && dealerAccess[0] !== 'ALL') {
       requestedDealer = dealerAccess[0];
     }
+    if (scopedRequest && (!requestedDealer || requestedDealer === 'ALL')) {
+      return res.status(400).json({ success: false, message: 'Select exactly one dealer before accessing dealer data.' });
+    }
     if (requestedDealer && requestedDealer !== 'ALL') {
       const access = await validateUserDealerAccess(req.user, requestedDealer, dealerAccess);
       if (!access.allowed) {
@@ -213,6 +217,15 @@ async function requireAuth(req, res, next) {
           requestedDealer: access.requestedDealer,
           userDealerAccess: access.userDealerAccess
         });
+      }
+      if (scopedRequest) {
+        const dealer = await Dealer.findOne({ dealerCode: access.requestedDealer }).lean();
+        if (!dealer || dealer.active === false || dealer.isActive === false || dealer.isDeleted === true) {
+          return res.status(400).json({ success: false, message: 'Selected dealer does not exist or is inactive.' });
+        }
+        req.authorizedDealer = { id: dealer._id || dealer.id, dealerCode: dealer.dealerCode };
+        res.setHeader('X-Dealer-Code', dealer.dealerCode);
+        res.setHeader('X-Dealer-Id', String(req.authorizedDealer.id));
       }
       applyRequestDealer(req, access.requestedDealer);
     } else if (requestedDealer === 'ALL' && !isAdmin) {
@@ -475,12 +488,20 @@ function extractRequestDealerCodes(req = {}) {
   add(req.query);
   add(req.params);
   add(req.body);
+  add(req.body?.filters);
   let scanIdentity = req.body?.scanIdentity;
   if (typeof scanIdentity === 'string') {
     try { scanIdentity = JSON.parse(scanIdentity); } catch (_error) { scanIdentity = null; }
   }
   add(scanIdentity);
-  const addRows = (rows) => Array.isArray(rows) && rows.forEach(add);
+  const addRows = (rows) => Array.isArray(rows) && rows.forEach(row => {
+    add(row);
+    let identity = row?.scanIdentity;
+    if (typeof identity === 'string') {
+      try { identity = JSON.parse(identity); } catch (_) { identity = null; }
+    }
+    add(identity);
+  });
   addRows(req.body);
   ['scans', 'records', 'items', 'inventory'].forEach((key) => addRows(req.body?.[key]));
   return [...new Set(values)];
@@ -492,11 +513,15 @@ function isDealerScopedRequest(req) {
   if (base === '/api/auth' || base === '/api/users') return false;
   if (base === '/api/master' && ['/dealers', '/filters', '/suggestions'].includes(path)) return false;
   if (base === '/api/dealers' && req.method === 'GET') return false;
+  if (base === '/api/bin-transfer' && path === '/dealers' && req.method === 'GET') return false;
+  if (base === '/api/admin-delete' && (path === '/dealers' || path.startsWith('/permanent-cleanup/'))) return false;
   if (base === '/api/mobile' && req.method === 'GET' && ['/dealers', '/config'].includes(path)) return false;
   return [
     '/api/scans',
+    '/api/scan',
     '/api/inventory',
     '/api/reports',
+    '/api/report',
     '/api/reconciliation',
     '/api/dealer-stock',
     '/api/bin',
@@ -508,6 +533,10 @@ function isDealerScopedRequest(req) {
     '/api/mobile',
     '/api/audit-backup',
     '/api/audit',
+    '/api/audit-dashboard',
+    '/api/local-parts',
+    '/api/scan-audit',
+    '/api/admin-delete',
     '/api/master-parts',
     '/api/parts',
     '/api/master'
@@ -536,6 +565,7 @@ function applyRequestDealer(req, dealerCode) {
   if (req.query.dealer !== undefined) req.query.dealer = cleanDealer;
   if (req.query.dealerId !== undefined) req.query.dealerId = cleanDealer;
   if (req.body && typeof req.body === 'object' && !(req.body instanceof Buffer)) {
+    if (req.body.filters && typeof req.body.filters === 'object') req.body.filters.dealerCode = cleanDealer;
     req.body.activeDealerId = cleanDealer;
     req.body.dealerCode = cleanDealer;
     if (req.body.dealer !== undefined) req.body.dealer = cleanDealer;
