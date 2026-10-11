@@ -48,7 +48,7 @@ async function main() {
     const input = page.locator('#barcodePartNumber');
     await input.fill(session.stem.toLowerCase());
     await page.locator('.smart-part-menu:not([hidden]) [role="option"]').first().waitFor();
-    assert.equal(await page.locator('.smart-part-menu:not([hidden]) [role="option"]').count(), 8);
+    assert.equal(await page.locator('.smart-part-menu:not([hidden]) [role="option"]').count(), 5);
     await page.locator('.smart-part-menu:not([hidden]) [role="option"]').first().click();
     assert.equal(await input.inputValue(), session.stem);
     assert.equal(await page.locator('#regularPartEntryTab [name="mrp"]').inputValue(), '770');

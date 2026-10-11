@@ -5037,11 +5037,14 @@
         window.SmartPartSearch.bind(input, {
           getScope: () => `${state.token || ''}|${dealer()}`,
           isEnabled: () => Boolean(state.token),
-          fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: dealer(), limit: scanEntrySearch ? '8' : '10' })}`, { ...options, timeoutMs: 5000 }),
+          fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: dealer(), limit: scanEntrySearch ? '5' : '10' })}`, { ...options, timeoutMs: 5000 }),
           ...(scanEntrySearch ? {
-            maxResults: 8,
+            maxResults: 5,
             displayPrice: false,
-            layout: 'columns',
+            widthMode: input.closest('#scanHistoryFilters') ? 'wide' : input.id === 'barcodePartNumber' ? 'panel' : 'input',
+            widthSelector: input.id === 'barcodePartNumber' ? '#regularPartEntryTab' : undefined,
+            maxWidth: 560,
+            debounceMs: 180,
             noResultsMessage: 'No matching part found.',
             ...(input.id === 'barcodePartNumber' ? { avoidSelector: '#saveBarcodeManualScan' } : {})
           } : {}),

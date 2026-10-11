@@ -62,11 +62,20 @@ test('web, mobile web and Android all call canonical suggestions with no stock s
     assert.match(source, /\/api\/parts\/suggestions\?/);
   }
   const component = fs.readFileSync('public/js/smart-part-search.js', 'utf8');
-  assert.match(component, /}, 200\)/);
+  assert.match(component, /Number\(options\.debounceMs\) \|\| 180/);
+  assert.match(component, /Math\.min\(5, Number\(options\.maxResults\) \|\| 5\)/);
   assert.match(component, /version !== sequence/);
   assert.match(component, /displayedScope !== scope/);
   assert.match(component, /button.type = 'button'/);
   assert.ok(!component.includes('requestSubmit'));
+  const styles = fs.readFileSync('public/smart-part-search.css', 'utf8');
+  assert.match(styles, /min-height: 64px/);
+  assert.match(styles, /overflow-wrap: anywhere/);
+  assert.match(styles, /overflow-x: hidden/);
+  const scan = fs.readFileSync('public/scan.js', 'utf8');
+  assert.match(scan, /widthMode: 'panel'/);
+  const ui = fs.readFileSync('public/ui.js', 'utf8');
+  assert.match(ui, /widthMode: input\.closest\('#scanHistoryFilters'\) \? 'wide'/);
   const auth = fs.readFileSync('routes/auth.js', 'utf8');
   const scoped = auth.slice(auth.indexOf('function isDealerScopedRequest('), auth.indexOf('async function validateUserDealerAccess('));
   assert.ok(scoped.includes("'/api/parts'"));

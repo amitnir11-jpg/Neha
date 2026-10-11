@@ -36,9 +36,22 @@
       const below = Math.max(0, safeBottom - rect.bottom - 8);
       const above = Math.max(0, rect.top - top - 8);
       const flip = below < 100 && above > below;
-      const height = Math.min(300, flip ? above : below);
-      menu.style.left = `${Math.max(4, rect.left)}px`;
-      menu.style.width = `${Math.min(rect.width, (viewport?.width || root.innerWidth) - 8)}px`;
+      const availableWidth = viewport?.width || root.innerWidth;
+      const viewportLeft = viewport?.offsetLeft || 0;
+      const viewportRight = viewportLeft + availableWidth;
+      const anchor = options.widthSelector ? input.closest(options.widthSelector) : null;
+      const anchorRect = anchor?.getBoundingClientRect();
+      const desiredWidth = options.widthMode === 'panel' && anchorRect
+        ? anchorRect.width
+        : options.widthMode === 'wide'
+          ? Math.max(rect.width, Math.min(Number(options.maxWidth) || 560, availableWidth - 16))
+          : rect.width;
+      const width = Math.max(0, Math.min(desiredWidth, availableWidth - 16));
+      const preferredLeft = options.widthMode === 'panel' && anchorRect ? anchorRect.left : rect.left;
+      const left = Math.max(viewportLeft + 8, Math.min(preferredLeft, viewportRight - width - 8));
+      const height = Math.min(320, flip ? above : below);
+      menu.style.left = `${left}px`;
+      menu.style.width = `${width}px`;
       menu.style.maxHeight = `${height}px`;
       menu.style.top = `${flip ? Math.max(top + 4, rect.top - Math.min(menu.scrollHeight, height) - 4) : rect.bottom + 4}px`;
     }
@@ -69,7 +82,7 @@
 
     function render(parts, message = '') {
       displayedScope = scope();
-      rows = parts.slice(0, Math.max(1, Math.min(10, Number(options.maxResults) || 10)));
+      rows = parts.slice(0, Math.max(1, Math.min(5, Number(options.maxResults) || 5)));
       active = -1;
       input.removeAttribute('aria-activedescendant');
       menu.replaceChildren();
@@ -126,7 +139,7 @@
         } finally {
           clearTimeout(timeout);
         }
-      }, 200);
+      }, Number(options.debounceMs) || 180);
     }
 
     input.addEventListener('input', search);

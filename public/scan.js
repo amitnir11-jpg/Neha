@@ -3840,11 +3840,13 @@
     window.SmartPartSearch.bind(input, {
       getScope: () => `${state.session?.token || ''}|${activeDealerCode()}|${activeAuditId()}`,
       isEnabled: () => Boolean(state.session?.token),
-      maxResults: 8,
+      maxResults: 5,
       displayPrice: false,
-      layout: 'columns',
+      widthMode: 'panel',
+      widthSelector: '#mobileRegularPartPanel',
+      debounceMs: 180,
       noResultsMessage: 'No matching part found.',
-      fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: activeDealerCode(), limit: '8' })}`, { ...options, timeoutMs: 5000 }),
+      fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: activeDealerCode(), limit: '5' })}`, { ...options, timeoutMs: 5000 }),
       onSelect: (part) => {
         input.value = upper(part.partNumber);
         byId('manualMrp').value = Number(part.mrp) > 0 ? String(part.mrp) : '';
