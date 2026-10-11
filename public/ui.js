@@ -3153,7 +3153,17 @@
   }
 
   function tableColumnMinWidth(key) {
-    return key === 'select' ? 44 : 70;
+    if (key === 'select') return 44;
+    if (key === 'bin' || key === 'bin-location') return 120;
+    if (key === 'part-number') return 125;
+    if (key === 'part-description') return 150;
+    return 70;
+  }
+
+  function scanHistoryLayoutStorageKey() {
+    const user = state.user || readStoredJson('dakshUser') || {};
+    const identity = String(user.id || user.username || user.email || user.name || 'user').trim().toLowerCase();
+    return `daksh_table_scan_history:${encodeURIComponent(identity)}`;
   }
 
   function applyTableColumnOrder(table, order) {
@@ -3171,7 +3181,7 @@
         if (row.dataset.columnOrder === orderSignature) return;
         const cells = Array.from(row.children);
         if (cells.length !== headers.length) return;
-        const sourceIndexes = row.dataset.columnOrder ? currentIndexes : headers.map((_, index) => index);
+        const sourceIndexes = row.dataset.columnOrder ? currentIndexes : headers.map((th) => Number(th.dataset.originalIndex));
         orderedIndexes.map((index) => cells[sourceIndexes.indexOf(index)]).filter(Boolean).forEach((cell) => row.appendChild(cell));
         row.dataset.columnOrder = orderSignature;
       });
@@ -3207,6 +3217,7 @@
 
   function enhanceDataTable(table, storageKey) {
     if (!table || !table.tHead || !table.tHead.rows.length) return;
+    table.dataset.preferenceKey = storageKey;
     const prefs = tablePrefs(storageKey);
     table.classList.add('resizable-data-table');
     table.style.tableLayout = 'fixed';
@@ -3268,9 +3279,10 @@
       };
       const onUp = (upEvent) => {
         const width = Math.max(tableColumnMinWidth(key), startWidth + upEvent.clientX - startX);
-        const columnWidths = { ...(tablePrefs(storageKey).columnWidths || {}) };
+        const activeStorageKey = table.dataset.preferenceKey || storageKey;
+        const columnWidths = { ...(tablePrefs(activeStorageKey).columnWidths || {}) };
         columnWidths[key] = Math.round(width);
-        saveTablePrefs(storageKey, { columnWidths });
+        saveTablePrefs(activeStorageKey, { columnWidths });
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
       };
@@ -3289,7 +3301,11 @@
       th.classList.add('dragging');
     });
     table.tHead.addEventListener('dragover', (event) => {
-      if (event.target.closest('th[data-col-key]')) event.preventDefault();
+      const target = event.target.closest('th[data-col-key]');
+      if (!target) return;
+      event.preventDefault();
+      Array.from(table.tHead.querySelectorAll('th.drag-over')).forEach((th) => th.classList.remove('drag-over'));
+      target.classList.add('drag-over');
     });
     table.tHead.addEventListener('drop', (event) => {
       const target = event.target.closest('th[data-col-key]');
@@ -3298,13 +3314,16 @@
       event.preventDefault();
       const current = Array.from(headRow.children).map((th) => th.dataset.colKey);
       const next = current.filter((key) => key !== sourceKey);
-      next.splice(next.indexOf(target.dataset.colKey), 0, sourceKey);
-      saveTablePrefs(storageKey, { columnOrder: next });
+      const targetIndex = next.indexOf(target.dataset.colKey);
+      const afterTarget = event.clientX > target.getBoundingClientRect().left + target.getBoundingClientRect().width / 2;
+      next.splice(targetIndex + (afterTarget ? 1 : 0), 0, sourceKey);
+      saveTablePrefs(table.dataset.preferenceKey || storageKey, { columnOrder: next });
       applyTableColumnOrder(table, next);
       enhanceDataTable(table, storageKey);
     });
     table.tHead.addEventListener('dragend', () => {
       Array.from(table.querySelectorAll('th.dragging')).forEach((th) => th.classList.remove('dragging'));
+      Array.from(table.querySelectorAll('th.drag-over')).forEach((th) => th.classList.remove('drag-over'));
     });
   }
 
@@ -3312,7 +3331,7 @@
     enhanceDataTable($('#streamRows')?.closest('table'), 'daksh_table_realtime_stream');
     enhanceDataTable($('#productGroupSummaryRows')?.closest('table'), 'daksh_table_product_group_summary');
     const scanHistoryTable = $('#scanHistoryRows')?.closest('table');
-    if (!isBarcodeWorkspaceActive()) enhanceDataTable(scanHistoryTable, 'daksh_table_scan_history');
+    enhanceDataTable(scanHistoryTable, scanHistoryLayoutStorageKey());
     initScanHistorySorting(scanHistoryTable);
     enhanceDataTable($('#dealerStockPreviewTable'), 'daksh_table_dealer_stock_preview');
     enhanceDataTable($('#localPartHistoryTable'), 'daksh_table_local_part_history');
@@ -3867,10 +3886,11 @@
     const mode = compact ? 'barcode' : 'full';
     if (table.dataset.workspaceMode !== mode) {
       table.dataset.workspaceMode = mode;
+      Array.from(table.tHead.rows[0].children).forEach((th) => { delete th.dataset.originalIndex; });
+      table.querySelector('colgroup')?.remove();
       if (compact) {
-        table.querySelector('colgroup')?.remove();
-        const columns = [['select', ''], ['row', '#'], ['time', 'Date & Time'], ['type', 'Type'], ['partNumber', 'Part Number'], ['partDescription', 'Description'], ['bin', 'Bin'], ['qty', 'Qty'], ['mrp', 'MRP (₹)'], ['dlc', 'DLC (₹)'], ['regdNo', 'Regd No'], ['jobCardNo', 'Job Card No'], ['device', 'Device'], ['action', 'Action']];
-        table.tHead.innerHTML = `<tr>${columns.map(([key, title]) => `<th data-col-key="${key}"${['time', 'type', 'partNumber', 'partDescription', 'bin', 'qty', 'mrp', 'dlc', 'device'].includes(key) ? ` data-sort-key="${key}"` : ''}>${key === 'select' ? '<input id="scanHistorySelectAll" type="checkbox" aria-label="Select all visible scans">' : title}</th>`).join('')}</tr>`;
+        const columns = [['select', ''], ['row', '#'], ['time', 'Date & Time'], ['type', 'Type'], ['part-number', 'Part Number'], ['part-description', 'Description'], ['bin', 'Bin Location'], ['qty', 'Qty'], ['mrp', 'MRP (₹)'], ['dlc', 'DLC (₹)'], ['regdNo', 'Regd No'], ['jobCardNo', 'Job Card No'], ['device', 'Device'], ['action', 'Action']];
+        table.tHead.innerHTML = `<tr>${columns.map(([key, title]) => `<th data-col-key="${key}"${['time', 'type', 'part-number', 'part-description', 'bin', 'qty', 'mrp', 'dlc', 'device'].includes(key) ? ` data-sort-key="${key === 'part-number' ? 'partNumber' : key === 'part-description' ? 'partDescription' : key}"` : ''}>${key === 'select' ? '<input id="scanHistorySelectAll" type="checkbox" aria-label="Select all visible scans">' : title}</th>`).join('')}</tr>`;
       } else {
         table.tHead.innerHTML = state.scanHistoryFullHeader;
       }
@@ -3898,6 +3918,19 @@
     configureScanHistoryLayout();
     const rows = (Array.isArray(records) ? records : []).slice(0, isBarcodeWorkspaceActive() ? 10 : 500);
     body.innerHTML = rows.length ? rows.map((scan, index) => scanHistoryRow(scan, index)).join('') : `<tr><td colspan="${isBarcodeWorkspaceActive() ? 14 : 18}" class="muted">No scan history found</td></tr>`;
+    const table = body.closest('table');
+    if (table) enhanceDataTable(table, scanHistoryLayoutStorageKey());
+    const resetLayout = $('#scanHistoryResetLayout');
+    if (resetLayout && resetLayout.dataset.bound !== 'true') {
+      resetLayout.dataset.bound = 'true';
+      resetLayout.addEventListener('click', () => {
+        localStorage.removeItem(scanHistoryLayoutStorageKey());
+        const currentTable = $('#scanHistoryRows')?.closest('table');
+        if (!currentTable) return;
+        currentTable.dataset.workspaceMode = '';
+        renderScanHistoryRecords(state.scanHistoryRecords || [], state.scanHistorySummary || {});
+      });
+    }
     updateScanHistorySummary(rows, summary);
     bindScanHistoryActions();
     renderScanHistorySortHeaders();
@@ -4812,7 +4845,7 @@
         <td>${escapeHtml(displayQty)}</td>
         <td>${escapeHtml(totalQty)}</td>
         <td>${escapeHtml(scan.type)}</td>
-        <td>${escapeHtml(scan.bin)}</td>
+        <td>${escapeHtml(scan.binLocation || scan.bin || '')}</td>
         <td>${escapeHtml(scan.dealerName || scan.dealerCode)}</td>
         <td>${deviceLink(scan.deviceId)}</td>
         <td>${statusCell(scan)}</td>
@@ -10690,7 +10723,10 @@
   async function loadMasterScanValidator() {
     const panel = $('#validatorStats');
     if (!panel) return;
-    const query = queryFromForm($('#validatorFilters'));
+    const params = new URLSearchParams(queryFromForm($('#validatorFilters')));
+    const dealerCode = cleanDealerCode($('#dashboardDealerSelect')?.value || state.activeDealerId || '');
+    if (dealerCode) params.set('dealerCode', dealerCode);
+    const query = params.toString();
     const data = await api(`/api/master/scan-validator${query ? `?${query}` : ''}`);
     state.validatorInvalidRows = data.invalidRows || data.missingRows || [];
     const stats = [
@@ -10730,7 +10766,8 @@
   }
 
   async function runValidatorAction(endpoint, message) {
-    const data = await api(endpoint, { method: 'POST', body: {} });
+    const dealerCode = cleanDealerCode($('#dashboardDealerSelect')?.value || state.activeDealerId || '');
+    const data = await api(endpoint, { method: 'POST', body: { dealerCode } });
     toast(data.message || message);
     await loadMasterScanValidator();
   }
@@ -10780,7 +10817,8 @@
     const partNumber = String($('#validatorMapPartNumber')?.value || '').trim();
     if (!ids.length) throw new Error('No invalid scan details selected');
     if (!partNumber) throw new Error('Existing master part number is required');
-    const data = await api('/api/master/scan-validator/map', { method: 'POST', body: { ids, partNumber } });
+    const dealerCode = cleanDealerCode($('#dashboardDealerSelect')?.value || state.activeDealerId || '');
+    const data = await api('/api/master/scan-validator/map', { method: 'POST', body: { ids, partNumber, dealerCode } });
     toast(data.message || 'Invalid scans mapped with existing part');
     closeValidatorMapModal();
     await loadMasterScanValidator();
@@ -10790,7 +10828,7 @@
     const ids = validatorRowIds(index);
     if (!ids.length) throw new Error('No invalid scan details selected');
     let endpoint = '';
-    let body = { ids };
+    let body = { ids, dealerCode: cleanDealerCode($('#dashboardDealerSelect')?.value || state.activeDealerId || '') };
     if (action === 'ignore') endpoint = '/api/master/scan-validator/ignore';
     if (action === 'corrected') endpoint = '/api/master/scan-validator/mark-corrected';
     if (action === 'delete') {
@@ -13695,7 +13733,10 @@
     $('#validatorRefreshBtn')?.addEventListener('click', () => loadMasterScanValidator().catch((error) => toast(error.message, 'error')));
     $('#recheckInvalidPartsBtn')?.addEventListener('click', () => runValidatorAction('/api/master/scan-validator/normalize-scans', 'Invalid parts rechecked').catch((error) => toast(error.message, 'error')));
     $('#exportMissingMasterBtn')?.addEventListener('click', () => {
-      const query = queryFromForm($('#validatorFilters'));
+      const params = new URLSearchParams(queryFromForm($('#validatorFilters')));
+      const dealerCode = cleanDealerCode($('#dashboardDealerSelect')?.value || state.activeDealerId || '');
+      if (dealerCode) params.set('dealerCode', dealerCode);
+      const query = params.toString();
       downloadGet(`/api/master/scan-validator/missing-master/export${query ? `?${query}` : ''}`, 'Invalid_Master_Parts.xlsx').catch((error) => toast(error.message, 'error'));
     });
     $('#validatorFilters')?.addEventListener('submit', (event) => {

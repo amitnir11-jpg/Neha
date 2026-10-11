@@ -3671,6 +3671,10 @@ tr:hover td {
   background: #dbeafe;
 }
 
+.resizable-data-table th.drag-over {
+  box-shadow: inset 3px 0 #2563eb;
+}
+
 .column-resizer {
   position: absolute;
   right: 0;

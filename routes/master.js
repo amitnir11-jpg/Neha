@@ -29,6 +29,23 @@ function invalidateMasterCaches(scope = {}, tags = ['master', 'catalogue', 'sear
   invalidateCache({ tags, scope });
 }
 
+function dealerScopedMasterFilter(filter = {}, dealerCode = '') {
+  const dealer = normalizePart(dealerCode);
+  const scope = dealer && dealer !== 'ALL'
+    ? { $or: [{ dealerCode: dealer }, { dealerCode: null }, { dealerCode: '' }, { dealerCode: 'ALL' }] }
+    : { $or: [{ dealerCode: null }, { dealerCode: '' }, { dealerCode: 'ALL' }] };
+  return { $and: [filter, scope] };
+}
+
+function selectedMasterDealer(req, res) {
+  const dealerCode = normalizePart(req.activeDealerId || req.query?.dealerCode || req.query?.activeDealerId || '');
+  if (!dealerCode || dealerCode === 'ALL') {
+    res.status(400).json({ success: false, message: 'Select one dealer before searching dealer inventory.' });
+    return '';
+  }
+  return dealerCode;
+}
+
 async function migrateDealerCodeReferences(fromCode, toCode) {
   const modelsWithDealerCode = Prisma.dmmf.datamodel.models
     .filter((model) => model.fields.some((field) => field.name === 'dealerCode'));
@@ -499,7 +516,9 @@ async function parsePartsFromUpload(file, body) {
   return parts;
 }
 
-async function importParts(parts) {
+async function importParts(parts, dealerCode) {
+  dealerCode = normalizePart(dealerCode);
+  if (!dealerCode || dealerCode === 'ALL') throw new Error('Select one dealer before importing part data.');
   const cleanParts = [];
   const failed = [];
   const seen = new Set();
@@ -509,6 +528,12 @@ async function importParts(parts) {
       failed.push({ row: index + 1, message: 'Missing part number' });
       return;
     }
+    const rowDealer = normalizePart(part.dealerCode || '');
+    if (rowDealer && rowDealer !== dealerCode) {
+      failed.push({ row: index + 1, partNo: part.partNo, message: 'Dealer code does not match the selected dealer' });
+      return;
+    }
+    part.dealerCode = dealerCode;
     if (seen.has(part.partNo)) {
       failed.push({ row: index + 1, partNo: part.partNo, message: 'Duplicate inside upload file' });
       return;
@@ -521,11 +546,12 @@ async function importParts(parts) {
     return { successCount: 0, duplicateCount: 0, failedCount: failed.length, failed };
   }
 
-  const existing = await MasterPart.find({ normalizedPartNumber: { $in: cleanParts.map((part) => part.normalizedPartNumber || part.partNo) } }).select('partNo normalizedPartNumber').lean();
+  const partNumbers = cleanParts.map((part) => part.normalizedPartNumber || part.partNo);
+  const existing = await MasterPart.find({ dealerCode, normalizedPartNumber: { $in: partNumbers } }).select('partNo normalizedPartNumber').lean();
   const existingSet = new Set(existing.map((part) => part.partNo));
   const operations = cleanParts.map((part) => ({
     updateOne: {
-      filter: { partNo: part.partNo },
+      filter: { partNo: part.partNo, dealerCode },
       update: { $set: part },
       upsert: true
     }
@@ -556,6 +582,8 @@ async function importParts(parts) {
 
 router.post('/upload', auth.requireAuth, auth.requireAdmin, upload.single('file'), async (req, res) => {
   try {
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -593,11 +621,10 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, upload.single('file'
         hint: 'Your Excel/CSV file must have a header row with at minimum a "Part Number" column. See requiredColumns for all accepted header names.'
       });
     }
-    const cleared = (await MasterPart.deleteMany({})).deletedCount || 0;
-    const result = await importParts(parts);
+    const result = await importParts(parts, dealerCode);
     req.io.emit('master:update');
     invalidateMasterCaches();
-    res.json({ success: true, imported: result.successCount, clearedMasterRows: cleared, ...result });
+    res.json({ success: true, imported: result.successCount, clearedMasterRows: 0, ...result });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -605,6 +632,8 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, upload.single('file'
 
 router.post('/parts/upload', auth.requireAuth, auth.requireAdmin, upload.single('file'), async (req, res) => {
   try {
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -641,11 +670,10 @@ router.post('/parts/upload', auth.requireAuth, auth.requireAdmin, upload.single(
         hint: 'Your Excel/CSV file must have a header row with at minimum a "Part Number" column. See requiredColumns for all accepted header names.'
       });
     }
-    const cleared = (await MasterPart.deleteMany({})).deletedCount || 0;
-    const result = await importParts(parts);
+    const result = await importParts(parts, dealerCode);
     req.io.emit('master:update');
     invalidateMasterCaches();
-    res.json({ success: true, clearedMasterRows: cleared, ...result });
+    res.json({ success: true, clearedMasterRows: 0, ...result });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -653,6 +681,8 @@ router.post('/parts/upload', auth.requireAuth, auth.requireAdmin, upload.single(
 
 router.get('/parts', auth.requireAuth, async (req, res) => {
   try {
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
     const filter = {};
     if (req.query.q) {
       const q = String(req.query.q).trim();
@@ -668,9 +698,8 @@ router.get('/parts', auth.requireAuth, async (req, res) => {
     }
     if (req.query.category) filter.category = String(req.query.category).trim();
     if (req.query.bin) filter.bin = { $regex: String(req.query.bin).trim(), $options: 'i' };
-    if (req.query.dealerCode) filter.dealerCode = normalizePart(req.query.dealerCode);
     const limit = Math.min(Number(req.query.limit || 500), 2000);
-    const result = (await MasterPart.find(filter).sort({ partNo: 1 }).limit(limit).lean()).map(formatPart);
+    const result = (await MasterPart.find(dealerScopedMasterFilter(filter, dealerCode)).sort({ partNo: 1 }).limit(limit).lean()).map(formatPart);
     res.json({ success: true, parts: result });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -679,6 +708,8 @@ router.get('/parts', auth.requireAuth, async (req, res) => {
 
 router.post('/parts', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
+    const dealerCode = normalizePart(req.activeDealerId || req.body.dealerCode || '');
+    if (!dealerCode || dealerCode === 'ALL') return res.status(400).json({ success: false, message: 'Select one dealer before adding dealer part data.' });
     const part = partFromObject({
       partnumber: req.body.partNumber || req.body.partNo || req.body.part,
       partname: req.body.partDescription || req.body.partName,
@@ -686,12 +717,12 @@ router.post('/parts', auth.requireAuth, auth.requireAdmin, async (req, res) => {
       category: req.body.productCategory || req.body.category,
       mrp: req.body.mrp,
       dlc: req.body.dlc,
-      dealercode: req.body.dealerCode,
+      dealercode: dealerCode,
       quantity: req.body.qty || req.body.quantity || req.body.openingStockQty,
       active: req.body.activeStatus
     });
     if (!part) return res.status(400).json({ success: false, message: 'Part number is required' });
-    const result = await importParts([part]);
+    const result = await importParts([part], dealerCode);
     req.io.emit('master:update');
     invalidateMasterCaches();
     res.json({ success: true, part, ...result });
@@ -1209,7 +1240,7 @@ router.post('/bins/merge', auth.requireAuth, auth.requireAdmin, async (req, res)
   try {
     const sourceBin = normalizePart(req.body.sourceBin);
     const destBin = normalizePart(req.body.destBin);
-    const dealerCode = normalizePart(req.body.dealerCode);
+    const dealerCode = normalizePart(req.activeDealerId || req.body.dealerCode || '');
 
     if (!sourceBin || !destBin) {
       return res.status(400).json({ success: false, message: 'Source and destination bins are required' });
@@ -1217,16 +1248,16 @@ router.post('/bins/merge', auth.requireAuth, auth.requireAdmin, async (req, res)
     if (sourceBin === destBin) {
       return res.status(400).json({ success: false, message: 'Source and destination bins cannot be the same' });
     }
+    if (!dealerCode || dealerCode === 'ALL') {
+      return res.status(400).json({ success: false, message: 'Select one dealer before merging bins.' });
+    }
 
     const masterFilter = { bin: sourceBin };
     const inventoryFilter = { $or: [{ bin: sourceBin }, { binLocation: sourceBin }] };
     const binFilter = { binCode: sourceBin };
-
-    if (dealerCode) {
-      masterFilter.dealerCode = dealerCode;
-      inventoryFilter.dealerCode = dealerCode;
-      binFilter.dealerCode = dealerCode;
-    }
+    masterFilter.dealerCode = dealerCode;
+    inventoryFilter.dealerCode = dealerCode;
+    binFilter.dealerCode = dealerCode;
 
     const [masterUpdate, inventoryUpdate] = await Promise.all([
       MasterPart.updateMany(masterFilter, { $set: { bin: destBin } }),
@@ -1252,10 +1283,12 @@ router.post('/bins/merge', auth.requireAuth, auth.requireAdmin, async (req, res)
 router.get('/search', auth.requireAuth, async (req, res) => {
   try {
     return await sendCachedJson(res, 'search', req.query, async (normalizedQuery) => {
+      const dealerCode = normalizePart(req.activeDealerId || normalizedQuery.dealerCode || normalizedQuery.activeDealerId || '');
+      if (!dealerCode || dealerCode === 'ALL') throw Object.assign(new Error('Select one dealer before searching dealer inventory.'), { status: 400 });
       const page = Math.max(Number(normalizedQuery.page || 1), 1);
       const limit = Math.min(Math.max(Number(normalizedQuery.limit || 25), 1), 100);
       const skip = (page - 1) * limit;
-      const filter = advancedMasterFilter(normalizedQuery);
+      const filter = dealerScopedMasterFilter(advancedMasterFilter(normalizedQuery), dealerCode);
       filter.activeStatus = { $ne: false };
       const sortFields = new Set(['partNumber', 'productCategory', 'productGroup', 'model', 'year', 'mrp', 'dlc', 'updatedAt']);
       const requestedSort = String(normalizedQuery.sort || 'partNumber');
@@ -1270,13 +1303,15 @@ router.get('/search', auth.requireAuth, async (req, res) => {
       return { success: true, parts: formatted, page, limit, total, totalPages: Math.ceil(total / limit) };
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
 router.get('/parts/search', auth.requireAuth, async (req, res) => {
   try {
     return await sendCachedJson(res, 'search', req.query, async (normalizedQuery) => {
+      const dealerCode = normalizePart(req.activeDealerId || normalizedQuery.dealerCode || normalizedQuery.activeDealerId || '');
+      if (!dealerCode || dealerCode === 'ALL') throw Object.assign(new Error('Select one dealer before searching dealer inventory.'), { status: 400 });
       const q = String(normalizedQuery.q || '').trim();
       const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const safePartQ = normalizePartNumber(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1297,14 +1332,12 @@ router.get('/parts/search', auth.requireAuth, async (req, res) => {
               { productCategory: { $regex: safeQ, $options: 'i' } }
             ] }
         : {};
-      if (normalizedQuery.dealerCode || normalizedQuery.activeDealerId) filter.dealerCode = normalizePart(normalizedQuery.dealerCode || normalizedQuery.activeDealerId);
-
-      const parts = await MasterPart.find(filter).sort({ partNo: 1 }).limit(limit).lean();
+      const parts = await MasterPart.find(dealerScopedMasterFilter(filter, dealerCode)).sort({ partNo: 1 }).limit(limit).lean();
       const formattedParts = parts.map(formatPart);
       return { success: true, parts: formattedParts };
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -1389,9 +1422,11 @@ router.post('/migrate', auth.requireAuth, auth.requireAdmin, async (req, res) =>
 
 router.get('/intelligence/:partNo', auth.requireAuth, async (req, res) => {
   try {
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
     const partNo = normalizePart(req.params.partNo);
-    const master = await MasterPart.findOne({ partNo }).lean();
-    const scanFilter = { part: partNo, ...nonVerificationScanClause() };
+    const master = await masterValidation.findMasterPart(partNo, dealerCode);
+    const scanFilter = { dealerCode, ...nonVerificationScanClause(), $or: [{ part: partNo }, { partNumber: partNo }, { normalizedPartNumber: partNo }] };
     const scans = await Inventory.find(scanFilter).sort({ timestamp: -1 }).limit(200).lean();
     const currentScannedQty = await Inventory.aggregate([
       { $match: scanFilter },
@@ -1413,9 +1448,12 @@ router.get('/intelligence/:partNo', auth.requireAuth, async (req, res) => {
 
     res.json({
       success: true,
+      dealerCode,
       master,
       currentScannedQty,
       dealerWiseMovement,
+      inventoryFound: scans.length > 0,
+      message: scans.length ? '' : `No inventory record found for selected dealer ${dealerCode}.`,
       lastScannedDate: scans[0] ? scans[0].timestamp : null,
       rawScanHistory: scans.map((scan) => ({
         time: scan.timestamp,
@@ -1436,21 +1474,24 @@ router.get('/intelligence/:partNo', auth.requireAuth, async (req, res) => {
 
 router.get('/scan-validator', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
-    const filter = validatorFilter(req.query);
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
+    const filter = { ...validatorFilter(req.query), dealerCode };
+    const scanScope = { ...nonVerificationScanClause(), dealerCode };
     const [totalMasterParts, totalScannedRecords, scans, duplicateScanIds, failedSyncRecords, verificationRows] = await Promise.all([
-      MasterPart.countDocuments({}),
-      Inventory.countDocuments(nonVerificationScanClause()),
-      Inventory.find(nonVerificationScanClause()).select('part partNumber normalizedPartNumber partName partDescription category productCategory manufacturingYear year uniqueScanId scanId syncStatus').lean(),
+      MasterPart.countDocuments({ dealerCode }),
+      Inventory.countDocuments(scanScope),
+      Inventory.find(scanScope).select('part partNumber normalizedPartNumber partName partDescription category productCategory manufacturingYear year uniqueScanId scanId syncStatus').lean(),
       Inventory.aggregate([
-        { $match: nonVerificationScanClause() },
+        { $match: scanScope },
         { $group: { _id: '$uniqueScanId', count: { $sum: 1 } } },
         { $match: { _id: { $nin: [null, ''] }, count: { $gt: 1 } } }
       ]),
-      Inventory.countDocuments({ syncStatus: 'failed', ...nonVerificationScanClause() }),
+      Inventory.countDocuments({ syncStatus: 'failed', ...scanScope }),
       VerificationLog.find({ ...filter, scanType: { $ne: 'VERIFICATION' } }).sort({ time: -1 }).limit(5000).lean()
     ]);
     const parts = Array.from(new Set(scans.map((scan) => normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)).filter(Boolean)));
-    const masters = parts.length ? await MasterPart.find({ $or: [{ normalizedPartNumber: { $in: parts } }, { partNo: { $in: parts } }, { partNumber: { $in: parts } }] }).select('partNo partNumber normalizedPartNumber partName partDescription category productCategory manufacturingYear year').lean() : [];
+    const masters = parts.length ? await MasterPart.find({ dealerCode, $or: [{ normalizedPartNumber: { $in: parts } }, { partNo: { $in: parts } }, { partNumber: { $in: parts } }] }).select('partNo partNumber normalizedPartNumber partName partDescription category productCategory manufacturingYear year').lean() : [];
     const masterSet = new Set(masters.map((part) => normalizePartNumber(part.normalizedPartNumber || part.partNo || part.partNumber)));
     const missingParts = parts.filter((part) => !masterSet.has(part));
     const masterByPart = new Map(masters.map((part) => [normalizePartNumber(part.normalizedPartNumber || part.partNo || part.partNumber), part]));
@@ -1520,12 +1561,14 @@ router.get('/scan-validator', auth.requireAuth, auth.requireAdmin, async (req, r
 
 router.post('/scan-validator/normalize-master', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
-    const parts = await MasterPart.find({}).lean();
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
+    const parts = await MasterPart.find({ dealerCode }).lean();
     const operations = parts.map((part) => {
       const partNo = normalizePart(part.partNo || part.partNumber);
       return {
         updateOne: {
-          filter: { _id: part._id },
+          filter: { _id: part._id, dealerCode },
           update: { $set: formatPart({ ...part, partNo, partNumber: partNo }) }
         }
       };
@@ -1541,13 +1584,15 @@ router.post('/scan-validator/normalize-master', auth.requireAuth, auth.requireAd
 
 router.post('/scan-validator/normalize-scans', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
-    const scans = await Inventory.find({}).lean();
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
+    const scans = await Inventory.find({ dealerCode }).lean();
     const operations = scans.map((scan) => {
       const partNo = normalizePart(scan.partNumber || scan.part);
       const rawUpi = scan.rawUpi || scan.rawScan || scan.rawScanString || '';
       return {
         updateOne: {
-          filter: { _id: scan._id },
+          filter: { _id: scan._id, dealerCode },
           update: {
             $set: {
               scanId: scan.scanId || scan.uniqueScanId,
@@ -1587,10 +1632,12 @@ function validatorIds(body = {}) {
 
 router.post('/scan-validator/ignore', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
     const ids = validatorIds(req.body);
     if (!ids.length) return res.status(400).json({ success: false, message: 'Select invalid rows first' });
     const result = await VerificationLog.updateMany(
-      { _id: { $in: ids } },
+      { _id: { $in: ids }, dealerCode },
       { $set: { status: 'ignored', ignoredAt: new Date(), actionBy: req.user.username || req.user.name || 'admin' } }
     );
     res.json({ success: true, updatedCount: result.modifiedCount || 0, message: 'Invalid part ignored' });
@@ -1601,14 +1648,16 @@ router.post('/scan-validator/ignore', auth.requireAuth, auth.requireAdmin, async
 
 router.post('/scan-validator/map', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
     const ids = validatorIds(req.body);
     const partNumber = normalizePart(req.body.partNumber || req.body.existingPartNumber);
     if (!ids.length) return res.status(400).json({ success: false, message: 'Select invalid rows first' });
     if (!partNumber) return res.status(400).json({ success: false, message: 'Existing part number is required' });
-    const master = await MasterPart.findOne({ $or: [{ partNo: partNumber }, { partNumber }, { normalizedPartNumber: partNumber }] }).lean();
+    const master = await MasterPart.findOne({ dealerCode, $or: [{ partNo: partNumber }, { partNumber }, { normalizedPartNumber: partNumber }] }).lean();
     if (!master) return res.status(404).json({ success: false, message: 'Existing master part not found' });
     const result = await VerificationLog.updateMany(
-      { _id: { $in: ids } },
+      { _id: { $in: ids }, dealerCode },
       { $set: { status: 'mapped', mappedPartNumber: partNumber, correctedAt: new Date(), actionBy: req.user.username || req.user.name || 'admin' } }
     );
     res.json({ success: true, updatedCount: result.modifiedCount || 0, message: 'Invalid scans mapped with existing part' });
@@ -1619,9 +1668,11 @@ router.post('/scan-validator/map', auth.requireAuth, auth.requireAdmin, async (r
 
 router.post('/scan-validator/delete-invalid', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
     const ids = validatorIds(req.body);
     if (!ids.length) return res.status(400).json({ success: false, message: 'Select invalid rows first' });
-    const result = await VerificationLog.deleteMany({ _id: { $in: ids } });
+    const result = await VerificationLog.deleteMany({ _id: { $in: ids }, dealerCode });
     res.json({ success: true, deletedCount: result.deletedCount || 0, message: 'Invalid scan records deleted' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1630,10 +1681,12 @@ router.post('/scan-validator/delete-invalid', auth.requireAuth, auth.requireAdmi
 
 router.post('/scan-validator/mark-corrected', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
     const ids = validatorIds(req.body);
     if (!ids.length) return res.status(400).json({ success: false, message: 'Select invalid rows first' });
     const result = await VerificationLog.updateMany(
-      { _id: { $in: ids } },
+      { _id: { $in: ids }, dealerCode },
       { $set: { status: 'corrected', correctedAt: new Date(), actionBy: req.user.username || req.user.name || 'admin' } }
     );
     res.json({ success: true, updatedCount: result.modifiedCount || 0, message: 'Invalid scans marked as corrected' });
@@ -1644,7 +1697,9 @@ router.post('/scan-validator/mark-corrected', auth.requireAuth, auth.requireAdmi
 
 router.get('/scan-validator/missing-master/export', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
-    const rows = await VerificationLog.find(validatorFilter(req.query)).sort({ time: -1 }).lean();
+    const dealerCode = selectedMasterDealer(req, res);
+    if (!dealerCode) return;
+    const rows = await VerificationLog.find({ ...validatorFilter(req.query), dealerCode }).sort({ time: -1 }).lean();
     const groups = new Map();
     rows.forEach((row) => {
       const key = invalidGroupKey(row);

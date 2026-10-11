@@ -216,7 +216,7 @@ async function saveAuditOrRollback(before, after, req, reason, remarks, action, 
       auditError.fallbackError = fallbackError;
     }
     try {
-      await Inventory.findByIdAndUpdate(before._id || before.id, { $set: before }, { new: true });
+      await Inventory.findOneAndUpdate({ _id: before._id || before.id, dealerCode: before.dealerCode }, { $set: before }, { new: true });
     } catch (rollbackError) {
       auditError.rollbackError = rollbackError;
     }
@@ -241,9 +241,16 @@ async function updateScan(scan, update, req, options = {}) {
   const actor = actorFromRequest(req);
   const modifiedAt = new Date();
   const nextUpdate = updateWithActor(update, actorFields(actor, modifiedAt));
+  const dealerCode = clean(req?.activeDealerId || scan?.dealerCode);
+  if (!dealerCode || dealerCode.toUpperCase() === 'ALL') {
+    const error = new Error('A single dealer context is required to modify a scan.');
+    error.status = 400;
+    throw error;
+  }
   const updateFilter = {
     ...(options.filter || {}),
-    _id: scan._id || scan.id
+    _id: scan._id || scan.id,
+    dealerCode
   };
   const after = await Inventory.findOneAndUpdate(updateFilter, nextUpdate, { new: true }).lean();
   if (!after) {
@@ -263,7 +270,9 @@ async function softDeleteScans(filter, req, options = {}) {
   if (!inDatabaseTransaction()) return withDatabaseTransaction(() => softDeleteScans(filter, req, options));
   assertScanModificationAccess(req);
   const { reason, remarks } = requireReason(modificationBody(req, options));
-  const rows = await Inventory.find({ ...(filter || {}), isDeleted: { $ne: true }, deletedAt: null }).lean();
+  const scopedFilter = { ...(filter || {}) };
+  if (req?.activeDealerId && req.activeDealerId !== 'ALL') scopedFilter.dealerCode = req.activeDealerId;
+  const rows = await Inventory.find({ ...scopedFilter, isDeleted: { $ne: true }, deletedAt: null }).lean();
   rows.forEach(row => assertScanModificationAccess(req, row));
   for (const row of rows) {
     const dependencies = await findInwardDependencies(row, rows);
@@ -303,7 +312,7 @@ async function softDeleteScans(filter, req, options = {}) {
         lastModifiedAt: deletedAt,
         updatedAt: deletedAt
       };
-      const after = await Inventory.findByIdAndUpdate(row._id || row.id, { $set: update }, { new: true }).lean();
+      const after = await Inventory.findOneAndUpdate({ _id: row._id || row.id, dealerCode: row.dealerCode }, { $set: update }, { new: true }).lean();
       if (!after) throw new Error(`Scan ${scanIdentifier(row)} could not be deleted`);
       changed.push({ before: row, after });
       const audit = await ScanAuditLog.create(auditPayload('DELETE', row, after, req, reason, remarks));
@@ -311,7 +320,7 @@ async function softDeleteScans(filter, req, options = {}) {
     }
   } catch (error) {
     for (const item of changed) {
-      await Inventory.findByIdAndUpdate(item.before._id || item.before.id, { $set: item.before }, { new: true }).catch(() => null);
+      await Inventory.findOneAndUpdate({ _id: item.before._id || item.before.id, dealerCode: item.before.dealerCode }, { $set: item.before }, { new: true }).catch(() => null);
     }
     if (auditIds.length) await ScanAuditLog.deleteMany({ _id: { $in: auditIds } }).catch(() => null);
     if (error.status) throw error;
@@ -333,7 +342,13 @@ async function restoreScan(scanId, req) {
   if (!inDatabaseTransaction()) return withDatabaseTransaction(() => restoreScan(scanId, req));
   assertAdmin(req);
   const { reason, remarks } = requireReason(req.body || {});
-  const before = await Inventory.findOne({ ...scanIdFilter(scanId), isDeleted: true }).lean();
+  const dealerCode = clean(req?.activeDealerId || req?.body?.dealerCode || req?.query?.dealerCode);
+  if (!dealerCode || dealerCode.toUpperCase() === 'ALL') {
+    const error = new Error('A single dealer context is required to restore a scan.');
+    error.status = 400;
+    throw error;
+  }
+  const before = await Inventory.findOne({ ...scanIdFilter(scanId), dealerCode, isDeleted: true }).lean();
   if (!before) {
     const error = new Error('Deleted scan not found');
     error.status = 404;
@@ -374,11 +389,11 @@ async function restoreScan(scanId, req) {
     lastModifiedByRole: actorFromRequest(req).role,
     updatedAt: restoredAt
   };
-  const after = await Inventory.findByIdAndUpdate(before._id || before.id, { $set: restored }, { new: true }).lean();
+  const after = await Inventory.findOneAndUpdate({ _id: before._id || before.id, dealerCode: before.dealerCode }, { $set: restored }, { new: true }).lean();
   try {
     await ScanAuditLog.create(auditPayload('RESTORE', before, after, req, reason, remarks));
   } catch (auditError) {
-    await Inventory.findByIdAndUpdate(before._id || before.id, { $set: before }, { new: true }).catch(() => null);
+    await Inventory.findOneAndUpdate({ _id: before._id || before.id, dealerCode: before.dealerCode }, { $set: before }, { new: true }).catch(() => null);
     const error = new Error('Scan restore was rolled back because the audit log could not be created.');
     error.status = 500;
     error.cause = auditError;

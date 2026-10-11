@@ -15,7 +15,10 @@ function searchOptions(input = {}) {
 }
 
 function dealerScope(dealerCode) {
-  return dealerCode ? Prisma.sql`("dealerCode" IS NULL OR "dealerCode" = '' OR upper("dealerCode") IN (${dealerCode}, 'ALL'))` : Prisma.sql`TRUE`;
+  const dealer = String(dealerCode || '').trim().toUpperCase();
+  return dealer && dealer !== 'ALL'
+    ? Prisma.sql`("dealerCode" IS NULL OR "dealerCode" = '' OR upper("dealerCode") IN (${dealer}, 'ALL'))`
+    : Prisma.sql`("dealerCode" IS NULL OR "dealerCode" = '' OR upper("dealerCode") = 'ALL')`;
 }
 
 function candidateQuery(source, stage, q, dealerCode, limit, excluded = []) {
@@ -75,8 +78,8 @@ async function partSuggestions(input, dealerCode = '', client = getPrismaClient(
 async function suggestionsHandler(req, res) {
   try {
     const requestedDealer = req.activeDealerId || req.query.dealerCode || req.query.activeDealerId || '';
-    const dealerCode = requestedDealer === 'ALL' ? '' : requestedDealer;
-    if (!dealerCode && !['admin', 'super_admin'].includes(req.user?.role)) {
+    const dealerCode = String(requestedDealer || '').trim().toUpperCase();
+    if (!dealerCode || dealerCode === 'ALL') {
       return res.status(400).json({ success: false, message: 'Select dealer first' });
     }
     const suggestions = await partSuggestions(req.query, dealerCode);

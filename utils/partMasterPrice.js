@@ -55,6 +55,14 @@ function partListLookup(partNumbers = []) {
   };
 }
 
+function dealerScopedPartLookup(lookup, dealerCode = '') {
+  const dealer = normalizeDealerCode(dealerCode);
+  const scope = dealer && dealer !== 'ALL'
+    ? { $or: [{ dealerCode: dealer }, { dealerCode: null }, { dealerCode: '' }, { dealerCode: 'ALL' }] }
+    : { $or: [{ dealerCode: null }, { dealerCode: '' }, { dealerCode: 'ALL' }] };
+  return { $and: [lookup, scope] };
+}
+
 function legacyPartListLookup(partNumbers = []) {
   const parts = Array.from(new Set(partNumbers.map(normalizePartNumber).filter(Boolean)));
   return parts.length ? {
@@ -286,7 +294,7 @@ function pickBestPriceRecord(records = [], dealerCode = '') {
 async function getPriceFromPartMaster(partNumber, dealerCode = '', options = {}) {
   const part = normalizePartNumber(partNumber);
   if (!part) return null;
-  const lookup = partLookup(part);
+  const lookup = dealerScopedPartLookup(partLookup(part), dealerCode);
   let [catalogueRows, masterRows] = await Promise.all([
     MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean(),
     MasterPart.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean()
@@ -294,8 +302,8 @@ async function getPriceFromPartMaster(partNumber, dealerCode = '', options = {})
   const hasMatch = catalogueRows.length > 0 || masterRows.length > 0;
   if (!hasMatch && options.exact !== true) {
     [catalogueRows, masterRows] = await Promise.all([
-      MasterCatalogue.find(legacyPartLookup(part)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean(),
-      MasterPart.find(legacyPartLookup(part)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean()
+      MasterCatalogue.find(dealerScopedPartLookup(legacyPartLookup(part), dealerCode)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean(),
+      MasterPart.find(dealerScopedPartLookup(legacyPartLookup(part), dealerCode)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).limit(25).lean()
     ]);
   }
   return mergePriceRecordCandidates(
@@ -309,7 +317,7 @@ async function getPricesFromPartMaster(partNumbers = [], dealerCode = '') {
   const parts = Array.from(new Set(partNumbers.map(normalizePartNumber).filter(Boolean)));
   const map = new Map();
   if (!parts.length) return map;
-  const lookup = partListLookup(parts);
+  const lookup = dealerScopedPartLookup(partListLookup(parts), dealerCode);
   let [catalogueRows, masterRows] = await Promise.all([
     MasterCatalogue.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean(),
     MasterPart.find(lookup).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean()
@@ -320,8 +328,8 @@ async function getPricesFromPartMaster(partNumbers = [], dealerCode = '') {
   const legacyParts = parts.filter((part) => !foundParts.has(part));
   if (legacyParts.length) {
     const [legacyCatalogueRows, legacyMasterRows] = await Promise.all([
-      MasterCatalogue.find(legacyPartListLookup(legacyParts)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean(),
-      MasterPart.find(legacyPartListLookup(legacyParts)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean()
+      MasterCatalogue.find(dealerScopedPartLookup(legacyPartListLookup(legacyParts), dealerCode)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean(),
+      MasterPart.find(dealerScopedPartLookup(legacyPartListLookup(legacyParts), dealerCode)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean()
     ]);
     catalogueRows = catalogueRows.concat(legacyCatalogueRows);
     masterRows = masterRows.concat(legacyMasterRows);
@@ -480,6 +488,7 @@ module.exports = {
   masterPriceError,
   masterPriceMissing,
   masterPriceScanFields,
+  dealerScopedPartLookup,
   legacyPartLookup,
   partListLookup,
   partLookup,

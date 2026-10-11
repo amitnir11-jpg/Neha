@@ -35,7 +35,7 @@ const server = http.createServer((req, res) => {
     for (const role of ['admin', 'audit_user']) {
       let rows = initialRows.map(row => ({ ...row }));
       const saves = []; const localSaves = []; const requests = []; const errors = []; const usedUpi = new Set();
-      const user = { id: 'USER-FIXTURE', username: 'fixture', name: 'Test Operator', role, permissions: { canViewReports: true } };
+      const user = { id: `${role}-USER-FIXTURE`, username: `${role}-fixture`, name: 'Test Operator', role, permissions: { canViewReports: true } };
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       await context.addInitScript(({ user, dealer }) => {
         localStorage.setItem('dakshToken','fixture-token'); localStorage.setItem('dakshUser',JSON.stringify(user));
@@ -90,6 +90,36 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.locator('#barcodeEntry').getAttribute('class'),'subview active','Scan must open directly on Barcode/Web Scan');
       assert.ok(requests.filter(request=>request.path==='/api/scans/history').every(request=>new URLSearchParams(request.query).get('limit')==='10'));
       await page.waitForFunction(()=>document.querySelectorAll('#scanHistoryRows tr').length===10);
+      assert.equal(await page.locator('#scanHistoryRows').locator('xpath=..').locator('th[data-col-key="bin"]').textContent().then(text=>text.trim()),'Bin Location');
+      const historyTable=page.locator('#scanHistoryRows').locator('xpath=..');
+      const layoutKey=`daksh_table_scan_history:${encodeURIComponent(`${role}-USER-FIXTURE`.toLowerCase())}`;
+      const defaultPartIndex=await historyTable.locator('thead th').evaluateAll(headers=>headers.findIndex(header=>header.dataset.colKey==='part-number'));
+      const historyRequestsBeforeLayout=requests.filter(request=>request.path==='/api/scans/history').length;
+      await historyTable.locator('th[data-col-key="part-number"]').dragTo(historyTable.locator('th[data-col-key="bin"]'));
+      await page.waitForFunction(()=>JSON.parse(localStorage.getItem(Object.keys(localStorage).find(key=>key.startsWith('daksh_table_scan_history:')))||'{}').columnOrder?.length===14);
+      await historyTable.locator('th[data-col-key="qty"]').dragTo(historyTable.locator('th[data-col-key="part-description"]'));
+      let orderedKeys=await historyTable.locator('thead th').evaluateAll(headers=>headers.map(header=>header.dataset.colKey));
+      assert.notEqual(orderedKeys.indexOf('part-number'),defaultPartIndex,'Part Number moves from its default position');
+      assert.ok(orderedKeys.indexOf('qty')<orderedKeys.indexOf('part-description'),'Quantity can move before Description');
+      const binColumnIndex=orderedKeys.indexOf('bin');
+      assert.equal((await historyTable.locator('tbody tr').first().locator('td').nth(binColumnIndex).textContent()).trim(),initialRows[0].binLocation,'Bin data stays aligned with its moved heading');
+      const binResize=historyTable.locator('th[data-col-key="bin"] .column-resizer');
+      const resizeBox=await binResize.boundingBox();
+      const binWidthBefore=await historyTable.locator('th[data-col-key="bin"]').evaluate(header=>header.getBoundingClientRect().width);
+      await page.mouse.move(resizeBox.x+resizeBox.width/2,resizeBox.y+resizeBox.height/2);await page.mouse.down();await page.mouse.move(resizeBox.x+resizeBox.width/2+45,resizeBox.y+resizeBox.height/2);await page.mouse.up();
+      const binWidthAfter=await historyTable.locator('th[data-col-key="bin"]').evaluate(header=>header.getBoundingClientRect().width);
+      assert.ok(binWidthAfter>=binWidthBefore+40,'Bin Location column resizes');
+      assert.equal(requests.filter(request=>request.path==='/api/scans/history').length,historyRequestsBeforeLayout,'Column layout changes do not reload scan history');
+      const savedLayout=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)||'{}'),layoutKey);
+      assert.ok(savedLayout.columnOrder&&savedLayout.columnWidths.bin,'Layout preference is saved for the logged-in user');
+      await page.reload();await page.waitForFunction(()=>document.querySelectorAll('#scanHistoryRows tr').length===10);
+      orderedKeys=await historyTable.locator('thead th').evaluateAll(headers=>headers.map(header=>header.dataset.colKey));
+      assert.ok(orderedKeys.indexOf('part-number')>orderedKeys.indexOf('bin'),'Saved column order restores after reload');
+      assert.ok(await historyTable.locator('th[data-col-key="bin"]').evaluate(header=>header.getBoundingClientRect().width)>=binWidthBefore+40,'Saved column width restores after reload');
+      await page.locator('#scanHistoryResetLayout').click();
+      orderedKeys=await historyTable.locator('thead th').evaluateAll(headers=>headers.map(header=>header.dataset.colKey));
+      assert.ok(orderedKeys.indexOf('part-number')<orderedKeys.indexOf('bin'),'Reset restores the default column order');
+      assert.equal(await page.evaluate(key=>localStorage.getItem(key),layoutKey),null,'Reset clears only the logged-in user layout');
       await page.locator('#barcodeScanForm [name="dealerCode"]').selectOption('11646');await page.waitForTimeout(150);assert.equal(await page.locator('#scan .subtab').count(),0);
       for(const panel of ['manualEntry','localPartEntry','mobileSync']) assert.equal(await page.locator(`#${panel}`).isVisible(),false);
       assert.equal(await page.locator('#barcodeManualTitle').isVisible(),true);

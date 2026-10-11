@@ -2300,11 +2300,13 @@ async function logValidationFailure(payload = {}, reason = INVALID_PART_MESSAGE,
   }
 }
 
-function scanLookupFilter(scanId = '') {
+function scanLookupFilter(scanId = '', dealerCode = '') {
   const id = String(scanId || '').trim();
   const clauses = [{ scanId: id }, { uniqueScanId: id }, { localId: id }, { rowId: id }, { id: id }];
   if (/^[a-f\d]{24}$/i.test(id)) clauses.push({ _id: id });
-  return { $and: [{ $or: clauses }, { isDeleted: { $ne: true } }] };
+  const filters = [{ $or: clauses }, { isDeleted: { $ne: true } }];
+  if (dealerCode && dealerCode !== 'ALL') filters.push({ dealerCode: upper(dealerCode) });
+  return { $and: filters };
 }
 
 function isManualScanRecord(scan = {}) {
@@ -2322,7 +2324,7 @@ function isManualScanRecord(scan = {}) {
 
 async function updateManualMrp(req, res) {
   try {
-    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId, req.activeDealerId)).lean();
     if (!scan) return res.status(404).json({ success: false, message: 'Scan record not found' });
     const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part || '');
     const masterPrice = await getMasterPrice(partNumber, scan.dealerCode, null);
@@ -2410,7 +2412,7 @@ async function updateScanDetails(req, res) {
 
     let scan = null;
     for (const value of lookupValues) {
-      scan = await Inventory.findOne(scanLookupFilter(value)).lean();
+      scan = await Inventory.findOne(scanLookupFilter(value, req.activeDealerId)).lean();
       if (scan) break;
     }
 
@@ -2419,7 +2421,7 @@ async function updateScanDetails(req, res) {
       const qtyHint = optionalNumber(scanIdentity.originalQuantity || scanIdentity.quantity || firstValue(req.body || {}, ['qty', 'quantity']) || '');
       const binHint = upper(scanIdentity.originalBinLocation || scanIdentity.binLocation || firstValue(req.body || {}, ['binLocation', 'bin']) || '');
       const scanTypeHint = normalizeScanType(scanIdentity.originalScanType || scanIdentity.scanType || firstValue(req.body || {}, ['scanType']) || '');
-      const dealerCodeHint = upper(firstValue(req.body || {}, ['dealerCode']) || scanIdentity.dealerCode || '');
+      const dealerCodeHint = upper(req.activeDealerId || firstValue(req.body || {}, ['dealerCode']) || scanIdentity.dealerCode || '');
       const fallbackClauses = [];
       if (partNumberHint) fallbackClauses.push({ $or: [{ partNumber: partNumberHint }, { normalizedPartNumber: partNumberHint }, { part: partNumberHint }] });
       if (Number(qtyHint) > 0) fallbackClauses.push({ $or: [{ qty: Number(qtyHint) }, { quantity: Number(qtyHint) }] });
@@ -2571,7 +2573,7 @@ async function saveScanRequest(req, res) {
     const explicitPartInput = firstValue(req.body, ['part', 'partNumber', 'partNo', 'sku', 'itemCode']);
     const part = upper(parsed.part || explicitPartInput);
     const normalizedPartNumber = normalizePartNumber(part);
-    const requestedDealerCode = upper(req.body.dealerCode || req.body.dealer || parsed.dealerCode || '');
+    const requestedDealerCode = upper(req.activeDealerId || req.body.dealerCode || req.body.dealer || parsed.dealerCode || '');
     let validation = null;
     let master = null;
     if (!requestedDealerCode) {
@@ -3221,7 +3223,7 @@ function isManualScanRecord(scan = {}) {
 
 async function updateManualMrp(req, res) {
   try {
-    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId, req.activeDealerId)).lean();
     if (!scan) return res.status(404).json({ success: false, message: 'Scan record not found' });
     const partNumber = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part || '');
     const masterPrice = await getMasterPrice(partNumber, scan.dealerCode, null);
@@ -3283,7 +3285,7 @@ async function updateManualMrp(req, res) {
 
 async function updateScanDetails(req, res) {
   try {
-    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+    const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId, req.activeDealerId)).lean();
     if (!scan) return res.status(404).json({ success: false, message: 'Scan record not found' });
     assertScanModificationAccess(req, scan);
 
@@ -3424,7 +3426,7 @@ async function saveScanRequest(req, res) {
     const explicitPartInput = firstValue(req.body, ['part', 'partNumber', 'partNo', 'sku', 'itemCode']);
     const part = upper(parsed.part || explicitPartInput);
     const normalizedPartNumber = normalizePartNumber(part);
-    const requestedDealerCode = upper(req.body.dealerCode || req.body.dealer || parsed.dealerCode || '');
+    const requestedDealerCode = upper(req.activeDealerId || req.body.dealerCode || req.body.dealer || parsed.dealerCode || '');
     let validation = null;
     let master = null;
     if (!requestedDealerCode) {
@@ -4325,7 +4327,7 @@ router.post('/', auth.requireAuth, processScanRequest);
 router.patch('/:scanId/details', auth.requireAuth, requireScanModification, updateScanDetails);
 router.delete('/:scanId', auth.requireAuth, requireScanModification, async (req, res) => {
   try {
-    const result = await scanModification.softDeleteScans(scanLookupFilter(req.params.scanId), req);
+    const result = await scanModification.softDeleteScans(scanLookupFilter(req.params.scanId, req.activeDealerId), req);
     if (!result.deletedCount) return res.status(404).json({ success: false, message: 'Scan record not found' });
     await refreshInventoryUpiScopes(result.rows);
     invalidateInventoryCaches({}, ['scan', 'report', 'dashboard']);
@@ -4343,7 +4345,7 @@ router.post('/:scanId/mark-outward', auth.requireAuth, auth.requireAdmin, async 
     }
 
     const result = await withDatabaseTransaction(async () => {
-      const sourceScan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+      const sourceScan = await Inventory.findOne(scanLookupFilter(req.params.scanId, req.activeDealerId)).lean();
       if (!sourceScan) {
         const error = new Error('Scan record not found');
         error.status = 404;
@@ -4422,7 +4424,7 @@ router.post('/:scanId/mark-outward', auth.requireAuth, auth.requireAdmin, async 
 router.post('/:scanId/fitted-status', auth.requireAuth, auth.requireAdmin, async (req, res) => {
   try {
     const result = await withDatabaseTransaction(async () => {
-      const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId)).lean();
+      const scan = await Inventory.findOne(scanLookupFilter(req.params.scanId, req.activeDealerId)).lean();
       if (!scan) {
         const error = new Error('Scan record not found');
         error.status = 404;

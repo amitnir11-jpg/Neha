@@ -193,6 +193,10 @@ async function requireAuth(req, res, next) {
     }
     const dealerAccess = await userDealerAccessCodes(freshUser);
     req.user = { ...publicUser({ ...freshUser, dealerAccess }), dealerAccess };
+    const dealerCodes = extractRequestDealerCodes(req);
+    if (dealerCodes.length > 1) {
+      return res.status(400).json({ success: false, message: 'Conflicting dealer context in request. Select one dealer and retry.' });
+    }
     let requestedDealer = extractRequestDealer(req);
     // Resolve a single-dealer auditor's context from the backend mapping. The
     // client does not need to choose or persist an authoritative dealer.
@@ -224,6 +228,11 @@ async function requireAuth(req, res, next) {
       });
     }
     const writeMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(req.method || '').toUpperCase());
+    const dealerWriteBases = ['/api/scans', '/api/scan', '/api/inventory'];
+    if (writeMethod && dealerWriteBases.includes(String(req.baseUrl || '').toLowerCase())
+      && (!req.activeDealerId || req.activeDealerId === 'ALL')) {
+      return res.status(400).json({ success: false, message: 'Select exactly one dealer before changing scan or inventory data.' });
+    }
     const auditWriteBases = ['/api/scans', '/api/scan', '/api/inventory', '/api/reconciliation', '/api/bin-transfer'];
     if (writeMethod && !isAdmin && auditWriteBases.includes(String(req.baseUrl || '').toLowerCase())) {
       const dealerCode = req.activeDealerId || extractRequestDealer(req);
@@ -433,13 +442,41 @@ async function activeDealersForUser(user = {}) {
 
 function extractRequestDealer(req) {
   const firstScan = Array.isArray(req.body) ? req.body[0] : null;
+  let scanIdentity = req.body?.scanIdentity;
+  if (typeof scanIdentity === 'string') {
+    try { scanIdentity = JSON.parse(scanIdentity); } catch (_error) { scanIdentity = null; }
+  }
   const sources = [
     req.query && (req.query.activeDealerId || req.query.dealerId || req.query.dealerCode || req.query.dealer),
     req.body && (req.body.activeDealerId || req.body.dealerId || req.body.dealerCode || req.body.dealer)
       || firstScan && (firstScan.activeDealerId || firstScan.dealerId || firstScan.dealerCode || firstScan.dealer),
+    scanIdentity && (scanIdentity.activeDealerId || scanIdentity.dealerId || scanIdentity.dealerCode || scanIdentity.dealer),
     req.params && (req.params.dealerId || req.params.dealerCode)
   ];
   return normalizeAccessCode(sources.find(Boolean) || '');
+}
+
+function extractRequestDealerCodes(req = {}) {
+  const values = [];
+  const add = (source) => {
+    if (!source || typeof source !== 'object') return;
+    ['activeDealerId', 'dealerId', 'dealerCode', 'dealer'].forEach((key) => {
+      const code = normalizeAccessCode(source[key]);
+      if (code) values.push(code);
+    });
+  };
+  add(req.query);
+  add(req.params);
+  add(req.body);
+  let scanIdentity = req.body?.scanIdentity;
+  if (typeof scanIdentity === 'string') {
+    try { scanIdentity = JSON.parse(scanIdentity); } catch (_error) { scanIdentity = null; }
+  }
+  add(scanIdentity);
+  const addRows = (rows) => Array.isArray(rows) && rows.forEach(add);
+  addRows(req.body);
+  ['scans', 'records', 'items', 'inventory'].forEach((key) => addRows(req.body?.[key]));
+  return [...new Set(values)];
 }
 
 function isDealerScopedRequest(req) {
@@ -487,11 +524,24 @@ function applyRequestDealer(req, dealerCode) {
   if (!cleanDealer || cleanDealer === 'ALL') return;
   req.activeDealerId = cleanDealer;
   req.query = req.query || {};
-  req.query.activeDealerId = req.query.activeDealerId || cleanDealer;
-  req.query.dealerCode = req.query.dealerCode || cleanDealer;
+  req.query.activeDealerId = cleanDealer;
+  req.query.dealerCode = cleanDealer;
+  if (req.query.dealer !== undefined) req.query.dealer = cleanDealer;
+  if (req.query.dealerId !== undefined) req.query.dealerId = cleanDealer;
   if (req.body && typeof req.body === 'object' && !(req.body instanceof Buffer)) {
-    req.body.activeDealerId = req.body.activeDealerId || cleanDealer;
-    req.body.dealerCode = req.body.dealerCode || cleanDealer;
+    req.body.activeDealerId = cleanDealer;
+    req.body.dealerCode = cleanDealer;
+    if (req.body.dealer !== undefined) req.body.dealer = cleanDealer;
+    if (req.body.dealerId !== undefined) req.body.dealerId = cleanDealer;
+    const applyRows = (rows) => Array.isArray(rows) && rows.forEach((row) => {
+      if (!row || typeof row !== 'object') return;
+      row.activeDealerId = cleanDealer;
+      row.dealerCode = cleanDealer;
+      if (row.dealer !== undefined) row.dealer = cleanDealer;
+      if (row.dealerId !== undefined) row.dealerId = cleanDealer;
+    });
+    applyRows(req.body);
+    ['scans', 'records', 'items', 'inventory'].forEach((key) => applyRows(req.body[key]));
   }
 }
 
@@ -1106,6 +1156,9 @@ module.exports.dealerAccessIncludes = dealerAccessIncludes;
 module.exports.syncUserDealerMappings = syncUserDealerMappings;
 module.exports.userDealerAccessCodes = userDealerAccessCodes;
 module.exports.activeDealersForUser = activeDealersForUser;
+module.exports.extractRequestDealer = extractRequestDealer;
+module.exports.extractRequestDealerCodes = extractRequestDealerCodes;
+module.exports.applyRequestDealer = applyRequestDealer;
 module.exports.validateUserDealerAccess = validateUserDealerAccess;
 module.exports.mobileLoginHandler = mobileLoginHandler;
 module.exports.publicUser = publicUser;

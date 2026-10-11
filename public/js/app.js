@@ -1208,7 +1208,8 @@
   }
 
   async function loadPartIntelligence(partNo) {
-    const data = await api(`/api/master/intelligence/${encodeURIComponent(partNo)}`);
+    const dealerCode = cleanDealerCode($('#dashboardDealerSelect')?.value || activeDealerCode());
+    const data = await api(`/api/master/intelligence/${encodeURIComponent(partNo)}?${new URLSearchParams({ dealerCode })}`);
     const master = data.master || {};
     const result = $('#partIntelResult');
     result.innerHTML = `
@@ -1543,7 +1544,9 @@
       btn.disabled = true;
       btn.textContent = 'Uploading...';
       try {
-        const data = await api('/api/master/upload', { method: 'POST', body: new FormData(event.currentTarget) });
+        const dealerCode = activeDealerCode();
+        if (!dealerCode || dealerCode === 'ALL') throw new Error('Select one dealer before uploading master parts.');
+        const data = await api(`/api/master/upload?dealerCode=${encodeURIComponent(dealerCode)}`, { method: 'POST', body: new FormData(event.currentTarget) });
         resultDiv.className = 'form-message success';
         let msg = `${data.imported} master parts uploaded`;
         if (data.clearedMasterRows) msg += `, cleared ${data.clearedMasterRows} old master rows`;
