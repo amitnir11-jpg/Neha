@@ -31,6 +31,7 @@
   <link rel="stylesheet" href="/compact-layout.css?v=20260921-global-density-v2">
   <link rel="stylesheet" href="/barcode-workspace.css?v=20261012-excel-stock-upload-v1">
   <link rel="stylesheet" href="/excel-stock-upload.css?v=20261012-row-delete-v2">
+  <link rel="stylesheet" href="/excel-upload-history.css?v=20261012-compact-v1">
 </head>
 <body class="app-booting">
   <script>
@@ -469,7 +470,22 @@
                       <div class="excel-review-tools"><label id="excelSelectPageLabel" hidden><input id="excelSelectPage" type="checkbox"> Verify valid parts on this page</label><button id="excelRejectedDownload" class="btn light" type="button" hidden>Download Rejected Parts Excel</button></div>
                       <div class="excel-confirm-bar"><span>Review parts, then submit validated stock.</span><button id="excelConfirmUpload" class="btn primary" type="button"><span aria-hidden="true">ⓥ</span> Submit Upload</button></div>
                     </div>
-                    <div id="excelHistoryPanel" hidden><h4>Upload History</h4><div class="excel-table-wrap"><table class="excel-stock-table"><thead><tr><th>Date</th><th>Batch ID</th><th>File</th><th>Accepted</th><th>Rejected</th><th>Uploaded Qty</th><th>Status</th><th>Open / Edit</th></tr></thead><tbody id="excelHistoryRows"></tbody></table></div></div>
+                    <section id="excelHistoryPanel" class="excel-history-panel" aria-label="Upload History" hidden>
+                      <div class="excel-history-heading"><div class="excel-history-title"><span class="excel-history-title-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 8V3 M4 8h5 M4 8a8 8 0 1 1-1 8 M12 7v5l3 2"/></svg></span><div><h4>Upload History</h4><p>View, open, edit, reverse or delete uploaded stock files</p></div></div><label class="excel-history-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="excelHistorySearch" type="search" placeholder="Search file, batch ID or date..." aria-label="Search upload history"></label></div>
+                      <div class="excel-history-summary"><div class="files"><span class="excel-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 2h9l5 5v15H5Z M14 2v6h5 M8 12h8 M8 16h8"/></svg></span><div><strong id="excelHistoryTotal">0</strong><span>Total Files</span></div></div><div class="accepted"><span class="excel-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m7 12 3 3 7-7"/></svg></span><div><strong id="excelHistoryAccepted">0</strong><span>Accepted</span></div></div><div class="rejected"><span class="excel-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 8 8 8 M16 8l-8 8"/></svg></span><div><strong id="excelHistoryRejected">0</strong><span>Rejected</span></div></div><div class="quantity"><span class="excel-summary-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 2 9 5v10l-9 5-9-5V7Z M3 7l9 5 9-5 M12 12v10 M7 4l9 5"/></svg></span><div><strong id="excelHistoryQty">0</strong><span>Uploaded Qty</span></div></div></div>
+                      <div class="excel-history-bulk"><label><input id="excelHistorySelectAll" type="checkbox" title="Select all files matching this search"><span id="excelHistorySelectedCount">Selected (0)</span></label><div class="excel-history-actions">
+                        <button type="button" class="excel-history-icon open" data-history-bulk="open" title="Open the selected file (select one)" aria-label="Open selected file" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="9" ry="6"/><circle cx="12" cy="12" r="2.5"/></svg><span class="excel-history-action-label">Open</span></button>
+                        <button type="button" class="excel-history-icon edit" data-history-bulk="edit" title="Edit the selected file (select one pending file)" aria-label="Edit selected file" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12H4v-5L16 3Z M14 5l5 5"/></svg><span class="excel-history-action-label">Edit</span></button>
+                        <button type="button" class="excel-history-icon reverse" data-history-bulk="reverse" title="Reverse selected committed files (administrator)" aria-label="Reverse selected files" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10V4 M4 10h6 M4 10a8 8 0 1 1 0 7"/></svg><span class="excel-history-action-label">Reverse</span></button>
+                        <button type="button" class="excel-history-icon delete" data-history-bulk="delete" title="Delete selected files" aria-label="Delete selected files" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7"/></svg><span class="excel-history-action-label">Delete</span></button>
+                      </div></div>
+                      <div class="excel-history-table-wrap"><table id="excelUploadHistoryTable" class="excel-history-table"><colgroup><col style="width:4%"><col style="width:14%"><col style="width:15%"><col style="width:19%"><col style="width:5%"><col style="width:5%"><col style="width:5%"><col style="width:15%"><col style="width:18%"></colgroup><thead><tr>
+                        <th><input id="excelHistorySelectPage" type="checkbox" title="Select files on this page" aria-label="Select files on this page"></th>
+                        <th><button type="button" data-history-sort="createdAt">Date &amp; Time <span aria-hidden="true">↓</span></button></th><th><button type="button" data-history-sort="batchId">Batch ID <span aria-hidden="true">↕</span></button></th><th><button type="button" data-history-sort="fileName">File Name <span aria-hidden="true">↕</span></button></th>
+                        <th title="Accepted parts">Acc</th><th title="Rejected parts">Rej</th><th title="Uploaded quantity">Qty</th><th>Status</th><th>Action</th>
+                      </tr></thead><tbody id="excelHistoryRows"></tbody></table></div>
+                      <div class="excel-history-pager"><label>Rows per page <select id="excelHistoryPageSize"><option selected>5</option><option>10</option><option>25</option><option>50</option></select></label><div><span id="excelHistoryPageLabel">Showing 0–0 of 0</span><button id="excelHistoryPrev" type="button" title="Previous page" aria-label="Previous history page">‹</button><span id="excelHistoryPageNumber">1</span><button id="excelHistoryNext" type="button" title="Next page" aria-label="Next history page">›</button></div></div>
+                    </section>
                     <dialog id="excelEditDialog"><form method="dialog" id="excelEditForm"><h3 id="excelEditTitle">Edit Stock Row</h3><label>Part Number<input id="excelEditPart" required></label><label>Qty<input id="excelEditQty" type="number" min="1" step="1" required></label><label>Bin Location<input id="excelEditBin" required></label><p id="excelEditStatus" aria-live="polite"></p><div class="excel-dialog-actions"><button value="cancel" class="btn light">Cancel</button><button id="excelSaveCorrection" value="save" class="btn primary">Save &amp; Revalidate</button></div></form></dialog>
                   </div>
                 </section>
@@ -1820,7 +1836,8 @@
   <link rel="stylesheet" href="/scan-edit-checkboxes.css?v=20261011-scan-edit-checkboxes-v3">
   <script src="/js/smart-part-search.js?v=20261011-smart-part-search-v1"></script>
   <script src="/js/excel-upload-table.js?v=20261012-adjustable-v1"></script>
-  <script src="/ui.js?v=20261012-excel-row-delete-v7"></script>
+  <script src="/js/excel-upload-history.js?v=20261012-compact-v1"></script>
+  <script src="/ui.js?v=20261012-compact-upload-history-v8"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

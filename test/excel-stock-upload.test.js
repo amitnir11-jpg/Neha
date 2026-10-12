@@ -11,11 +11,13 @@ function harness() {
   let fixtureFile;
   let ledger = [];
   let deletionBlocked = false;
+  let auditBlocked = false;
+  let audits = [];
   const clone = value => value == null ? value : structuredClone(value);
   const db = { excelStockUploadBatch: {
     findUnique: async () => clone(batch),
     findFirst: async ({ where }) => clone(batches.find(row => Object.entries(where).every(([key, value]) => row[key] === value))),
-    findMany: async ({ where }) => clone(batches.filter(row => row.dealerCode === where.dealerCode)),
+    findMany: async ({ where }) => clone(batches.filter(row => row.dealerCode === where.dealerCode && row.status !== where.status?.not)),
     create: async ({ data }) => { batch = { id: `batch-${batches.length}`, ...clone(data) }; batches.push(batch); return clone(batch); },
     update: async ({ where, data }) => { const saved = batches.find(row => row.id === where.id); Object.assign(saved, clone(data)); return clone(saved); }
   } };
@@ -30,7 +32,7 @@ function harness() {
       create: async row => { ledger.push({ _id: `scan-${ledger.length}`, ...clone(row) }); },
       find: () => ({ lean: async () => clone(ledger.filter(row => row.source === 'EXCEL_MANUAL' && !row.isDeleted)) })
     },
-    '../models/ScanAuditLog': { create: async () => ({}) },
+    '../models/ScanAuditLog': { create: async audit => { if (auditBlocked) throw new Error('Audit storage failed'); audits.push(clone(audit)); return {}; } },
     '../utils/audit': { getActiveAudit: async () => ({ auditId: 'AUD1' }) },
     '../services/StockCalculationService': { loadPartStock: async () => {
       const bins = new Map();
@@ -38,15 +40,14 @@ function harness() {
       return { binBreakdown: Array.from(bins, ([binLocation, availableQty]) => ({ binLocation, availableQty })) };
     } },
     '../services/prisma': { getPrismaClient: () => db, withDatabaseTransaction: async work => {
-      const beforeBatch = clone(batch); const beforeBatches = clone(batches); const beforeLedger = clone(ledger);
-      try { return await work(); } catch (error) { batches = beforeBatches; batch = batches.find(row => row.id === beforeBatch?.id); ledger = beforeLedger; throw error; }
+      const beforeBatch = clone(batch); const beforeBatches = clone(batches); const beforeLedger = clone(ledger); const beforeAudits = clone(audits);
+      try { return await work(); } catch (error) { batches = beforeBatches; batch = batches.find(row => row.id === beforeBatch?.id); ledger = beforeLedger; audits = beforeAudits; throw error; }
     } },
     '../services/PartBinLocationService': { recordPartBinLocationFromScan: async () => {} },
     '../services/ScanModificationService': { softDeleteScans: async filter => {
       if (deletionBlocked) throw Object.assign(new Error('Dependent stock activity exists'), { status: 409 });
-      const row = ledger.find(scan => scan._id === filter._id && !scan.isDeleted);
-      if (!row) return { deletedCount: 0 };
-      row.isDeleted = true; return { deletedCount: 1 };
+      const rows = ledger.filter(scan => (Array.isArray(filter._id?.$in) ? filter._id.$in.includes(scan._id) : scan._id === filter._id) && !scan.isDeleted);
+      rows.forEach(row => { row.isDeleted = true; }); return { deletedCount: rows.length };
     } },
     '../utils/safeCache': { invalidateCache() {} }
   };
@@ -57,7 +58,7 @@ function harness() {
     const req = { body, query: body, file, params: { batchId: batch?.batchId, sourceRow: body.sourceRow }, user: { id: 'u1', username: 'Auditor' }, app: { get: () => null } };
     const res = { status(code) { status = code; return this; }, json(value) { output = clone(value); return this; } };
     await routes.get(`${method} ${path}`)(req, res, value => { error = value; });
-    return { status: error?.statusCode || error?.status || status, data: output, error };
+    return { status: error?.statusCode || error?.status || (error ? 500 : status), data: output, error };
   }
   async function preview() {
     if (!fixtureFile) {
@@ -68,8 +69,63 @@ function harness() {
     }
     return call('post', '/preview', { dealerCode: 'D1' }, fixtureFile);
   }
-  return { call, preview, batch: () => clone(batch), ledger: () => clone(ledger), blockDeletion: () => { deletionBlocked = true; } };
+  return { call, preview, batch: () => clone(batch), ledger: () => clone(ledger), audits: () => clone(audits), blockDeletion: () => { deletionBlocked = true; }, blockAudit: () => { auditBlocked = true; } };
 }
+
+test('deleting a pending upload removes it from compact history and keeps an audit receipt', async () => {
+  const h = harness(); await h.preview();
+  const deleted = await h.call('delete', '/batches/:batchId');
+  assert.equal(deleted.status, 200); assert.equal(h.batch().status, 'DELETED');
+  assert.equal(h.batch().rows.length, 2); assert.equal(h.audits()[0].action, 'DELETE');
+  assert.equal((await h.call('get', '/batches', { dealerCode: 'D1' })).data.batches.length, 0);
+  assert.equal((await h.call('delete', '/batches/:batchId')).status, 409);
+  assert.equal((await h.preview()).status, 201);
+});
+
+test('deleting a partially committed upload removes its stock once and excludes it from history', async () => {
+  const h = harness(); await h.preview(); const rows = h.batch().rows; rows[0].checked = true;
+  await h.call('patch', '/batches/:batchId/rows', { rows });
+  await h.call('post', '/batches/:batchId/confirm', { dealerCode: 'D1' });
+  assert.equal((await h.call('delete', '/batches/:batchId')).status, 200);
+  assert.equal(h.ledger()[0].isDeleted, true);
+  assert.equal((await h.call('get', '/batches', { dealerCode: 'D1' })).data.batches.length, 0);
+});
+
+test('batch deletion rolls back all stock and history changes when audit storage fails', async () => {
+  const h = harness(); await h.preview(); const rows = h.batch().rows; rows[0].checked = true;
+  await h.call('patch', '/batches/:batchId/rows', { rows });
+  await h.call('post', '/batches/:batchId/confirm', { dealerCode: 'D1' });
+  const before = h.batch(); h.blockAudit();
+  assert.equal((await h.call('delete', '/batches/:batchId')).status, 500);
+  assert.deepEqual(h.batch(), before); assert.notEqual(h.ledger()[0].isDeleted, true);
+});
+
+test('deleting a reversed upload archives history without deleting its original stock twice', async () => {
+  const h = harness(); await h.preview(); let rows = h.batch().rows; rows[1].partNumber = 'PART1';
+  await h.call('patch', '/batches/:batchId/rows', { rows }); rows = h.batch().rows; rows.forEach(row => { row.checked = true; });
+  await h.call('patch', '/batches/:batchId/rows', { rows });
+  await h.call('post', '/batches/:batchId/confirm', { dealerCode: 'D1' });
+  await h.call('post', '/batches/:batchId/reverse', { dealerCode: 'D1' });
+  const before = h.ledger();
+  assert.equal((await h.call('delete', '/batches/:batchId')).status, 200);
+  assert.deepEqual(h.ledger(), before); assert.equal(h.batch().status, 'DELETED');
+});
+
+test('dependent stock prevents whole-batch deletion without changing any receipt', async () => {
+  const h = harness(); await h.preview(); const rows = h.batch().rows; rows[0].checked = true;
+  await h.call('patch', '/batches/:batchId/rows', { rows });
+  await h.call('post', '/batches/:batchId/confirm', { dealerCode: 'D1' });
+  const before = h.batch(); h.blockDeletion();
+  assert.equal((await h.call('delete', '/batches/:batchId')).status, 409);
+  assert.deepEqual(h.batch(), before); assert.notEqual(h.ledger()[0].isDeleted, true);
+});
+
+test('compact history summarizes pending parts without transferring full row data', async () => {
+  const h = harness(); await h.preview();
+  const batch = (await h.call('get', '/batches', { dealerCode: 'D1' })).data.batches[0];
+  assert.equal(batch.acceptedRows, 1); assert.equal(batch.rejectedRows, 1); assert.equal(batch.uploadedQty, 0);
+  assert.equal(batch.rows, undefined);
+});
 
 test('delete removes pending rows and uploaded stock while preserving receipts', async () => {
   const h = harness(); await h.preview();

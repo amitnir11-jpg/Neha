@@ -14,6 +14,12 @@ Validation uses the same dealer-scoped Part Master and Master Catalogue lookup a
 
 Every active row has an Edit icon and a Delete icon. Edits apply to uncommitted rows. Deletion keeps a tombstone receipt, excludes the row from confirmation and visible totals, and refreshes history. Uploaded-row deletion uses the existing audited scan soft-deletion service in the same transaction as the receipt update; existing permissions and dependent-stock protections apply. Fully deleted batches can be uploaded afresh. Batch reversal excludes stock rows already deleted individually.
 
+Upload History is confined to the Excel module's right-hand panel. It includes compact summary cards, search by filename/batch/date, date/batch/filename sorting, pagination, and full-name tooltips on truncated filenames. Select All selects all matching files; the table-header checkbox selects the current page. Selection persists across pages and clears on a new search or dealer. Open and Edit operate on one selected file; pending/partial uploads support Edit, while administrator Reverse requires fully committed uploads. Reverse and Delete support multiple selected files with a single confirmation and individual success/failure reporting. Failed files remain selected.
+
+Deleting a whole upload retains its batch receipt and an audit event while hiding it from history. Committed stock is removed through the existing scan deletion service in the same transaction; dependent activity or audit failure prevents the deletion. Removing an already reversed upload only archives its history receipt and does not remove stock twice. The history endpoint sends compact batch summaries rather than full row data; Open/Edit fetch the detailed receipt.
+
+Browser validation covers 1920px and 1440px desktop layouts, narrow mobile cards, complete action visibility, select-all/page selection, pagination, sorting/search, Open/Edit, confirmation cancellation, multi-file reverse, and mixed-success bulk deletion. The left Scan panel's bounds remain unchanged during history interactions.
+
 Re-uploading identical sheet contents replaces an unconfirmed pending attempt with a fresh batch. The original remains in history as `SUPERSEDED`; no stock is added by either preview. A fully reversed sheet can also be uploaded again, preserving its original reversal record. Partially and fully committed sheets retain duplicate protection so their stock cannot be added twice. History access does not require an active audit.
 
 Run `npm run test:excel-stock-upload` for local workflow coverage:

@@ -137,7 +137,7 @@ router.post('/preview', auth.requireAuth, upload.single('file'), async (req, res
         const db = getPrismaClient();
         const duplicate = await db.excelStockUploadBatch.findFirst({ where: { dealerCode: scope.dealerCode, auditId: scope.auditId, fileHash } });
         if (duplicate) {
-          if (!['PENDING', 'REVERSED', 'SUPERSEDED', 'CANCELLED'].includes(duplicate.status)) {
+          if (!['PENDING', 'REVERSED', 'SUPERSEDED', 'CANCELLED', 'DELETED'].includes(duplicate.status)) {
             throw Object.assign(new Error(`Stock from this sheet was already added in batch ${duplicate.batchId}. Open that batch in Upload History to correct remaining rows.`), { statusCode: 409 });
           }
           await db.excelStockUploadBatch.update({ where: { id: duplicate.id }, data: {
@@ -161,8 +161,12 @@ router.get('/batches', auth.requireAuth, async (req, res, next) => {
     if (!dealerCode || dealerCode === 'ALL') return res.status(400).json({ success: false, message: 'Select one dealer to view Upload History.' });
     const access = await auth.validateUserDealerAccess(req.user, dealerCode);
     if (!access.allowed) return res.status(403).json({ success: false, message: 'Unauthorized dealer access.' });
-    const batches = await getPrismaClient().excelStockUploadBatch.findMany({ where: { dealerCode }, select: batchFields, orderBy: { createdAt: 'desc' }, take: 100 });
-    res.json({ success: true, batches });
+    const batches = await getPrismaClient().excelStockUploadBatch.findMany({ where: { dealerCode, status: { not: 'DELETED' } }, select: batchFields, orderBy: { createdAt: 'desc' }, take: 100 });
+    res.json({ success: true, batches: batches.map(batch => {
+      const rows = (batch.rows || []).filter(row => !row.deleted);
+      const { rows: _rows, ...receipt } = batch;
+      return { ...receipt, ...summarize(rows), uploadedQty: rows.filter(row => row.committed).reduce((sum, row) => sum + Number(row.qty), 0) };
+    }) });
   } catch (error) { next(error); }
 });
 
@@ -270,6 +274,40 @@ router.post('/batches/:batchId/confirm', auth.requireAuth, async (req, res, next
     io?.emit('inventory:update', { reason: 'excel-manual-stock-upload', dealerCode: result.dealerCode, auditId: result.auditId, batchId: req.params.batchId, at: new Date().toISOString() });
     io?.emit('reports:update', { reason: 'excel-manual-stock-upload', dealerCode: result.dealerCode, auditId: result.auditId, batchId: req.params.batchId, at: new Date().toISOString() });
     res.json({ success: true, message: 'Verified stock was committed.', ...summary });
+  } catch (error) { next(error); }
+});
+
+router.delete('/batches/:batchId', auth.requireAuth, async (req, res, next) => {
+  try {
+    const batch = await withDatabaseTransaction(async () => {
+      const db = getPrismaClient();
+      const saved = await db.excelStockUploadBatch.findUnique({ where: { batchId: req.params.batchId } });
+      if (!saved) throw Object.assign(new Error('Upload batch not found.'), { statusCode: 404 });
+      const access = await auth.validateUserDealerAccess(req.user, saved.dealerCode);
+      if (!access.allowed) throw Object.assign(new Error('Unauthorized dealer access.'), { statusCode: 403 });
+      if (saved.status === 'DELETED') throw Object.assign(new Error('This upload is already deleted.'), { statusCode: 409 });
+      const committed = saved.rows.filter(row => row.committed && !row.deleted);
+      if (committed.length && ['COMMITTED', 'PARTIALLY_COMMITTED'].includes(saved.status)) {
+        const scope = await resolveScope(req, saved.dealerCode);
+        if (scope.auditId !== saved.auditId) throw Object.assign(new Error('Only uploads in the active audit can have their stock deleted.'), { statusCode: 409 });
+        const scans = await Inventory.find({ dealerCode: saved.dealerCode, auditId: saved.auditId, uploadBatchId: saved.batchId, source: 'EXCEL_MANUAL', isDeleted: { $ne: true } }).lean();
+        if (scans.length !== committed.length || committed.some(row => scans.filter(scan =>
+          (String(scan.scanId || '').startsWith(`EXCEL-${saved.batchId}-${row.sourceRow}-`) || String(scan.uniqueScanId || '').startsWith(`EXCEL-${saved.batchId}-${row.sourceRow}-`))
+          && normalizePartNumber(scan.partNumber) === row.partNumber && upper(scan.binLocation || scan.bin) === row.binLocation && Number(scan.qty ?? scan.quantity) === Number(row.qty)).length !== 1)) {
+          throw Object.assign(new Error('Uploaded stock records do not match the batch receipt; deletion was stopped.'), { statusCode: 409 });
+        }
+        const removed = await require('../services/ScanModificationService').softDeleteScans({ _id: { $in: scans.map(scan => scan._id || scan.id) }, dealerCode: saved.dealerCode }, req, { reason: 'Incorrect Excel stock upload deleted from history' });
+        if (removed.deletedCount !== committed.length) throw Object.assign(new Error('Uploaded stock could not be fully deleted.'), { statusCode: 409 });
+      }
+      await ScanAuditLog.create({ action: 'DELETE', scanId: saved.batchId, dealerCode: saved.dealerCode, dealerName: saved.dealerName,
+        auditId: saved.auditId, performedByUserId: actor(req), performedByUsername: req.user?.username || '', performedByName: actorName(req), performedByRole: req.user?.role || '',
+        reason: 'Excel stock upload removed from history', oldData: { status: saved.status, fileName: saved.fileName, uploadedQty: saved.uploadedQty }, newData: { status: 'DELETED' }, timestamp: new Date() });
+      return db.excelStockUploadBatch.update({ where: { id: saved.id }, data: { status: 'DELETED' }, select: batchFields });
+    }, { timeout: 60000 });
+    require('../utils/safeCache').invalidateCache({ namespaces: ['dashboard', 'report', 'report-download', 'reconciliation'], tags: ['scan', 'inventory', 'stock'], scope: { dealerCode: batch.dealerCode, auditId: batch.auditId }, clearInFlight: true });
+    const io = req.io || req.app?.get('io');
+    for (const event of ['inventory:update', 'reports:update']) io?.emit(event, { reason: 'excel-upload-batch-deleted', dealerCode: batch.dealerCode, auditId: batch.auditId, batchId: batch.batchId });
+    res.json({ success: true, message: 'Upload deleted from history.', batchId: batch.batchId });
   } catch (error) { next(error); }
 });
 

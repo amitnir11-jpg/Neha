@@ -1,0 +1,129 @@
+#excelStockUploadPanel #excelHistoryPanel {
+  box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0;
+  border: 1px solid #e1e9f4; border-radius: 12px; padding: 16px;
+  background: #fff; color: #183153; container-type: inline-size;
+}
+#excelHistoryPanel .excel-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+#excelHistoryPanel .excel-history-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+#excelHistoryPanel .excel-history-title-icon { display: grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; color: #183e79; background: #eaf3ff; border-radius: 10px; }
+#excelHistoryPanel .excel-history-title-icon svg { width: 25px; height: 25px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#excelHistoryPanel .excel-history-heading h4 { margin: 0 0 4px; color: #111c34; font-size: 22px; font-weight: 700; }
+#excelHistoryPanel .excel-history-heading p { margin: 0; font-size: 12px; color: #4e638a; }
+#excelHistoryPanel .excel-history-search { position: relative; width: 40%; flex: 0 0 40%; }
+#excelHistoryPanel .excel-history-search > svg { position: absolute; top: 12px; left: 10px; width: 17px; height: 17px; fill: none; stroke: #627c9f; stroke-width: 1.8; }
+#excelHistoryPanel .excel-history-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+#excelHistoryPanel .excel-history-summary > div { display: flex; align-items: center; gap: 10px; padding: 12px 10px; border: 1px solid #deebff; border-radius: 9px; background: #f0f6ff; min-width: 0; }
+#excelHistoryPanel .excel-history-summary strong { color: #15385f; font-size: 24px; font-weight: 700; line-height: 1.2; }
+#excelHistoryPanel .excel-history-summary span { display: block; font-size: 12px; color: #314c70; margin-top: 4px; }
+#excelHistoryPanel .excel-history-summary .excel-summary-icon { display: grid; place-items: center; margin: 0; width: 34px; height: 34px; flex: 0 0 34px; background: #dceaff; color: #087aff; border-radius: 8px; }
+#excelHistoryPanel .excel-summary-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#excelHistoryPanel .accepted .excel-summary-icon { color: #00a777 !important; background: #d5f6e9 !important; }
+#excelHistoryPanel .rejected .excel-summary-icon { color: #e82b43 !important; background: #ffe0e5 !important; }
+#excelHistoryPanel .quantity .excel-summary-icon { color: #7838c4 !important; background: #e9dcff !important; }
+#excelHistoryPanel .excel-history-summary .accepted { background: #edfdf5; border-color: #d1f5e3; }
+#excelHistoryPanel .excel-history-summary .accepted strong { color: #09915f; }
+#excelHistoryPanel .excel-history-summary .rejected { background: #fff2f3; border-color: #ffdce0; }
+#excelHistoryPanel .excel-history-summary .rejected strong { color: #da293f; }
+#excelHistoryPanel .excel-history-summary .quantity { background: #f7f2ff; border-color: #e9dfff; }
+#excelHistoryPanel .excel-history-summary .quantity strong { color: #703cb8; }
+#excelHistoryPanel .excel-history-bulk { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+#excelHistoryPanel .excel-history-bulk label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #233b5d; }
+#excelHistoryPanel .excel-history-actions { display: flex; align-items: center; gap: 3px; }
+#excelHistoryPanel .excel-history-bulk .excel-history-actions { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+#excelHistoryPanel .excel-history-icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#excelHistoryPanel .excel-history-table-wrap { width: 100%; max-width: 100%; overflow: hidden; border: 1px solid #e3eaf3; border-radius: 8px; }
+#excelHistoryPanel .excel-history-file { display: flex; align-items: center; gap: 5px; min-width: 0; }
+#excelHistoryPanel .excel-file-symbol { flex: 0 0 22px; display: grid; place-items: center; width: 22px; height: 29px; border-radius: 3px; background: #00a472; color: #fff; font-size: 14px; font-weight: 600; clip-path: polygon(0 0, 70% 0, 100% 25%, 100% 100%, 0 100%); }
+#excelHistoryPanel .excel-file-copy { min-width: 0; }
+#excelHistoryPanel .excel-history-batch > span { display: block; }
+#excelHistoryPanel .excel-file-name { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#excelHistoryPanel .excel-history-status { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; box-sizing: border-box; padding: 5px 6px; border-radius: 12px; color: #65748b; background: #eef2f7; font-size: 10px; font-weight: 650; overflow-wrap: anywhere; }
+#excelHistoryPanel .excel-history-status-mark { font-size: 14px; line-height: 1; }
+#excelHistoryPanel .excel-history-status.committed { color: #07885a; background: #ddf9ee; }
+#excelHistoryPanel .excel-history-status.pending, #excelHistoryPanel .excel-history-status.partially-committed { color: #ac7000; background: #fff4d8; }
+#excelHistoryPanel .excel-history-status.rejected { color: #d22e42; background: #ffe5e9; }
+#excelHistoryPanel .excel-history-status.reversed { color: #7140b3; background: #f0e6ff; }
+#excelHistoryPanel .excel-history-pager { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; font-size: 11px; color: #5e7087; }
+#excelHistoryPanel .excel-history-pager label, #excelHistoryPanel .excel-history-pager > div { display: flex; align-items: center; gap: 7px; }
+#excelHistoryPanel #excelHistoryPageNumber { display: grid; place-items: center; background: #087aff; color: #fff; min-width: 24px; height: 26px; border-radius: 5px; }
+#excelHistoryPanel .excel-history-empty { padding: 20px !important; text-align: center !important; color: #70829a; }
+@layer app-controls {
+  #excelStockUploadPanel #excelHistoryPanel [hidden] { display: none !important; }
+  #excelStockUploadPanel #excelHistoryPanel button {
+    box-sizing: border-box; min-width: 0 !important; min-height: 0 !important; max-width: 100% !important;
+    margin: 0 !important; padding: 0 !important; height: auto !important; font-size: inherit !important;
+    border: 0 !important; background: transparent !important; border-radius: 5px !important;
+    box-shadow: none !important; color: inherit !important; cursor: pointer;
+  }
+  #excelStockUploadPanel #excelHistoryPanel button:disabled { opacity: .5; cursor: default; }
+  #excelStockUploadPanel #excelHistoryPanel button:focus-visible { outline: 2px solid #438dff !important; outline-offset: 2px; }
+  #excelStockUploadPanel #excelHistoryPanel .excel-history-icon {
+    display: inline-flex !important; align-items: center !important; justify-content: center !important;
+    width: 26px !important; height: 30px !important; flex: 0 0 26px !important;
+    border: 1px solid #d9e8ff !important; background: #f4f8ff !important; color: #087aff !important;
+  }
+  #excelStockUploadPanel #excelHistoryPanel .excel-history-icon.reverse { color: #793fc1 !important; background: #f7f1ff !important; border-color: #e4d5fa !important; }
+  #excelStockUploadPanel #excelHistoryPanel .excel-history-icon.delete { color: #df3045 !important; background: #fff5f5 !important; border-color: #ffd5dc !important; }
+  #excelStockUploadPanel #excelHistoryPanel .excel-history-bulk .excel-history-icon { width: auto !important; height: 34px !important; flex-basis: auto !important; padding: 6px 10px !important; gap: 6px; font-size: 12px !important; }
+  #excelStockUploadPanel #excelHistoryPanel .excel-history-heading h4 { font-size: 22px !important; line-height: 1.3 !important; }
+  #excelStockUploadPanel #excelHistoryPanel .excel-history-search { width: 40% !important; margin: 0 !important; }
+  #excelStockUploadPanel #excelHistoryPanel .excel-history-bulk label,
+  #excelStockUploadPanel #excelHistoryPanel .excel-history-pager label { display: inline-flex !important; align-items: center !important; gap: 7px !important; font-weight: 400 !important; }
+  #excelStockUploadPanel #excelHistoryPanel input[type="checkbox"] { width: 14px !important; height: 14px !important; min-width: 14px !important; margin: 0 !important; padding: 0 !important; accent-color: #1679ee; }
+  #excelStockUploadPanel #excelHistorySearch {
+    width: 100% !important; min-width: 0 !important; max-width: 100% !important; height: 40px !important; min-height: 40px !important;
+    margin: 0 !important; padding: 7px 10px 7px 32px !important; font-size: 12px !important;
+    border: 1px solid #d2ddec !important; border-radius: 7px !important; background: #fff !important;
+  }
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable {
+    width: 100% !important; max-width: 100% !important; min-width: 0 !important; table-layout: fixed !important;
+    border-collapse: collapse !important; border: 0 !important;
+  }
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable th,
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable td {
+    box-sizing: border-box; width: auto !important; min-width: 0 !important; max-width: none !important;
+    padding: 12px 6px !important; font-size: 12px !important; line-height: 1.4 !important; height: auto !important;
+    border: 0 !important; border-bottom: 1px solid #e9eef5 !important; background: transparent !important;
+    white-space: normal !important; text-transform: none !important; overflow-wrap: anywhere;
+    text-align: left !important; vertical-align: middle; font-weight: 400 !important;
+  }
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable th { background: #f2f7fd !important; color: #314e74 !important; font-size: 11px !important; font-weight: 600 !important; }
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable th button { display: flex !important; align-items: center !important; justify-content: flex-start !important; gap: 3px; width: 100% !important; text-align: left !important; line-height: 1.35 !important; }
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable th button span { color: #8295ac; }
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable td small { display: block; font-size: 11px; color: #425b7b; }
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable .excel-history-number { text-align: center !important; }
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable tr.selected td { background: #f3f8ff !important; }
+  #excelStockUploadPanel #excelHistoryPageSize { width: 48px !important; min-width: 0 !important; height: 28px !important; min-height: 28px !important; margin: 0 !important; padding: 3px 6px !important; font-size: 11px !important; border: 1px solid #d7e1ee !important; border-radius: 6px !important; background: #fff !important; }
+  #excelStockUploadPanel #excelHistoryPanel .excel-history-pager button { width: 24px !important; height: 26px !important; font-size: 18px !important; border: 1px solid #e0e7f0 !important; background: #f8fbff !important; }
+}
+@container (max-width: 700px) {
+  #excelHistoryPanel .excel-history-heading { flex-wrap: wrap; }
+  @layer app-controls { #excelStockUploadPanel #excelHistoryPanel .excel-history-search { width: 100% !important; flex-basis: 100%; } }
+}
+@container (max-width: 600px) {
+  #excelHistoryPanel .excel-history-actions:not(.excel-history-bulk .excel-history-actions) { display: grid; grid-template-columns: repeat(2, 26px); }
+}
+@container (max-width: 480px) {
+  #excelHistoryPanel .excel-history-heading { flex-wrap: wrap; }
+  #excelStockUploadPanel #excelHistorySearch { width: 100% !important; }
+  #excelHistoryPanel .excel-history-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #excelHistoryPanel .excel-history-pager { flex-wrap: wrap; }
+  #excelHistoryPanel .excel-file-symbol { display: none; }
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable td { font-size: 10px !important; padding: 7px 2px !important; }
+  #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable th { font-size: 9px !important; padding: 7px 2px !important; }
+  @layer app-controls {
+    #excelStockUploadPanel #excelHistoryPanel .excel-history-search { width: 100% !important; flex-basis: 100%; }
+    #excelStockUploadPanel #excelHistorySearch { width: 100% !important; }
+    #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable { display: block !important; }
+    #excelHistoryPanel #excelUploadHistoryTable colgroup, #excelHistoryPanel #excelUploadHistoryTable thead { display: none !important; }
+    #excelHistoryPanel #excelUploadHistoryTable tbody { display: block; }
+    #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable tbody tr { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; border-bottom: 1px solid #e9eef5; }
+    #excelStockUploadPanel #excelHistoryPanel #excelUploadHistoryTable tbody td { display: block !important; padding: 0 !important; border: 0 !important; text-align: left !important; font-size: 11px !important; }
+    #excelHistoryPanel #excelUploadHistoryTable td[data-label]::before { content: attr(data-label); display: block; color: #7a8aa1; font-size: 9px; margin-bottom: 2px; }
+    #excelHistoryPanel #excelUploadHistoryTable td:first-child { order: -2; justify-self: end; }
+    #excelHistoryPanel #excelUploadHistoryTable td:nth-child(2) { order: -3; }
+    #excelHistoryPanel #excelUploadHistoryTable td:nth-child(3) { order: -1; grid-column: 1 / -1; }
+    #excelHistoryPanel #excelUploadHistoryTable td:nth-child(4), #excelHistoryPanel #excelUploadHistoryTable td:last-child { grid-column: 1 / -1; }
+    #excelHistoryPanel .excel-history-actions:not(.excel-history-bulk .excel-history-actions) { display: flex !important; justify-content: flex-end; }
+  }
+}

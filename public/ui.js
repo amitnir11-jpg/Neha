@@ -13576,19 +13576,25 @@
       excelStockBatch = response.batch; renderExcelStockBatch();
       await loadExcelUploadHistory();
     };
-    const loadExcelUploadHistory = async () => {
-      const dealerCode = excelSelectedDealer(); if (!dealerCode) throw new Error('Select a dealer first.');
-      const response = await api(`${excelStockApi}/batches?dealerCode=${encodeURIComponent(dealerCode)}`);
-      $('#excelHistoryPanel').hidden = false;
-      $('#excelHistoryRows').innerHTML = response.batches.map(batch => {
-        const rows = (batch.rows || []).filter(row => !row.deleted);
-        const accepted = rows.filter(row => row.status === 'ACCEPTED').length;
-        const rejected = rows.filter(row => row.status === 'REJECTED').length;
-        const uploadedQty = rows.filter(row => row.committed).reduce((sum, row) => sum + Number(row.qty || 0), 0);
-        const editable = ['PENDING', 'PARTIALLY_COMMITTED'].includes(batch.status);
-        return `<tr><td>${new Date(batch.createdAt).toLocaleString()}</td><td>${excelHtml(batch.batchId)}</td><td>${excelHtml(batch.fileName)}</td><td>${accepted}</td><td>${rejected}</td><td>${uploadedQty}</td><td>${excelHtml(batch.status)}</td><td><button class="btn light" type="button" data-excel-open-batch="${excelHtml(batch.batchId)}">${editable ? 'Open / Edit' : 'Open'}</button>${isAdminUser() && batch.status === 'COMMITTED' ? ` <button class="btn danger" type="button" data-excel-reverse="${excelHtml(batch.batchId)}">Reverse</button>` : ''}</td></tr>`;
-      }).join('') || '<tr><td colspan="8">No upload history for this dealer.</td></tr>';
-    };
+    const excelHistory = window.ExcelUploadHistory.create({
+      api, getDealer: excelSelectedDealer, isAdmin: isAdminUser, notify: excelStockNotice,
+      onOpen: (batch, action) => {
+        excelStockBatch = batch; excelStockPage = 1;
+        $('#excelStockSearch').value = ''; $('#excelStockFilter').value = 'ALL';
+        renderExcelStockBatch(); $('#excelStockWorkspace').scrollIntoView({ block: 'start', behavior: 'smooth' });
+        if (action === 'edit') {
+          const index = batch.rows.findIndex(row => !row.committed && !row.deleted);
+          if (index >= 0) openExcelStockRowEdit(index);
+        }
+      },
+      onChanged: async (batchId, action) => {
+        if (excelStockBatch?.batchId !== batchId) return;
+        if (action === 'delete') { excelStockBatch = null; $('#excelStockWorkspace').hidden = true; return; }
+        const latest = await api(`${excelStockApi}/batches/${encodeURIComponent(batchId)}`);
+        if (latest.batch.dealerCode === excelSelectedDealer()) { excelStockBatch = latest.batch; renderExcelStockBatch(); }
+      }
+    });
+    const loadExcelUploadHistory = () => excelHistory.load();
     const openExcelStockRowEdit = (index) => {
       if (!excelStockBatch || !['PENDING', 'PARTIALLY_COMMITTED'].includes(excelStockBatch.status)) return;
       const row = excelStockBatch.rows[index]; if (!row || row.committed) return;
