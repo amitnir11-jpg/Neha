@@ -1075,7 +1075,8 @@
   }
 
   async function downloadGet(path, fileName, options = {}) {
-    const { headers: optionHeaders, timeoutMs = 120000, ...fetchOptions } = options || {};
+    const { headers: optionHeaders, timeoutMs = 120000, expectedDealerCode = '', ...fetchOptions } = options || {};
+    const downloadContextVersion = dealerContextVersion;
     const controller = new AbortController();
     const externalSignal = fetchOptions.signal;
     const abort = () => controller.abort(externalSignal.reason);
@@ -1098,6 +1099,13 @@
       });
       if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
       const blob = await response.blob();
+      if (expectedDealerCode && (downloadContextVersion !== dealerContextVersion
+        || cleanDealerCode(expectedDealerCode) !== activeReconDealer())) {
+        throw new Error('Dealer changed during download. Export again for the selected dealer.');
+      }
+      if (expectedDealerCode && cleanDealerCode(response.headers.get('X-Dealer-Code')) !== cleanDealerCode(expectedDealerCode)) {
+        throw new Error('Download dealer does not match the selected dealer. Please retry.');
+      }
       const finalName = resolveDownloadFileName(response, path, fileName);
       triggerDownload(blob, finalName);
       return finalName;
@@ -1546,6 +1554,8 @@
     }
     state.activeDealerId = code;
     if (isAdminUser()) state.dashboardDealerCode = code;
+    syncReconDealer(code);
+    setText('reconSelectedDealer', code || 'Select Dealer');
     const scopedActiveDealerKey = userScopedStorageKey(ACTIVE_DEALER_KEY);
     if (code) {
       storageSet(ACTIVE_DEALER_KEY, code);
@@ -1584,6 +1594,7 @@
     state.dashboardLastLoadedAt = 0;
     state.dashboardLoadPromise = null;
     state.dashboardAbortController = null;
+    clearReconciliationSelectionData();
     if (clearReportCache) state.reportCache.clear();
   }
 
@@ -1680,6 +1691,7 @@
       }
       $$('.dealerSelect').forEach((select) => {
         if (select.closest('#reportFilters')) return;
+        if (select.closest('#reconciliation')) return;
         const current = cleanDealerCode(select.value || '');
         if (!current || (current === 'ALL' && !select.closest('#reportFilters'))) {
           setDealerSelectValue(select, audit.dealerCode);
@@ -8514,7 +8526,46 @@
   }
 
   function activeReconDealer() {
-    return cleanDealerCode($('#reconDealer')?.value || $('#dealerStockDealer')?.value || '');
+    return cleanDealerCode(activeDealerId());
+  }
+
+  function clearReconciliationSelectionData() {
+    clearTimeout(state.reconRefreshTimer);
+    state.reconLoaded = false;
+    state.reconRows = [];
+    state.reconDashboardStats = null;
+    state.reconLastUpdatedAt = null;
+    state.reconAuditId = '';
+    renderReconciliationRows();
+    setReconciliationSummary({}, null, 0);
+    renderDealerStockPreview([]);
+    renderDealerStockErrors([]);
+    const panel = $('#dealerStockPreviewPanel');
+    if (panel) panel.hidden = true;
+    const message = $('#dealerStockUploadMessage');
+    if (message) {
+      message.className = 'form-message';
+      message.textContent = 'Select a dealer and load its uploaded stock.';
+    }
+  }
+
+  function reconciliationResponseIsCurrent(dealerCode, version, data = {}) {
+    if (version !== dealerContextVersion || dealerCode !== activeReconDealer()) return false;
+    const responseDealer = cleanDealerCode(data.dealerCode || data.scope?.dealerCode || data.summary?.dealerCode || '');
+    const rows = data.stock || data.preview || data.rows || [];
+    if ((responseDealer && responseDealer !== dealerCode)
+      || rows.some(row => row.dealerCode && cleanDealerCode(row.dealerCode) !== dealerCode)) {
+      throw new Error('Stock response does not match the selected dealer. Please reload.');
+    }
+    return true;
+  }
+
+  function selectReconciliationDealer(dealerCode) {
+    setActiveDealerId(dealerCode);
+    syncReconDealer(dealerCode);
+    setText('reconSelectedDealer', activeReconDealer() || 'Select Dealer');
+    if (!activeReconDealer()) return;
+    loadDealerStockPreview().catch(error => toast(error.message, 'error'));
   }
 
   function renderDealerStockErrors(errorRows = [], skippedCount = errorRows.length, truncated = false) {
@@ -8581,9 +8632,10 @@
     const button = $('#reconStockExportBtn');
     if (button?.disabled) return;
     const params = new URLSearchParams({ dealerCode });
+    if (state.reconAuditId) params.set('auditId', state.reconAuditId);
     if (button) button.disabled = true;
     try {
-      await downloadGet(`/api/reconciliation/stock-export?${params.toString()}`, `Daksh_Uploaded_Stock_${dealerCode}.xlsx`);
+      await downloadGet(`/api/reconciliation/stock-export?${params.toString()}`, `Daksh_Uploaded_Stock_${dealerCode}.xlsx`, { expectedDealerCode: dealerCode });
     } finally {
       if (button) button.disabled = false;
     }
@@ -8591,8 +8643,12 @@
 
   async function loadDealerStockPreview() {
     const dealerCode = activeReconDealer();
+    const version = dealerContextVersion;
     if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
     const data = await api(`/api/reconciliation/stock-preview?dealerCode=${encodeURIComponent(dealerCode)}`);
+    if (!reconciliationResponseIsCurrent(dealerCode, version, data)) return null;
+    state.reconAuditId = data.auditId || '';
+    setText('reconSelectedDealer', dealerCode);
     renderDealerStockPreview(data.stock || [], data.total || 0, data.summary || {});
     renderDealerStockErrors([]);
     const message = $('#dealerStockUploadMessage');
@@ -8611,9 +8667,11 @@
     const submitButton = form.querySelector('[type="submit"]');
     if (submitButton) submitButton.disabled = true;
     const dealerCode = cleanDealerCode($('[name="dealerCode"]', form)?.value || '');
+    const version = dealerContextVersion;
     const message = $(messageSelector);
     try {
       if (!dealerCode) throw new Error('Select Dealer Code first');
+      if (dealerCode !== activeReconDealer()) throw new Error('Upload dealer must match the selected dealer. Select the dealer again.');
       if (message) {
         message.className = 'form-message loading';
         message.textContent = 'Uploading Dealer Stock...';
@@ -8623,7 +8681,8 @@
       const uploadBody = new FormData(form);
       uploadBody.set('progressId', uploadId);
       const data = await api('/api/reconciliation/upload-stock', { method: 'POST', body: uploadBody });
-      syncReconDealer(data.dealerCode || dealerCode);
+      if (!reconciliationResponseIsCurrent(dealerCode, version, data)) return null;
+      state.reconAuditId = data.auditId || '';
       renderDealerStockPreview(data.preview || [], data.savedCount || 0, data.summary || {});
       renderDealerStockErrors(data.errorRows || [], data.skippedCount || 0, data.errorRowsTruncated);
       if (message) {
@@ -8645,7 +8704,10 @@
     const value = cleanDealerCode(dealerCode || '');
     ['#reconDealer', '#dealerStockDealer'].forEach((selector) => {
       const select = $(selector);
-      if (select) select.value = value;
+      if (select) {
+        setDealerSelectValue(select, value);
+        syncDealerSelectDisplay(select);
+      }
     });
   }
 
@@ -8666,9 +8728,11 @@
 
   async function deleteDealerStock() {
     const dealerCode = activeReconDealer();
+    const version = dealerContextVersion;
     if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
     if (!window.confirm(`Delete old DMS stock for dealer ${dealerCode}?`)) return;
     const data = await api(`/api/reconciliation/stock?dealerCode=${encodeURIComponent(dealerCode)}`, { method: 'DELETE' });
+    if (!reconciliationResponseIsCurrent(dealerCode, version, data)) return;
     renderDealerStockPreview([]);
     renderDealerStockErrors([]);
     state.reconRows = [];
@@ -8682,8 +8746,10 @@
 
   async function reprocessReconciliation() {
     const dealerCode = activeReconDealer();
+    const version = dealerContextVersion;
     if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
     const data = await api(`/api/reconciliation/reprocess?dealerCode=${encodeURIComponent(dealerCode)}`, { method: 'POST', body: {} });
+    if (!reconciliationResponseIsCurrent(dealerCode, version, data)) return null;
     setReconciliationSummary(data.summary || {});
     await loadReconciliation({ silent: true });
     toast(data.message || 'Reconciliation reprocessed');
@@ -8753,6 +8819,7 @@
   async function loadReconciliation(options = {}) {
     const silent = Boolean(options.silent);
     const dealerCode = activeReconDealer();
+    const version = dealerContextVersion;
     const message = $('#reconMessage');
     if (!dealerCode || dealerCode === 'ALL') {
       state.reconRows = [];
@@ -8773,7 +8840,8 @@
     }
     syncReconDealer(dealerCode);
     const params = new URLSearchParams(queryFromForm($('#reconFilters')));
-    if (!params.get('dealerCode')) params.set('dealerCode', dealerCode);
+    params.set('dealerCode', dealerCode);
+    if (state.reconAuditId) params.set('auditId', state.reconAuditId);
     params.set('dealerStockOnly', '1');
     const query = params.toString();
     const dashboardParams = new URLSearchParams();
@@ -8784,6 +8852,12 @@
       api(`/api/reconciliation/report?${query}`),
       api(`/api/scans/dashboard?${dashboardParams.toString()}`).catch(() => null)
     ]);
+    if (!reconciliationResponseIsCurrent(dealerCode, version, data)) return;
+    if (dashboardData?.stats?.dealerCode && cleanDealerCode(dashboardData.stats.dealerCode) !== dealerCode) {
+      throw new Error('Stock totals do not match the selected dealer. Please reload.');
+    }
+    state.reconAuditId = data.auditId || data.scope?.auditId || data.summary?.auditId || '';
+    setText('reconSelectedDealer', dealerCode);
     const summary = data.summary || {};
     state.reconRows = Array.isArray(data.rows) ? data.rows : [];
     state.reconDashboardStats = dashboardData && dashboardData.stats ? dashboardData.stats : null;
@@ -8800,6 +8874,10 @@
 
   function reconciliationExportQuery(format, full = false) {
     const params = new URLSearchParams(queryFromForm($('#reconFilters')));
+    const dealerCode = activeReconDealer();
+    if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
+    params.set('dealerCode', dealerCode);
+    if (state.reconAuditId) params.set('auditId', state.reconAuditId);
     params.set('dealerStockOnly', '1');
     params.set('format', format);
     if (full) params.set('full', '1');
@@ -13871,6 +13949,7 @@
           if (state.dashboardDealerCode) jobs.push(loadActiveAudit({ dealerCode: state.dashboardDealerCode, silent: true, allowMissing: true }));
           if ($('#reports')?.classList.contains('active') && isProductGroupSummaryReport()) jobs.push(loadReport({ forceRefresh: true }));
           if ($('#scan')?.classList.contains('active')) jobs.push(loadScanHistory());
+          if ($('#reconciliation')?.classList.contains('active') && state.dashboardDealerCode) jobs.push(loadDealerStockPreview());
           Promise.all(jobs).then(() => {
             if (switchVersion === dealerContextVersion) state.dealerSwitching = false;
           }).catch((error) => {
@@ -14361,12 +14440,10 @@
     });
     $$('.recon-tab').forEach((button) => button.addEventListener('click', () => activateReconciliationTab(button.dataset.reconTab)));
     $('#dealerStockDealer')?.addEventListener('change', (event) => {
-      syncReconDealer(event.target.value);
-      loadReconciliation().catch((error) => toast(error.message, 'error'));
+      selectReconciliationDealer(event.target.value);
     });
     $('#reconDealer')?.addEventListener('change', (event) => {
-      syncReconDealer(event.target.value);
-      loadReconciliation().catch((error) => toast(error.message, 'error'));
+      selectReconciliationDealer(event.target.value);
     });
     $('#dealerStockUploadForm')?.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -14387,10 +14464,11 @@
     $('#reconReprocessBtn')?.addEventListener('click', () => reprocessReconciliation().catch((error) => toast(error.message, 'error')));
     $('#reconReset')?.addEventListener('click', () => {
       $('#reconFilters').reset();
+      syncReconDealer(activeReconDealer());
       loadReconciliation().catch((error) => toast(error.message, 'error'));
     });
-    $('#reconExcel').addEventListener('click', () => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('excel')}`, 'Daksh_Reconciliation.xlsx').catch((error) => toast(error.message, 'error')));
-    $('#reconPdf').addEventListener('click', () => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('pdf')}`, 'Daksh_Reconciliation.pdf').catch((error) => toast(error.message, 'error')));
+    $('#reconExcel').addEventListener('click', () => Promise.resolve().then(() => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('excel')}`, `Daksh_Reconciliation_${activeReconDealer()}.xlsx`, { expectedDealerCode: activeReconDealer() })).catch((error) => toast(error.message, 'error')));
+    $('#reconPdf').addEventListener('click', () => Promise.resolve().then(() => downloadGet(`/api/reconciliation/report?${reconciliationExportQuery('pdf')}`, `Daksh_Reconciliation_${activeReconDealer()}.pdf`, { expectedDealerCode: activeReconDealer() })).catch((error) => toast(error.message, 'error')));
     $('#reconPrevPage')?.addEventListener('click', () => {
       state.reconPage = Math.max(1, (state.reconPage || 1) - 1);
       renderReconciliationRows();

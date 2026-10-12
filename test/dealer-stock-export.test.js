@@ -30,7 +30,7 @@ test('uploaded stock export is complete, preserves upload values and isolates de
   let reads = 0;
   replace(DealerStock, 'find', filter => {
     reads++;
-    assert.equal(filter.dealerCode, 'D-A');
+    assert.ok(['D-A', 'D-B'].includes(filter.dealerCode));
     assert.ok(filter.auditId);
     return query(rows.filter(row => row.dealerCode === filter.dealerCode && row.auditId === filter.auditId));
   });
@@ -71,4 +71,14 @@ test('uploaded stock export is complete, preserves upload values and isolates de
   assert.match((await empty.json()).message, /No uploaded dealer stock/);
   assert.equal((await request('?dealerCode=D-A')).status, 200, 'UI download resolves the active audit');
   assert.equal((await request('?dealerCode=ALL')).status, 400);
+  const otherDealer = await request('?dealerCode=D-B&auditId=CURRENT');
+  assert.equal(otherDealer.status, 200);
+  assert.equal(otherDealer.headers.get('x-dealer-code'), 'D-B');
+  const otherWorkbook = new ExcelJS.Workbook();
+  await otherWorkbook.xlsx.load(Buffer.from(await otherDealer.arrayBuffer()));
+  const otherSheet = otherWorkbook.getWorksheet('Uploaded Dealer Stock');
+  assert.equal(otherSheet.rowCount, 2);
+  assert.equal(otherSheet.getCell('A2').value, 'D-B');
+  assert.equal(otherSheet.getCell('B2').value, 'OTHER-DEALER');
+  assert.equal(otherSheet.getCell('D2').value, 999);
 });
