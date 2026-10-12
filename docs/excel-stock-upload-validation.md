@@ -12,6 +12,8 @@ The panel follows the supplied visual reference: compact Select Excel / Template
 
 Validation uses the same dealer-scoped Part Master and Master Catalogue lookup as regular manual entry. Part numbers and reasons wrap in the table rather than disappearing behind ellipses. Drag a column heading to reorder it; drag its right edge to resize it. Focus a resize edge and use the arrow keys for keyboard resizing. Column order and custom widths are saved in this browser and preserved when filtering or opening another batch.
 
+Every active row has an Edit icon and a Delete icon. Edits apply to uncommitted rows. Deletion keeps a tombstone receipt, excludes the row from confirmation and visible totals, and refreshes history. Uploaded-row deletion uses the existing audited scan soft-deletion service in the same transaction as the receipt update; existing permissions and dependent-stock protections apply. Fully deleted batches can be uploaded afresh. Batch reversal excludes stock rows already deleted individually.
+
 Re-uploading identical sheet contents replaces an unconfirmed pending attempt with a fresh batch. The original remains in history as `SUPERSEDED`; no stock is added by either preview. A fully reversed sheet can also be uploaded again, preserving its original reversal record. Partially and fully committed sheets retain duplicate protection so their stock cannot be added twice. History access does not require an active audit.
 
 Run `npm run test:excel-stock-upload` for local workflow coverage:

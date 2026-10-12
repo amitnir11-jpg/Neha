@@ -10,6 +10,7 @@ function harness() {
   let batches = [];
   let fixtureFile;
   let ledger = [];
+  let deletionBlocked = false;
   const clone = value => value == null ? value : structuredClone(value);
   const db = { excelStockUploadBatch: {
     findUnique: async () => clone(batch),
@@ -19,7 +20,7 @@ function harness() {
     update: async ({ where, data }) => { const saved = batches.find(row => row.id === where.id); Object.assign(saved, clone(data)); return clone(saved); }
   } };
   const deps = {
-    express: { Router: () => Object.fromEntries(['get', 'post', 'patch'].map(method => [method, (path, ...handlers) => routes.set(`${method} ${path}`, handlers.at(-1))])) },
+    express: { Router: () => Object.fromEntries(['get', 'post', 'patch', 'delete'].map(method => [method, (path, ...handlers) => routes.set(`${method} ${path}`, handlers.at(-1))])) },
     multer: Object.assign(() => ({ single: () => () => {} }), { memoryStorage: () => ({}) }),
     './auth': { requireAuth() {}, requireAdmin() {}, validateUserDealerAccess: async (_user, code) => ({ allowed: code === 'D1' }) },
     '../models/Dealer': { findOne: () => ({ lean: async () => ({ dealerName: 'Dealer One' }) }) },
@@ -27,13 +28,13 @@ function harness() {
     '../models/Bin': { findOne: () => ({ lean: async () => ({}) }), create: async () => ({}) },
     '../models/Inventory': {
       create: async row => { ledger.push({ _id: `scan-${ledger.length}`, ...clone(row) }); },
-      find: () => ({ lean: async () => clone(ledger.filter(row => row.source === 'EXCEL_MANUAL')) })
+      find: () => ({ lean: async () => clone(ledger.filter(row => row.source === 'EXCEL_MANUAL' && !row.isDeleted)) })
     },
     '../models/ScanAuditLog': { create: async () => ({}) },
     '../utils/audit': { getActiveAudit: async () => ({ auditId: 'AUD1' }) },
     '../services/StockCalculationService': { loadPartStock: async () => {
       const bins = new Map();
-      ledger.forEach(row => bins.set(row.binLocation, (bins.get(row.binLocation) || 0) + row.qty * (row.scanType === 'OUTWARD' ? -1 : 1)));
+      ledger.filter(row => !row.isDeleted).forEach(row => bins.set(row.binLocation, (bins.get(row.binLocation) || 0) + row.qty * (row.scanType === 'OUTWARD' ? -1 : 1)));
       return { binBreakdown: Array.from(bins, ([binLocation, availableQty]) => ({ binLocation, availableQty })) };
     } },
     '../services/prisma': { getPrismaClient: () => db, withDatabaseTransaction: async work => {
@@ -41,16 +42,22 @@ function harness() {
       try { return await work(); } catch (error) { batches = beforeBatches; batch = batches.find(row => row.id === beforeBatch?.id); ledger = beforeLedger; throw error; }
     } },
     '../services/PartBinLocationService': { recordPartBinLocationFromScan: async () => {} },
+    '../services/ScanModificationService': { softDeleteScans: async filter => {
+      if (deletionBlocked) throw Object.assign(new Error('Dependent stock activity exists'), { status: 409 });
+      const row = ledger.find(scan => scan._id === filter._id && !scan.isDeleted);
+      if (!row) return { deletedCount: 0 };
+      row.isDeleted = true; return { deletedCount: 1 };
+    } },
     '../utils/safeCache': { invalidateCache() {} }
   };
   const context = { require: name => deps[name] || require(name.startsWith('../') ? `../routes/${name}` : name), module: { exports: {} }, console, Buffer };
   vm.runInNewContext(fs.readFileSync('routes/excelStockUpload.js', 'utf8'), context);
   async function call(method, path, body = {}, file) {
     let output; let error; let status = 200;
-    const req = { body, query: body, file, params: { batchId: batch?.batchId }, user: { id: 'u1', username: 'Auditor' }, app: { get: () => null } };
+    const req = { body, query: body, file, params: { batchId: batch?.batchId, sourceRow: body.sourceRow }, user: { id: 'u1', username: 'Auditor' }, app: { get: () => null } };
     const res = { status(code) { status = code; return this; }, json(value) { output = clone(value); return this; } };
     await routes.get(`${method} ${path}`)(req, res, value => { error = value; });
-    return { status: error?.statusCode || status, data: output, error };
+    return { status: error?.statusCode || error?.status || status, data: output, error };
   }
   async function preview() {
     if (!fixtureFile) {
@@ -61,8 +68,45 @@ function harness() {
     }
     return call('post', '/preview', { dealerCode: 'D1' }, fixtureFile);
   }
-  return { call, preview, batch: () => clone(batch), ledger: () => clone(ledger) };
+  return { call, preview, batch: () => clone(batch), ledger: () => clone(ledger), blockDeletion: () => { deletionBlocked = true; } };
 }
+
+test('delete removes pending rows and uploaded stock while preserving receipts', async () => {
+  const h = harness(); await h.preview();
+  const removed = await h.call('delete', '/batches/:batchId/rows/:sourceRow', { sourceRow: 3 });
+  assert.equal(removed.status, 200); assert.equal(h.batch().rows[1].deleted, true); assert.equal(h.batch().rejectedRows, 0);
+  let rows = h.batch().rows; rows[1].deleted = false; rows[1].status = 'ACCEPTED'; rows[0].checked = true;
+  await h.call('patch', '/batches/:batchId/rows', { rows });
+  assert.equal(h.batch().rows[1].deleted, true, 'a row patch cannot resurrect a deleted receipt');
+  const committed = await h.call('post', '/batches/:batchId/confirm', { dealerCode: 'D1' });
+  assert.equal(committed.data.status, 'COMMITTED'); assert.equal(h.ledger().length, 1);
+  assert.equal((await h.call('delete', '/batches/:batchId/rows/:sourceRow', { sourceRow: 2 })).status, 200);
+  assert.equal(h.batch().status, 'CANCELLED'); assert.equal(h.batch().uploadedQty, 0); assert.equal(h.ledger()[0].isDeleted, true);
+  assert.equal((await h.call('delete', '/batches/:batchId/rows/:sourceRow', { sourceRow: 2 })).status, 409);
+  assert.equal((await h.preview()).status, 201, 'fully removed stock does not block a fresh sheet');
+});
+
+test('uploaded-row deletion rolls back when dependent stock exists', async () => {
+  const h = harness(); await h.preview(); const rows = h.batch().rows; rows[0].checked = true;
+  await h.call('patch', '/batches/:batchId/rows', { rows });
+  await h.call('post', '/batches/:batchId/confirm', { dealerCode: 'D1' });
+  const before = h.batch(); h.blockDeletion();
+  assert.equal((await h.call('delete', '/batches/:batchId/rows/:sourceRow', { sourceRow: 2 })).status, 409);
+  assert.deepEqual(h.batch(), before); assert.notEqual(h.ledger()[0].isDeleted, true);
+});
+
+test('batch reversal excludes a previously deleted uploaded row', async () => {
+  const h = harness(); await h.preview(); let rows = h.batch().rows;
+  rows[1].partNumber = 'PART1'; rows[1].binLocation = 'BIN1';
+  await h.call('patch', '/batches/:batchId/rows', { rows }); rows = h.batch().rows; rows.forEach(row => { row.checked = true; });
+  await h.call('patch', '/batches/:batchId/rows', { rows });
+  await h.call('post', '/batches/:batchId/confirm', { dealerCode: 'D1' });
+  assert.equal((await h.call('delete', '/batches/:batchId/rows/:sourceRow', { sourceRow: 2 })).status, 200);
+  assert.equal(h.batch().uploadedQty, 3);
+  const reversal = await h.call('post', '/batches/:batchId/reverse', { dealerCode: 'D1' });
+  assert.equal(reversal.status, 200);
+  assert.equal(h.ledger().filter(row => !row.isDeleted).reduce((sum, row) => sum + row.qty * (row.scanType === 'OUTWARD' ? -1 : 1), 0), 0);
+});
 
 test('manual Excel upload previews, partially commits, corrects remaining rows, and reverses stock', async () => {
   const h = harness();

@@ -13539,17 +13539,17 @@
       if (!excelStockBatch) return [];
       const query = clean($('#excelStockSearch')?.value).toUpperCase(); const filter = $('#excelStockFilter')?.value || 'ALL';
       return (excelStockBatch.rows || []).map((row, index) => ({ row, index })).filter(({ row }) =>
-        (filter === 'ALL' || row.status === filter) && (!query || `${row.partNumber} ${row.binLocation}`.toUpperCase().includes(query)));
+        !row.deleted && (filter === 'ALL' || row.status === filter) && (!query || `${row.partNumber} ${row.binLocation}`.toUpperCase().includes(query)));
     };
     const renderExcelStockBatch = () => {
       if (!excelStockBatch) return;
-      const rows = excelStockBatch.rows || []; const accepted = rows.filter(row => row.status === 'ACCEPTED'); const rejected = rows.length - accepted.length;
+      const rows = (excelStockBatch.rows || []).filter(row => !row.deleted); const accepted = rows.filter(row => row.status === 'ACCEPTED'); const rejected = rows.filter(row => row.status === 'REJECTED').length;
       $('#excelStockWorkspace').hidden = false;
       const editable = ['PENDING', 'PARTIALLY_COMMITTED'].includes(excelStockBatch.status);
       $('#excelTotalRows').textContent = rows.length; $('#excelAcceptedRows').textContent = accepted.length; $('#excelRejectedCount').textContent = rejected;
       $('#excelAcceptedQty').textContent = accepted.reduce((sum, row) => sum + Number(row.qty || 0), 0);
       $('#excelBatchLabel').textContent = `Batch ${excelStockBatch.batchId}`;
-      const statusLabels = { PENDING: 'Pending review', PARTIALLY_COMMITTED: 'Partially uploaded', COMMITTED: 'Uploaded', REVERSED: 'Reversed', SUPERSEDED: 'Replaced' };
+      const statusLabels = { PENDING: 'Pending review', PARTIALLY_COMMITTED: 'Partially uploaded', COMMITTED: 'Uploaded', REVERSED: 'Reversed', SUPERSEDED: 'Replaced', CANCELLED: 'All rows deleted' };
       $('#excelReviewStatus').textContent = statusLabels[excelStockBatch.status] || excelStockBatch.status;
       $('#excelReviewStatus').className = `excel-badge ${excelStockBatch.status === 'COMMITTED' ? 'accepted' : 'pending'}`;
       $('#excelStockStatus').textContent = excelStockBatch.status === 'COMMITTED' ? 'Uploaded to stock' : excelStockBatch.status === 'PARTIALLY_COMMITTED' ? 'Some parts uploaded' : excelStockBatch.status === 'REVERSED' ? 'Stock upload reversed' : 'Not uploaded to stock';
@@ -13561,7 +13561,7 @@
       });
       const visible = excelStockVisibleRows(); const pageSize = Number($('#excelRowsPerPage')?.value || 50); const pages = Math.max(1, Math.ceil(visible.length / pageSize));
       excelStockPage = Math.min(excelStockPage, pages); const start = (excelStockPage - 1) * pageSize; const pageRows = visible.slice(start, start + pageSize);
-      $('#excelStockRows').innerHTML = pageRows.map(({ row, index }) => `<tr><td>${index + 1}</td><td class="part-cell"><span>${excelHtml(row.partNumber)}</span>${row.status === 'REJECTED' ? `<small class="excel-row-reason">${excelHtml(row.reason)}</small>` : ''}</td><td>${excelHtml(row.binLocation)}</td><td>${excelHtml(row.qty)}</td><td><label class="excel-row-status">${row.status === 'ACCEPTED' && !row.committed && editable ? `<input type="checkbox" data-excel-check="${index}" ${row.checked ? 'checked' : ''} aria-label="Verify row ${index + 1}">` : ''}<span class="excel-badge ${row.status === 'ACCEPTED' ? 'accepted' : 'rejected'}">${row.committed ? 'Uploaded' : row.status === 'ACCEPTED' ? 'Accepted' : 'Rejected'}</span></label></td><td><button type="button" class="btn light" data-excel-edit="${index}" ${row.committed || !editable ? 'disabled' : ''}>Edit</button></td></tr>`).join('') || '<tr><td colspan="6">No rows match this filter.</td></tr>';
+      $('#excelStockRows').innerHTML = pageRows.map(({ row, index }, position) => `<tr><td>${start + position + 1}</td><td class="part-cell"><span>${excelHtml(row.partNumber)}</span>${row.status === 'REJECTED' ? `<small class="excel-row-reason">${excelHtml(row.reason)}</small>` : ''}</td><td>${excelHtml(row.binLocation)}</td><td>${excelHtml(row.qty)}</td><td><label class="excel-row-status">${row.status === 'ACCEPTED' && !row.committed && editable ? `<input type="checkbox" data-excel-check="${index}" ${row.checked ? 'checked' : ''} aria-label="Verify row ${index + 1}">` : ''}<span class="excel-badge ${row.status === 'ACCEPTED' ? 'accepted' : 'rejected'}">${row.committed ? 'Uploaded' : row.status === 'ACCEPTED' ? 'Accepted' : 'Rejected'}</span></label></td><td><div class="excel-row-actions"><button type="button" class="btn light excel-icon-button" data-excel-edit="${index}" ${row.committed || !editable ? 'disabled' : ''} title="Edit part" aria-label="Edit part ${excelHtml(row.partNumber)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12H4v-5L16 3Z M14 5l5 5"/></svg></button><button type="button" class="btn light excel-icon-button excel-delete-button" data-excel-delete="${index}" ${!['PENDING', 'PARTIALLY_COMMITTED', 'COMMITTED'].includes(excelStockBatch.status) ? 'disabled' : ''} title="Delete part" aria-label="Delete part ${excelHtml(row.partNumber)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7"/></svg></button></div></td></tr>`).join('') || '<tr><td colspan="6">No rows match this filter.</td></tr>';
       $('#excelRejectedDownload').hidden = !rejected || $('#excelStockFilter').value !== 'REJECTED';
       $('#excelSelectPageLabel').hidden = !editable || !pageRows.some(({ row }) => row.status === 'ACCEPTED' && !row.committed);
       $('#excelPageLabel').textContent = `Showing ${pageRows.length ? start + pageRows.length : 0} of ${visible.length}`; $('#excelPrevPage').disabled = excelStockPage <= 1; $('#excelNextPage').disabled = excelStockPage >= pages;
@@ -13569,7 +13569,7 @@
       $('#excelSelectPage').checked = pageRows.length > 0 && pageRows.every(({ row }) => row.status === 'ACCEPTED' && row.checked);
       $('#excelConfirmUpload').disabled = !editable || !accepted.some(row => row.checked && !row.committed);
       $('#excelSelectPage').disabled = !editable;
-      $('#excelStockRows').querySelectorAll('input, button').forEach(control => { if (!editable) control.disabled = true; });
+      $('#excelStockRows').querySelectorAll('input, button').forEach(control => { if (!editable && !control.hasAttribute('data-excel-delete')) control.disabled = true; });
     };
     const saveExcelStockRows = async () => {
       const response = await api(`${excelStockApi}/batches/${encodeURIComponent(excelStockBatch.batchId)}/rows`, { method: 'PATCH', body: { rows: excelStockBatch.rows } });
@@ -13581,7 +13581,7 @@
       const response = await api(`${excelStockApi}/batches?dealerCode=${encodeURIComponent(dealerCode)}`);
       $('#excelHistoryPanel').hidden = false;
       $('#excelHistoryRows').innerHTML = response.batches.map(batch => {
-        const rows = batch.rows || [];
+        const rows = (batch.rows || []).filter(row => !row.deleted);
         const accepted = rows.filter(row => row.status === 'ACCEPTED').length;
         const rejected = rows.filter(row => row.status === 'REJECTED').length;
         const uploadedQty = rows.filter(row => row.committed).reduce((sum, row) => sum + Number(row.qty || 0), 0);
@@ -13635,6 +13635,18 @@
     });
     document.addEventListener('click', async (event) => {
       const edit = event.target.closest('[data-excel-edit]'); if (edit) { openExcelStockRowEdit(Number(edit.dataset.excelEdit)); return; }
+      const remove = event.target.closest('[data-excel-delete]'); if (remove) {
+        if (!excelStockBatch || remove.disabled) return;
+        const row = excelStockBatch.rows[Number(remove.dataset.excelDelete)]; if (!row || row.deleted) return;
+        const note = row.committed ? 'This will undo its uploaded stock. Deletion is blocked if dependent stock activity exists.' : 'This part will be excluded from the upload.';
+        if (!window.confirm(`Delete ${row.partNumber} (${row.qty} units in ${row.binLocation})? ${note}`)) return;
+        remove.disabled = true;
+        try {
+          const response = await api(`${excelStockApi}/batches/${encodeURIComponent(excelStockBatch.batchId)}/rows/${row.sourceRow}`, { method: 'DELETE', body: { dealerCode: excelStockBatch.dealerCode } });
+          excelStockBatch = response.batch; renderExcelStockBatch(); await loadExcelUploadHistory(); excelStockNotice(response.message);
+        } catch (error) { remove.disabled = false; excelStockNotice(error.message, true); }
+        return;
+      }
       const open = event.target.closest('[data-excel-open-batch]'); if (open) {
         try { const response = await api(`${excelStockApi}/batches/${encodeURIComponent(open.dataset.excelOpenBatch)}`); excelStockBatch = response.batch; excelStockPage = 1; renderExcelStockBatch(); }
         catch (error) { excelStockNotice(error.message, true); }

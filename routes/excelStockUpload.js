@@ -49,7 +49,7 @@ async function validateRows(dealerCode, auditId, inputRows) {
   const stockByPart = new Map(stockEntries);
   const rows = [];
   for (const input of inputRows) {
-    if (input.committed === true) { rows.push({ ...input }); continue; }
+    if (input.committed === true || input.deleted === true) { rows.push({ ...input }); continue; }
     const row = { ...input };
     const partNumber = normalizePartNumber(row.correctedPartNumber || row.partNumber || '');
     const binLocation = upper(row.correctedBinLocation || row.binLocation || '');
@@ -85,7 +85,7 @@ async function validateRows(dealerCode, auditId, inputRows) {
 
 function summarize(rows) {
   const accepted = rows.filter(row => row.status === 'ACCEPTED');
-  const rejected = rows.length - accepted.length;
+  const rejected = rows.filter(row => row.status === 'REJECTED').length;
   return { acceptedRows: accepted.length, rejectedRows: rejected, uploadedQty: accepted.reduce((sum, row) => sum + Number(row.qty || 0), 0) };
 }
 
@@ -137,7 +137,7 @@ router.post('/preview', auth.requireAuth, upload.single('file'), async (req, res
         const db = getPrismaClient();
         const duplicate = await db.excelStockUploadBatch.findFirst({ where: { dealerCode: scope.dealerCode, auditId: scope.auditId, fileHash } });
         if (duplicate) {
-          if (!['PENDING', 'REVERSED', 'SUPERSEDED'].includes(duplicate.status)) {
+          if (!['PENDING', 'REVERSED', 'SUPERSEDED', 'CANCELLED'].includes(duplicate.status)) {
             throw Object.assign(new Error(`Stock from this sheet was already added in batch ${duplicate.batchId}. Open that batch in Upload History to correct remaining rows.`), { statusCode: 409 });
           }
           await db.excelStockUploadBatch.update({ where: { id: duplicate.id }, data: {
@@ -191,7 +191,7 @@ router.patch('/batches/:batchId/rows', auth.requireAuth, async (req, res, next) 
     for (let index = 0; index < (batch.rows || []).length; index += 1) {
       const saved = batch.rows[index]; const incoming = requested[index];
       if (!incoming || incoming.sourceRow !== saved.sourceRow) throw Object.assign(new Error('Original Excel row identities cannot be changed.'), { statusCode: 400 });
-      if (saved.committed) {
+      if (saved.committed || saved.deleted) {
         if (saved.partNumber !== incoming.partNumber || Number(saved.qty) !== Number(incoming.qty) || saved.binLocation !== incoming.binLocation) {
           throw Object.assign(new Error('Committed rows are locked and cannot be edited.'), { statusCode: 409 });
         }
@@ -251,8 +251,8 @@ router.post('/batches/:batchId/confirm', auth.requireAuth, async (req, res, next
       }
       const committedIds = new Set(eligible.map(row => row.sourceRow));
       const updatedRows = rows.map(row => committedIds.has(row.sourceRow) ? { ...row, committed: true, committedAt: now.toISOString() } : row);
-      const allCommitted = updatedRows.every(row => row.committed === true);
-      const previouslyCommittedRows = (batch.rows || []).filter(row => row.committed === true);
+      const allCommitted = updatedRows.every(row => row.committed === true || row.deleted === true);
+      const previouslyCommittedRows = (batch.rows || []).filter(row => row.committed === true && !row.deleted);
       const previouslyCommitted = previouslyCommittedRows.length;
       const previouslyUploadedQty = previouslyCommittedRows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
       const cumulativeQty = previouslyUploadedQty + eligible.reduce((sum, row) => sum + Number(row.qty), 0);
@@ -273,6 +273,43 @@ router.post('/batches/:batchId/confirm', auth.requireAuth, async (req, res, next
   } catch (error) { next(error); }
 });
 
+router.delete('/batches/:batchId/rows/:sourceRow', auth.requireAuth, async (req, res, next) => {
+  try {
+    const batch = await withDatabaseTransaction(async () => {
+      const db = getPrismaClient();
+      const saved = await db.excelStockUploadBatch.findUnique({ where: { batchId: req.params.batchId } });
+      if (!saved) throw Object.assign(new Error('Upload batch not found.'), { statusCode: 404 });
+      const access = await auth.validateUserDealerAccess(req.user, saved.dealerCode);
+      if (!access.allowed) throw Object.assign(new Error('Unauthorized dealer access.'), { statusCode: 403 });
+      if (!['PENDING', 'PARTIALLY_COMMITTED', 'COMMITTED'].includes(saved.status)) throw Object.assign(new Error('This batch can no longer be changed.'), { statusCode: 409 });
+      const row = saved.rows.find(item => item.sourceRow === Number(req.params.sourceRow));
+      if (!row || row.deleted) throw Object.assign(new Error('Upload row was not found or is already deleted.'), { statusCode: 404 });
+      if (row.committed) {
+        const scope = await resolveScope(req, saved.dealerCode);
+        if (scope.auditId !== saved.auditId) throw Object.assign(new Error('Only rows in the active audit can be deleted.'), { statusCode: 409 });
+        const scans = await Inventory.find({ dealerCode: saved.dealerCode, auditId: saved.auditId, uploadBatchId: saved.batchId, source: 'EXCEL_MANUAL', isDeleted: { $ne: true } }).lean();
+        const prefix = `EXCEL-${saved.batchId}-${row.sourceRow}-`;
+        const matches = scans.filter(scan => (String(scan.scanId || '').startsWith(prefix) || String(scan.uniqueScanId || '').startsWith(prefix))
+          && normalizePartNumber(scan.partNumber) === row.partNumber && upper(scan.binLocation || scan.bin) === row.binLocation && Number(scan.qty ?? scan.quantity) === Number(row.qty));
+        if (matches.length !== 1) throw Object.assign(new Error('The uploaded stock record does not match this row; deletion was stopped.'), { statusCode: 409 });
+        const removed = await require('../services/ScanModificationService').softDeleteScans({ _id: matches[0]._id || matches[0].id, dealerCode: saved.dealerCode }, req, { reason: 'Incorrect part removed from Excel stock upload' });
+        if (removed.deletedCount !== 1) throw Object.assign(new Error('The uploaded stock row could not be deleted.'), { statusCode: 409 });
+      }
+      row.deleted = true; row.deletedAt = new Date().toISOString(); row.deletedBy = actor(req); row.status = 'DELETED'; row.checked = false;
+      const remaining = saved.rows.filter(item => !item.deleted);
+      const committed = remaining.filter(item => item.committed);
+      const status = !remaining.length ? 'CANCELLED' : committed.length === remaining.length ? 'COMMITTED' : committed.length ? 'PARTIALLY_COMMITTED' : 'PENDING';
+      const summary = summarize(remaining);
+      return db.excelStockUploadBatch.update({ where: { id: saved.id }, data: { rows: saved.rows, status, ...summary,
+        uploadedQty: status === 'PENDING' ? summary.uploadedQty : committed.reduce((sum, item) => sum + Number(item.qty), 0) }, select: batchFields });
+    }, { timeout: 60000 });
+    require('../utils/safeCache').invalidateCache({ namespaces: ['dashboard', 'report', 'report-download', 'reconciliation'], tags: ['scan', 'inventory', 'stock'], scope: { dealerCode: batch.dealerCode, auditId: batch.auditId }, clearInFlight: true });
+    const io = req.io || req.app?.get('io');
+    for (const event of ['inventory:update', 'reports:update']) io?.emit(event, { reason: 'excel-upload-row-deleted', dealerCode: batch.dealerCode, auditId: batch.auditId, batchId: batch.batchId });
+    res.json({ success: true, message: 'Part removed from the upload.', batch });
+  } catch (error) { next(error); }
+});
+
 router.post('/batches/:batchId/reverse', auth.requireAuth, auth.requireAdmin, async (req, res, next) => {
   try {
     const batchRef = await getPrismaClient().excelStockUploadBatch.findUnique({ where: { batchId: req.params.batchId } });
@@ -283,9 +320,9 @@ router.post('/batches/:batchId/reverse', auth.requireAuth, auth.requireAdmin, as
       const db = getPrismaClient();
       const batch = await db.excelStockUploadBatch.findUnique({ where: { batchId: req.params.batchId } });
       if (batch.status !== 'COMMITTED') throw Object.assign(new Error('Only a fully committed, unreversed batch can be reversed.'), { statusCode: 409 });
-      const rows = (batch.rows || []).filter(row => row.committed === true);
+      const rows = (batch.rows || []).filter(row => row.committed === true && !row.deleted);
       const now = new Date();
-      const sourceRows = await Inventory.find({ dealerCode: batch.dealerCode, auditId: batch.auditId, uploadBatchId: batch.batchId }).lean();
+      const sourceRows = await Inventory.find({ dealerCode: batch.dealerCode, auditId: batch.auditId, uploadBatchId: batch.batchId, source: 'EXCEL_MANUAL', isDeleted: { $ne: true } }).lean();
       if (sourceRows.length !== rows.length) throw Object.assign(new Error('Committed Excel ledger records do not match the batch receipt; reversal was stopped for review.'), { statusCode: 409 });
       for (const source of sourceRows) {
         const matches = rows.find(row => normalizePartNumber(row.partNumber) === normalizePartNumber(source.normalizedPartNumber || source.partNumber)
@@ -356,7 +393,7 @@ router.get('/batches/:batchId/rejected.xlsx', auth.requireAuth, async (req, res,
       { header: 'Bin Location', key: 'binLocation', width: 20 }, { header: 'Rejection Reason', key: 'reason', width: 32 },
       { header: 'Suggested Correction', key: 'suggestion', width: 28 }, { header: 'Final Status', key: 'status', width: 18 }
     ];
-    sheet.getRow(1).font = { bold: true }; sheet.addRows((batch.rows || []).filter(row => row.status !== 'ACCEPTED').map(row => ({ ...row, suggestion: row.reason === 'Part not found in Part Master' ? 'Check Part Master spelling' : '' })));
+    sheet.getRow(1).font = { bold: true }; sheet.addRows((batch.rows || []).filter(row => row.status === 'REJECTED').map(row => ({ ...row, suggestion: row.reason === 'Part not found in Part Master' ? 'Check Part Master spelling' : '' })));
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); res.setHeader('Content-Disposition', `attachment; filename="${batch.batchId}-rejected.xlsx"`);
     await workbook.xlsx.write(res); res.end();
   } catch (error) { next(error); }
