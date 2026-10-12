@@ -23,7 +23,7 @@ function harness() {
     multer: Object.assign(() => ({ single: () => () => {} }), { memoryStorage: () => ({}) }),
     './auth': { requireAuth() {}, requireAdmin() {}, validateUserDealerAccess: async (_user, code) => ({ allowed: code === 'D1' }) },
     '../models/Dealer': { findOne: () => ({ lean: async () => ({ dealerName: 'Dealer One' }) }) },
-    '../models/MasterPart': { find: () => ({ lean: async () => [{ partNumber: 'PART1', dealerCode: 'D1', partDescription: 'Test part' }] }) },
+    '../utils/partMasterPrice': { getPricesFromPartMaster: async (parts, dealerCode) => new Map(parts.filter(part => part === 'PART1' && dealerCode === 'D1').map(part => [part, { masterRecord: { partNumber: part, dealerCode, partDescription: 'Catalogue test part', source: 'MASTER_CATALOGUE' } }])) },
     '../models/Bin': { findOne: () => ({ lean: async () => ({}) }), create: async () => ({}) },
     '../models/Inventory': {
       create: async row => { ledger.push({ _id: `scan-${ledger.length}`, ...clone(row) }); },
@@ -68,6 +68,7 @@ test('manual Excel upload previews, partially commits, corrects remaining rows, 
   const h = harness();
   const preview = await h.preview();
   assert.equal(preview.status, 201); assert.equal(preview.data.batch.acceptedRows, 1); assert.equal(preview.data.batch.rejectedRows, 1);
+  assert.equal(preview.data.batch.rows[0].partDescription, 'Catalogue test part', 'upload accepts the shared catalogue lookup result');
   assert.equal(h.ledger().length, 0, 'preview must never change stock');
   let rows = h.batch().rows; rows[0].checked = true;
   assert.equal((await h.call('patch', '/batches/:batchId/rows', { rows })).status, 200);

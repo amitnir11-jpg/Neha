@@ -74,6 +74,7 @@
 .excel-stock-pager > label { display: flex; align-items: center; gap: 8px; }
 .excel-stock-panel #excelRowsPerPage { min-height: 28px; padding: 3px 9px; border: 1px solid #d8d8d8; border-radius: 16px; background: transparent; font-size: 12px; }
 .excel-review-tools { display: flex; justify-content: space-between; gap: 12px; align-items: center; font-size: 12px; }
+.excel-table-hint { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 11px; color: #66758a; margin: 8px 0 12px; }
 .excel-stock-panel .excel-confirm-bar { margin-top: 16px; padding-top: 20px; border-color: #eee; }
 .excel-stock-panel .excel-confirm-bar > span { color: #42546d; font-size: 12px; }
 .excel-stock-panel #excelConfirmUpload { background: #111 !important; color: #fff !important; border-color: #111 !important; padding: 6px 16px !important; }
@@ -91,6 +92,25 @@
 
 /* Keep this panel compact within the shared legacy control and table styles. */
 @layer app-controls {
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) #excelUploadPartsTable th,
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) #excelUploadPartsTable td {
+    width: auto !important; max-width: none !important; font-size: 12px !important;
+    white-space: normal !important; overflow: visible !important; text-overflow: clip !important;
+    overflow-wrap: anywhere; vertical-align: middle;
+  }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) #excelUploadPartsTable th {
+    position: relative; cursor: grab; padding-right: 10px !important;
+  }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) #excelUploadPartsTable [data-column="qty"],
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) #excelUploadPartsTable [data-column="action"] { text-align: right !important; }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) #excelUploadPartsTable [data-column="part"],
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) #excelUploadPartsTable [data-column="status"] { text-align: left !important; }
+  #excelUploadPartsTable .excel-column-resize {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 8px;
+    cursor: col-resize; touch-action: none; border-right: 2px solid transparent;
+  }
+  #excelUploadPartsTable .excel-column-resize:hover,
+  #excelUploadPartsTable .excel-column-resize:focus-visible { border-color: #9fb4ca; outline: none; }
   :is(#scan #excelStockUploadPanel, #excelStockUploadPanel)[hidden] { display: none !important; }
   :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .btn {
     min-width: 0 !important; height: auto !important; min-height: 28px !important; padding: 4px 12px !important;

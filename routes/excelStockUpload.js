@@ -4,7 +4,7 @@ const ExcelJS = require('exceljs');
 const { randomUUID, createHash } = require('crypto');
 const auth = require('./auth');
 const Dealer = require('../models/Dealer');
-const MasterPart = require('../models/MasterPart');
+const { getPricesFromPartMaster } = require('../utils/partMasterPrice');
 const Bin = require('../models/Bin');
 const Inventory = require('../models/Inventory');
 const ScanAuditLog = require('../models/ScanAuditLog');
@@ -43,15 +43,8 @@ async function resolveScope(req, requestedCode) {
 
 async function validateRows(dealerCode, auditId, inputRows) {
   const partNumbers = [...new Set(inputRows.map(row => normalizePartNumber(row.correctedPartNumber || row.partNumber || '')).filter(Boolean))];
-  const masterScope = { $or: [{ dealerCode }, { dealerCode: null }, { dealerCode: '' }] };
-  const masters = partNumbers.length ? await MasterPart.find({ ...masterScope, $or: [
-    { dealerCode }, { dealerCode: null }, { dealerCode: '' }
-  ], $and: [{ $or: [{ normalizedPartNumber: { $in: partNumbers } }, { partNumber: { $in: partNumbers } }] }] }).lean() : [];
-  const masterByPart = new Map();
-  for (const master of masters) {
-    const key = normalizePartNumber(master.normalizedPartNumber || master.partNumber || master.partNo);
-    if (key && (!masterByPart.has(key) || upper(master.dealerCode) === dealerCode)) masterByPart.set(key, master);
-  }
+  const pricesByPart = await getPricesFromPartMaster(partNumbers, dealerCode);
+  const masterByPart = new Map([...pricesByPart].map(([part, price]) => [part, price.masterRecord || price]));
   const stockEntries = await Promise.all(partNumbers.map(async partNumber => [partNumber, await loadPartStock({ dealerCode, auditId, partNumber })]));
   const stockByPart = new Map(stockEntries);
   const rows = [];

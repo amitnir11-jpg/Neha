@@ -10,6 +10,8 @@ Selecting a sheet only stores the selection in the browser. Clicking **Upload Sh
 
 The panel follows the supplied visual reference: compact Select Excel / Template / History controls, four summary cards, review and stock-status badges, All / Accepted / Rejected tabs, search, and one part-details table. Rejection reasons appear below each part number, with an Edit action on the same row. Verification controls appear only for valid remaining rows. The Upload Sheet button appears after file selection, preserving explicit upload behavior.
 
+Validation uses the same dealer-scoped Part Master and Master Catalogue lookup as regular manual entry. Part numbers and reasons wrap in the table rather than disappearing behind ellipses. Drag a column heading to reorder it; drag its right edge to resize it. Focus a resize edge and use the arrow keys for keyboard resizing. Column order and custom widths are saved in this browser and preserved when filtering or opening another batch.
+
 Re-uploading identical sheet contents replaces an unconfirmed pending attempt with a fresh batch. The original remains in history as `SUPERSEDED`; no stock is added by either preview. A fully reversed sheet can also be uploaded again, preserving its original reversal record. Partially and fully committed sheets retain duplicate protection so their stock cannot be added twice. History access does not require an active audit.
 
 Run `npm run test:excel-stock-upload` for local workflow coverage:

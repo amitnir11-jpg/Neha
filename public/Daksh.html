@@ -463,8 +463,9 @@
                       <div class="excel-upload-summary"><div><strong id="excelTotalRows">0</strong><span>Total Rows</span></div><div><strong id="excelAcceptedRows">0</strong><span>Accepted</span></div><div><strong id="excelRejectedCount">0</strong><span>Rejected</span></div><div><strong id="excelAcceptedQty">0</strong><span>Accepted Qty</span></div></div>
                       <div class="excel-details-head"><div><h4>Uploaded Part Details</h4><p id="excelBatchLabel">Batch</p></div><span id="excelStockStatus" class="excel-badge pending">Not uploaded to stock</span></div>
                       <div class="excel-stock-toolbar"><div class="excel-filter-tabs" role="tablist" aria-label="Filter uploaded parts"><button id="excelFilterAll" type="button" role="tab" aria-selected="true" class="active" data-excel-filter="ALL">All (0)</button><button type="button" role="tab" aria-selected="false" data-excel-filter="ACCEPTED">Accepted</button><button type="button" role="tab" aria-selected="false" data-excel-filter="REJECTED">Rejected</button></div><input id="excelStockSearch" type="search" placeholder="Search part or bin..." aria-label="Search uploaded parts"><select id="excelStockFilter" hidden aria-hidden="true"><option value="ALL">All rows</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option></select></div>
-                      <div class="excel-table-wrap"><table class="excel-stock-table"><thead><tr><th>#</th><th>Part Number</th><th>Bin</th><th>Qty</th><th>Status</th><th>Action</th></tr></thead><tbody id="excelStockRows"></tbody></table></div>
+                      <div class="excel-table-wrap"><table id="excelUploadPartsTable" class="excel-stock-table" aria-label="Uploaded parts. Drag headings to reorder columns; drag column edges to resize."><thead><tr><th>#</th><th>Part Number</th><th>Bin</th><th>Qty</th><th>Status</th><th>Action</th></tr></thead><tbody id="excelStockRows"></tbody></table></div>
                       <div class="excel-stock-pager"><label>Rows/page <select id="excelRowsPerPage"><option>10</option><option>25</option><option selected>50</option></select></label><div><button id="excelPrevPage" class="btn light" type="button">Previous</button><span id="excelPageLabel">Showing 0 of 0</span><button id="excelNextPage" class="btn light" type="button">Next</button></div></div>
+                      <div class="excel-table-hint"><span>Drag headings to move columns. Drag column edges to resize.</span><button type="button" class="btn light" data-excel-reset-columns>Reset columns</button></div>
                       <div class="excel-review-tools"><label id="excelSelectPageLabel" hidden><input id="excelSelectPage" type="checkbox"> Verify valid parts on this page</label><button id="excelRejectedDownload" class="btn light" type="button" hidden>Download Rejected Parts Excel</button></div>
                       <div class="excel-confirm-bar"><span>Review parts, then submit validated stock.</span><button id="excelConfirmUpload" class="btn primary" type="button"><span aria-hidden="true">ⓥ</span> Submit Upload</button></div>
                     </div>
@@ -1818,7 +1819,8 @@
   <link rel="stylesheet" href="/smart-part-search.css?v=20261011-smart-part-search-v3">
   <link rel="stylesheet" href="/scan-edit-checkboxes.css?v=20261011-scan-edit-checkboxes-v3">
   <script src="/js/smart-part-search.js?v=20261011-smart-part-search-v1"></script>
-  <script src="/ui.js?v=20261012-excel-upload-reference-v4"></script>
+  <script src="/js/excel-upload-table.js?v=20261012-adjustable-v1"></script>
+  <script src="/ui.js?v=20261012-excel-upload-adjustable-v5"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>
