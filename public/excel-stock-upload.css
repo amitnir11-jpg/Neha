@@ -1,0 +1,146 @@
+.excel-stock-panel {
+  padding: 16px; border: 1px solid #e2e2e2; border-radius: 12px;
+  background: #fcfcfc; color: #111; font-family: "Segoe UI", Arial, sans-serif;
+}
+.excel-stock-panel [hidden] { display: none !important; }
+.excel-stock-panel .excel-stock-head { align-items: center; }
+.excel-stock-panel .excel-stock-head h3 { font-size: 18px; font-weight: 600; }
+.excel-stock-panel .excel-stock-head p { font-size: 12px; color: #495568; margin-top: 6px; }
+.excel-stock-panel .btn {
+  min-width: 0 !important; min-height: 28px !important; padding: 4px 12px !important;
+  border-radius: 18px !important; border: 1px solid #d8d8d8 !important;
+  background: transparent !important; color: #626262 !important;
+  font-size: 13px !important; line-height: 18px !important; font-weight: 600;
+  box-shadow: none !important; cursor: pointer;
+}
+.excel-stock-panel .btn:hover:not(:disabled) { background: #f0f0f0 !important; }
+.excel-stock-panel .btn:focus-visible, .excel-filter-tabs button:focus-visible {
+  outline: 2px solid #2279ce; outline-offset: 2px;
+}
+.excel-stock-panel .excel-upload-actions { gap: 8px; margin: 8px 0 24px; flex-wrap: wrap; }
+.excel-stock-panel .excel-select-file,
+.excel-stock-panel #excelUploadFileBtn {
+  background: #111 !important; color: #fff !important; border-color: #111 !important;
+}
+.excel-stock-panel .excel-upload-actions .btn span { font-size: 17px; margin-right: 4px; }
+.excel-stock-panel #excelSelectedFileName { font-size: 12px; color: #626262; overflow-wrap: anywhere; }
+.excel-stock-panel #excelStockMessage { margin: 8px 0 14px; font-size: 12px; }
+.excel-stock-panel .excel-upload-summary { gap: 8px; margin: 0 0 16px; }
+.excel-stock-panel .excel-upload-summary > div {
+  align-items: flex-start; padding: 10px 8px 8px; min-height: 62px;
+  border: 1px solid #dedede; border-radius: 8px; background: transparent;
+}
+.excel-stock-panel .excel-upload-summary strong { font-size: 20px; font-weight: 500; line-height: 24px; color: #111; }
+.excel-stock-panel #excelAcceptedRows { color: #00a64d; }
+.excel-stock-panel #excelRejectedCount { color: #ff2525; }
+.excel-stock-panel .excel-upload-summary span { color: #455063; font-size: 10px; margin-top: 4px; }
+.excel-details-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.excel-details-head h4 { font-size: 16px; font-weight: 600; margin: 0; }
+.excel-details-head p { font-size: 10px; color: #465468; margin: 6px 0 0; }
+.excel-badge { display: inline-block; padding: 2px 7px; border-radius: 12px; font-size: 12px; line-height: 16px; white-space: nowrap; font-weight: 400; }
+.excel-badge.pending { background: #ffe5d9; color: #ef5600; }
+.excel-badge.accepted { background: #dcf4e5; color: #008d43; }
+.excel-badge.rejected { background: #ffdddd; color: #ff2424; }
+.excel-stock-panel .excel-stock-toolbar { flex-wrap: nowrap; gap: 16px; margin: 12px 0 14px; }
+.excel-filter-tabs { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.excel-filter-tabs button {
+  border: 0; border-radius: 20px; background: transparent; padding: 7px 15px;
+  font: 600 13px "Segoe UI", Arial, sans-serif; color: #929292; cursor: pointer;
+}
+.excel-filter-tabs button.active { color: #222; background: #f0f0f0; }
+.excel-stock-panel #excelStockSearch {
+  min-width: 100px; width: 100%; min-height: 32px; padding: 6px 15px;
+  border: 1px solid #d8d8d8; border-radius: 20px; background: transparent; font-size: 13px;
+}
+.excel-stock-panel .excel-table-wrap { border: 0; border-radius: 0; }
+.excel-stock-panel .excel-stock-table { font-size: 11px; }
+.excel-stock-panel .excel-stock-table th { background: transparent; color: #111; font-size: 10px; font-weight: 500; }
+.excel-stock-panel .excel-stock-table th,
+.excel-stock-panel .excel-stock-table td { padding: 9px 0; border-bottom: 1px solid #eee; }
+.excel-stock-panel .excel-stock-table th:first-child { width: 5%; }
+.excel-stock-panel .excel-stock-table th:nth-child(2) { width: 38%; }
+.excel-stock-panel .excel-stock-table th:nth-child(3) { width: 14%; }
+.excel-stock-panel .excel-stock-table th:nth-child(4),
+.excel-stock-panel .excel-stock-table td:nth-child(4) { text-align: right; padding-right: 16px; }
+.excel-stock-panel .excel-stock-table th:last-child,
+.excel-stock-panel .excel-stock-table td:last-child { text-align: right; }
+.excel-stock-panel .excel-stock-table td.part-cell { font-family: inherit; letter-spacing: 0; }
+.excel-row-reason { display: block; color: #ff2828; font-size: 10px; line-height: 13px; }
+.excel-row-status { display: inline-flex; align-items: center; gap: 6px; }
+.excel-row-status input { width: 14px; height: 14px; margin: 0; accent-color: #008d43; }
+.excel-stock-panel .excel-stock-table .btn { min-height: 26px !important; padding: 2px 10px !important; }
+.excel-stock-panel .excel-stock-table tr:last-child td { border-bottom: 0; }
+.excel-stock-panel .excel-stock-pager { margin: 18px 0 20px; font-size: 10px; color: #465468; }
+.excel-stock-pager > label { display: flex; align-items: center; gap: 8px; }
+.excel-stock-panel #excelRowsPerPage { min-height: 28px; padding: 3px 9px; border: 1px solid #d8d8d8; border-radius: 16px; background: transparent; font-size: 12px; }
+.excel-review-tools { display: flex; justify-content: space-between; gap: 12px; align-items: center; font-size: 12px; }
+.excel-stock-panel .excel-confirm-bar { margin-top: 16px; padding-top: 20px; border-color: #eee; }
+.excel-stock-panel .excel-confirm-bar > span { color: #42546d; font-size: 12px; }
+.excel-stock-panel #excelConfirmUpload { background: #111 !important; color: #fff !important; border-color: #111 !important; padding: 6px 16px !important; }
+.excel-stock-panel #excelConfirmUpload:disabled { background: #eee !important; color: #969696 !important; border-color: #eee !important; cursor: default; opacity: 1; }
+.excel-stock-panel #excelHistoryPanel { margin-top: 22px; padding-top: 16px; border-top: 1px solid #eee; }
+.excel-stock-panel #excelHistoryPanel h4 { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
+@media (max-width: 680px) {
+  .excel-stock-panel .excel-stock-toolbar { flex-wrap: wrap; gap: 10px; }
+  .excel-stock-panel .excel-upload-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .excel-filter-tabs { width: 100%; }
+  .excel-filter-tabs button { flex: 1; }
+  .excel-stock-panel .excel-stock-table { min-width: 460px; }
+  .excel-stock-panel .excel-upload-summary span { font-size: 9px; }
+}
+
+/* Keep this panel compact within the shared legacy control and table styles. */
+@layer app-controls {
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel)[hidden] { display: none !important; }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .btn {
+    min-width: 0 !important; height: auto !important; min-height: 28px !important; padding: 4px 12px !important;
+    border: 1px solid #d8d8d8 !important; border-radius: 18px !important;
+    background: transparent !important; color: #626262 !important; font-size: 13px !important;
+    line-height: 18px !important; box-shadow: none !important;
+  }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .excel-select-file,
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) #excelUploadFileBtn,
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) #excelConfirmUpload {
+    background: #111 !important; color: #fff !important; border-color: #111 !important;
+  }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) #excelConfirmUpload:disabled {
+    background: #eee !important; color: #969696 !important; border-color: #eee !important;
+  }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) [hidden] { display: none !important; }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .excel-stock-head h3 { font-size: 18px !important; line-height: 1.3 !important; font-weight: 600 !important; }
+  #excelStockUploadPanel .excel-stock-toolbar { display: flex !important; width: 100% !important; flex-wrap: nowrap !important; }
+  #excelStockUploadPanel .excel-filter-tabs { display: flex !important; width: auto !important; min-width: 0 !important; flex: 0 0 auto !important; }
+  #excelStockUploadPanel .excel-filter-tabs button {
+    width: auto !important; min-width: 0 !important; height: auto !important; min-height: 28px !important;
+    padding: 5px 15px !important; border: 0 !important; border-radius: 20px !important;
+    background: transparent !important; color: #929292 !important; box-shadow: none !important;
+  }
+  #excelStockUploadPanel .excel-filter-tabs button.active { background: #f0f0f0 !important; color: #222 !important; }
+  #excelStockUploadPanel #excelStockSearch {
+    width: 0 !important; min-width: 100px !important; max-width: 100% !important; flex: 1 1 0 !important;
+    min-height: 32px !important; height: 32px !important; padding: 6px 15px !important;
+    border: 1px solid #d8d8d8 !important; border-radius: 20px !important; background: transparent !important;
+  }
+  #excelStockUploadPanel .excel-table-wrap { display: block !important; overflow-x: auto !important; }
+  #excelStockUploadPanel .excel-stock-table { width: 100% !important; min-width: 0 !important; table-layout: auto !important; }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .excel-stock-table th,
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .excel-stock-table td {
+    min-width: 0 !important; padding: 9px 0 !important; background: transparent !important;
+    font-size: 10px !important; border: 0 !important; border-bottom: 1px solid #eee !important; height: auto !important;
+    text-transform: none !important; font-weight: 400 !important; text-align: left !important;
+  }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .excel-stock-table th:nth-child(4),
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .excel-stock-table td:nth-child(4) { padding-right: 16px !important; text-align: right !important; }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .excel-stock-table th:last-child,
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .excel-stock-table td:last-child { text-align: right !important; }
+  :is(#scan #excelStockUploadPanel, #excelStockUploadPanel) .excel-stock-table tr:last-child td { border-bottom: 0 !important; }
+  #excelStockUploadPanel .excel-stock-table .btn { padding: 2px 10px !important; min-height: 26px !important; height: 26px !important; }
+  #excelStockUploadPanel .excel-stock-pager label { font-size: 10px !important; font-weight: 400 !important; }
+  #excelStockUploadPanel #excelRowsPerPage { width: 56px !important; height: 28px !important; min-height: 28px !important; padding: 3px 9px !important; border-radius: 16px !important; }
+  @media (max-width: 680px) {
+    #excelStockUploadPanel .excel-stock-toolbar { flex-wrap: wrap !important; }
+    #excelStockUploadPanel .excel-filter-tabs { width: 100% !important; }
+    #excelStockUploadPanel #excelStockSearch { width: 100% !important; flex-basis: 100% !important; }
+    #excelStockUploadPanel .excel-stock-table { min-width: 460px !important; }
+  }
+}

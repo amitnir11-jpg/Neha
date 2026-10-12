@@ -35,7 +35,8 @@
     "test:app:readiness": "node --test test/app-readiness.test.js",
     "backfill:scan-categories": "node scripts/backfill-scan-categories.js",
     "start": "node scripts/railway-start.js",
-    "test:reports": "node --test test/report-*.test.js test/complete-audit-workbook.test.js test/audit-pack-download.test.js"
+    "test:reports": "node --test test/report-*.test.js test/complete-audit-workbook.test.js test/audit-pack-download.test.js",
+    "test:excel-stock-upload": "node --test test/excel-stock-upload.test.js"
   },
   "keywords": [
     "inventory",

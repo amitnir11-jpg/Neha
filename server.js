@@ -768,6 +768,7 @@ app.use('/api/scan', require('./routes/inventory'));
 app.use('/api/scan-audit', require('./routes/scanAudit'));
 app.use('/api/audit-dashboard', require('./routes/audit-dashboard'));
 app.use('/api/local-parts', localPartsRouter);
+app.use('/api/excel-stock-upload', require('./routes/excelStockUpload'));
 app.use('/api/reports', reportsRouter);
 app.use('/api/report-filter-settings', require('./routes/reportFilterSettings'));
 app.use('/api/settings', settingsRoutes);

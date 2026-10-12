@@ -1596,3 +1596,27 @@ model PermanentDealerCleanupAudit {
   @@index([status, startedAt])
   @@map("permanentdealercleanupaudits")
 }
+
+model ExcelStockUploadBatch {
+  id             String   @id @default(cuid())
+  batchId        String   @unique
+  dealerCode     String
+  dealerName     String?
+  auditId        String
+  fileName       String
+  fileHash       String
+  uploadedBy     String
+  uploadedByName String?
+  status         String   @default("PENDING")
+  acceptedRows   Int      @default(0)
+  rejectedRows   Int      @default(0)
+  uploadedQty    Int      @default(0)
+  rows           Json     @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([dealerCode, createdAt])
+  @@index([auditId, status])
+  @@unique([dealerCode, auditId, fileHash])
+  @@map("excel_stock_upload_batches")
+}
