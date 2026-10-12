@@ -1726,6 +1726,64 @@ async function previewDealerStockHandler(req, res) {
   }
 }
 
+async function exportDealerStockHandler(req, res) {
+  try {
+    const scope = await resolveScope(req);
+    if (!requireScope(scope, res)) return null;
+    // Export saved upload values without substituting part-master descriptions or prices.
+    // Read every row: preview pagination must never truncate a verification download.
+    const rows = await DealerStock.find({ dealerCode: scope.dealerCode, auditId: scope.auditId }).sort({ partNumber: 1 }).lean();
+    if (!rows.length) return res.status(404).json({ success: false, message: 'No uploaded dealer stock found for the selected dealer and audit' });
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Uploaded Dealer Stock');
+    sheet.columns = [
+      { header: 'Dealer Code', key: 'dealerCode', width: 16 },
+      { header: 'Part Number', key: 'partNumber', width: 24 },
+      { header: 'Part Description', key: 'partDescription', width: 42 },
+      { header: 'DMS Stock', key: 'dmsStock', width: 16 },
+      { header: 'Bin Loc 1', key: 'binLoc1', width: 18 },
+      { header: 'Bin Loc 2', key: 'binLoc2', width: 18 },
+      { header: 'Bin Loc 3', key: 'binLoc3', width: 18 },
+      ...Object.keys(HEADER_ALIASES)
+        .filter(key => !['dealerCode', 'partNumber', 'partDescription', 'dmsStock', 'binLoc1', 'binLoc2', 'binLoc3'].includes(key))
+        .map(key => ({ header: HEADER_ALIASES[key][0], key, width: 20 }))
+    ];
+    let totalQuantity = 0;
+    for (const row of rows) {
+      const dmsStock = numberValue(row.dmsStock ?? row.systemQty);
+      totalQuantity += dmsStock;
+      sheet.addRow({
+        ...row, dealerCode: scope.dealerCode, partNumber: clean(row.partNumber), dmsStock,
+        binLoc1: row.binLoc1 || row.systemBinLoc1 || '',
+        binLoc2: row.binLoc2 || row.systemBinLoc2 || '',
+        binLoc3: row.binLoc3 || row.systemBinLoc3 || ''
+      });
+    }
+    sheet.getColumn('partNumber').numFmt = '@';
+    sheet.getColumn('dealerCode').numFmt = '@';
+    sheet.getColumn('dmsStock').numFmt = '0.########';
+    sheet.getRow(1).font = { bold: true };
+    sheet.views = [{ state: 'frozen', ySplit: 1 }];
+    sheet.autoFilter = { from: 'A1', to: { row: rows.length + 1, column: sheet.columns.length } };
+    const summary = workbook.addWorksheet('Verification Summary');
+    summary.columns = [{ width: 28 }, { width: 48 }];
+    summary.addRows([
+      ['Dealer Code', scope.dealerCode], ['Audit ID', scope.auditId],
+      ['Saved Part Lines', rows.length], ['Total DMS Stock Qty', totalQuantity],
+      ['Exported At (UTC)', new Date().toISOString()],
+      ['Data', 'Current saved upload; duplicate part rows may be merged during upload.']
+    ]);
+    const safeName = value => clean(value).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="Daksh_Uploaded_Stock_${safeName(scope.dealerCode)}_${safeName(scope.auditId)}.xlsx"`);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
 async function deleteDealerStockHandler(req, res) {
   try {
     const scope = await resolveScope(req);
@@ -1747,6 +1805,7 @@ async function deleteDealerStockHandler(req, res) {
 router.get('/dealer-stock-template', auth.requireAuth, auth.requireAdmin, sendDealerStockTemplate);
 router.post(['/upload-stock', '/upload'], auth.requireAuth, auth.requireAdmin, upload.single('file'), uploadDealerStockHandler);
 router.get(['/stock-preview', '/preview/:dealerCode/:auditId'], auth.requireAuth, previewDealerStockHandler);
+router.get('/stock-export', auth.requireAuth, exportDealerStockHandler);
 router.delete(['/stock', '/delete/:dealerCode/:auditId'], auth.requireAuth, auth.requireAdmin, deleteDealerStockHandler);
 
 router.get('/export/excel', auth.requireAuth, exportHandler('excel'));

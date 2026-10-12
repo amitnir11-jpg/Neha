@@ -8575,6 +8575,20 @@
     }
   }
 
+  async function exportUploadedDealerStock() {
+    const dealerCode = activeReconDealer();
+    if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
+    const button = $('#reconStockExportBtn');
+    if (button?.disabled) return;
+    const params = new URLSearchParams({ dealerCode });
+    if (button) button.disabled = true;
+    try {
+      await downloadGet(`/api/reconciliation/stock-export?${params.toString()}`, `Daksh_Uploaded_Stock_${dealerCode}.xlsx`);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   async function loadDealerStockPreview() {
     const dealerCode = activeReconDealer();
     if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
@@ -14368,6 +14382,7 @@
     });
     $('#dealerStockTemplateDownloadBtn')?.addEventListener('click', () => downloadGet('/api/reconciliation/dealer-stock-template', 'Daksh_Dealer_Stock_Upload_Template.xlsx').catch((error) => toast(error.message, 'error')));
     $('#reconPreviewBtn')?.addEventListener('click', () => loadDealerStockPreview().catch((error) => toast(error.message, 'error')));
+    $('#reconStockExportBtn')?.addEventListener('click', () => exportUploadedDealerStock().catch((error) => toast(error.message, 'error')));
     $('#reconDeleteStockBtn')?.addEventListener('click', () => deleteDealerStock().catch((error) => toast(error.message, 'error')));
     $('#reconReprocessBtn')?.addEventListener('click', () => reprocessReconciliation().catch((error) => toast(error.message, 'error')));
     $('#reconReset')?.addEventListener('click', () => {
