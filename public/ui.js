@@ -5050,13 +5050,13 @@
 
   function bindSuggestions() {
     const bindFields = () => {
-      $$('input[name="part"], input[name="partNumber"], #binTransferPartSearch, #validatorMapPartNumber, #binLabelPartSearch').forEach((input) => {
+      $$('input[name="part"], input[name="partNumber"], #binTransferPartSearch, #validatorMapPartNumber, #binLabelPartSearch, #excelEditPart').forEach((input) => {
         if (input.closest('#localPartForm, #localPartHistoryFilters')) return;
         const form = input.form || input.closest('form');
-        const dealer = () => cleanDealerCode(form?.elements.dealerCode?.value || currentDealerCode() || activeDealerId());
-        const scanEntrySearch = Boolean(input.classList.contains('partSuggestInput') || input.closest('#scanHistoryFilters'));
+        const dealer = () => cleanDealerCode(input.id === 'excelEditPart' ? input.closest('dialog')?.dataset.dealerCode : form?.elements.dealerCode?.value || currentDealerCode() || activeDealerId());
+        const scanEntrySearch = Boolean(input.id === 'excelEditPart' || input.classList.contains('partSuggestInput') || input.closest('#scanHistoryFilters'));
         window.SmartPartSearch.bind(input, {
-          getScope: () => `${state.token || ''}|${dealer()}`,
+          getScope: () => `${state.token || ''}|${dealer()}|${input.id === 'excelEditPart' ? input.closest('dialog')?.dataset.batchId || '' : ''}`,
           isEnabled: () => Boolean(state.token),
           fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode: dealer(), limit: scanEntrySearch ? '5' : '10' })}`, { ...options, timeoutMs: 5000 }),
           ...(scanEntrySearch ? {
@@ -13593,6 +13593,8 @@
       if (!excelStockBatch || !['PENDING', 'PARTIALLY_COMMITTED'].includes(excelStockBatch.status)) return;
       const row = excelStockBatch.rows[index]; if (!row || row.committed) return;
       excelEditingRow = index; $('#excelEditTitle').textContent = row.status === 'ACCEPTED' ? 'Edit Accepted Part' : 'Correct Rejected Part';
+      $('#excelEditDialog').dataset.dealerCode = excelStockBatch.dealerCode || '';
+      $('#excelEditDialog').dataset.batchId = excelStockBatch.batchId;
       $('#excelEditPart').value = row.partNumber || ''; $('#excelEditQty').value = row.qty || ''; $('#excelEditBin').value = row.binLocation || ''; $('#excelEditStatus').textContent = '';
       $('#excelEditDialog').showModal();
     };
