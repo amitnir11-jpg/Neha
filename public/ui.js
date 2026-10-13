@@ -8442,7 +8442,7 @@
       partLineCount: summary.totalPartsUploaded ?? stats?.dealerStockPartLines ?? stats?.uploadedPartLineCount
     });
     const stockValue = reconciliationNumber(
-      stats?.systemStockValue ?? stats?.dealerStockValue ?? stats?.masterStockValue ?? stats?.totalSystemValue ?? summary.totalInventoryValue,
+      valuation?.totalDmsDlcValue ?? valuation?.totalDmsDlcValueKnownSubtotal ?? stats?.systemStockValue ?? stats?.dealerStockValue ?? stats?.masterStockValue ?? stats?.totalSystemValue ?? summary.totalInventoryValue,
       0
     );
     const scanValue = reconciliationNumber(
@@ -8474,15 +8474,16 @@
     setText('reconSummaryFast', wholeNumber(summary.totalFastMovingParts || 0));
     setText('reconSummarySlow', wholeNumber(summary.totalSlowMovingParts || 0));
     setText('reconSummaryDead', wholeNumber(summary.totalDeadStockParts || 0));
-    setText('reconSummaryInventoryValue', money2(summary.totalInventoryValue || 0));
-    setText('reconSummaryShortageValue', money2(summary.totalShortageValue || 0));
-    setText('reconSummaryExcessValue', money2(summary.totalExcessValue || 0));
+    const summaryAmount=(value,known)=>value===null?(known===undefined?'Pending':`${money2(known)} (subtotal)`):money2(value??0);
+    setText('reconSummaryInventoryValue', summaryAmount(summary.totalInventoryValue,valuation?.totalDmsDlcValueKnownSubtotal));
+    setText('reconSummaryShortageValue', summaryAmount(summary.totalShortageValue,valuation?.totalShortValueKnownSubtotal));
+    setText('reconSummaryExcessValue', summaryAmount(summary.totalExcessValue,valuation?.totalExcessValueKnownSubtotal));
     setText('reconSummaryNotInDms', wholeNumber(summary.totalScannedButNotInDms || 0));
     setText('reconSummaryExcess', wholeNumber(summary.excess || 0));
     setText('reconSummaryShort', wholeNumber(summary.short || 0));
     setText('reconSummaryNet', wholeNumber(summary.netDifference || 0));
-    setText('reconSummaryMrp', money2(summary.varianceMrp || 0));
-    setText('reconSummaryDlc', money2(summary.varianceDlc || 0));
+    setText('reconSummaryMrp', summaryAmount(summary.varianceMrp));
+    setText('reconSummaryDlc', summaryAmount(summary.varianceDlc));
   }
 
   function dealerStockSummaryCount(summary = {}) {
@@ -8515,6 +8516,7 @@
       ? state.reconDashboardStats
       : null;
     const stockValue = Number(
+      summary.valuationSummary?.totalDmsDlcValue ?? summary.valuationSummary?.totalDmsDlcValueKnownSubtotal ??
       scopedStats?.systemStockValue ??
       scopedStats?.dealerStockValue ??
       summary.systemStockValue ??
@@ -8526,7 +8528,7 @@
     setText('dealerStockUploadedLineCount', wholeNumber(partLineCount));
     setText('dealerStockUploadedLineRange', summary.lineRange?.text || dealerStockLineRangeText(partLineCount));
     setText('dealerStockUploadedDmsQty', wholeNumber(dmsStock));
-    setText('dealerStockUploadedSystemValue', summary.valuationSummary?.totalDmsDlcValue === null ? `₹ ${money2(summary.valuationSummary.totalDmsDlcValueKnownSubtotal)} (subtotal)` : `₹ ${money2(stockValue)}`);
+    setText('dealerStockUploadedSystemValue', summary.previewPending?'Pending confirmation':summary.valuationSummary?.totalDmsDlcValue === null ? `₹ ${money2(summary.valuationSummary.totalDmsDlcValueKnownSubtotal)} (subtotal)` : `₹ ${money2(stockValue)}`);
     renderValuationExceptions(summary.valuationSummary);
   }
 
@@ -8579,6 +8581,7 @@
   }
 
   function clearReconciliationSelectionData() {
+    state.reconSnapshotId='';
     clearTimeout(state.reconRefreshTimer);
     state.reconLoaded = false;
     state.reconRows = [];
@@ -8917,6 +8920,7 @@
       throw new Error('Stock totals do not match the selected dealer. Please reload.');
     }
     state.reconAuditId = data.auditId || data.scope?.auditId || data.summary?.auditId || '';
+    state.reconSnapshotId=data.snapshotId||'';
     setText('reconSelectedDealer', dealerCode);
     const summary = data.summary || {};
     state.reconRows = Array.isArray(data.rows) ? data.rows : [];
@@ -8938,6 +8942,7 @@
     if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
     params.set('dealerCode', dealerCode);
     if (state.reconAuditId) params.set('auditId', state.reconAuditId);
+    if(state.reconSnapshotId)params.set('snapshotId',state.reconSnapshotId);
     params.delete('dealerStockOnly');
     params.set('format', format);
     if (full) params.set('full', '1');

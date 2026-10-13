@@ -26,7 +26,7 @@ async function previewUpload(req,scope,parse) {
     return {...row,dlc:price.dlc||null,mrp:price.mrp||null,partDescription:price.description||price.partDescription||row.partDescription||''};});
   return {success:true,...scope,requiresConfirmation:true,importId:imports[0].id,alreadyConfirmed:imports[0].status==='CONFIRMED',
     preview,savedCount:0,acceptedRows:parsed.records.length,skippedCount:0,duplicateRowsMerged:parsed.duplicateRowsMerged,
-    errorRows:[],summary:{partLineCount:parsed.records.length,dmsStock:parsed.records.reduce((sum,r)=>sum+Number(r.dmsStock||r.systemQty||0),0)},
+    errorRows:[],summary:{previewPending:true,partLineCount:parsed.records.length,dmsStock:parsed.records.reduce((sum,r)=>sum+Number(r.dmsStock||r.systemQty||0),0)},
     message:'Preview ready. Confirm to save stock. Existing parts are updated by exact SKU; other uploaded stock is preserved.'};
 }
 async function confirmUpload(req,scope) {
