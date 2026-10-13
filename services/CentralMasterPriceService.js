@@ -6,10 +6,10 @@ async function resolvePrices(parts,dealerCode) {
   if(!parts.length)return new Map();
   const rows=await getPrismaClient().$queryRaw`WITH documents AS (
     SELECT id,data,"dealerCode","normalizedPartNumber","partNumber","updatedAt","createdAt",'MASTER_CATALOGUE' source,30 rank FROM mastercatalogues
-    WHERE coalesce("dealerCode",'') IN ('','ALL',${dealerCode})
+    WHERE coalesce("dealerCode",data->>'dealerCode','') IN ('','ALL',${dealerCode})
     UNION ALL
     SELECT id,data,"dealerCode","normalizedPartNumber","partNumber","updatedAt","createdAt",'MASTER_PART',10 FROM masterparts
-    WHERE coalesce("dealerCode",'') IN ('','ALL',${dealerCode})
+    WHERE coalesce("dealerCode",data->>'dealerCode','') IN ('','ALL',${dealerCode})
   ), normalized AS (
     SELECT *,regexp_replace(upper(coalesce(nullif("normalizedPartNumber",''),nullif("partNumber",''),data->>'partNo',data->>'part','')),'[[:space:]*-]','','g') part,
       coalesce(data->>'dlc',data->>'dlp',data->>'currentCatalogueDLC',data->>'currentCatalogueDlc',data->>'catalogueDLC',data->>'catalogueDlc') dlc_text,

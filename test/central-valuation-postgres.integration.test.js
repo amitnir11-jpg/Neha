@@ -26,6 +26,11 @@ run('one database snapshot survives price exceptions, concurrent readers, correc
   assert.notEqual(noMatchingUser.snapshotId,initial.snapshotId);
   await assert.rejects(central.getSnapshot({...a,snapshotId:initial.snapshotId,userName:'absent-user'}),/filters changed/);
   assert.equal((await central.getSnapshot(b)).summary.totalSystemQty,900);
+  const legacyId=require('crypto').randomUUID(),legacyPart=`LEGACYSCOPED${suffix}`;
+  await db.$executeRaw`INSERT INTO mastercatalogues(id,data,"updatedAt","createdAt") VALUES(${legacyId},${JSON.stringify({dealerCode:b.dealerCode,partNo:legacyPart,dlc:10,mrp:20})}::jsonb,now(),now())`;
+  const exactMaster=require('../services/CentralMasterPriceService');
+  assert.equal((await exactMaster.resolvePrices([legacyPart],a.dealerCode)).size,0,'legacy JSON-only dealer scope cannot leak into another dealer');
+  assert.equal((await exactMaster.resolvePrices([legacyPart],b.dealerCode)).get(legacyPart).dlc,'10');
   await Inventory.create({...b,partNumber:`UNPRICED${suffix}`,qty:2,scanType:'INWARD',syncStatus:'synced',scanStatus:'ACCEPTED',masterFound:true,uniqueScanId:`UNPRICED-SCAN-${suffix}`});
   const unpricedPhysical=await central.getSnapshot(b);assert.equal(unpricedPhysical.summary.totalPhysicalQty,2);
   assert.equal(unpricedPhysical.summary.totalPhysicalDlcValue,null);assert.equal(unpricedPhysical.summary.totalPhysicalDlcValueKnownSubtotal,0);
