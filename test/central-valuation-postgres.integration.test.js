@@ -26,6 +26,9 @@ run('one database snapshot survives price exceptions, concurrent readers, correc
   assert.notEqual(noMatchingUser.snapshotId,initial.snapshotId);
   await assert.rejects(central.getSnapshot({...a,snapshotId:initial.snapshotId,userName:'absent-user'}),/filters changed/);
   assert.equal((await central.getSnapshot(b)).summary.totalSystemQty,900);
+  await Inventory.create({...b,partNumber:`UNPRICED${suffix}`,qty:2,scanType:'INWARD',syncStatus:'synced',scanStatus:'ACCEPTED',masterFound:true,uniqueScanId:`UNPRICED-SCAN-${suffix}`});
+  const unpricedPhysical=await central.getSnapshot(b);assert.equal(unpricedPhysical.summary.totalPhysicalQty,2);
+  assert.equal(unpricedPhysical.summary.totalPhysicalDlcValue,null);assert.equal(unpricedPhysical.summary.totalPhysicalDlcValueKnownSubtotal,0);
   await assert.rejects(central.getSnapshot({...b,auditId:a.auditId}),/does not belong/);
   await assert.rejects(central.getSnapshot({...b,snapshotId:initial.snapshotId}),/does not belong/);
   await workflow.correctPrice({user:{id:'synthetic-admin'},body:{partNumber:`MISSING${suffix}`,dlc:'0.12345678',mrp:'0.98765432',reason:'Synthetic correction'}},a);

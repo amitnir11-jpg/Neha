@@ -3690,7 +3690,8 @@
   function updateDashboardCards(stats = {}) {
     setDashboardKpiValue('dashToday', wholeNumber(stats.totalScannedToday || 0));
     setDashboardKpiValue('dashTotalScanQty', wholeNumber(stats.totalScannedQuantity || stats.totalQuantity || stats.partsScanned || stats.totalScanQty || 0));
-    setDashboardKpiValue('dashStockValueDlc', `₹ ${money2(stats.actualStockValueDLC || stats.totalScannedValue || 0)}`);
+    setDashboardKpiValue('dashStockValueDlc',stats.valuationSummary?.totalPhysicalDlcValue===null
+      ?`₹ ${money2(stats.valuationSummary.totalPhysicalDlcValueKnownSubtotal)} (subtotal)`:`₹ ${money2(stats.actualStockValueDLC || stats.totalScannedValue || 0)}`);
     setDashboardKpiValue('dashboardPhysicalStockQty', wholeNumber(stats.physicalBinStockQty || 0));
     setDashboardKpiValue('dashboardFittedStockQty', wholeNumber(stats.fittedWorkshopQty || 0));
     setDashboardKpiValue('dashboardTotalDealerStockQty', wholeNumber(stats.totalDealerStockQty || 0));
@@ -3713,12 +3714,12 @@
     setDashboardKpiValue('auditFailed', wholeNumber(stats.failedCount || 0));
     setDashboardKpiValue('auditConnectedScanners', wholeNumber(stats.activeDevices || 0));
     setDashboardKpiValue('auditOfflineDevices', wholeNumber(stats.offlineDevices || 0));
-    const scannedValue = Number(stats.actualStockValueDLC || stats.totalScannedValue || 0);
+    const scannedValue = Number(stats.valuationSummary?.totalPhysicalDlcValue===null?stats.valuationSummary.totalPhysicalDlcValueKnownSubtotal:stats.actualStockValueDLC ?? stats.totalScannedValue ?? 0);
     const systemValue = Number(stats.valuationSummary?.totalDmsDlcValue===null ? stats.valuationSummary.totalDmsDlcValueKnownSubtotal : stats.systemStockValue ?? stats.masterStockValue ?? stats.totalSystemValue ?? 0);
     const chartMax = Math.max(systemValue, scannedValue, 1);
     const priceHealth=$('#dashboardPriceHealth');if(priceHealth){priceHealth.innerHTML=priceHealthHtml(stats.valuationSummary||{});priceHealth.hidden=!stats.valuationSummary?.snapshotId;}
     setDashboardKpiValue('dashboardSystemValue', stats.valuationSummary?.totalDmsDlcValue === null ? '₹ '+money2(stats.valuationSummary.totalDmsDlcValueKnownSubtotal)+' (subtotal)' : `₹ ${money2(systemValue)}`);
-    setDashboardKpiValue('dashboardScannedValue', `₹ ${money2(scannedValue)}`);
+    setDashboardKpiValue('dashboardScannedValue', `₹ ${money2(scannedValue)}${stats.valuationSummary?.totalPhysicalDlcValue===null?' (subtotal)':''}`);
     const systemBar = $('#dashboardSystemValueBar');
     const scannedBar = $('#dashboardScannedValueBar');
     if (systemBar) systemBar.style.height = `${systemValue > 0 ? Math.max(4, Math.round((systemValue / chartMax) * 100)) : 0}%`;
@@ -8454,7 +8455,7 @@
     setText('dealerStockUploadedDmsQty', wholeNumber(dmsQty));
     setText('dealerStockUploadedSystemValue', valuation?.totalDmsDlcValue === null ? `₹ ${money2(valuation.totalDmsDlcValueKnownSubtotal)} (subtotal)` : `₹ ${money2(stockValue)}`);
     renderValuationExceptions(valuation);
-    setText('reconScanValue', `₹ ${money2(scanValue)}`);
+    setText('reconScanValue',valuation?.totalPhysicalDlcValue===null?`₹ ${money2(valuation.totalPhysicalDlcValueKnownSubtotal)} (subtotal)`:`₹ ${money2(valuation?.totalPhysicalDlcValue??scanValue)}`);
     setText('reconPhysical', wholeNumber(actualQty));
     setText('reconNet', wholeNumber(netVariance));
     setText('reconQuantityCoverage', `${coverage.toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`);
