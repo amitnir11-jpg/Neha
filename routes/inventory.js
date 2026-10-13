@@ -5145,17 +5145,30 @@ router.get('/dashboard/product-group-summary/details', auth.requireAuth, async (
 
 router.get('/dashboard', auth.requireAuth, async (req, res) => {
   try {
-    return await sendCachedJson(res, 'dashboard', { ...req.query, view: 'dashboard' }, async (normalizedQuery) => {
+    const centralDashboardQuery=require('../services/CentralValuationService').enabled()
+      ? {...req.query,...(await activeDashboardScope(req.query)).reportQuery}:req.query;
+    return await sendCachedJson(res, 'dashboard', { ...centralDashboardQuery, view: 'dashboard' }, async (normalizedQuery) => {
       const { filter, reportQuery, range, activeAudit } = await activeDashboardScope(normalizedQuery);
       const [stats, recent] = await Promise.all([
       dashboardStats(filter, reportQuery),
       dashboardRecentRows(filter, 20)
     ]);
-    const reconciliation = filter.dealerCode && filter.dealerCode !== '__NO_DEALER_SELECTED__' ? await require('./report').validateValuationReports(filter) : null;
+    const reconciliation = filter.dealerCode && filter.dealerCode !== '__NO_DEALER_SELECTED__' ? await require('./report').validateValuationReports(
+      require('../services/CentralValuationService').enabled()?{...reportQuery,snapshotId:normalizedQuery.snapshotId}:filter) : null;
     if (reconciliation) {
       stats.totalScannedValue = reconciliation.totals.dashboard;
       stats.actualStockValueDLC = reconciliation.totals.dashboard;
       stats.valuationBasis = 'DLC';
+    }
+    if (require('../services/CentralValuationService').enabled() && filter.dealerCode && filter.auditId) {
+      const v=(await require('../services/CentralValuationService').getSnapshot({...reportQuery,snapshotId:normalizedQuery.snapshotId})).summary;
+      Object.assign(stats,{valuationSummary:v,snapshotId:v.snapshotId,calculationVersion:v.calculationVersion,
+        totalScannedValue:v.totalPhysicalDlcValue,actualStockValueDLC:v.totalPhysicalDlcValue,actualStockValueMRP:v.totalPhysicalMrpValue,
+        systemStockValue:v.totalDmsDlcValue,masterStockValue:v.totalDmsDlcValue,totalSystemValue:v.totalDmsDlcValue,
+        dealerStockDmsQty:v.totalSystemQty,dealerStockValue:v.totalDmsDlcValue,totalDealerStockQty:v.totalPhysicalQty,
+        uploadedPartLineCount:v.uploadedRowCount,dealerStockPartLines:v.uploadedRowCount,
+        totalScanRecords:v.scanTransactionCount,totalScannedQuantity:v.scanTransactionUnits,
+        physicalBinStockQty:v.totalPhysicalQty,valuationComplete:v.valuationComplete});
     }
     stampDashboardScope(stats, filter);
     stats.dashboardRange = range || 'audit';

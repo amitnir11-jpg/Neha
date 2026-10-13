@@ -1031,6 +1031,7 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
 }
 
 function selectRows(data, type) {
+  if(data.snapshotId && ['bin-wise-stock','bin-stock','bin-wise'].includes(type))return data.binRows;
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') {
     // Bin Transfer and this report must use the same movement/bin attribution
     // and the same net-stock ledger. In particular, OUTWARD/FITTED/DAMAGE rows
@@ -2272,6 +2273,15 @@ function buildAuditSummaryRows(reportData = {}, context = null, productGroupSumm
       ['Final Net Difference (DLC)', amount('totalVarianceDlcValue')],
       ['Final Net Difference (MRP)', amount('totalVarianceMrpValue')]
     ]),
+    ...(reportData.snapshotId?packMetricRows('Master Price Health',[
+      ['Valuation Snapshot',reportData.snapshotId],['Calculation',reportData.calculationVersion],
+      ['Uploaded Rows',totals.uploadedRowCount],['Unique DMS SKUs',totals.uniqueDmsSkuCount],
+      ['Scan Transactions',totals.scanTransactionCount],['Scan Transaction Units',totals.scanTransactionUnits],
+      ['Fully Priced DMS Units',totals.pricedDmsQty],['Units Awaiting Prices',totals.dmsPriceMissingQty],
+      ['Quantity Price Coverage',`${totals.quantityPriceCoverage}%`],
+      ['DMS DLC Known Subtotal',packCurrency(totals.totalDmsDlcValueKnownSubtotal)],
+      ['DMS MRP Known Subtotal',packCurrency(totals.totalDmsMrpValueKnownSubtotal)]
+    ]):[]),
     ...packMetricRows('Product Group Summary', [
       ['Total Groups', packNumber(Array.isArray(productGroupSummary.rows) ? productGroupSummary.rows.length : 0, 0)],
       ['Total Scans', packNumber(groupTotals.totalScans || 0, 0)],
@@ -2474,6 +2484,7 @@ function reconciliationRemarksText(summary = {}) {
 }
 
 function buildReconciliationCategoryRows(report = {}, context = null) {
+  if(report.centralCategoryRows)return report.centralCategoryRows;
   const rows = Array.isArray(report.rows) ? report.rows : [];
   const buckets = new Map();
   rows.forEach(row => {
@@ -2545,6 +2556,7 @@ function buildReconciliationSummaryRows(report = {}, context = null) {
 
 async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
   const normalized = normalizeAuditPackSelection(payload);
+  if(require('../services/CentralValuationService').enabled()) normalized._includeAllAudits=false;
   if (!normalized.dealerCode) {
     const error = new Error('Select dealer code first to generate complete audit pack');
     error.statusCode = 400;
@@ -2552,6 +2564,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
   }
 
   let reportData = await reportModule.buildReportData(normalized);
+  if(reportData.snapshotId) normalized.snapshotId=reportData.snapshotId;
   const resolvedAuditId = normalized._includeAllAudits
     ? ''
     : clean(normalized.auditId || reportData.selectedAudit?.auditId || reportData.selectedDealer?.currentAuditId || (Array.isArray(reportData.audits) && reportData.audits[0] ? reportData.audits[0].auditId : ''));

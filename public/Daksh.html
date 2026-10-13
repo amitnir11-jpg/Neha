@@ -167,6 +167,7 @@
       </header>
 
       <section id="dashboard" class="view active dashboard-page dashboard-content daksh-dashboard-v2">
+<div id="dashboardPriceHealth" class="card" hidden></div>
         <header class="dashboard-page-heading">
           <div class="dashboard-title-block">
             <h2>Dashboard</h2>
@@ -862,6 +863,8 @@
 
       <section id="reconciliation" class="view">
         <div class="recon-tabs" role="tablist" aria-label="Reconciliation sections">
+          <button class="recon-tab active" type="button" role="tab" aria-selected="true" aria-controls="reconUploadTab" data-recon-tab="reconUploadTab">Upload Dealer Stock</button>
+          <button class="recon-tab" type="button" role="tab" aria-selected="false" aria-controls="reconPriceValidationTab" data-recon-tab="reconPriceValidationTab">Price Validation</button>
           <button class="recon-tab" type="button" role="tab" aria-selected="false" aria-controls="reconSummaryTab" data-recon-tab="reconSummaryTab">Final Summary</button>
         </div>
 
@@ -884,7 +887,7 @@
             </form>
             <div id="dealerStockUploadMessage" class="form-message">Upload columns: Dealer Code, Part Number, Part Description, Dms Stock, Bin Loc 1, Bin Loc 2, Bin Loc 3. Drag headers to move columns and drag the header edge to resize them.</div>
             <div id="dealerStockErrorReport" class="stock-error-report" hidden></div>
-            <div id="reconPriceExceptions" class="stock-error-report" hidden></div>
+            <div id="reconPriceHealthSummary" class="card" hidden></div>
             <div id="dealerStockPreviewPanel" class="table-wrap recon-stock-preview-wrap" hidden>
               <table id="dealerStockPreviewTable">
                 <thead><tr><th>Dealer Code</th><th>Part Number</th><th>Part Description</th><th>Dms Stock</th><th>Bin Loc 1</th><th>Bin Loc 2</th><th>Bin Loc 3</th></tr></thead>
@@ -969,6 +972,7 @@
           </section>
         </section>
 
+        <section id="reconPriceValidationTab" class="recon-panel" role="tabpanel" hidden><section class="card"><div id="reconPriceExceptions" hidden></div></section></section>
         <section id="reconSummaryTab" class="recon-panel" role="tabpanel" hidden>
           <section class="card">
             <div class="card-head"><h2>Final Summary</h2></div>
@@ -1840,7 +1844,7 @@
   <script src="/js/smart-part-search.js?v=20261011-smart-part-search-v1"></script>
   <script src="/js/excel-upload-table.js?v=20261012-adjustable-v1"></script>
   <script src="/js/excel-upload-history.js?v=20261012-compact-v1"></script>
-  <script src="/ui.js?v=20261012-audit-valuation-v1"></script>
+  <script src="/ui.js?v=20261013-central-valuation-v2"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

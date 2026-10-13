@@ -3714,9 +3714,10 @@
     setDashboardKpiValue('auditConnectedScanners', wholeNumber(stats.activeDevices || 0));
     setDashboardKpiValue('auditOfflineDevices', wholeNumber(stats.offlineDevices || 0));
     const scannedValue = Number(stats.actualStockValueDLC || stats.totalScannedValue || 0);
-    const systemValue = Number(stats.systemStockValue || stats.masterStockValue || stats.totalSystemValue || 0);
+    const systemValue = Number(stats.valuationSummary?.totalDmsDlcValue===null ? stats.valuationSummary.totalDmsDlcValueKnownSubtotal : stats.systemStockValue ?? stats.masterStockValue ?? stats.totalSystemValue ?? 0);
     const chartMax = Math.max(systemValue, scannedValue, 1);
-    setDashboardKpiValue('dashboardSystemValue', stats.valuationSummary?.totalDmsDlcValue === null ? 'PRICE MISSING' : `₹ ${money2(systemValue)}`);
+    const priceHealth=$('#dashboardPriceHealth');if(priceHealth){priceHealth.innerHTML=priceHealthHtml(stats.valuationSummary||{});priceHealth.hidden=!stats.valuationSummary?.snapshotId;}
+    setDashboardKpiValue('dashboardSystemValue', stats.valuationSummary?.totalDmsDlcValue === null ? '₹ '+money2(stats.valuationSummary.totalDmsDlcValueKnownSubtotal)+' (subtotal)' : `₹ ${money2(systemValue)}`);
     setDashboardKpiValue('dashboardScannedValue', `₹ ${money2(scannedValue)}`);
     const systemBar = $('#dashboardSystemValueBar');
     const scannedBar = $('#dashboardScannedValueBar');
@@ -8435,7 +8436,7 @@
     const dmsQty = reconciliationNumber(summary.totalDmsStockQty ?? summary.dmsStock, 0);
     const actualQty = reconciliationNumber(summary.totalActualScannedQty ?? summary.physicalStock ?? summary.actualStock, 0);
     const netVariance = reconciliationNumber(summary.netDifference, actualQty - dmsQty);
-    const coverage = dmsQty > 0 ? (actualQty / dmsQty) * 100 : 0;
+    const coverage = valuation?.quantityCoverage ?? (dmsQty > 0 ? (actualQty / dmsQty) * 100 : 0);
     const partLineCount = dealerStockSummaryCount({
       partLineCount: summary.totalPartsUploaded ?? stats?.dealerStockPartLines ?? stats?.uploadedPartLineCount
     });
@@ -8451,7 +8452,7 @@
 
     setText('dealerStockUploadedLineCount', wholeNumber(partLineCount));
     setText('dealerStockUploadedDmsQty', wholeNumber(dmsQty));
-    setText('dealerStockUploadedSystemValue', valuation?.totalDmsDlcValue === null ? 'PRICE MISSING' : `₹ ${money2(stockValue)}`);
+    setText('dealerStockUploadedSystemValue', valuation?.totalDmsDlcValue === null ? `₹ ${money2(valuation.totalDmsDlcValueKnownSubtotal)} (subtotal)` : `₹ ${money2(stockValue)}`);
     renderValuationExceptions(valuation);
     setText('reconScanValue', `₹ ${money2(scanValue)}`);
     setText('reconPhysical', wholeNumber(actualQty));
@@ -8524,20 +8525,52 @@
     setText('dealerStockUploadedLineCount', wholeNumber(partLineCount));
     setText('dealerStockUploadedLineRange', summary.lineRange?.text || dealerStockLineRangeText(partLineCount));
     setText('dealerStockUploadedDmsQty', wholeNumber(dmsStock));
-    setText('dealerStockUploadedSystemValue', summary.valuationSummary?.totalDmsDlcValue === null ? 'PRICE MISSING' : `₹ ${money2(stockValue)}`);
+    setText('dealerStockUploadedSystemValue', summary.valuationSummary?.totalDmsDlcValue === null ? `₹ ${money2(summary.valuationSummary.totalDmsDlcValueKnownSubtotal)} (subtotal)` : `₹ ${money2(stockValue)}`);
     renderValuationExceptions(summary.valuationSummary);
   }
 
+
+  function priceHealthHtml(v={}) {
+    if(!v.snapshotId)return '';
+    return '<h3>Master Price Health · '+(v.valuationComplete?'Valuation Complete':'Final valuation pending')+'</h3>'+
+      '<div class="actions"><strong>'+escapeHtml(v.quantityPriceCoverage)+'% quantity price coverage</strong><span>'+escapeHtml(v.pricedDmsQty)+' fully priced DMS units</span><span>'+escapeHtml(v.dmsPriceMissingQty)+' units awaiting prices</span></div>'+
+      '<p>DMS DLC '+(v.totalDmsDlcValue===null?'incomplete subtotal: ₹ '+money2(v.totalDmsDlcValueKnownSubtotal):'value: ₹ '+money2(v.totalDmsDlcValue))+
+      ' · DMS MRP '+(v.totalDmsMrpValue===null?'incomplete subtotal: ₹ '+money2(v.totalDmsMrpValueKnownSubtotal):'value: ₹ '+money2(v.totalDmsMrpValue))+'</p>'+
+      '<p class="muted">Dealer '+escapeHtml(v.dealerCode||activeReconDealer())+' · Audit '+escapeHtml(v.auditId||state.reconAuditId||'')+' · Uploaded rows '+escapeHtml(v.uploadedRowCount)+' · Unique DMS SKUs '+escapeHtml(v.uniqueDmsSkuCount)+' · Scan transactions '+escapeHtml(v.scanTransactionCount)+' · Scan transaction units '+escapeHtml(v.scanTransactionUnits)+' · Physical units '+escapeHtml(v.totalPhysicalQty)+'</p>'+
+      '<p class="muted">Calculation '+escapeHtml(v.calculationVersion)+' · Snapshot '+escapeHtml(v.snapshotId)+'</p>';
+  }
   function renderValuationExceptions(valuation = {}) {
-    const box = $('#reconPriceExceptions');
-    if (!box) return;
-    const exceptions = valuation?.priceExceptions || [];
-    box.hidden = !exceptions.length;
-    if (!exceptions.length) { box.innerHTML = ''; return; }
-    box.innerHTML = `<div class="stock-error-title">Valuation incomplete: ${exceptions.length} part(s) have missing prices. All stock quantities remain included. DMS quantity awaiting prices: ${escapeHtml(valuation.dmsPriceMissingQty || 0)}.</div>
-      <div class="table-wrap"><table><thead><tr><th>Part Number</th><th>DMS Qty</th><th>Physical Qty</th><th>DLC</th><th>MRP</th><th>Status</th></tr></thead><tbody>${exceptions.map(row => `<tr>
-      <td>${escapeHtml(row.partNumber)}</td><td>${escapeHtml(row.dmsQuantity)}</td><td>${escapeHtml(row.actualQuantity)}</td>
-      <td>${row.missingDlc ? 'PRICE MISSING' : escapeHtml(money2(row.dlc))}</td><td>${row.missingMrp ? 'PRICE MISSING' : escapeHtml(money2(row.mrp))}</td><td>PRICE MISSING</td></tr>`).join('')}</tbody></table></div>`;
+    const health=$('#reconPriceHealthSummary');if(health){health.innerHTML=priceHealthHtml(valuation);health.hidden=!valuation?.snapshotId;}
+    const box=$('#reconPriceExceptions');if(!box)return;
+    const exceptions=valuation.priceExceptions||[];
+    box.hidden=!exceptions.length&&!valuation.snapshotId;
+    if(box.hidden){box.innerHTML='';return;}
+    const dealerCode=activeReconDealer(), version=dealerContextVersion;
+    const auditId=valuation.auditId||state.reconAuditId;
+    box.innerHTML=priceHealthHtml(valuation)+'<h3>Price Validation</h3><div class="actions"><label>Search part <input id="priceSearch" type="search"></label><label>Problem <select id="priceFilter"><option value="all">All price problems</option><option value="dlc">Missing DLC</option><option value="mrp">Missing MRP</option></select></label><button id="priceDownload" class="btn light" type="button">Download Excel</button><button id="priceRecalculate" class="btn light" type="button">Recalculate Valuation</button></div><div class="table-wrap"><table><thead><tr><th>Part Number</th><th>DMS Qty</th><th>Physical Qty</th><th>DLC</th><th>MRP</th><th>Problem</th><th>Action</th></tr></thead><tbody id="priceValidationRows"></tbody></table></div>';
+    const render=()=>{
+      const search=normalizePartText($('#priceSearch').value||''),filter=$('#priceFilter').value;
+      $('#priceValidationRows').innerHTML=exceptions.filter(r=>(!search||normalizePartText(r.partNumber).includes(search))&&(filter==='all'||(filter==='dlc'?r.missingDlc:r.missingMrp))).map(r=>'<tr><td>'+escapeHtml(r.partNumber)+'</td><td>'+escapeHtml(r.dmsQuantity)+'</td><td>'+escapeHtml(r.actualQuantity)+'</td><td>'+(r.missingDlc?'Pending':money2(r.dlc))+'</td><td>'+(r.missingMrp?'Pending':money2(r.mrp))+'</td><td>'+[r.missingDlc?'Missing DLC':'',r.missingMrp?'Missing MRP':''].filter(Boolean).join(', ')+'</td><td>'+(isAdminUser()?'<button class="btn light price-edit" data-part="'+escapeHtml(r.partNumber)+'" type="button">Edit Master</button>':'Admin correction required')+'</td></tr>').join('')||'<tr><td colspan="7">No price exceptions for this filter.</td></tr>';
+      $$('.price-edit',box).forEach(button=>button.onclick=()=>{
+        if(dealerCode!==activeReconDealer()||version!==dealerContextVersion)return;
+        const row=exceptions.find(r=>r.partNumber===button.dataset.part);
+        const dialog=document.createElement('dialog');
+        dialog.innerHTML='<form><h3>Correct dealer master price</h3><p>'+escapeHtml(dealerCode)+' / '+escapeHtml(row.partNumber)+'</p><label>DLC <input name="dlc" type="number" min="0.00000001" step="any" required value="'+escapeHtml(row.dlc||'')+'"></label><label>MRP <input name="mrp" type="number" min="0.00000001" step="any" required value="'+escapeHtml(row.mrp||'')+'"></label><label>Correction reason <input name="reason" required></label><p class="form-message"></p><button class="btn primary" type="submit">Save & recalculate</button> <button class="btn light" type="button">Cancel</button></form>';
+        document.body.appendChild(dialog);dialog.showModal();dialog.querySelector('[type="button"]').onclick=()=>{dialog.close();dialog.remove();};
+        dialog.querySelector('form').onsubmit=async event=>{
+          event.preventDefault();const submit=dialog.querySelector('[type="submit"]');submit.disabled=true;
+          try{
+            if(dealerCode!==activeReconDealer()||version!==dealerContextVersion)throw Error('Dealer changed. Reopen the price correction.');
+            const fields=Object.fromEntries(new FormData(event.currentTarget));
+            await api('/api/reconciliation/master-price',{method:'PATCH',body:{...fields,dealerCode,auditId,partNumber:row.partNumber}});
+            dialog.close();dialog.remove();await loadReconciliation({silent:true});toast('Master price corrected');
+          }catch(error){dialog.querySelector('.form-message').textContent=error.message;submit.disabled=false;}
+        };
+      });
+    };
+    $('#priceSearch').oninput=render;$('#priceFilter').onchange=render;render();
+    $('#priceDownload').onclick=()=>downloadGet('/api/reconciliation/price-validation?'+new URLSearchParams({dealerCode,auditId,snapshotId:valuation.snapshotId||'',search:$('#priceSearch').value,filter:$('#priceFilter').value,format:'excel'}),'Price_Validation_'+dealerCode+'.xlsx',{expectedDealerCode:dealerCode}).catch(e=>toast(e.message));
+    $('#priceRecalculate').onclick=()=>reprocessReconciliation().catch(e=>toast(e.message));
   }
 
   function activeReconDealer() {
@@ -8695,7 +8728,16 @@
       state.dealerStockUploadId = uploadId;
       const uploadBody = new FormData(form);
       uploadBody.set('progressId', uploadId);
-      const data = await api('/api/reconciliation/upload-stock', { method: 'POST', body: uploadBody });
+      let data = await api('/api/reconciliation/upload-stock', { method: 'POST', body: uploadBody });
+      if(data.requiresConfirmation){
+        if(!reconciliationResponseIsCurrent(dealerCode,version,data))return null;
+        renderDealerStockPreview(data.preview||[],data.acceptedRows||0,data.summary||{});
+        if(message)message.textContent=data.message;
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        if(!window.confirm(`Confirm ${data.acceptedRows} stock SKUs for dealer ${dealerCode}, audit ${data.auditId}?\nReview the preview first. Existing scans will remain unchanged.`))return null;
+        if(!reconciliationResponseIsCurrent(dealerCode,version,data))return null;
+        data=await api('/api/reconciliation/confirm-upload',{method:'POST',body:{dealerCode,auditId:data.auditId,importId:data.importId}});
+      }
       if (!reconciliationResponseIsCurrent(dealerCode, version, data)) return null;
       state.reconAuditId = data.auditId || '';
       renderDealerStockPreview(data.preview || [], data.savedCount || 0, data.summary || {});

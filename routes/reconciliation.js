@@ -968,6 +968,7 @@ function selectReportRows(rows = [], reportType = 'dealer') {
 }
 
 async function buildReconciliationReport(query = {}) {
+  if (require('../services/CentralValuationService').enabled()) return require('../services/ValuationReportProjection').project(query,'reconciliation');
   const scope = { dealerCode: upper(query.dealerCode), auditId: clean(query.auditId) };
   if (!scope.dealerCode || scope.dealerCode === 'ALL') {
     return { scope, summary: {}, rows: [], stockCount: 0, message: 'Select Dealer Code to view reconciliation report' };
@@ -1642,6 +1643,10 @@ async function uploadDealerStockHandler(req, res) {
     if (!req.file) return res.status(400).json({ success: false, message: 'Upload DMS stock Excel/CSV file' });
     const scope = await resolveScope(req);
     if (!requireScope(scope, res)) return null;
+    if(require('../services/CentralValuationService').enabled()) {
+      const workflow=require('../services/ValuationWorkflow');
+      return res.json(await workflow.previewUpload(req,scope,async()=>rowsToStockRecords(await readUploadedRows(req.file),scope.dealerCode,scope.auditId,req.user.name||req.user.username)));
+    }
     const uploadBatchId = randomUUID();
     const progressId = clean(req.body && req.body.progressId);
     const sendProgress = (stage, processed = 0, total = 0) => {
@@ -1731,6 +1736,15 @@ async function previewDealerStockHandler(req, res) {
   try {
     const scope = await resolveScope(req);
     if (!requireScope(scope, res)) return null;
+    if(require('../services/CentralValuationService').enabled()){
+      const snapshot=await require('../services/CentralValuationService').getSnapshot(scope);
+      const rows=snapshot.rows.filter(r=>r.uploadedStockPresent);
+      const limit=Math.min(Math.max(Number(req.query.limit||PREVIEW_LIMIT),1),2000);
+      const summary={partLineCount:rows.length,totalPartsUploaded:rows.length,dmsStock:snapshot.summary.totalSystemQty,
+        dmsStockQty:snapshot.summary.totalSystemQty,systemStockValue:snapshot.summary.totalDmsDlcValue,stockValue:snapshot.summary.totalDmsDlcValue,
+        valuationSummary:snapshot.summary,valuationComplete:snapshot.summary.valuationComplete};
+      return res.json({success:true,...scope,total:rows.length,summary,stock:rows.slice(0,limit),rows:rows.slice(0,limit),preview:rows.slice(0,limit),snapshotId:snapshot.snapshotId});
+    }
     const limit = Math.min(Math.max(Number(req.query.limit || PREVIEW_LIMIT), 1), 2000);
     const query = { dealerCode: scope.dealerCode, auditId: scope.auditId };
     const [rows, allRows, total] = await Promise.all([
@@ -1832,6 +1846,46 @@ async function deleteDealerStockHandler(req, res) {
     return res.status(500).json({ success: false, message: error.message });
   }
 }
+
+
+router.post('/confirm-upload',auth.requireAuth,auth.requireAdmin,async(req,res)=>{
+  try{const scope=await resolveScope(req);if(!requireScope(scope,res))return;
+    const result=await require('../services/ValuationWorkflow').confirmUpload(req,scope);
+    await emitReconciliationChanged(req,'dealer-stock-uploaded',scope);res.json(result);
+  }catch(error){res.status(error.statusCode||500).json({success:false,message:error.message});}
+});
+router.get('/price-validation',auth.requireAuth,async(req,res)=>{
+  try{const scope=await resolveScope(req);if(!requireScope(scope,res))return;
+    const snapshot=await require('../services/CentralValuationService').getSnapshot({...scope,snapshotId:req.query.snapshotId});
+    const search=normalizePart(req.query.search||'');const filter=clean(req.query.filter);
+    const rows=snapshot.priceExceptions.filter(r=>(!search||r.partNumber.includes(search))&&(!filter||filter==='all'||(filter==='dlc'?r.missingDlc:r.missingMrp)));
+    if(req.query.format==='excel'){
+      const workbook=new ExcelJS.Workbook();const sheet=workbook.addWorksheet('Price Validation');
+      sheet.addRow(['Dealer',scope.dealerCode,'Audit',scope.auditId,'Snapshot',snapshot.snapshotId]);
+      sheet.addRow(['Part Number','DMS Qty','Physical Qty','DLC','MRP','Problem','Price Version']);
+      rows.forEach(r=>sheet.addRow([r.partNumber,r.dmsQuantity,r.actualQuantity,r.dlc,r.mrp,[r.missingDlc?'Missing DLC':'',r.missingMrp?'Missing MRP':''].filter(Boolean).join(', '),r.priceVersion||r.dlcPriceDate||'']));
+      sheet.columns.forEach(c=>c.width=22);
+      res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition',`attachment; filename="Price_Validation_${scope.dealerCode}.xlsx"`);
+      return res.send(Buffer.from(await workbook.xlsx.writeBuffer()));
+    }
+    res.json({success:true,...scope,rows,summary:snapshot.summary,snapshotId:snapshot.snapshotId});
+  }catch(error){res.status(error.statusCode||500).json({success:false,message:error.message});}
+});
+router.patch('/master-price',auth.requireAuth,auth.requireAdmin,async(req,res)=>{
+  try{const scope=await resolveScope(req);if(!requireScope(scope,res))return;
+    const result=await require('../services/ValuationWorkflow').correctPrice(req,scope);
+    await emitReconciliationChanged(req,'master-price-corrected',scope);res.json(result);
+  }catch(error){res.status(error.statusCode||500).json({success:false,message:error.message});}
+});
+router.get('/import-history',auth.requireAuth,async(req,res)=>{
+  try{const scope=await resolveScope(req);if(!requireScope(scope,res))return;
+    await require('../services/CentralValuationService').validateScope(scope);
+    const db=require('../services/prisma').getPrismaClient();
+    const rows=await db.$queryRaw`SELECT id,file_name,status,created_at,confirmed_at FROM dealer_stock_imports WHERE dealer_code=${scope.dealerCode} AND audit_id=${scope.auditId} ORDER BY created_at DESC LIMIT 100`;
+    res.json({success:true,...scope,rows});
+  }catch(error){res.status(error.statusCode||500).json({success:false,message:error.message});}
+});
 
 router.get('/dealer-stock-template', auth.requireAuth, auth.requireAdmin, sendDealerStockTemplate);
 router.post(['/upload-stock', '/upload'], auth.requireAuth, auth.requireAdmin, upload.single('file'), uploadDealerStockHandler);

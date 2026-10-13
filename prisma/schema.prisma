@@ -1620,3 +1620,71 @@ model ExcelStockUploadBatch {
   @@unique([dealerCode, auditId, fileHash])
   @@map("excel_stock_upload_batches")
 }
+
+model ValuationChange {
+  id         BigInt   @id @default(autoincrement())
+  dealerCode String   @default("") @map("dealer_code")
+  auditId    String   @default("") @map("audit_id")
+  partNumber String   @default("") @map("part_number")
+  source     String
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  @@index([dealerCode, auditId, id], map: "valuation_changes_scope")
+  @@map("valuation_changes")
+}
+
+model ValuationSnapshot {
+  id            String @id
+  dealerCode    String @map("dealer_code")
+  auditId       String @map("audit_id")
+  revision      String
+  engineVersion String @map("engine_version")
+  metadata      Json
+  summary       Json @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  items         ValuationItem[]
+  @@unique([dealerCode, auditId, revision, engineVersion], map: "valuation_snapshot_revision_key")
+  @@index([dealerCode, auditId, createdAt(sort: Desc)], map: "valuation_snapshot_scope")
+  @@map("valuation_snapshots")
+}
+
+model ValuationItem {
+  snapshotId String @map("snapshot_id")
+  partNumber String @map("part_number")
+  dmsQty Decimal @map("dms_qty") @db.Decimal(24,8)
+  physicalQty Decimal @map("physical_qty") @db.Decimal(24,8)
+  dlc Decimal? @db.Decimal(24,8)
+  mrp Decimal? @db.Decimal(24,8)
+  details Json
+  snapshot ValuationSnapshot @relation(fields:[snapshotId], references:[id], onDelete:NoAction, onUpdate:NoAction)
+  @@id([snapshotId, partNumber])
+  @@map("valuation_items")
+}
+
+model DealerStockImport {
+  id String @id
+  dealerCode String @map("dealer_code")
+  auditId String @map("audit_id")
+  fileHash String @map("file_hash")
+  fileName String @map("file_name")
+  originalFile Bytes @map("original_file")
+  parsed Json
+  actor String
+  status String @default("PREVIEW")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz
+  @@unique([dealerCode, auditId, fileHash], map: "dealer_stock_imports_dealer_code_audit_id_file_hash_key")
+  @@map("dealer_stock_imports")
+}
+
+model MasterPriceRevision {
+  id String @id
+  dealerCode String @map("dealer_code")
+  partNumber String @map("part_number")
+  dlc Decimal @db.Decimal(24,8)
+  mrp Decimal @db.Decimal(24,8)
+  reason String
+  actor String
+  effectiveAt DateTime @default(now()) @map("effective_at") @db.Timestamptz
+  @@index([dealerCode, partNumber, effectiveAt(sort: Desc)], map:"master_price_revision_lookup")
+  @@map("master_price_revisions")
+}
