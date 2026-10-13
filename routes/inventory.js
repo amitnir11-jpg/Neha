@@ -1266,6 +1266,7 @@ function masterForScan(scan = {}, lookup = {}) {
 }
 
 async function dashboardProductGroupSummary({ limit = 100, q = '', filter = {} } = {}) {
+  if(require('../services/CentralValuationService').enabled())return (await require('../services/ValuationReportProjection').productGroups(filter,{limit,q})).rows;
   const search = String(q || '').trim();
   const regex = search ? new RegExp(escapeRegex(search), 'i') : null;
   if (!filter.dealerCode) return [];
@@ -1292,6 +1293,7 @@ async function dashboardProductGroupSummary({ limit = 100, q = '', filter = {} }
 }
 
 async function dashboardProductGroupDetails({ productGroup = '', partSubGroup = '', filter = {} } = {}) {
+  if(require('../services/CentralValuationService').enabled())return require('../services/ValuationReportProjection').productGroupDetails(filter,productGroup,partSubGroup);
   const group = String(productGroup || 'OTHERS').trim() || 'OTHERS';
   const subGroup = String(partSubGroup || 'GENERAL').trim() || 'GENERAL';
   if (!filter.dealerCode) return { productGroup: group, partSubGroup: subGroup, rows: [], totals: { partCount: 0, totalQty: 0, totalDlcValue: 0, totalMrpValue: 0 } };

@@ -7,6 +7,7 @@ function matches(row,q) {
   const includes=(value,filter)=>!filter||String(value||'').toUpperCase().includes(String(filter).toUpperCase());
   if (!includes(row.partNumber,normalizePartNumber(q.partNumber||''))) return false;
   if (!includes(row.category,q.productCategory||q.category)||!includes(row.binLocation,q.bin||q.binLocation)) return false;
+  if(!includes(row.productGroup,q.productGroup)||!includes(row.partSubGroup,q.partSubGroup||q.productSubGroup)||!includes(row.model,q.model)||!includes(row.year,q.year))return false;
   if(q.status && !includes(row.status,q.status==='Short'?'Shortage':q.status))return false;
   if(q.varianceType && q.varianceType!=='ALL' && !includes(row.status,q.varianceType))return false;
   if(['1','true','yes'].includes(String(q.dealerStockOnly))&&!row.uploadedStockPresent)return false;
@@ -92,4 +93,38 @@ async function project(query,kind='raw') {
     accessoryRows:rows.filter(r=>/accessor/i.test(r.category)),damageRows:scans.filter(r=>r.scanType==='DAMAGE'),
     nonMovingRows:[],highValueNonMovingRows:[],dealers:[selectedDealer],audits:[selectedAudit],dealerBackupRows:[selectedDealer]};
 }
-module.exports={project,summaryAliases};
+async function productGroups(query={},options={}) {
+  if(!query.auditId)query={...query,auditId:(await require('./InventoryCalculationService').resolveCurrentAudit(query.dealerCode)).auditId};
+  const snapshot=await valuation.getSnapshot(query),groups=new Map();
+  const selected=snapshot.rows.filter(r=>matches(r,query)&&(!options.q||`${r.productGroup||r.category} ${r.partSubGroup||'GENERAL'}`.toUpperCase().includes(options.q.toUpperCase())));
+  for(const row of selected){
+    const productGroup=row.productGroup||row.category||'OTHERS',partSubGroup=row.partSubGroup||'GENERAL';
+    if(options.q&&!`${productGroup} ${partSubGroup}`.toUpperCase().includes(options.q.toUpperCase()))continue;
+    const key=`${productGroup}:${partSubGroup}`;
+    if(!groups.has(key))groups.set(key,{productGroup,partSubGroup,parts:[]});groups.get(key).parts.push(row);
+  }
+  const rows=[];
+  for(const group of groups.values()){
+    const totals=await valuation.summarizeSelection(snapshot,group.parts);
+    const totalScans=group.parts.reduce((sum,r)=>sum+r.scanCount,0);
+    rows.push({productGroup:group.productGroup,partSubGroup:group.partSubGroup,totalScans,scanCount:totalScans,
+      totalQuantity:totals.totalPhysicalQty,qty:totals.totalPhysicalQty,uniqueParts:totals.totalParts,
+      totalDlcValue:totals.totalPhysicalDlcValue,totalMrpValue:totals.totalPhysicalMrpValue,
+      totalDlcValueKnownSubtotal:totals.totalPhysicalDlcValueKnownSubtotal,totalMrpValueKnownSubtotal:totals.totalPhysicalMrpValueKnownSubtotal,
+      valuationComplete:totals.totalPhysicalDlcValue!==null&&totals.totalPhysicalMrpValue!==null});
+  }
+  rows.sort((a,b)=>b.totalQuantity-a.totalQuantity||a.productGroup.localeCompare(b.productGroup));
+  const v=selected.length===snapshot.rows.length?snapshot.summary:await valuation.summarizeSelection(snapshot,selected);
+  return {rows:options.limit?rows.slice(0,options.limit):rows,snapshotId:snapshot.snapshotId,
+    totals:{totalScans:rows.reduce((sum,r)=>sum+r.totalScans,0),totalQuantity:v.totalPhysicalQty,totalDlcValue:v.totalPhysicalDlcValue,totalMrpValue:v.totalPhysicalMrpValue}};
+}
+async function productGroupDetails(query,productGroup,partSubGroup) {
+  if(!query.auditId)query={...query,auditId:(await require('./InventoryCalculationService').resolveCurrentAudit(query.dealerCode)).auditId};
+  const snapshot=await valuation.getSnapshot(query);
+  const selected=snapshot.rows.filter(r=>matches(r,query)&&(r.productGroup||r.category||'OTHERS').toUpperCase()===productGroup.toUpperCase()&&(r.partSubGroup||'GENERAL').toUpperCase()===partSubGroup.toUpperCase());
+  const v=await valuation.summarizeSelection(snapshot,selected);
+  return {productGroup,partSubGroup,rows:selected.map(r=>({partNumber:r.partNumber,partDescription:r.partDescription,qty:r.actualQuantity,
+    binLocation:r.binLocation,dlc:r.dlc,dlcTotal:r.actualDlcValue,mrp:r.mrp,mrpTotal:r.actualMrpValue,scanCount:r.scanCount})),
+    totals:{partCount:v.totalParts,totalQty:v.totalPhysicalQty,totalDlcValue:v.totalPhysicalDlcValue,totalMrpValue:v.totalPhysicalMrpValue},snapshotId:snapshot.snapshotId};
+}
+module.exports={project,summaryAliases,productGroups,productGroupDetails};

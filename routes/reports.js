@@ -2854,7 +2854,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     },
     'product-group-summary': async () => {
       const partwise = await getPartwiseData();
-      const productGroupSummary = buildProductGroupSummaryPackRows(partwise.rows || []);
+      const productGroupSummary = partwise.snapshotId?await require('../services/ValuationReportProjection').productGroups(resolvedQuery):buildProductGroupSummaryPackRows(partwise.rows || []);
       return {
         title: 'Product Group Summary',
         kind: 'table',
@@ -3089,7 +3089,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
 
   const coreReportKeys = new Set(['stock-summary', 'bin-wise-stock', 'partwise-inventory-audit', 'scan-register', 'product-group-summary']);
   const [stockSummaryData, partwiseData] = await Promise.all([getStockSummaryData(), getPartwiseData()]);
-  const productGroupSummary = buildProductGroupSummaryPackRows(partwiseData.rows || []);
+  const productGroupSummary = partwiseData.snapshotId?await require('../services/ValuationReportProjection').productGroups(resolvedQuery):buildProductGroupSummaryPackRows(partwiseData.rows || []);
 
   const coreSpecs = [
     {

@@ -40,6 +40,9 @@ run('one database snapshot survives price exceptions, concurrent readers, correc
   const categoryReport=await require('../routes/report').buildCategoryWiseVarianceSummary({...a,snapshotId:fixed.snapshotId});
   assert.equal(stockReport.sections.grandTotal.dmsValue,fixed.summary.totalDmsDlcValue);
   assert.equal(categoryReport.grandTotal.sumPhysicalValueOnDLC,fixed.summary.totalPhysicalDlcValue);
+  const productGroups=await require('../services/ValuationReportProjection').productGroups({...a,snapshotId:fixed.snapshotId});
+  assert.equal(productGroups.totals.totalQuantity,fixed.summary.totalPhysicalQty);
+  assert.equal(productGroups.totals.totalDlcValue,fixed.summary.totalPhysicalDlcValue);
   const express=require('express'),jwt=require('jsonwebtoken'),ExcelJS=require('exceljs');
   const user=await require('../models/User').create({username:`synthetic-admin-${suffix.toLowerCase()}`,role:'admin',approved:true,isActive:true});
   const app=express();app.use(express.json());app.use((req,res,next)=>{req.io={emit(){}};next();});

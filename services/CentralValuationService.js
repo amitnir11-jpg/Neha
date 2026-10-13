@@ -11,7 +11,7 @@ const { applyMovementCountRules } = require('../utils/reportTotals');
 const { stockAvailableQuantity, stockMovementQuantity, stockWorkshopQuantity, stockUnitQuantity, activeStockTransaction, stockMovementType, stockMovementBin } = require('../utils/stockQuantity');
 const { validScanClause } = require('../utils/masterValidation');
 
-const ENGINE = 'central-pg-numeric-v4';
+const ENGINE = 'central-pg-numeric-v5';
 const flights = new Map();
 const readFlights = new Map();
 function sourceFilters(query={}) {
@@ -102,6 +102,8 @@ async function loadSource(scope,filters={}) {
       mrp: revision ? String(revision.mrp) : rate.mrp || null,
       partDescription: price.description || price.partDescription || row.stock?.partDescription || '',
       category: price.category || price.productCategory || 'Uncategorized',
+      productGroup:price.productGroup||row.stock?.productGroup||'',partSubGroup:price.partSubGroup||row.stock?.partSubGroup||'',
+      model:price.model||row.stock?.model||'',year:price.year||row.stock?.year||'',
       priceVersion: revision?.id || null, dlcPriceVersion:rate.dlc_version||null,mrpPriceVersion:rate.mrp_version||null,
       dlcPriceDate: revision?.effective_at || rate.dlc_date || null,
       mrpPriceDate: revision?.effective_at || rate.mrp_date || null, pricingSource: revision ? 'MASTER_PRICE_REVISION' : rate.source || 'MASTER_NOT_FOUND' };
