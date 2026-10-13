@@ -11,7 +11,7 @@ const { applyMovementCountRules } = require('../utils/reportTotals');
 const { stockAvailableQuantity, stockMovementQuantity, stockWorkshopQuantity, stockUnitQuantity, activeStockTransaction, stockMovementType, stockMovementBin } = require('../utils/stockQuantity');
 const { validScanClause } = require('../utils/masterValidation');
 
-const ENGINE = 'central-pg-numeric-v6';
+const ENGINE = 'central-pg-numeric-v7';
 const flights = new Map();
 const readFlights = new Map();
 function sourceFilters(query={}) {
@@ -193,7 +193,7 @@ async function aggregate(db, id, selectedParts=null) {
     'dmsPriceMissingQty',coalesce(sum(dms_qty) FILTER(WHERE dlc IS NULL OR mrp IS NULL),0),
     'pricedDmsQty',coalesce(sum(dms_qty) FILTER(WHERE dlc IS NOT NULL AND mrp IS NOT NULL),0),
     'quantityPriceCoverage',CASE WHEN sum(dms_qty)>0 THEN round(100*coalesce(sum(dms_qty) FILTER(WHERE dlc IS NOT NULL AND mrp IS NOT NULL),0)/sum(dms_qty),2) ELSE 100 END,
-    'valuationComplete',count(*) FILTER(WHERE dlc IS NULL OR mrp IS NULL)=0,
+    'valuationComplete',count(*) FILTER(WHERE (dms_qty<>0 OR physical_qty<>0) AND (dlc IS NULL OR mrp IS NULL))=0,
     'totalDmsDlcValue',CASE WHEN count(*) FILTER(WHERE ds IS NULL)=0 THEN coalesce(sum(ds),0) END,
     'totalPhysicalDlcValue',CASE WHEN count(*) FILTER(WHERE ph IS NULL)=0 THEN coalesce(sum(ph),0) END,
     'totalDmsMrpValue',CASE WHEN count(*) FILTER(WHERE dm IS NULL)=0 THEN coalesce(sum(dm),0) END,
