@@ -3716,7 +3716,7 @@
     const scannedValue = Number(stats.actualStockValueDLC || stats.totalScannedValue || 0);
     const systemValue = Number(stats.systemStockValue || stats.masterStockValue || stats.totalSystemValue || 0);
     const chartMax = Math.max(systemValue, scannedValue, 1);
-    setDashboardKpiValue('dashboardSystemValue', `₹ ${money2(systemValue)}`);
+    setDashboardKpiValue('dashboardSystemValue', stats.valuationSummary?.totalDmsDlcValue === null ? 'PRICE MISSING' : `₹ ${money2(systemValue)}`);
     setDashboardKpiValue('dashboardScannedValue', `₹ ${money2(scannedValue)}`);
     const systemBar = $('#dashboardSystemValueBar');
     const scannedBar = $('#dashboardScannedValueBar');
@@ -8431,6 +8431,7 @@
   }
 
   function setReconciliationSummary(summary = {}, stats = state.reconDashboardStats, rowCount = state.reconRows.length) {
+    const valuation = summary.valuationSummary || stats?.valuationSummary;
     const dmsQty = reconciliationNumber(summary.totalDmsStockQty ?? summary.dmsStock, 0);
     const actualQty = reconciliationNumber(summary.totalActualScannedQty ?? summary.physicalStock ?? summary.actualStock, 0);
     const netVariance = reconciliationNumber(summary.netDifference, actualQty - dmsQty);
@@ -8450,7 +8451,8 @@
 
     setText('dealerStockUploadedLineCount', wholeNumber(partLineCount));
     setText('dealerStockUploadedDmsQty', wholeNumber(dmsQty));
-    setText('dealerStockUploadedSystemValue', `₹ ${money2(stockValue)}`);
+    setText('dealerStockUploadedSystemValue', valuation?.totalDmsDlcValue === null ? 'PRICE MISSING' : `₹ ${money2(stockValue)}`);
+    renderValuationExceptions(valuation);
     setText('reconScanValue', `₹ ${money2(scanValue)}`);
     setText('reconPhysical', wholeNumber(actualQty));
     setText('reconNet', wholeNumber(netVariance));
@@ -8522,7 +8524,20 @@
     setText('dealerStockUploadedLineCount', wholeNumber(partLineCount));
     setText('dealerStockUploadedLineRange', summary.lineRange?.text || dealerStockLineRangeText(partLineCount));
     setText('dealerStockUploadedDmsQty', wholeNumber(dmsStock));
-    setText('dealerStockUploadedSystemValue', `₹ ${money2(stockValue)}`);
+    setText('dealerStockUploadedSystemValue', summary.valuationSummary?.totalDmsDlcValue === null ? 'PRICE MISSING' : `₹ ${money2(stockValue)}`);
+    renderValuationExceptions(summary.valuationSummary);
+  }
+
+  function renderValuationExceptions(valuation = {}) {
+    const box = $('#reconPriceExceptions');
+    if (!box) return;
+    const exceptions = valuation?.priceExceptions || [];
+    box.hidden = !exceptions.length;
+    if (!exceptions.length) { box.innerHTML = ''; return; }
+    box.innerHTML = `<div class="stock-error-title">Valuation incomplete: ${exceptions.length} part(s) have missing prices. All stock quantities remain included. DMS quantity awaiting prices: ${escapeHtml(valuation.dmsPriceMissingQty || 0)}.</div>
+      <div class="table-wrap"><table><thead><tr><th>Part Number</th><th>DMS Qty</th><th>Physical Qty</th><th>DLC</th><th>MRP</th><th>Status</th></tr></thead><tbody>${exceptions.map(row => `<tr>
+      <td>${escapeHtml(row.partNumber)}</td><td>${escapeHtml(row.dmsQuantity)}</td><td>${escapeHtml(row.actualQuantity)}</td>
+      <td>${row.missingDlc ? 'PRICE MISSING' : escapeHtml(money2(row.dlc))}</td><td>${row.missingMrp ? 'PRICE MISSING' : escapeHtml(money2(row.mrp))}</td><td>PRICE MISSING</td></tr>`).join('')}</tbody></table></div>`;
   }
 
   function activeReconDealer() {
@@ -8785,6 +8800,8 @@
     if (body) {
       body.innerHTML = visibleRows.map((row) => {
         const status = row.status || '';
+        const hasDlc = Number(row.dlp ?? row.dlc ?? 0) > 0;
+        const hasMrp = Number(row.mrp ?? 0) > 0;
         const dmsValue = reconciliationValue(row.stockValue, row.dmsStockValue, row.dmsMrpValue);
         const scannedValue = reconciliationValue(row.actualStockValue, row.actualMrpValue, row.finalInventoryValue);
         return `
@@ -8796,10 +8813,10 @@
             <td>${escapeHtml(wholeNumber(row.actualStock ?? row.physicalStock ?? 0))}</td>
             <td>${escapeHtml(wholeNumber(row.variance ?? row.netDifference ?? 0))}</td>
             <td><span class="recon-status ${reconciliationStatusClass(status)}">${escapeHtml(status)}</span></td>
-            <td>${escapeHtml(money2(row.mrp || 0))}</td>
-            <td>${escapeHtml(money2(row.dlp || row.dlc || 0))}</td>
-            <td>${escapeHtml(money2(dmsValue))}</td>
-            <td>${escapeHtml(money2(scannedValue))}</td>
+            <td>${hasMrp ? escapeHtml(money2(row.mrp)) : 'PRICE MISSING'}</td>
+            <td>${hasDlc ? escapeHtml(money2(row.dlp ?? row.dlc)) : 'PRICE MISSING'}</td>
+            <td>${hasDlc ? escapeHtml(money2(dmsValue)) : 'PRICE MISSING'}</td>
+            <td>${hasDlc ? escapeHtml(money2(scannedValue)) : 'PRICE MISSING'}</td>
             <td>${escapeHtml(row.binLocation || row.bin || '')}</td>
             <td>${escapeHtml(row.movementType || '')}</td>
             <td>${escapeHtml(row.movementStatus || row.fastSlowDeadStatus || '')}</td>
@@ -8842,7 +8859,7 @@
     const params = new URLSearchParams(queryFromForm($('#reconFilters')));
     params.set('dealerCode', dealerCode);
     if (state.reconAuditId) params.set('auditId', state.reconAuditId);
-    params.set('dealerStockOnly', '1');
+    params.delete('dealerStockOnly');
     const query = params.toString();
     const dashboardParams = new URLSearchParams();
     dashboardParams.set('dealerCode', dealerCode);
@@ -8878,7 +8895,7 @@
     if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
     params.set('dealerCode', dealerCode);
     if (state.reconAuditId) params.set('auditId', state.reconAuditId);
-    params.set('dealerStockOnly', '1');
+    params.delete('dealerStockOnly');
     params.set('format', format);
     if (full) params.set('full', '1');
     else params.set('report', $('#reconExportType')?.value || 'dealer');

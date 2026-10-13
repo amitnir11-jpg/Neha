@@ -65,10 +65,14 @@ function dealerScopedPartLookup(lookup, dealerCode = '') {
 
 function legacyPartListLookup(partNumbers = []) {
   const parts = Array.from(new Set(partNumbers.map(normalizePartNumber).filter(Boolean)));
+  const flexible = parts.map(part => Array.from(part, character => character.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\s*\\-]*'));
+  const legacyPattern = new RegExp(`^\\s*(?:${flexible.join('|')})\\s*$`, 'i');
   return parts.length ? {
     $or: [
       { partNo: { $in: parts } },
-      { part: { $in: parts } }
+      { part: { $in: parts } },
+      { normalizedPartNumber: legacyPattern }, { partNumber: legacyPattern },
+      { partNo: legacyPattern }, { part: legacyPattern }
     ]
   } : { _id: '__NO_PARTS__' };
 }
@@ -145,6 +149,11 @@ function mergePriceRecordCandidates(records = [], dealerCode = '') {
   const manufacturingYear = priceTextValue(primary, ['manufacturingYear', 'year']) || priceTextValue(candidates, ['manufacturingYear', 'year']);
   const mrp = firstPositiveNumber([primary].concat(candidates), ['mrp', 'currentCatalogueMRP', 'currentCatalogueMrp', 'rate', 'price']);
   const dlc = firstPositiveNumber([primary].concat(candidates), ['dlc', 'dlp']);
+  const mrpRecord = candidates.find(row => firstPositiveNumber([row], ['mrp', 'currentCatalogueMRP', 'currentCatalogueMrp', 'rate', 'price']) > 0);
+  const dlcRecord = candidates.find(row => firstPositiveNumber([row], ['dlc', 'dlp']) > 0);
+  const sourcePriceDate = row => row?.masterRecord?.effectiveFrom || row?.uploadedAt || row?.updatedAt || null;
+  merged.mrpPriceDate = sourcePriceDate(mrpRecord);
+  merged.dlcPriceDate = sourcePriceDate(dlcRecord);
   if (description) {
     merged.description = description;
     merged.partDescription = description;
@@ -440,11 +449,21 @@ function savedAuditPrice(record = null, master = null) {
     mrp,
     dlc
   });
-  return price ? { ...price, priceSnapshot: true } : null;
+  const snapshotDate = record.pricePeriodFrom || record.uploadedAt || record.timestamp || null;
+  const masterPriceDate = currentPrice?.masterRecord?.effectiveFrom || currentPrice?.uploadedAt || currentPrice?.updatedAt || null;
+  return price ? { ...price, priceSnapshot: savedMrp > 0 || savedDlc > 0,
+    mrpResolution: savedMrp > 0 ? 'SAVED_AUDIT_PRICE' : 'PART_MASTER_FALLBACK',
+    dlcResolution: savedDlc > 0 ? 'SAVED_AUDIT_PRICE' : 'PART_MASTER_FALLBACK',
+    priceSnapshotDate: snapshotDate,
+    mrpPriceDate: savedMrp > 0 ? snapshotDate : (currentPrice?.masterRecord?.mrpPriceDate || masterPriceDate),
+    dlcPriceDate: savedDlc > 0 ? snapshotDate : (currentPrice?.masterRecord?.dlcPriceDate || masterPriceDate),
+    valuationDate: savedMrp > 0 && savedDlc > 0 ? snapshotDate : null } : null;
 }
 
 function auditPartPrice(scans = [], stock = null, master = null) {
-  return savedAuditPrice(stock || scans[0] || null, master);
+  const stockRecord = stock && (stock.normalizedPartNumber || stock.partNumber || stock.partNo || stock.part) ? stock : null;
+  const record = stockRecord || scans[0] || null;
+  return record ? savedAuditPrice(record, master) : master;
 }
 
 function scanWithSavedAuditPrice(scan = {}, master = null) {

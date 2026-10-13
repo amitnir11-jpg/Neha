@@ -32,7 +32,7 @@ const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { canonicalizePartCategory, resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals } = require('../utils/reportTotals');
-const { calculateDealerStockSystemValue } = require('../utils/stockValuation');
+const { summarizeAuditValuation } = require('../utils/auditValuation');
 const { buildSmartBinSuggestion, normalizeBinLocation } = require('../utils/smartBinSuggestion');
 const smartBinSettingsRoute = require('./settings');
 const {
@@ -1099,22 +1099,21 @@ async function dashboardDealerStockSummary(filter = {}) {
     .filter(Boolean)));
   const priceByPart = partNumbers.length ? await getPricesFromPartMaster(partNumbers, dealerCode) : new Map();
 
-  let dmsStockQty = 0;
-  let stockValue = 0;
-  let missingPriceLineCount = 0;
-  rows.forEach((row) => {
+  const pricedRows = rows.map((row) => {
     const partNumber = normalizePartNumber(row.normalizedPartNumber || row.partNumber || row.partNo || row.part);
-    const valuation = calculateDealerStockSystemValue(row, priceByPart.get(partNumber) || null);
-    dmsStockQty += valuation.quantity;
-    stockValue += Number(valuation.stockValue || 0);
-    if (valuation.missingMrp) missingPriceLineCount += 1;
+    const price = savedAuditPrice(row, priceByPart.get(partNumber) || null);
+    return { ...row, dlc: price?.dlc ?? null, mrp: price?.mrp ?? null, actualQuantity: 0, uploadedStockPresent: true };
   });
+  const valuationSummary = summarizeAuditValuation(pricedRows);
 
   return {
     partLineCount: rows.length,
-    dmsStockQty,
-    stockValue: money(stockValue),
-    missingPriceLineCount
+    dmsStockQty: valuationSummary.totalSystemQty,
+    stockValue: valuationSummary.totalDmsDlcValue,
+    missingPriceLineCount: valuationSummary.dmsPriceMissingParts,
+    valuationSummary,
+    valuationComplete: valuationSummary.valuationComplete,
+    priceExceptions: valuationSummary.priceExceptions
   };
 }
 
@@ -1177,7 +1176,9 @@ async function dashboardStats(filter, reportQuery = filter) {
   const uploadedPartLineCount = Number(dealerStockSummary.partLineCount || summary.totalPartsUploaded || 0);
   const uploadedStockValue = Number(dealerStockSummary.partLineCount ? dealerStockSummary.stockValue : 0);
   const reportSystemStockValue = Number(summary.totalDmsStockValue || summary.totalDmsDlcValue || summary.dmsStockValueDLC || 0);
-  const systemStockValue = Number(dealerStockSummary.partLineCount ? uploadedStockValue : reportSystemStockValue);
+  const systemStockValue = dealerStockSummary.valuationSummary
+    ? dealerStockSummary.valuationSummary.totalDmsDlcValue
+    : Number(dealerStockSummary.partLineCount ? uploadedStockValue : reportSystemStockValue);
 
   return {
     totalUniqueScannedParts: uniqueParts,
@@ -1223,6 +1224,8 @@ async function dashboardStats(filter, reportQuery = filter) {
     dealerStockDmsQty: Number(dealerStockSummary.dmsStockQty || summary.totalDmsStockQty || 0),
     dealerStockValue: Number(dealerStockSummary.stockValue || 0),
     dealerStockMissingPriceLines: Number(dealerStockSummary.missingPriceLineCount || 0),
+    valuationSummary: reportData.valuationSummary || dealerStockSummary.valuationSummary || null,
+    valuationComplete: (reportData.valuationSummary || dealerStockSummary.valuationSummary)?.valuationComplete !== false,
     actualStockValueMRP: Number(summary.totalActualMrpValue || summary.totalPhysicalMrpValue || 0),
     valuationBasis: 'DLC',
     lastScanTime: summary.lastScanTime || lastScan.time || null,
