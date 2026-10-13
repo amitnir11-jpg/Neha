@@ -28,6 +28,7 @@ function summaryAliases(v, scope) {
     varianceDlc:v.totalVarianceDlcValue,varianceMrp:v.totalVarianceMrpValue,
     totalScannedButNotInDms:v.totalParts-v.dmsParts,totalScans:v.scanTransactionCount,scanRows:v.scanTransactionCount,
     totalQuantity:v.scanTransactionUnits,uniqueParts:v.totalParts,matched:v.matchedSkuCount,shortage:v.shortageSkuCount,
+    totalDealerStockQty:v.totalPhysicalQty,totalPhysicalBinQty:v.totalPhysicalBinQty,totalFittedWorkshopQty:v.totalFittedWorkshopQty,
     mismatchCount:v.shortageSkuCount+v.excessSkuCount,valuationBasis:'DLC'};
 }
 async function project(query,kind='raw') {

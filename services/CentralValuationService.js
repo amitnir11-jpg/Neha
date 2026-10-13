@@ -11,7 +11,7 @@ const { applyMovementCountRules } = require('../utils/reportTotals');
 const { stockAvailableQuantity, stockMovementQuantity, stockWorkshopQuantity, stockUnitQuantity, activeStockTransaction, stockMovementType, stockMovementBin } = require('../utils/stockQuantity');
 const { validScanClause } = require('../utils/masterValidation');
 
-const ENGINE = 'central-pg-numeric-v5';
+const ENGINE = 'central-pg-numeric-v6';
 const flights = new Map();
 const readFlights = new Map();
 function sourceFilters(query={}) {
@@ -180,6 +180,8 @@ async function aggregate(db, id, selectedParts=null) {
   ) SELECT jsonb_build_object(
     'totalParts',count(*),'dmsParts',count(*) FILTER(WHERE (details->>'uploadedStockPresent')::boolean),
     'totalSystemQty',coalesce(sum(dms_qty),0),'totalPhysicalQty',coalesce(sum(physical_qty),0),
+    'totalPhysicalBinQty',coalesce(sum((details->>'physicalBinQty')::numeric),0),
+    'totalFittedWorkshopQty',coalesce(sum((details->>'fittedWorkshopQty')::numeric),0),
     'totalShortQty',coalesce(sum(greatest(dms_qty-physical_qty,0)),0),'totalExcessQty',coalesce(sum(greatest(physical_qty-dms_qty,0)),0),
     'totalVarianceQty',coalesce(sum(physical_qty-dms_qty),0),
     'quantityCoverage',CASE WHEN sum(dms_qty)>0 THEN round(100*sum(physical_qty)/sum(dms_qty),1) ELSE 0 END,

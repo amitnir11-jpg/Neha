@@ -81,6 +81,20 @@ run('one database snapshot survives price exceptions, concurrent readers, correc
 });
 after(async()=>{if(prisma)await prisma.$disconnect();});
 
+run('pending fitted stock remains dealer-owned and billing removes it without changing transaction quantities',async()=>{
+  const {prisma:db}=require('../services/prisma');prisma=db;
+  const suffix=Date.now().toString(36).toUpperCase(),scope={dealerCode:`FIT-${suffix}`,auditId:`FIT-AUD-${suffix}`},partNumber=`FITTED${suffix}`;
+  await require('../models/Dealer').create({...scope,currentAuditId:scope.auditId});await require('../models/Audit').create({...scope,status:'IN_PROGRESS'});
+  await require('../models/MasterCatalogue').create({partNumber,dlc:10,mrp:20});await require('../models/DealerStock').create({...scope,partNumber,dmsStock:6});
+  const Inventory=require('../models/Inventory'),central=require('../services/CentralValuationService');
+  await Inventory.create({...scope,partNumber,qty:6,scanType:'INWARD',syncStatus:'synced',scanStatus:'ACCEPTED',masterFound:true,bin:'STORE'});
+  const fitted=await Inventory.create({...scope,partNumber,qty:2,fittedQty:2,scanType:'FITTED',status:'FITTED_PENDING',syncStatus:'synced',scanStatus:'ACCEPTED',masterFound:true,bin:'STORE'});
+  const pending=await central.getSnapshot(scope);assert.equal(pending.summary.totalPhysicalQty,6);assert.equal(pending.summary.totalPhysicalBinQty,4);assert.equal(pending.summary.totalFittedWorkshopQty,2);assert.equal(pending.summary.totalPhysicalDlcValue,60);
+  await Inventory.updateOne({_id:fitted._id},{$set:{status:'BILLED'}});
+  const billed=await central.getSnapshot(scope);assert.equal(billed.summary.totalPhysicalQty,4);assert.equal(billed.summary.totalFittedWorkshopQty,0);assert.equal(billed.summary.totalPhysicalDlcValue,40);
+  assert.equal((await Inventory.findOne({_id:fitted._id}).lean()).qty,2);assert.equal(billed.summary.totalSystemQty,6);
+});
+
 run('quantity-only high-volume upload is confirmed atomically and serves ten simultaneous users',async()=>{
   const {prisma:db}=require('../services/prisma');prisma=db;
   const suffix=Date.now().toString(36).toUpperCase();const scope={dealerCode:`LOAD-${suffix}`,auditId:`LOAD-AUD-${suffix}`};

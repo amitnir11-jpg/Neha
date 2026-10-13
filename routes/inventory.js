@@ -5170,7 +5170,7 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
         dealerStockDmsQty:v.totalSystemQty,dealerStockValue:v.totalDmsDlcValue,totalDealerStockQty:v.totalPhysicalQty,
         uploadedPartLineCount:v.uploadedRowCount,dealerStockPartLines:v.uploadedRowCount,
         totalScanRecords:v.scanTransactionCount,totalScannedQuantity:v.scanTransactionUnits,
-        physicalBinStockQty:v.totalPhysicalQty,valuationComplete:v.valuationComplete});
+        physicalBinStockQty:v.totalPhysicalBinQty,fittedWorkshopQty:v.totalFittedWorkshopQty,valuationComplete:v.valuationComplete});
     }
     stampDashboardScope(stats, filter);
     stats.dashboardRange = range || 'audit';
