@@ -10,6 +10,7 @@ const reconciliationRoute = require('./reconciliation');
 const localPartsRoute = require('./localParts');
 const inventoryRoute = require('./inventory');
 const { calculateInventoryLedger } = require('../services/InventoryCalculationService');
+const { summarizeAuditValuation } = require('../utils/auditValuation');
 const Inventory = require('../models/Inventory');
 const Dealer = require('../models/Dealer');
 const router = reportModule;
@@ -1182,6 +1183,7 @@ function packNumber(value, digits = 0) {
 }
 
 function packCurrency(value) {
+  if (value === null) return 'PRICE MISSING';
   const number = Number(value || 0);
   return `₹ ${number.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
@@ -2150,7 +2152,9 @@ function buildAuditPackContext(reportData = {}, movementAnalysis = null, scanReg
       uniqueUsers,
       uniqueDevices,
       netDifference,
-      finalStatus
+      finalStatus,
+      ...(reportData.valuationSummary || {}),
+      ...(reportData.valuationSummary ? { netDifference: reportData.valuationSummary.totalVarianceDlcValue } : {})
     }
   };
 }
@@ -2188,18 +2192,18 @@ function buildSummaryStatusRows(reportData = {}, selectedReports = [], extras = 
       ['Unique Parts', packNumber(totals.uniqueParts || 0, 0)],
       ['Total Physical Qty', packNumber(totals.totalPhysicalQty || 0, 0)],
       ['Total System Qty', packNumber(totals.totalSystemQty || 0, 0)],
-      ['Inventory Value (DLC)', packCurrency(totals.totalPhysicalDlcValue || 0)],
-      ['DMS Value (DLC)', packCurrency(totals.totalDmsDlcValue || 0)],
-      ['Inventory Value (MRP)', packCurrency(totals.totalPhysicalMrpValue || 0)],
-      ['DMS Value (MRP)', packCurrency(totals.totalDmsMrpValue || 0)],
-      ['Net Difference (DLC)', packCurrency(totals.totalVarianceDlcValue || 0)]
+      ['Inventory Value (DLC)', packCurrency(totals.totalPhysicalDlcValue)],
+      ['DMS Value (DLC)', packCurrency(totals.totalDmsDlcValue)],
+      ['Inventory Value (MRP)', packCurrency(totals.totalPhysicalMrpValue)],
+      ['DMS Value (MRP)', packCurrency(totals.totalDmsMrpValue)],
+      ['Net Difference (DLC)', packCurrency(totals.totalVarianceDlcValue)]
     ]),
     ...packMetricRows('Variance Summary', [
       ['Total Excess', packNumber(totals.excessCount || 0, 0)],
       ['Total Short', packNumber(totals.shortCount || 0, 0)],
       ['Damage Count', packNumber(totals.damageCount || 0, 0)],
       ['Dead Stock', packNumber(totals.deadStockCount || 0, 0)],
-      ['Net Difference', packCurrency(totals.netDifference || 0)],
+      ['Net Difference', packCurrency(totals.netDifference)],
       ['Pending Sync', packNumber(registerCounts.pending || 0, 0)],
       ['Failed Sync', packNumber(registerCounts.failed || 0, 0)],
       ['Duplicate Sync', packNumber(registerCounts.duplicate || 0, 0)],
@@ -2225,8 +2229,12 @@ function buildSummaryStatusRows(reportData = {}, selectedReports = [], extras = 
 function buildAuditSummaryRows(reportData = {}, context = null, productGroupSummary = {}, generatedAt = '') {
   const packContext = context || buildAuditPackContext(reportData, null, []);
   const { summary, dealer, audit, totals } = packContext;
+  const amount = key => totals[key] === null
+    ? `PRICE MISSING — known subtotal ${packCurrency(totals[`${key}KnownSubtotal`] || 0)}`
+    : packCurrency(totals[key] || 0);
   const groupTotals = productGroupSummary && productGroupSummary.totals ? productGroupSummary.totals : {};
   const remarks = reconciliationRemarksText({
+    ...totals,
     netDifference: totals.netDifference || 0,
     totalShortageValue: totals.totalShortValue || 0,
     totalExcessValue: totals.totalExcessValue || 0
@@ -2247,13 +2255,22 @@ function buildAuditSummaryRows(reportData = {}, context = null, productGroupSumm
     ...packMetricRows('Audit Totals', [
       ['Total Scan Qty', packNumber(totals.totalQuantity || 0, 0)],
       ['Total Parts', packNumber(totals.totalParts || 0, 0)],
-      ['Actual Stock Value (DLC)', packCurrency(totals.totalPhysicalDlcValue || 0)],
-      ['Actual Stock Value (MRP)', packCurrency(totals.totalPhysicalMrpValue || 0)],
-      ['DMS Value (DLC)', packCurrency(totals.totalDmsDlcValue || 0)],
-      ['DMS Value (MRP)', packCurrency(totals.totalDmsMrpValue || 0)],
-      ['Shortage / Excess', `Shortage ${packCurrency(totals.totalShortValue || 0)} | Excess ${packCurrency(totals.totalExcessValue || 0)}`],
-      ['Final Net Difference (DLC)', packCurrency(totals.netDifference || 0)],
-      ['Final Net Difference (MRP)', packCurrency(totals.totalVarianceMrpValue || 0)]
+      ['Uploaded DMS Parts', totals.dmsParts ?? totals.totalParts ?? 0],
+      ['Uploaded DMS Quantity', totals.totalSystemQty || 0],
+      ['Net Physical Quantity', totals.totalPhysicalQty || 0],
+      ['Part-wise Shortage Quantity', totals.totalShortQty || 0],
+      ['Part-wise Excess Quantity', totals.totalExcessQty || 0],
+      ['Net Quantity Difference', totals.totalVarianceQty ?? (Number(totals.totalPhysicalQty || 0) - Number(totals.totalSystemQty || 0))],
+      ['Actual Stock Value (DLC)', amount('totalPhysicalDlcValue')],
+      ['Actual Stock Value (MRP)', amount('totalPhysicalMrpValue')],
+      ['DMS Value (DLC)', amount('totalDmsDlcValue')],
+      ['DMS Value (MRP)', amount('totalDmsMrpValue')],
+      ['Shortage Value (DLC)', amount('totalShortValue')],
+      ['Excess Value (DLC)', amount('totalExcessValue')],
+      ['Shortage Value (MRP)', amount('totalShortMrpValue')],
+      ['Excess Value (MRP)', amount('totalExcessMrpValue')],
+      ['Final Net Difference (DLC)', amount('totalVarianceDlcValue')],
+      ['Final Net Difference (MRP)', amount('totalVarianceMrpValue')]
     ]),
     ...packMetricRows('Product Group Summary', [
       ['Total Groups', packNumber(Array.isArray(productGroupSummary.rows) ? productGroupSummary.rows.length : 0, 0)],
@@ -2263,6 +2280,9 @@ function buildAuditSummaryRows(reportData = {}, context = null, productGroupSumm
       ['MRP Value Reference', packCurrency(groupTotals.totalMrpValue || 0)]
     ]),
     ...packMetricRows('Final Remarks', [
+      ['Valuation Status', totals.reconciliationComplete === false ? 'INCOMPLETE — STOCK UPLOAD REQUIRED' : totals.valuationComplete === false ? 'INCOMPLETE — PRICE MISSING' : 'Verified valuation'],
+      ['Unresolved Parts', totals.priceMissingParts || 0],
+      ['Unresolved DMS Quantity', totals.dmsPriceMissingQty || 0],
       ['Remarks', remarks]
     ])
   ];
@@ -2278,9 +2298,9 @@ function buildDashboardSummaryRows(reportData = {}, movementAnalysis = null, sca
       ['Total Quantity', packNumber(totals.totalQuantity || 0, 0)],
       ['Unique Parts', packNumber(totals.uniqueParts || 0, 0)],
       ['Visible Rows', packNumber(totals.visibleRows || 0, 0)],
-      ['Inventory Value (DLC)', packCurrency(totals.totalPhysicalDlcValue || 0)],
-      ['DMS Value (DLC)', packCurrency(totals.totalDmsDlcValue || 0)],
-      ['Variance (DLC)', packCurrency(totals.totalVarianceDlcValue || 0)],
+      ['Inventory Value (DLC)', packCurrency(totals.totalPhysicalDlcValue)],
+      ['DMS Value (DLC)', packCurrency(totals.totalDmsDlcValue)],
+      ['Variance (DLC)', packCurrency(totals.totalVarianceDlcValue)],
       ['Pending Records', packNumber(registerCounts.pending || 0, 0)],
       ['Failed Records', packNumber(registerCounts.failed || 0, 0)],
       ['Duplicate Records', packNumber(registerCounts.duplicate || 0, 0)],
@@ -2432,9 +2452,11 @@ function buildCategoryVarianceRows(data = {}, context = null) {
 }
 
 function reconciliationStatusText(summary = {}) {
+  if (summary.valuationComplete === false || summary.reconciliationComplete === false) return 'Incomplete';
   const net = Number(summary.netDifference || 0);
   const shortValue = Number(summary.totalShortageValue || 0);
   const excessValue = Number(summary.totalExcessValue || 0);
+  if (net === 0 && (Number(summary.totalShortQty || 0) > 0 || Number(summary.totalExcessQty || 0) > 0)) return 'Review Required';
   if (net === 0 && shortValue === 0 && excessValue === 0) return 'Balanced';
   if (net > 0) return 'Excess';
   if (net < 0) return 'Shortage';
@@ -2443,6 +2465,8 @@ function reconciliationStatusText(summary = {}) {
 
 function reconciliationRemarksText(summary = {}) {
   const status = reconciliationStatusText(summary);
+  if (summary.reconciliationComplete === false) return 'Uploaded DMS stock missing; reconciliation is incomplete.';
+  if (status === 'Incomplete') return 'PRICE MISSING — valuation is incomplete. Review the Price Exceptions sheet before closing the audit.';
   if (status === 'Balanced') return 'No variance found in the selected reconciliation scope';
   if (status === 'Excess') return 'Excess stock detected. Review category-wise mismatches before closure';
   if (status === 'Shortage') return 'Shortage detected. Verify missing items and pending postings';
@@ -2451,77 +2475,41 @@ function reconciliationRemarksText(summary = {}) {
 
 function buildReconciliationCategoryRows(report = {}, context = null) {
   const rows = Array.isArray(report.rows) ? report.rows : [];
-  const contextTotals = context && context.totals ? context.totals : {};
-  const categories = summarizeByCategory(rows, {
-    qtyResolver: (row) => firstNumericValue(row.actualStock, row.physicalQty, row.qty),
-    valueResolver: (row) => firstNumericValue(row.actualStockValue, row.finalInventoryValue, row.stockValue),
-    dmsQtyResolver: (row) => firstNumericValue(row.dmsStock, row.systemQty),
-    actualQtyResolver: (row) => firstNumericValue(row.actualStock, row.physicalQty, row.qty),
-    dmsValueResolver: (row) => firstNumericValue(row.dmsStockValue, 0),
-    actualValueResolver: (row) => firstNumericValue(row.actualStockValue, row.finalInventoryValue, row.stockValue),
-    shortValueResolver: (row) => firstNumericValue(row.shortageValue, 0),
-    excessValueResolver: (row) => firstNumericValue(row.excessValue, 0),
-    varianceQtyResolver: (row) => firstNumericValue(row.variance, row.varianceQty, 0),
-    varianceValueResolver: (row) => firstNumericValue(row.varianceDlc, row.varianceValue, row.netDifference, 0)
+  const buckets = new Map();
+  rows.forEach(row => {
+    const category = String(row.productCategory || row.category || 'Uncategorized').trim() || 'Uncategorized';
+    if (!buckets.has(category)) buckets.set(category, []);
+    buckets.get(category).push(row);
   });
-  const aggregated = categories.map((row) => ({
-    category: row.category,
-    dmsQty: row.dmsQty,
-    actualQty: row.actualQty,
-    varianceQty: row.actualQty - row.dmsQty,
-    dmsValue: row.dmsValue,
-    actualValue: row.actualValue,
-    shortValue: row.shortValue,
-    excessValue: row.excessValue,
-    netDifference: row.varianceValue,
-    status: reconciliationStatusText({ netDifference: row.varianceValue, totalShortageValue: row.shortValue, totalExcessValue: row.excessValue })
-  }));
-  const aggregatedTotals = aggregated.reduce((summary, row) => ({
-    dmsQty: summary.dmsQty + Number(row.dmsQty || 0),
-    actualQty: summary.actualQty + Number(row.actualQty || 0),
-    varianceQty: summary.varianceQty + Number(row.varianceQty || 0),
-    dmsValue: summary.dmsValue + Number(row.dmsValue || 0),
-    actualValue: summary.actualValue + Number(row.actualValue || 0),
-    shortValue: summary.shortValue + Number(row.shortValue || 0),
-    excessValue: summary.excessValue + Number(row.excessValue || 0),
-    netDifference: summary.netDifference + Number(row.netDifference || 0)
-  }), {
-    dmsQty: 0,
-    actualQty: 0,
-    varianceQty: 0,
-    dmsValue: 0,
-    actualValue: 0,
-    shortValue: 0,
-    excessValue: 0,
-    netDifference: 0
-  });
-  aggregated.push({
-    category: 'Grand Total',
-    dmsQty: Number(contextTotals.totalSystemQty || aggregatedTotals.dmsQty || 0),
-    actualQty: Number(contextTotals.totalPhysicalQty || aggregatedTotals.actualQty || 0),
-    varianceQty: Number((contextTotals.totalPhysicalQty || aggregatedTotals.actualQty || 0) - (contextTotals.totalSystemQty || aggregatedTotals.dmsQty || 0)),
-    dmsValue: Number(contextTotals.totalDmsDlcValue || aggregatedTotals.dmsValue || 0),
-    actualValue: Number(contextTotals.totalPhysicalDlcValue || aggregatedTotals.actualValue || 0),
-    shortValue: Number(contextTotals.totalShortValue || aggregatedTotals.shortValue || 0),
-    excessValue: Number(contextTotals.totalExcessValue || aggregatedTotals.excessValue || 0),
-    netDifference: Number(firstNumericValue(contextTotals.netDifference, contextTotals.totalVarianceDlcValue, 0)),
-    status: reconciliationStatusText({
-      netDifference: firstNumericValue(contextTotals.netDifference, contextTotals.totalVarianceDlcValue, 0),
-      totalShortageValue: contextTotals.totalShortValue || aggregatedTotals.shortValue || 0,
-      totalExcessValue: contextTotals.totalExcessValue || aggregatedTotals.excessValue || 0
-    }),
-    rowType: 'grandTotal'
-  });
-  return aggregated;
+  const buildCategory = (category, input) => {
+    const valuation = summarizeAuditValuation(input, {
+      stockUploadPresent: report.valuationSummary?.reconciliationComplete ?? report.summary?.reconciliationComplete
+    });
+    return {
+      category, dmsQty: valuation.totalSystemQty, actualQty: valuation.totalPhysicalQty,
+      varianceQty: valuation.totalVarianceQty, dmsValue: valuation.totalDmsDlcValue,
+      actualValue: valuation.totalPhysicalDlcValue, shortValue: valuation.totalShortValue,
+      excessValue: valuation.totalExcessValue, netDifference: valuation.totalVarianceDlcValue,
+      valuationComplete: valuation.valuationComplete,
+      status: reconciliationStatusText({
+        ...valuation, netDifference: valuation.totalVarianceDlcValue,
+        totalShortageValue: valuation.totalShortValue, totalExcessValue: valuation.totalExcessValue
+      })
+    };
+  };
+  const categories = [...buckets.keys()].sort((a, b) => a.localeCompare(b));
+  return categories.map(category => buildCategory(category, buckets.get(category)))
+    .concat([{ ...buildCategory('Grand Total', rows), rowType: 'grandTotal' }]);
 }
 
 function buildReconciliationSummaryRows(report = {}, context = null) {
   const summary = report.summary || {};
-  const totals = context && context.totals ? context.totals : {};
+  const totals = context && context.totals ? context.totals : (report.valuationSummary || summary.valuationSummary || {});
+  const amount = (field, summaryField) => packCurrency(Object.hasOwn(totals, field) ? totals[field] : summary[summaryField]);
   const rows = packMetricRows('Inventory Reconciliation Summary', [
     ['Dealer Code', summary.dealerCode || report.scope?.dealerCode || report.filters?.dealerCode || '-'],
     ['Audit ID', summary.auditId || report.scope?.auditId || report.filters?.auditId || '-'],
-    ['Total Parts Uploaded', totals.totalParts || summary.totalPartsUploaded || 0],
+    ['Total Parts Uploaded', totals.dmsParts ?? summary.totalPartsUploaded ?? 0],
     ['Total DMS Stock Qty', totals.totalSystemQty || summary.totalDmsStockQty || 0],
     ['Total Actual Scanned Qty', totals.totalPhysicalQty || summary.totalActualScannedQty || 0],
     ['Total Matched Parts', summary.totalMatchedParts || 0],
@@ -2530,16 +2518,19 @@ function buildReconciliationSummaryRows(report = {}, context = null) {
     ['Total Fast Moving Parts', totals.fastMovingCount || summary.totalFastMovingParts || 0],
     ['Total Slow Moving Parts', totals.slowMovingCount || summary.totalSlowMovingParts || 0],
     ['Total Dead Stock Parts', totals.deadStockCount || summary.totalDeadStockParts || 0],
-    ['Total Inventory Value', packCurrency(totals.totalPhysicalDlcValue || summary.totalInventoryValue || 0)],
-    ['Actual Stock Value (DLC)', packCurrency(totals.totalPhysicalDlcValue || summary.actualStockValueDLC || 0)],
-    ['DMS Stock Value (DLC)', packCurrency(totals.totalDmsDlcValue || summary.dmsStockValueDLC || 0)],
-    ['Total Shortage Value', packCurrency(totals.totalShortValue || summary.totalShortageValue || 0)],
-    ['Total Excess Value', packCurrency(totals.totalExcessValue || summary.totalExcessValue || 0)],
+    ['Total Inventory Value', amount('totalPhysicalDlcValue', 'actualStockValueDLC')],
+    ['Actual Stock Value (DLC)', amount('totalPhysicalDlcValue', 'actualStockValueDLC')],
+    ['DMS Stock Value (DLC)', amount('totalDmsDlcValue', 'dmsStockValueDLC')],
+    ['Total Shortage Value', amount('totalShortValue', 'totalShortageValue')],
+    ['Total Excess Value', amount('totalExcessValue', 'totalExcessValue')],
     ['Scanned But Not In DMS', summary.totalScannedButNotInDms || 0],
-    ['Net Difference', packCurrency(totals.netDifference || summary.netDifference || 0)],
+    ['Net Quantity Difference', totals.totalVarianceQty ?? summary.netDifference ?? 0],
+    ['Net Difference (DLC)', amount('totalVarianceDlcValue', 'varianceDlc')],
     ['Mismatch Count', summary.mismatchCount || 0],
     ['Final Status', totals.finalStatus || reconciliationStatusText(summary)],
     ['Remarks', reconciliationRemarksText({
+      ...summary,
+      ...totals,
       netDifference: totals.netDifference || summary.netDifference || 0,
       totalShortageValue: totals.totalShortValue || summary.totalShortageValue || 0,
       totalExcessValue: totals.totalExcessValue || summary.totalExcessValue || 0
@@ -2721,11 +2712,11 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
           { label: 'Categories', value: packNumber(categoryCount, 0) },
           { label: 'Total Scanned Parts', value: packNumber(totals.totalParts || sumBy(rows, (row) => firstNumericValue(row.totalScannedParts, 0)), 0) },
           { label: 'Total Scanned Qty', value: packNumber(totals.totalQuantity || sumBy(rows, (row) => firstNumericValue(row.totalScannedQuantity, 0)), 0) },
-          { label: 'Actual Stock Value (DLC)', value: packCurrency(totals.totalPhysicalDlcValue || sumBy(rows, (row) => firstNumericValue(row.sumPhysicalValueOnDLC, 0))) },
-          { label: 'DMS Stock Value (DLC)', value: packCurrency(totals.totalDmsDlcValue || sumBy(rows, (row) => firstNumericValue(row.sumDmsValueOnDLC, 0))) },
-          { label: 'Actual Stock Value (MRP)', value: packCurrency(totals.totalPhysicalMrpValue || sumBy(rows, (row) => firstNumericValue(row.sumPhysicalValueOnMRP, 0))) },
-          { label: 'DMS Stock Value (MRP)', value: packCurrency(totals.totalDmsMrpValue || sumBy(rows, (row) => firstNumericValue(row.sumDmsValueOnMRP, 0))) },
-          { label: 'Variance Value', value: packCurrency(totals.totalVarianceDlcValue || sumBy(rows, (row) => firstNumericValue(row.sumVarianceOnDLC, 0))) }
+          { label: 'Actual Stock Value (DLC)', value: packCurrency(totals.totalPhysicalDlcValue) },
+          { label: 'DMS Stock Value (DLC)', value: packCurrency(totals.totalDmsDlcValue) },
+          { label: 'Actual Stock Value (MRP)', value: packCurrency(totals.totalPhysicalMrpValue) },
+          { label: 'DMS Stock Value (MRP)', value: packCurrency(totals.totalDmsMrpValue) },
+          { label: 'Variance Value', value: packCurrency(totals.totalVarianceDlcValue) }
         ];
       }
       case 'partwise-inventory-audit':
@@ -2733,8 +2724,8 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
           { label: 'Rows', value: packNumber(rowCount, 0) },
           { label: 'Unique Categories', value: packNumber(countDistinctBy(rows, (row) => row.productCategory || row.category), 0) },
           { label: 'Total Qty', value: packNumber(totals.totalQuantity || totalQty, 0) },
-          { label: 'Total Value', value: packCurrency(totals.totalPhysicalDlcValue || totalValue) },
-          { label: 'Net Difference', value: packCurrency(totals.totalVarianceDlcValue || sumBy(rows, (row) => firstNumericValue(row.varianceDlc, row.netDifference, row.varianceValue))) }
+          { label: 'Total Value', value: packCurrency(totals.totalPhysicalDlcValue) },
+          { label: 'Net Difference', value: packCurrency(totals.totalVarianceDlcValue) }
         ];
       case 'product-group-summary': {
         const summaryTotals = context.productGroupSummaryTotals || {};
@@ -2781,7 +2772,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
           { label: 'Rows', value: packNumber(rowCount, 0) },
           { label: 'Unique Parts', value: packNumber(uniqueParts, 0) },
           { label: 'Total Qty', value: packNumber(totals.totalQuantity || totalQty, 0) },
-          { label: 'Total Value', value: packCurrency(totals.totalPhysicalDlcValue || totalValue) }
+          { label: 'Total Value', value: packCurrency(totals.totalPhysicalDlcValue) }
         ];
     }
   };
@@ -3147,6 +3138,21 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
       maxWidth: 60
     }
   ];
+
+  coreSpecs.push({ sheetName: 'Price Exceptions', kind: 'table', reportName: 'Price Exceptions',
+    title: 'Unresolved prices — quantities retained; valuation incomplete', orientation: 'landscape',
+    columns: [
+      { header: 'Part Number', key: 'partNumber', width: 22 },
+      { header: 'Dealer Code', key: 'dealerCode', width: 14 },
+      { header: 'Description', key: 'partDescription', width: 35 },
+      { header: 'DMS Quantity', key: 'dmsQuantity', width: 16 },
+      { header: 'Physical Quantity', key: 'actualQuantity', width: 18 },
+      { header: 'Shortage Qty', key: 'shortageQty', width: 16 },
+      { header: 'Excess Qty', key: 'excessQty', width: 16 },
+      { header: 'DLC', key: 'dlc', width: 14 }, { header: 'MRP', key: 'mrp', width: 14 },
+      { header: 'Missing DLC', key: 'missingDlc', width: 16 }, { header: 'Missing MRP', key: 'missingMrp', width: 16 },
+      { header: 'Status', key: 'pricingStatus', width: 20 }
+    ], rows: reportData.priceExceptions || partwiseData.priceExceptions || [], maxWidth: 60 });
 
   const renderCompactSpec = (spec) => {
     const sheetName = spec.sheetName || spec.title || 'Report';

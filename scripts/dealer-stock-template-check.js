@@ -54,7 +54,7 @@ assert.ok(uiSource.includes('dashboardDealerStockLineCount'), 'Dashboard UI must
 assert.ok(routeSource.includes('dealerStockSummaryFromPublicRows'), 'Reconciliation API must include uploaded dealer-stock summary totals');
 assert.ok(routeSource.includes('previewRange: summary.previewRange'), 'Reconciliation API must include uploaded dealer-stock preview range');
 assert.ok(inventoryRouteSource.includes('dashboardDealerStockSummary'), 'Dashboard stats must summarize uploaded dealer stock');
-assert.ok(inventoryRouteSource.includes('systemStockValue = Number(dealerStockSummary.partLineCount ? uploadedStockValue : reportSystemStockValue)'), 'Dashboard system value must fall back to uploaded dealer stock value');
+assert.ok(inventoryRouteSource.includes('dealerStockSummary.valuationSummary.totalDmsDlcValue'), 'Dashboard system value must use the shared DLC valuation and retain unresolved values');
 assert.ok(inventoryRouteSource.includes('dealerStockPartLines'), 'Dashboard stats must expose uploaded dealer-stock line count');
 
 async function verifyTemplateDownloadHandler() {

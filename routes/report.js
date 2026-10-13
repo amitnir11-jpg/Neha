@@ -58,6 +58,7 @@ const stockValuationTotals = typeof stockValuationModule.stockValuationTotals ==
       return Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, Math.round(Number(value || 0) * 100) / 100]));
     };
 const { resolvePartPricing } = require('../utils/partPricing');
+const { summarizeAuditValuation } = require('../utils/auditValuation');
 const categoryResolver = require('../utils/categoryResolver');
 const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
   ? categoryResolver.canonicalizePartCategory
@@ -242,11 +243,13 @@ function money(value) {
 }
 
 function stockSummaryAmountText(value = 0) {
+  if (value === null) return 'PRICE MISSING';
   const amount = Math.round(Math.abs(Number(value || 0)));
   return `₹ ${amount.toLocaleString('en-IN')}`;
 }
 
 function stockSummaryAmountTextSigned(value = 0) {
+  if (value === null) return 'PRICE MISSING';
   const amount = Math.round(Math.abs(Number(value || 0)));
   return Number(value || 0) < 0 ? `₹ (${amount.toLocaleString('en-IN')})` : `₹ ${amount.toLocaleString('en-IN')}`;
 }
@@ -717,7 +720,9 @@ function rowStatus(diffQty) {
 }
 
 function partwiseStatus({ mrp = 0, physicalQty = 0, fittedQty = 0, systemQty = 0 }) {
-  return auditStockStatus({ mrp, physicalQty, fittedQty, systemQty });
+  const actual = Number(physicalQty || 0) + Number(fittedQty || 0);
+  const system = Number(systemQty || 0);
+  return actual === system ? 'Inventory Matched' : actual > system ? 'Excess' : 'Short';
 }
 
 function partwiseAction(varianceQty, hasSystemStock, physicalQty, status = '') {
@@ -1190,6 +1195,8 @@ function finalColumns() {
     { header: 'DLC', key: 'dlc', width: 12 },
     { header: 'Pricing Status', key: 'pricingStatus', width: 24 },
     { header: 'Pricing Source', key: 'pricingSource', width: 20 },
+    { header: 'MRP Price Date', key: 'mrpPriceDate', width: 20 },
+    { header: 'DLC Price Date', key: 'dlcPriceDate', width: 20 },
     { header: 'Latest MRP Effective Date', key: 'latestMrpEffectiveDate', width: 24 },
     { header: 'Physical Qty', key: 'physicalQty', width: 14 },
     { header: 'Fitted Qty', key: 'fittedQty', width: 12 },
@@ -2017,10 +2024,10 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
   const varianceValueOnMrp = pricing.varianceMrpValue;
   const physicalBins = binDisplayWithFitted(group.scans);
   const systemBins = splitBins((system && (system.binLocation || system.bin)) || master.binLocation || master.bin || '');
-  const partDescription = hasCatalogue ? unknownIfBlank(pricing.partDescription || master.partDescription || master.partName || '') : MASTER_NOT_FOUND_LABEL;
+  const partDescription = hasCatalogue ? unknownIfBlank(pricing.partDescription || master.partDescription || master.partName || '') : (system.partDescription || MASTER_NOT_FOUND_LABEL);
   const category = displayCategory(pricing.productCategory || master.productCategory || master.category || '');
   const fitted = fittedDetails(group.scans);
-  const status = auditStockStatus({ mrp, physicalQty, fittedQty, systemQty: dmsQty });
+  const status = partwiseStatus({ mrp, physicalQty, fittedQty, systemQty: dmsQty });
   const actionRemarks = inventoryRiskAction(status);
   const row = {
     partNo: group.partNo,
@@ -2049,6 +2056,7 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
     productGroup: pricing.productGroup || (hasCatalogue ? master.productGroup || '' : 'UNKNOWN'),
     partSubGroup: pricing.partSubGroup || (hasCatalogue ? master.partSubGroup || master.productSubGroup || '' : 'UNKNOWN'),
     dmsQty,
+    uploadedStockPresent: hasSystemStock,
     systemQty: dmsQty,
     physicalQty,
     binPhysicalQty,
@@ -2107,6 +2115,11 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
     varianceOnDlc: pricing.varianceStockValue,
     pricingStatus: pricing.pricingStatus,
     pricingSource: pricing.pricingSource,
+    mrpResolution: pricing.mrpResolution,
+    dlcResolution: pricing.dlcResolution,
+    valuationDate: pricing.valuationDate,
+    mrpPriceDate: pricing.mrpPriceDate,
+    dlcPriceDate: pricing.dlcPriceDate,
     pricingWarnings: pricing.pricingWarnings,
     warnings: pricing.warnings,
     missingMrp: pricing.missingMrp,
@@ -2277,7 +2290,8 @@ async function buildReportData(query = {}) {
   const mergedDuplicateScanRows = rawScanCountBeforeDedupe - rawScans.length;
   rawScans = await enrichScanUsers(rawScans);
   const realScansForLookup = rawScans.filter((scan) => !/^SYNC/i.test(normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)));
-  const partNumbers = Array.from(new Set(realScansForLookup.map((scan) => normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)).filter(Boolean)));
+  const partNumbers = Array.from(new Set([...realScansForLookup, ...dealerStockRows]
+    .map(row => normalizePartNumber(row.normalizedPartNumber || row.partNumber || row.partNo || row.part)).filter(Boolean)));
   const priceByPart = partNumbers.length
     ? await getPricesFromPartMaster(partNumbers, query.dealerCode)
     : new Map();
@@ -2324,12 +2338,29 @@ async function buildReportData(query = {}) {
     if (new Date(scan.timestamp) > new Date(group.lastScanTime || 0)) group.lastScanTime = scan.timestamp;
     groupMap.set(key, group);
   });
+  // Uploaded stock is independent of scans, including every unscanned DMS part.
+  dealerStockRows.forEach(stock => {
+    const partNo = masterPartNumber(stock);
+    const dealerCode = cleanText(stock.dealerCode).toUpperCase();
+    const key = `${partNo}::${dealerCode}`;
+    if (partNo && !groupMap.has(key)) groupMap.set(key, { partNo, dealerCode, scans: [], qty: 0, binPhysicalQty: 0 });
+  });
   const allFinalRows = Array.from(groupMap.values()).map((group) => buildAuditRow(
     group,
     masterByDealer.get(masterKey(group.partNo, group.dealerCode)) || masterByPart.get(group.partNo) || {},
     systemByPart.get(group.partNo) || {}
   )).sort((a, b) => sortText(a.partNo, b.partNo));
-  const finalRows = applyVarianceFilter(allFinalRows, query.varianceType);
+  const scopedFinalRows = allFinalRows.filter(row => {
+    if (!stockSummaryRowMatchesFilters(row, query)) return false;
+    if (query.partNumber && !normalizePartNumber(row.partNumber || row.partNo).includes(normalizePartNumber(query.partNumber))) return false;
+    if (query.bin || query.binLocation) {
+      const bin = new RegExp(escapeRegExp(query.bin || query.binLocation), 'i');
+      if (![row.bin, row.binLocation, row.binLoc1, row.binLoc2, row.binLoc3, row.systemBinLoc1, row.systemBinLoc2, row.systemBinLoc3, row.binLocations].some(value => bin.test(value || ''))) return false;
+    }
+    return true;
+  });
+  const finalRows = applyVarianceFilter(scopedFinalRows, query.varianceType);
+  const valuationSummary = summarizeAuditValuation(finalRows, { stockUploadPresent: dealerStockRows.length > 0 });
 
   const categoryMap = new Map();
   finalRows.forEach((row) => {
@@ -2400,6 +2431,8 @@ async function buildReportData(query = {}) {
     summary,
     selectedDealer,
     selectedAudit,
+    valuationSummary,
+    priceExceptions: valuationSummary.priceExceptions,
     allFinalRows,
     finalRows,
     categoryRows: Array.from(categoryMap.values()).sort((a, b) => sortText(a.category, b.category)),
@@ -2437,6 +2470,8 @@ function partwiseInventoryAuditColumns() {
     { header: 'DLC', key: 'dlc', width: 12, numFmt: '#,##0.00' },
     { header: 'Pricing Status', key: 'pricingStatus', width: 24 },
     { header: 'Pricing Source', key: 'pricingSource', width: 20 },
+    { header: 'MRP Price Date', key: 'mrpPriceDate', width: 20 },
+    { header: 'DLC Price Date', key: 'dlcPriceDate', width: 20 },
     { header: 'Latest MRP Effective Date', key: 'latestMrpEffectiveDate', width: 24 },
     { header: 'Physical Qty', key: 'physicalQty', width: 16, numFmt: '#,##0.00' },
     { header: 'Fitted Qty', key: 'fittedQty', width: 16, numFmt: '#,##0.00' },
@@ -2541,7 +2576,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   const systemQty = hasSystemStock ? systemQtyValue(system) : 0;
   const pricing = resolvePartPricing({
     partNumber: partNo,
-    partMasterPrice: catalogue || null,
+    partMasterPrice: auditPartPrice(scans, system, catalogue || null),
     actualQty: totalDealerStockQty,
     dmsQty: systemQty
   });
@@ -2587,7 +2622,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
   return {
     partNum: partNo,
     partNumber: partNo,
-    partDescription: hasCatalogue ? unknownIfBlank(pricing.partDescription || catalogue.partDescription || catalogue.partName || '') : MASTER_NOT_FOUND_LABEL,
+    partDescription: hasCatalogue ? unknownIfBlank(pricing.partDescription || catalogue.partDescription || catalogue.partName || '') : (system.partDescription || MASTER_NOT_FOUND_LABEL),
     productCategory: displayCategory(pricing.productCategory || catalogue.productCategory || catalogue.category || ''),
     productGroup: hasCatalogue ? unknownIfBlank(pricing.productGroup || catalogue.productGroup || '') : 'UNKNOWN',
     partSubGroup: hasCatalogue ? unknownIfBlank(pricing.partSubGroup || catalogue.partSubGroup || catalogue.productSubGroup || '') : 'UNKNOWN',
@@ -2607,6 +2642,7 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     latestMrpEffectiveDate: masterPriceDateText(catalogue),
     dlc,
     openingStock: systemQty,
+    uploadedStockPresent: hasSystemStock,
     physicalQty,
     binPhysicalQty,
     physicalBinQty: binPhysicalQty,
@@ -2628,6 +2664,11 @@ function partwiseRowFrom(partNo, group = {}, catalogue = {}, system = {}, priceH
     excessQty,
     pricingStatus: pricing.pricingStatus,
     pricingSource: pricing.pricingSource,
+    mrpResolution: pricing.mrpResolution,
+    dlcResolution: pricing.dlcResolution,
+    valuationDate: pricing.valuationDate,
+    mrpPriceDate: pricing.mrpPriceDate,
+    dlcPriceDate: pricing.dlcPriceDate,
     pricingWarnings: pricing.pricingWarnings,
     warnings: pricing.warnings,
     missingMrp: pricing.missingMrp,
@@ -2824,14 +2865,6 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   const stockFilter = query.dealerCode && query.auditId
     ? { dealerCode: String(query.dealerCode).trim().toUpperCase(), auditId: String(query.auditId).trim() }
     : null;
-  if (stockFilter && !includeFullMaster) {
-    stockFilter.$and = (stockFilter.$and || []).concat([{
-      $or: [
-        { normalizedPartNumber: { $in: scannedParts } },
-        { partNumber: { $in: scannedParts } }
-      ]
-    }]);
-  }
   if (stockFilter && query.partNumber) {
     const part = normalizePartNumber(query.partNumber);
     stockFilter.$and = (stockFilter.$and || []).concat([{
@@ -2856,12 +2889,16 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   }
   const [systemParts, dealerStockRows] = await Promise.all([
     // This can be slow if systemFilter is broad.
-    MasterPart.find(systemFilter).lean(),
+    stockFilter ? [] : MasterPart.find(systemFilter).lean(),
     stockFilter ? DealerStock.find(stockFilter).lean() : []
   ]);
   validationLog.totalMasterParts = Math.max(validationLog.totalMasterParts, dealerStockRows.length || systemParts.length);
   const scannedPartSet = new Set(scannedParts);
   const partSet = new Set(scannedParts);
+  dealerStockRows.forEach(part => {
+    const partNo = masterPartNumber(part);
+    if (partNo) partSet.add(partNo);
+  });
   if (includeFullMaster) {
     systemParts.forEach((part) => {
       const partNo = masterPartNumber(part);
@@ -2899,12 +2936,10 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   });
 
   const groupedRows = Array.from(groups.values()).map((group) => partwiseRowFrom(group.partNo, group, priceByPart.get(group.partNo), systemByPart.get(group.partNo)));
-  const zeroScanRows = includeFullMaster
-    ? allParts.filter((partNo) => !scannedPartSet.has(partNo)).map((partNo) => partwiseRowFrom(partNo, { partNo, scans: [], physicalQty: 0 }, priceByPart.get(partNo), systemByPart.get(partNo)))
-    : [];
+  const zeroScanRows = allParts.filter(partNo => !scannedPartSet.has(partNo))
+    .map(partNo => partwiseRowFrom(partNo, { partNo, dealerCode: query.dealerCode, scans: [], physicalQty: 0 }, priceByPart.get(partNo), systemByPart.get(partNo)));
   log('Rows grouped', { withScans: groupedRows.length, zeroScans: zeroScanRows.length });
   const rows = applyPartwiseFilters(groupedRows.concat(zeroScanRows), query)
-    .filter((row) => row.status !== 'MASTER NOT FOUND')
     .sort(sortPartwiseInventoryRows);
 
   rows.forEach((row) => {
@@ -2918,6 +2953,7 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   validationLog.totalVarianceOnMRP = money(validationLog.totalVarianceOnMRP);
   validationLog.totalVarianceOnDLC = money(validationLog.totalVarianceOnDLC);
   const pricingIssues = rows.filter((row) => row.missingMrp || row.missingDlc);
+  const valuationSummary = summarizeAuditValuation(rows, { stockUploadPresent: dealerStockRows.length > 0 });
   const pricingCoverage = {
     totalRows: rows.length,
     partsWithValidMrp: rows.filter((row) => Number(row.mrp || 0) > 0).length,
@@ -2959,7 +2995,9 @@ async function buildPartwiseInventoryAuditReport(query = {}) {
   };
 
   log('Report build complete', { finalRows: rows.length });
-  return { rows, columns: partwiseInventoryAuditColumns(), summary, validationLog, selectedDealer, selectedAudit, pricingIssues };
+  summary.valuationSummary = valuationSummary;
+  summary.valuationComplete = valuationSummary.valuationComplete;
+  return { rows, columns: partwiseInventoryAuditColumns(), summary, validationLog, selectedDealer, selectedAudit, pricingIssues, pricingCoverage, valuationSummary, priceExceptions: valuationSummary.priceExceptions };
 }
 
 function addPartwiseInventoryAuditSheet(workbook, data, name = 'Partwise Inventory Audit') {
@@ -3169,7 +3207,19 @@ async function buildCategoryWiseVarianceSummary(query = {}, providedPartwise = n
     grandTotalMRP: grandTotal.sumVarianceOnMRP,
     grandTotalDLC: grandTotal.sumVarianceOnDLC
   };
-  return { rows, grandTotal, validationLog, summary: partwise.summary, selectedDealer: partwise.selectedDealer, selectedAudit: partwise.selectedAudit };
+  const valuationSummary = summarizeAuditValuation(partwise.rows, { stockUploadPresent: partwise.valuationSummary?.reconciliationComplete });
+  const applyCategoryValues = (target, input) => {
+    const valuation = summarizeAuditValuation(input);
+    Object.assign(target, { sumPhysicalValueOnMRP: valuation.totalPhysicalMrpValue,
+      sumPhysicalValueOnDLC: valuation.totalPhysicalDlcValue,
+      sumDmsValueOnMRP: valuation.totalDmsMrpValue, sumDmsValueOnDLC: valuation.totalDmsDlcValue,
+      sumVarianceOnMRP: valuation.totalVarianceMrpValue, sumVarianceOnDLC: valuation.totalVarianceDlcValue,
+      valuationComplete: valuation.valuationComplete });
+  };
+  rows.forEach(row => applyCategoryValues(row, partwise.rows.filter(part => displayCategory(part.productCategory) === row.productCategory
+    && (row.rowType === 'subtotal' || (part.scanTypeAction || part.action || partwiseAction(Number(part.varianceQty || 0), Number(part.systemQty || 0) > 0, Number(part.physicalQty || 0))) === row.action))));
+  applyCategoryValues(grandTotal, partwise.rows);
+  return { rows, grandTotal, validationLog, summary: partwise.summary, selectedDealer: partwise.selectedDealer, selectedAudit: partwise.selectedAudit, valuationSummary, priceExceptions: valuationSummary.priceExceptions };
   }
 
   const productCategoryFilter = displayCategory(query.productCategory || query.category || '');
@@ -3651,10 +3701,19 @@ async function buildStockSummaryReport(query = {}, providedPartwise = null) {
   const dealerCode = query.dealerCode;
   const partwise = providedPartwise || await cachedBuildPartwiseInventoryAuditReport({ ...query, showFullMasterWithZeroScan: 'on' });
   const rows = partwise.rows.filter((row) => stockSummaryRowMatchesFilters(row, query));
+  const valuationSummary = summarizeAuditValuation(rows, { stockUploadPresent: partwise.valuationSummary?.reconciliationComplete });
   const selectedDealer = partwise.selectedDealer || null;
   const selectedAudit = partwise.selectedAudit || null;
   const matrixRows = stockSummaryMatrixRows(rows);
   const grandTotal = stockSummaryGrandTotal(matrixRows);
+  const applyStockValues = (target, input) => {
+    const valuation = summarizeAuditValuation(input);
+    Object.assign(target, { dmsValue: valuation.totalDmsDlcValue, physicalValue: valuation.totalPhysicalDlcValue,
+      shortValue: valuation.totalShortValue, excessValue: valuation.totalExcessValue,
+      netDifference: valuation.totalVarianceDlcValue, valuationComplete: valuation.valuationComplete });
+  };
+  matrixRows.forEach(row => applyStockValues(row, rows.filter(part => stockSummaryCategory(part) === row.category)));
+  applyStockValues(grandTotal, rows);
   const footerTotals = stockSummaryFooterTotals(rows);
   const footer = {
     damagedItemsValue: footerTotals.damagedItemsValue,
@@ -3667,6 +3726,20 @@ async function buildStockSummaryReport(query = {}, providedPartwise = null) {
     damagedItemsDeadline: ''
   };
   const reconciliationSummary = stockSummaryReconciliationSummary(rows, grandTotal, footer);
+  const reconciliationAmounts = {
+    'DMS Stock Value': valuationSummary.totalDmsDlcValue,
+    'Actual Physical Stock Value': valuationSummary.totalPhysicalDlcValue,
+    'Variance Value': valuationSummary.totalVarianceDlcValue,
+    'Shortages Identified': valuationSummary.totalShortValue,
+    'Excess Stock Identified': valuationSummary.totalExcessValue,
+    'FINAL NET DIFFERENCE': valuationSummary.totalVarianceDlcValue
+  };
+  reconciliationSummary.rows.forEach(row => {
+    if (Object.hasOwn(reconciliationAmounts, row.label)) {
+      row.value = reconciliationAmounts[row.label];
+      row.displayValue = stockSummaryAmountText(row.value);
+    }
+  });
   footer.undefinedItemsDeadline = reconciliationSummary.undefinedDeadLineItems;
   const metadata = stockSummaryMetadata(selectedDealer, selectedAudit, query);
   const sections = {
@@ -3707,9 +3780,27 @@ async function buildStockSummaryReport(query = {}, providedPartwise = null) {
     remarks: reconciliationSummary.remarks,
     pricingCoverage: partwise.pricingCoverage || null,
     pricingIssues: partwise.pricingIssues || [],
+    valuationSummary,
+    valuationComplete: valuationSummary.valuationComplete,
+    priceExceptions: valuationSummary.priceExceptions,
     valuationBasis: 'DLC'
   };
-  return { rows: matrixRows.concat([grandTotal]), columns: stockSummaryColumns(), sections, summary, detailRows: rows, selectedDealer, selectedAudit, message: rows.length ? '' : 'No stock summary data found for selected dealer/filter' };
+  if (!valuationSummary.valuationComplete || !valuationSummary.reconciliationComplete) {
+    summary.status = valuationSummary.finalStatus;
+    summary.remarks = 'Resolve the Price Exceptions before certifying reconciliation.';
+    reconciliationSummary.status = summary.status;
+    reconciliationSummary.remarks = summary.remarks;
+    reconciliationSummary.rows.filter(row => row.kind === 'status' || row.kind === 'remarks').forEach(row => {
+      row.value = row.kind === 'status' ? summary.status : summary.remarks;
+      row.displayValue = row.value;
+    });
+  }
+  Object.assign(summary, { dmsStockValue: valuationSummary.totalDmsDlcValue,
+    dmsStockValueDLC: valuationSummary.totalDmsDlcValue, actualStockValueDLC: valuationSummary.totalPhysicalDlcValue,
+    dmsStockValueMRP: valuationSummary.totalDmsMrpValue, actualStockValueMRP: valuationSummary.totalPhysicalMrpValue,
+    totalShortValue: valuationSummary.totalShortValue, totalExcessValue: valuationSummary.totalExcessValue,
+    netDiff: valuationSummary.totalVarianceDlcValue });
+  return { rows: matrixRows.concat([grandTotal]), columns: stockSummaryColumns(), sections, summary, detailRows: rows, selectedDealer, selectedAudit, valuationSummary, priceExceptions: valuationSummary.priceExceptions, message: rows.length ? '' : 'No stock summary data found for selected dealer/filter' };
 }
 
 async function validateValuationReports(query = {}, provided = {}) {
@@ -3723,12 +3814,19 @@ async function validateValuationReports(query = {}, provided = {}) {
   const dashboardTotal = stockValuationTotals(partwise.rows).actualDlcTotal;
   // A reconciliation mismatch is useful report metadata, but it must not
   // prevent users from opening or downloading the underlying report.
-  return reconcileDlcTotals({
+  const reconciliation = reconcileDlcTotals({
     partwise: partwiseTotal,
     stockSummary: Number(stockSummary.sections && stockSummary.sections.grandTotal ? stockSummary.sections.grandTotal.physicalValue : 0),
     category: Number(category.grandTotal ? category.grandTotal.sumPhysicalValueOnDLC : 0),
     dashboard: dashboardTotal
   });
+  const valuation = partwise.valuationSummary || summarizeAuditValuation(partwise.rows);
+  return { ...reconciliation, calculationTotalsMatch: reconciliation.passed,
+    passed: reconciliation.passed && valuation.valuationComplete && valuation.reconciliationComplete,
+    valuationComplete: valuation.valuationComplete,
+    priceMissingParts: valuation.priceMissingParts,
+    message: !valuation.reconciliationComplete ? 'Uploaded DMS stock required before reconciliation can be certified'
+      : valuation.valuationComplete ? reconciliation.message : 'PRICE MISSING — valuation is incomplete; known subtotals are available for review' };
 }
 
 function addStockSummarySheet(workbook, data, options = {}) {
@@ -3789,7 +3887,7 @@ function addStockSummarySheet(workbook, data, options = {}) {
   };
   const setNumber = (rowNumber, colNumber, value, isCurrency = false) => {
     const cell = sheet.getCell(rowNumber, colNumber);
-    cell.value = Number(value || 0);
+    cell.value = value === null ? 'PRICE MISSING' : Number(value || 0);
     cell.numFmt = isCurrency ? currencyFormat : '#,##0';
     cell.alignment = isCurrency ? right : center;
   };

@@ -17,8 +17,8 @@ const { validScanClause } = require('../utils/masterValidation');
 const { normalizePartNumber } = require('../utils/normalize');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, signedScanQuantity } = require('../utils/reportTotals');
-const { calculateDealerStockSystemValue, calculateStockValuation } = require('../utils/stockValuation');
 const { resolvePartPricing } = require('../utils/partPricing');
+const { summarizeAuditValuation, priceValue, decimalSum } = require('../utils/auditValuation');
 const { getPricesFromPartMaster, savedAuditPrice } = require('../utils/partMasterPrice');
 const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
@@ -540,7 +540,7 @@ function publicStock(row, pricing = null) {
     safetyStock: Number(row.safetyStock || 0),
     rop: Number(row.rop || 0),
     pendingOrder: Number(row.pendingOrder || 0),
-    stockValue: hasValidDlc ? money(dmsStock * dlp) : 0,
+    stockValue: hasValidDlc ? priceValue(dmsStock, dlp) : null,
     uploadBatchId: row.uploadBatchId || '',
     uploadedAt: row.uploadedAt || row.updatedAt || row.createdAt,
     pricingStatus: hasMasterRecord ? (hasValidPrice ? (pricing.pricingStatus || '') : 'PART_MASTER_PRICE_MISSING') : 'PART_MASTER_PRICE_MISSING',
@@ -585,9 +585,8 @@ function dealerStockPreviewRange(total, visible) {
 
 function dealerStockSummaryFromPublicRows(rows = [], total = rows.length, visible = rows.length) {
   const lineRange = dealerStockRange(total);
-  const systemStockValue = money(rows.reduce((sum, row) => (
-    sum + Number(calculateDealerStockSystemValue(row).stockValue || 0)
-  ), 0));
+  const valuationSummary = summarizeAuditValuation(rows.map(row => ({ ...row, actualQuantity: 0, uploadedStockPresent: true })));
+  const systemStockValue = valuationSummary.totalDmsDlcValue;
   return {
     rows: lineRange.total,
     partLineCount: lineRange.total,
@@ -596,7 +595,10 @@ function dealerStockSummaryFromPublicRows(rows = [], total = rows.length, visibl
     previewRange: dealerStockPreviewRange(total, visible),
     dmsStock: rows.reduce((sum, row) => sum + Number(row.dmsStock || row.systemQty || 0), 0),
     systemStockValue,
-    stockValue: money(rows.reduce((sum, row) => sum + Number(row.stockValue || row.dmsStockValue || 0), 0))
+    stockValue: systemStockValue,
+    valuationSummary,
+    valuationComplete: valuationSummary.valuationComplete,
+    priceExceptions: valuationSummary.priceExceptions
   };
 }
 
@@ -835,6 +837,8 @@ function reportRowFromStock(stock, physical, pricing = null) {
   const mrp = publicRow.mrp ?? null;
   const hasDlc = Number(dlp || 0) > 0;
   const hasMrp = Number(mrp || 0) > 0;
+  const dlcVariance = pricing?.varianceStockValue ?? (hasDlc ? decimalSum([priceValue(actualStock, dlp), -priceValue(dmsStock, dlp)]) : null);
+  const mrpVariance = pricing?.varianceMrpValue ?? (hasMrp ? decimalSum([priceValue(actualStock, mrp), -priceValue(dmsStock, mrp)]) : null);
   const movement = classifyMovement(publicRow, actualStock);
   const binLocation = [publicRow.binLoc1, publicRow.binLoc2, publicRow.binLoc3].filter(Boolean).join(', ')
     || ((physical && physical.bins) || []).filter(Boolean).join(', ');
@@ -868,11 +872,11 @@ function reportRowFromStock(stock, physical, pricing = null) {
     excessQty: Math.max(variance, 0),
     short: Math.max(variance * -1, 0),
     excess: Math.max(variance, 0),
-    shortageValue: hasDlc ? money(Math.max(variance * -1, 0) * Number(dlp || 0)) : null,
-    excessValue: hasDlc ? money(Math.max(variance, 0) * Number(dlp || 0)) : null,
-    varianceDlp: hasDlc ? money(variance * Number(dlp || 0)) : null,
-    varianceDlc: hasDlc ? money(variance * Number(dlp || 0)) : null,
-    varianceMrp: hasMrp ? money(variance * Number(mrp || 0)) : null,
+    shortageValue: hasDlc ? Math.max(-dlcVariance, 0) : null,
+    excessValue: hasDlc ? Math.max(dlcVariance, 0) : null,
+    varianceDlp: dlcVariance,
+    varianceDlc: dlcVariance,
+    varianceMrp: mrpVariance,
     pricingStatus: publicRow.pricingStatus || '',
     pricingSource: publicRow.pricingSource || '',
     pricingWarnings: publicRow.pricingWarnings || [],
@@ -1020,6 +1024,7 @@ async function buildReconciliationReport(query = {}) {
     const filteredRows = rows.filter((row) => stockFilter(row, filters) && (!dealerStockOnly || !row.notInDms));
     filteredRows.sort((a, b) => String(a.partNumber || '').localeCompare(String(b.partNumber || ''), undefined, { numeric: true, sensitivity: 'base' }));
     const stockOnlyRows = filteredRows.filter((row) => !row.notInDms);
+    const valuationSummary = summarizeAuditValuation(filteredRows, { stockUploadPresent: stockRows.length > 0 });
     const totalInventoryValue = money(stockRowsWithPricing.reduce((sum, row) => sum + Number(row.stockValue || 0), 0));
     const summary = {
       dealerCode: scope.dealerCode,
@@ -1050,13 +1055,26 @@ async function buildReconciliationReport(query = {}) {
       netDifference: filteredRows.reduce((sum, row) => sum + Number(row.variance || 0), 0),
       varianceMrp: money(filteredRows.reduce((sum, row) => sum + Number(row.varianceMrp || 0), 0)),
       varianceDlc: money(filteredRows.reduce((sum, row) => sum + Number(row.varianceDlc || 0), 0)),
-      mismatchCount: filteredRows.filter((row) => Number(row.variance || 0) !== 0).length
+      mismatchCount: filteredRows.filter((row) => Number(row.variance || 0) !== 0).length,
+      valuationSummary,
+      valuationComplete: valuationSummary.valuationComplete,
+      reconciliationComplete: valuationSummary.reconciliationComplete,
+      priceMissingParts: valuationSummary.priceMissingParts,
+      priceExceptions: valuationSummary.priceExceptions
     };
+    Object.assign(summary, { totalInventoryValue: valuationSummary.totalDmsDlcValue,
+      dmsStockValueDLC: valuationSummary.totalDmsDlcValue, dmsStockValueMRP: valuationSummary.totalDmsMrpValue,
+      actualStockValueDLC: valuationSummary.totalPhysicalDlcValue, actualStockValueMRP: valuationSummary.totalPhysicalMrpValue,
+      totalShortageValue: valuationSummary.totalShortValue, totalExcessValue: valuationSummary.totalExcessValue,
+      varianceDlc: valuationSummary.totalVarianceDlcValue, varianceMrp: valuationSummary.totalVarianceMrpValue });
 
     return {
       scope,
       summary,
+      filters,
       rows: filteredRows,
+      valuationSummary,
+      priceExceptions: valuationSummary.priceExceptions,
       mismatchRecords: filteredRows.filter((row) => Number(row.variance || 0) !== 0),
       stockCount: stockRows.length,
       message: stockRows.length ? '' : 'No dealer DMS stock uploaded for selected dealer/audit'
@@ -1337,7 +1355,7 @@ function addSheet(workbook, name, columns, rows) {
 
 function addSummarySheet(workbook, summary) {
   const sheet = workbook.addWorksheet('Final Summary');
-  sheet.columns = [{ header: 'Metric', key: 'metric', width: 34 }, { header: 'Value', key: 'value', width: 18 }];
+  sheet.columns = [{ header: 'Metric', key: 'metric', width: 42 }, { header: 'Value', key: 'value', width: 34 }];
   [
     ['Dealer Code', summary.dealerCode],
     ['Audit ID', summary.auditId],
@@ -1350,11 +1368,16 @@ function addSummarySheet(workbook, summary) {
     ['Total Fast Moving Parts', summary.totalFastMovingParts],
     ['Total Slow Moving Parts', summary.totalSlowMovingParts],
     ['Total Dead Stock Parts', summary.totalDeadStockParts],
-    ['Total Inventory Value', summary.totalInventoryValue],
+    ['DMS Stock Value (DLC)', summary.totalInventoryValue],
     ['Total Shortage Value', summary.totalShortageValue],
     ['Total Excess Value', summary.totalExcessValue],
-    ['Scanned but not in DMS', summary.totalScannedButNotInDms]
-  ].forEach(([metric, value]) => sheet.addRow({ metric, value }));
+    ['Scanned but not in DMS', summary.totalScannedButNotInDms],
+    ['Valuation Status', summary.valuationSummary?.finalStatus || ''],
+    ['DMS DLC Known Subtotal', summary.valuationSummary?.totalDmsDlcValueKnownSubtotal],
+    ['DMS MRP Known Subtotal', summary.valuationSummary?.totalDmsMrpValueKnownSubtotal],
+    ['Price Missing Parts', summary.valuationSummary?.priceMissingParts || 0],
+    ['DMS Quantity Awaiting Prices', summary.valuationSummary?.dmsPriceMissingQty || 0]
+  ].forEach(([metric, value]) => sheet.addRow({ metric, value: value === null ? 'PRICE MISSING' : value }));
   sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF153A5B' } };
 }
@@ -1389,6 +1412,7 @@ async function sendReportExport(res, report, format, reportType = 'dealer') {
   };
   if (format === 'excel' || format === 'xlsx') {
     const cached = await getCachedResponse('reconciliation-download', {
+      ...compactParams(report.filters || {}),
       reportType,
       format: 'excel',
       dealerCode: scope.dealerCode,
@@ -1398,6 +1422,13 @@ async function sendReportExport(res, report, format, reportType = 'dealer') {
       workbook.creator = 'Daksh Inventory';
       addSummarySheet(workbook, report.summary || {});
       addSheet(workbook, reportType === 'full' ? 'Dealer Report' : `${reportType || 'dealer'} report`, reportColumns(), rows);
+      if (report.priceExceptions?.length) addSheet(workbook, 'Price Exceptions', [
+        { header: 'Part Number', key: 'partNumber', width: 24 },
+        { header: 'DMS Quantity', key: 'dmsQuantity', width: 18 },
+        { header: 'Physical Quantity', key: 'actualQuantity', width: 18 },
+        { header: 'DLC', key: 'dlc', width: 16 }, { header: 'MRP', key: 'mrp', width: 16 },
+        { header: 'Missing DLC', key: 'missingDlc', width: 18 }, { header: 'Missing MRP', key: 'missingMrp', width: 18 }
+      ], report.priceExceptions);
       if (reportType === 'full') {
         addSheet(workbook, 'Shortage Report', reportColumns(), selectReportRows(report.rows, 'shortage'));
         addSheet(workbook, 'Excess Report', reportColumns(), selectReportRows(report.rows, 'excess'));
