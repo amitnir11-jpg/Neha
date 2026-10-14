@@ -8545,6 +8545,19 @@
     return cleanDealerCode($('#reconDealer')?.value || $('#dealerStockDealer')?.value || '');
   }
 
+  function clearReconciliationScope(message = 'Select a dealer with an active audit to load reconciliation stock.') {
+    state.reconRows = [];
+    state.reconDashboardStats = null;
+    state.reconLastUpdatedAt = null;
+    renderDealerStockPreview([]);
+    renderDealerStockErrors([]);
+    setDealerStockUploadSummary({});
+    setReconciliationSummary({}, null, 0);
+    renderReconciliationRows();
+    const notice = $('#dealerStockUploadMessage');
+    if (notice) { notice.className = 'form-message'; notice.textContent = message; }
+  }
+
   function renderDealerStockErrors(errorRows = [], skippedCount = errorRows.length, truncated = false) {
     const box = $('#dealerStockErrorReport');
     if (!box) return;
@@ -15155,7 +15168,12 @@
       if (isAdmin()) loadBins().catch(console.warn);
       queueDashboardRefresh(250);
     });
-    function handleInactiveAuditEvent() {
+    function handleInactiveAuditEvent(payload = {}) {
+      const completedDealer = cleanDealerCode(payload.dealerCode || '');
+      if (completedDealer && activeReconDealer() === completedDealer) {
+        syncReconDealer('');
+        clearReconciliationScope();
+      }
       state.activeAudit = null;
       updateActiveAuditUi();
       if (isAdmin()) loadBins().catch(console.warn);

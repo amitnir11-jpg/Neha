@@ -621,12 +621,12 @@ async function resolveScope(req, source = {}) {
     ''
   );
   if (auditId.toLowerCase() === 'active') auditId = '';
-  if (!auditId && dealerCode && dealerCode !== 'ALL') {
-    const [dealer, activeAudit] = await Promise.all([
-      Dealer.findOne({ dealerCode }).lean().catch(() => null),
-      getActiveAudit({ dealerCode }).catch(() => null)
-    ]);
-    auditId = clean((dealer && dealer.currentAuditId) || (activeAudit && activeAudit.auditId) || '');
+  // Completed audits remain in Dealer.currentAuditId as history only; never
+  // use that historical value to authorize operational reconciliation.
+  if (dealerCode && dealerCode !== 'ALL') {
+    const activeAudit = await getActiveAudit({ dealerCode }).catch(() => null);
+    const activeAuditId = clean(activeAudit && activeAudit.auditId);
+    auditId = activeAuditId && (!auditId || auditId === activeAuditId) ? activeAuditId : '';
   }
   return { dealerCode, auditId };
 }

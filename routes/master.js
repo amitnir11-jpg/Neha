@@ -800,23 +800,22 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
     const userAccess = await auth.userDealerAccessCodes(req.user);
     const canSeeAll = auth.isAdminRole(req.user.role);
     const allowedDealerSet = new Set(userAccess);
-    if (dealerListCache.expiresAt > Date.now()) {
-      const dealers = canSeeAll
-        ? dealerListCache.dealers
-        : dealerListCache.dealers.filter((dealer) => allowedDealerSet.has(normalizePart(dealer.dealerCode)));
-      return res.json({ success: true, dealers });
-    }
+    // Audit status is an access boundary. Avoid returning a cached dealer
+    // list that could include a dealer whose audit was just completed.
     const [dealerRows, masterDealerCodes, scanDealerCodes, binDealerCodes, auditRows] = await Promise.all([
       Dealer.find({}).sort({ dealerName: 1 }).lean(),
       MasterPart.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
       Inventory.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
       Bin.distinct('dealerCode', { dealerCode: { $nin: [null, ''] } }),
-      Audit.find({}).sort({ createdAt: -1 }).select('auditId auditStatus status completedAt auditClosedDate auditUserId auditorUsername auditorName').lean()
+      Audit.find({}).sort({ createdAt: -1 }).select('dealerCode auditId auditStatus status completedAt auditClosedDate auditUserId auditorUsername auditorName').lean()
     ]);
     const auditMap = new Map();
+    const activeAuditByDealer = new Map();
     auditRows.forEach((audit) => {
       const key = auditLookupKey(audit.auditId);
       if (key && !auditMap.has(key)) auditMap.set(key, audit);
+      const dealerCode = normalizePart(audit.dealerCode);
+      if (dealerCode && ['ACTIVE', 'IN_PROGRESS'].includes(auditWorkflowStatus(audit)) && !activeAuditByDealer.has(dealerCode)) activeAuditByDealer.set(dealerCode, audit);
     });
     const dealerMap = new Map();
     dealerRows.forEach((dealer) => {
@@ -830,7 +829,7 @@ router.get('/dealers', auth.requireAuth, async (req, res) => {
       dealerMap.set(code, { dealerCode: code, dealerName: code, active: true });
     });
     const allDealers = Array.from(dealerMap.values()).map((dealer) => {
-      const audit = auditMap.get(auditLookupKey(dealer.currentAuditId));
+      const audit = activeAuditByDealer.get(normalizePart(dealer.dealerCode)) || auditMap.get(auditLookupKey(dealer.currentAuditId));
       return {
         ...dealer,
         auditUserId: dealer.auditUserId || (audit && audit.auditUserId) || '',
