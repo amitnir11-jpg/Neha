@@ -17,8 +17,11 @@ const { validScanClause } = require('../utils/masterValidation');
 const { normalizePartNumber } = require('../utils/normalize');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, signedScanQuantity } = require('../utils/reportTotals');
+const { stockMovementQuantity } = require('../utils/stockQuantity');
+const { applyInventoryLedgerFilter } = require('../utils/inventoryLedgerFilter');
 const { calculateDealerStockSystemValue, calculateStockValuation } = require('../utils/stockValuation');
 const { resolvePartPricing } = require('../utils/partPricing');
+const { aggregateDealerStockRows } = require('../utils/dmsStockAggregation');
 const { getPricesFromPartMaster, savedAuditPrice } = require('../utils/partMasterPrice');
 const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
@@ -684,11 +687,13 @@ function scanMatch(scope, filters = {}) {
     const binRegex = new RegExp(escapeRegex(filters.bin), 'i');
     match.$and.push({ $or: [{ binLocation: binRegex }, { bin: binRegex }] });
   }
-  return match;
+  return applyInventoryLedgerFilter(match, 'real');
 }
 
 function scanQty(scan = {}) {
-  return stockAvailableQuantity(scan);
+  // Reconciliation "Physical" means stock still in bins. Workshop/fitted
+  // stock is reported separately and must not inflate this quantity.
+  return stockMovementQuantity(scan);
 }
 
 async function physicalRows(scope, filters = {}) {
@@ -975,10 +980,11 @@ async function buildReconciliationReport(query = {}) {
   const cached = await getCachedResponse('reconciliation-report', cacheQuery, async (normalizedQuery) => {
     const filters = compactParams(normalizedQuery);
     const stockQuery = { dealerCode: scope.dealerCode, auditId: scope.auditId };
-    const [stockRows, scannedRows] = await Promise.all([
+    const [rawStockRows, scannedRows] = await Promise.all([
       DealerStock.find(stockQuery).sort({ partNumber: 1 }).lean(),
       physicalRows(scope, filters)
     ]);
+    const stockRows = aggregateDealerStockRows(rawStockRows);
 
     const partNumbers = Array.from(new Set([
       ...stockRows.map((row) => normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo || row.part)),

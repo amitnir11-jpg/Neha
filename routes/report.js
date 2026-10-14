@@ -58,6 +58,7 @@ const stockValuationTotals = typeof stockValuationModule.stockValuationTotals ==
       return Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, Math.round(Number(value || 0) * 100) / 100]));
     };
 const { resolvePartPricing } = require('../utils/partPricing');
+const { aggregateDealerStockRows } = require('../utils/dmsStockAggregation');
 const categoryResolver = require('../utils/categoryResolver');
 const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
   ? categoryResolver.canonicalizePartCategory
@@ -478,6 +479,56 @@ function normalizeReportQuery(query = {}) {
   };
   return enriched;
 }
+
+function activeReportAuditError() {
+  const error = new Error('Reports can be viewed or downloaded only while this dealer audit is running.');
+  error.statusCode = 409;
+  error.code = 'REPORT_AUDIT_NOT_ACTIVE';
+  return error;
+}
+
+async function scopeReportRequestToActiveAudit(req, res, next) {
+  try {
+    const bodyFilters = req.body && typeof req.body.filters === 'object' && req.body.filters
+      ? req.body.filters
+      : null;
+    const source = req.method === 'GET' ? (req.query || {}) : (bodyFilters || req.body || {});
+    const query = normalizeReportQuery(source);
+    if (!query.dealerCode) return next();
+
+    const activeAudit = await getActiveAudit({ dealerCode: query.dealerCode });
+    const activeAuditId = cleanText(activeAudit && (activeAudit.auditId || activeAudit._id));
+    if (!activeAuditId) throw activeReportAuditError();
+
+    const requestedAuditId = reportQueryValue(source.auditId || source.audit || '');
+    if (requestedAuditId && requestedAuditId.toLowerCase() !== 'active' && requestedAuditId !== activeAuditId) {
+      throw activeReportAuditError();
+    }
+
+    const scoped = {
+      dealerCode: query.dealerCode,
+      auditId: activeAuditId,
+      audit: activeAuditId,
+      _includeAllAudits: false
+    };
+    Object.assign(req.query, scoped);
+    if (req.body && typeof req.body === 'object') {
+      Object.assign(req.body, scoped);
+      if (bodyFilters) req.body.filters = { ...bodyFilters, ...scoped };
+    }
+    return next();
+  } catch (error) {
+    return res.status(reportErrorStatus(error)).json({
+      success: false,
+      code: error.code || 'REPORT_AUDIT_SCOPE_FAILED',
+      message: error.message
+    });
+  }
+}
+
+// This router is extended by routes/reports.js, so the middleware also covers
+// Excel, PDF, email, and complete-audit-pack downloads registered there.
+router.use(auth.requireAuth, scopeReportRequestToActiveAudit);
 
 function reqSafeValue(value) {
   return String(value || '').trim();
@@ -2097,6 +2148,13 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
     physicalDlcValue: pricing.actualStockValue,
     systemValueOnDlc: pricing.dmsStockValue,
     physicalValueOnDlc: pricing.actualStockValue,
+    // Keep gross shortage and excess separate. The signed variance remains
+    // available for the net result, while these values drive the Audit
+    // Summary's non-zero Shortage / Excess figures.
+    shortageValue: money(Math.max(-pricing.varianceStockValue, 0)),
+    excessValue: money(Math.max(pricing.varianceStockValue, 0)),
+    shortageMrpValue: money(Math.max(-pricing.varianceMrpValue, 0)),
+    excessMrpValue: money(Math.max(pricing.varianceMrpValue, 0)),
     differenceQty: diffQty,
     varianceQty: diffQty,
     varianceValue: pricing.varianceStockValue,
@@ -2118,9 +2176,9 @@ function buildAuditRow(group, master = {}, system = {}, priceHistories = []) {
     action: actionRemarks,
     status,
     scanType: Array.from(new Set(group.scans.map((scan) => scan.scanType || scan.type).filter(Boolean))).join(', '),
-    dealer: first.dealerName || first.dealerCode || '',
-    dealerCode: first.dealerCode || '',
-    dealerName: first.dealerName || '',
+    dealer: first.dealerName || first.dealerCode || system.dealerName || system.dealerCode || group.dealerCode || '',
+    dealerCode: first.dealerCode || system.dealerCode || group.dealerCode || '',
+    dealerName: first.dealerName || system.dealerName || '',
     userWiseScanSummary,
     userAuditTrail: Array.from(scanBreakdown.users.values()).map((item) => item.name).join(', '),
     lastScanTime: group.lastScanTime,
@@ -2277,7 +2335,13 @@ async function buildReportData(query = {}) {
   const mergedDuplicateScanRows = rawScanCountBeforeDedupe - rawScans.length;
   rawScans = await enrichScanUsers(rawScans);
   const realScansForLookup = rawScans.filter((scan) => !/^SYNC/i.test(normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)));
-  const partNumbers = Array.from(new Set(realScansForLookup.map((scan) => normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)).filter(Boolean)));
+  // Reports must reconcile the complete dealer upload, including parts that
+  // have not been scanned. Looking up prices only for scanned rows omitted
+  // DMS-only shortages from the Audit Summary valuation.
+  const partNumbers = Array.from(new Set([
+    ...realScansForLookup.map((scan) => normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)),
+    ...dealerStockRows.map((stock) => masterPartNumber(stock))
+  ].filter(Boolean)));
   const priceByPart = partNumbers.length
     ? await getPricesFromPartMaster(partNumbers, query.dealerCode)
     : new Map();
@@ -2290,15 +2354,12 @@ async function buildReportData(query = {}) {
     if (partNo && dealerCode) masterByDealer.set(masterKey(partNo, dealerCode), master);
     if (partNo && !masterByPart.has(partNo)) masterByPart.set(partNo, master);
   });
+  dealerStockRows = aggregateDealerStockRows(dealerStockRows);
   const systemByPart = new Map();
   dealerStockRows.forEach((stock) => {
     const partNo = masterPartNumber(stock);
     if (!partNo) return;
-    systemByPart.set(partNo, {
-      ...stock,
-      dmsStock: firstPositiveNumber(stock.dmsStock, stock.systemQty),
-      systemQty: firstPositiveNumber(stock.systemQty, stock.dmsStock)
-    });
+    systemByPart.set(partNo, stock);
   });
   let scans = rawScans.map((scan) => {
     const partNo = normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part);
@@ -2323,6 +2384,26 @@ async function buildReportData(query = {}) {
     group.masterFound = group.masterFound || scan.masterFound;
     if (new Date(scan.timestamp) > new Date(group.lastScanTime || 0)) group.lastScanTime = scan.timestamp;
     groupMap.set(key, group);
+  });
+  // Seed a zero-physical group for every uploaded DMS part. This keeps the
+  // report's part-level values, shortage/excess totals, and DMS valuation on
+  // the same scope as Dealer Reconciliation.
+  dealerStockRows.forEach((stock) => {
+    const partNo = masterPartNumber(stock);
+    if (!partNo) return;
+    const dealerCode = cleanText(stock.dealerCode || query.dealerCode).toUpperCase();
+    const key = `${partNo}::${dealerCode}`;
+    if (!groupMap.has(key)) {
+      groupMap.set(key, {
+        partNo,
+        dealerCode,
+        scans: [],
+        qty: 0,
+        binPhysicalQty: 0,
+        masterFound: Boolean(masterByDealer.get(masterKey(partNo, dealerCode)) || masterByPart.get(partNo)),
+        lastScanTime: null
+      });
+    }
   });
   const allFinalRows = Array.from(groupMap.values()).map((group) => buildAuditRow(
     group,
@@ -2354,6 +2435,13 @@ async function buildReportData(query = {}) {
     totalDmsStockValue: reportValuationTotals.dmsDlcTotal,
     totalActualMrpValue: reportValuationTotals.actualMrpTotal,
     totalDmsMrpValue: reportValuationTotals.dmsMrpTotal,
+    totalShortValue: money(finalRows.reduce((sum, row) => sum + Number(row.shortageValue || 0), 0)),
+    totalExcessValue: money(finalRows.reduce((sum, row) => sum + Number(row.excessValue || 0), 0)),
+    totalShortMrpValue: money(finalRows.reduce((sum, row) => sum + Number(row.shortageMrpValue || 0), 0)),
+    totalExcessMrpValue: money(finalRows.reduce((sum, row) => sum + Number(row.excessMrpValue || 0), 0)),
+    totalVarianceValue: reportValuationTotals.varianceDlcTotal,
+    totalVarianceMrpValue: reportValuationTotals.varianceMrpTotal,
+    netDifference: reportValuationTotals.varianceDlcTotal,
     valuationBasis: 'DLC'
   });
 
@@ -4656,3 +4744,4 @@ module.exports.buildPartsInventoryRefreshRows = cachedBuildPartsInventoryRefresh
 module.exports.addStockSummarySheet = addStockSummarySheet;
 module.exports.validateValuationReports = validateValuationReports;
 module.exports.getDakshReportLogoId = getDakshReportLogoId;
+module.exports.scopeReportRequestToActiveAudit = scopeReportRequestToActiveAudit;

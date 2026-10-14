@@ -32,7 +32,8 @@ const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { canonicalizePartCategory, resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals } = require('../utils/reportTotals');
-const { calculateDealerStockSystemValue } = require('../utils/stockValuation');
+const { calculateStockValuation } = require('../utils/stockValuation');
+const { aggregateDealerStockRows } = require('../utils/dmsStockAggregation');
 const { buildSmartBinSuggestion, normalizeBinLocation } = require('../utils/smartBinSuggestion');
 const smartBinSettingsRoute = require('./settings');
 const {
@@ -1077,6 +1078,8 @@ async function dashboardDealerStockSummary(filter = {}) {
     return {
       partLineCount: 0,
       dmsStockQty: 0,
+      dlcValue: 0,
+      mrpValue: 0,
       stockValue: 0,
       missingPriceLineCount: 0
     };
@@ -1089,6 +1092,8 @@ async function dashboardDealerStockSummary(filter = {}) {
     return {
       partLineCount: 0,
       dmsStockQty: 0,
+      dlcValue: 0,
+      mrpValue: 0,
       stockValue: 0,
       missingPriceLineCount: 0
     };
@@ -1099,21 +1104,30 @@ async function dashboardDealerStockSummary(filter = {}) {
     .filter(Boolean)));
   const priceByPart = partNumbers.length ? await getPricesFromPartMaster(partNumbers, dealerCode) : new Map();
 
+  const aggregatedRows = aggregateDealerStockRows(rows);
   let dmsStockQty = 0;
-  let stockValue = 0;
+  let dlcValue = 0;
+  let mrpValue = 0;
   let missingPriceLineCount = 0;
-  rows.forEach((row) => {
+  aggregatedRows.forEach((row) => {
     const partNumber = normalizePartNumber(row.normalizedPartNumber || row.partNumber || row.partNo || row.part);
-    const valuation = calculateDealerStockSystemValue(row, priceByPart.get(partNumber) || null);
-    dmsStockQty += valuation.quantity;
-    stockValue += Number(valuation.stockValue || 0);
-    if (valuation.missingMrp) missingPriceLineCount += 1;
+    // Prefer the price saved with the audit upload. Falling back to the
+    // current master is allowed only when the historical row has no snapshot.
+    const price = savedAuditPrice(row, priceByPart.get(partNumber) || null) || priceByPart.get(partNumber) || {};
+    const quantity = Number(row.dmsStock || row.systemQty || 0);
+    const valuation = calculateStockValuation({ dmsQuantity: quantity, dlc: price.dlc, mrp: price.mrp });
+    dmsStockQty += quantity;
+    dlcValue += Number(valuation.dmsStockValue || 0);
+    mrpValue += Number(valuation.dmsMrpValue || 0);
+    if (!(Number(price.dlc || 0) > 0) || !(Number(price.mrp || 0) > 0)) missingPriceLineCount += 1;
   });
 
   return {
-    partLineCount: rows.length,
+    partLineCount: aggregatedRows.length,
     dmsStockQty,
-    stockValue: money(stockValue),
+    dlcValue: money(dlcValue),
+    mrpValue: money(mrpValue),
+    stockValue: money(dlcValue),
     missingPriceLineCount
   };
 }
@@ -1175,7 +1189,7 @@ async function dashboardStats(filter, reportQuery = filter) {
   const uniqueParts = Number(summary.uniqueParts || 0);
   const auditCompletionPercent = totalMasterParts > 0 ? Math.min(100, (uniqueParts / totalMasterParts) * 100) : 0;
   const uploadedPartLineCount = Number(dealerStockSummary.partLineCount || summary.totalPartsUploaded || 0);
-  const uploadedStockValue = Number(dealerStockSummary.partLineCount ? dealerStockSummary.stockValue : 0);
+  const uploadedStockValue = Number(dealerStockSummary.partLineCount ? dealerStockSummary.dlcValue : 0);
   const reportSystemStockValue = Number(summary.totalDmsStockValue || summary.totalDmsDlcValue || summary.dmsStockValueDLC || 0);
   const systemStockValue = Number(dealerStockSummary.partLineCount ? uploadedStockValue : reportSystemStockValue);
 
@@ -1221,7 +1235,9 @@ async function dashboardStats(filter, reportQuery = filter) {
     uploadedPartLineCount,
     dealerStockPartLines: uploadedPartLineCount,
     dealerStockDmsQty: Number(dealerStockSummary.dmsStockQty || summary.totalDmsStockQty || 0),
-    dealerStockValue: Number(dealerStockSummary.stockValue || 0),
+    dealerStockValue: Number(dealerStockSummary.dlcValue || 0),
+    dealerStockDlcValue: Number(dealerStockSummary.dlcValue || 0),
+    dealerStockMrpValue: Number(dealerStockSummary.mrpValue || 0),
     dealerStockMissingPriceLines: Number(dealerStockSummary.missingPriceLineCount || 0),
     actualStockValueMRP: Number(summary.totalActualMrpValue || summary.totalPhysicalMrpValue || 0),
     valuationBasis: 'DLC',
@@ -2558,6 +2574,12 @@ async function updateScanDetails(req, res) {
 async function saveScanRequest(req, res) {
   try {
     const rawScanInput = firstValue(req.body, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText']);
+    if (!isManualEntryMode(req.body, rawScanInput, '', 'manual')) {
+      const parser = require('../utils/scanParser');
+      const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(rawScanInput, req.body.barcodeFormat, req.body.dealerCode || req.activeDealerId, req.body.auditId);
+      if (!validation.valid) return res.status(422).json({ success: false, code: 'INVALID_SCANNER_SEQUENCE',
+        title: parser.invalidScannerSequenceTitle, message: parser.invalidScannerSequenceMessage, reason: validation.reason });
+    }
     scanDebug('[MANUAL SCAN] request received', {
       bodyKeys: Object.keys(req.body || {}).slice(0, 30),
       partNumber: req.body.partNumber || req.body.partNo || req.body.part || '',
@@ -3411,6 +3433,12 @@ async function updateScanDetails(req, res) {
 async function saveScanRequest(req, res) {
   try {
     const rawScanInput = firstValue(req.body, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText']);
+    if (!isManualEntryMode(req.body, rawScanInput, '', 'manual')) {
+      const parser = require('../utils/scanParser');
+      const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(rawScanInput, req.body.barcodeFormat, req.body.dealerCode || req.activeDealerId, req.body.auditId);
+      if (!validation.valid) return res.status(422).json({ success: false, code: 'INVALID_SCANNER_SEQUENCE',
+        title: parser.invalidScannerSequenceTitle, message: parser.invalidScannerSequenceMessage, reason: validation.reason });
+    }
     scanDebug('[MANUAL SCAN] request received', {
       bodyKeys: Object.keys(req.body || {}).slice(0, 30),
       partNumber: req.body.partNumber || req.body.partNo || req.body.part || '',
@@ -4016,6 +4044,10 @@ async function handleBluetoothScan(req, res) {
   const body = req.body || {};
   const deviceId = clean(body.deviceId || body.macAddress || body.device);
   const scanValue = clean(firstValue(body, ['scanValue', 'rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanText', 'raw']));
+  const parser = require('../utils/scanParser');
+  const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(scanValue, body.barcodeFormat, body.dealerCode || req.activeDealerId, body.auditId);
+  if (!validation.valid) return res.status(422).json({ success: false, code: 'INVALID_SCANNER_SEQUENCE',
+    title: parser.invalidScannerSequenceTitle, message: parser.invalidScannerSequenceMessage, reason: validation.reason });
   const transactionId = bluetoothTransactionId(body, deviceId);
   const scanTime = new Date();
 
@@ -4559,6 +4591,16 @@ router.post('/sync', auth.requireAuth, async (req, res) => {
     for (const item of incoming) {
       try {
         const rawScanInput = firstValue(item, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText', 'raw']);
+        if (!isManualEntryMode(item, rawScanInput, '', 'mobile')) {
+          const parser = require('../utils/scanParser');
+          const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(rawScanInput, item.barcodeFormat || item.source?.barcodeFormat, item.dealerCode || req.body.dealerCode, item.auditId);
+          if (!validation.valid) {
+            failed.push({ uniqueScanId: String(item.uniqueScanId || item.scanId || ''),
+              code: 'INVALID_SCANNER_SEQUENCE', title: parser.invalidScannerSequenceTitle,
+              message: parser.invalidScannerSequenceMessage, reason: validation.reason, item });
+            continue;
+          }
+        }
         const parsed = parseRawScan(rawScanInput || item.part);
         const part = upper(parsed.part || firstValue(item, ['part', 'partNo', 'partNumber', 'sku', 'itemCode']));
         const normalizedPartNumber = normalizePartNumber(part);
@@ -4826,6 +4868,12 @@ router.post('/sync', auth.requireAuth, async (req, res) => {
       await emitScanUpdate(req, saved[saved.length - 1]);
     }
 
+    if (incoming.length && failed.length === incoming.length && failed.every(row => row.code === 'INVALID_SCANNER_SEQUENCE')) {
+      return res.status(422).json({ success: false, code: 'INVALID_SCANNER_SEQUENCE',
+        title: require('../utils/scanParser').invalidScannerSequenceTitle,
+        message: require('../utils/scanParser').invalidScannerSequenceMessage,
+        syncedNow: 0, failed: failed.length, failedItems: failed, skippedDuplicates: 0, verificationResults });
+    }
     const [pending, totalSynced] = await Promise.all([
       Inventory.countDocuments({ synced: false }),
       Inventory.countDocuments({ synced: true })
@@ -4875,7 +4923,29 @@ router.get('/part-summary', auth.requireAuth, async (req, res) => {
 router.get('/resolve-code', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = normalizeDealerCode(req.query.dealerCode);
+    const parser = require('../utils/scanParser');
+    const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(
+      req.query.rawValue,
+      req.query.barcodeFormat, dealerCode, req.query.auditId
+    );
+    if (!validation.valid && req.query.entryMode !== 'manual') {
+      return res.status(422).json({
+        success: false,
+        code: 'INVALID_SCANNER_SEQUENCE',
+        title: parser.invalidScannerSequenceTitle,
+        message: parser.invalidScannerSequenceMessage,
+        rawValue: String(req.query.rawValue || ''),
+        reason: validation.reason
+      });
+    }
     const audit = await getActiveAudit({ dealerCode });
+    if (validation.existingIdentity) {
+      const existing = validation.existingIdentity;
+      return res.json({ success: true, parsedCode: { ...validation.parsed, success: true,
+        type: 'STORED_UPI', identityKind: 'UNIQUE_UPI', hasUniqueItemId: true,
+        partNumber: existing.normalizedPartNumber || existing.partNumber || existing.part,
+        upi: validation.parsed.normalizedValue }, binOptions: [] });
+    }
     const decoded = await require('../services/ScannedCodeService').resolveScannedCode(req.query.rawValue, req.query.barcodeFormat, dealerCode);
     if (!decoded.success) return res.status(422).json({ success: false, message: decoded.message,
       rawValue: decoded.rawValue, extractedPartNumber: decoded.partNumber || '', reason: decoded.reason,

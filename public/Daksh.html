@@ -29,7 +29,7 @@
   <link rel="stylesheet" href="/css/app-controls.css?v=20260908-enterprise-controls-v2">
   <link rel="stylesheet" href="/dashboard-layout.css?v=20260928-dashboard-dealer-picker-v2">
   <link rel="stylesheet" href="/compact-layout.css?v=20260921-global-density-v2">
-  <link rel="stylesheet" href="/barcode-workspace.css?v=20261009-scan-manual-tabs-v3">
+  <link rel="stylesheet" href="/barcode-workspace.css?v=20261012-excel-stock-upload-v1">
 </head>
 <body class="app-booting">
   <script>
@@ -433,6 +433,7 @@
                   <div class="manual-entry-tabs" role="tablist" aria-label="Part entry type">
                     <button id="regularPartTab" class="manual-entry-tab active" type="button" role="tab" aria-selected="true" aria-controls="regularPartEntryTab">Regular Part</button>
                     <button id="localPartTab" class="manual-entry-tab" type="button" role="tab" aria-selected="false" aria-controls="localPartEntryTab">Local Part</button>
+                    <button id="excelStockUploadTab" class="manual-entry-tab" type="button" role="tab" aria-selected="false" aria-controls="excelStockUploadPanel">Excel Stock Upload</button>
                   </div>
                   <div id="regularPartEntryTab" class="manual-entry-tab-panel" role="tabpanel" aria-labelledby="regularPartTab">
                   <div class="barcode-manual-fields">
@@ -453,6 +454,21 @@
                   </div>
                   </div>
                   <div id="localPartEntryTab" class="manual-entry-tab-panel local-part-tab-panel" role="tabpanel" aria-labelledby="localPartTab" hidden></div>
+                  <div id="excelStockUploadPanel" class="manual-entry-tab-panel excel-stock-panel" role="tabpanel" aria-labelledby="excelStockUploadTab" hidden>
+                    <div class="excel-stock-head"><div><h3>Excel Stock Upload</h3><p id="excelStockDealer">Select a dealer to start</p></div><button id="excelUploadHistoryBtn" class="btn light" type="button">Upload History</button></div>
+                    <div class="excel-upload-actions"><a class="btn light" href="/api/excel-stock-upload/template">Download Excel Template</a><label class="btn primary" for="excelStockFile">Select Excel File</label><input id="excelStockFile" type="file" accept=".xlsx" hidden></div>
+                    <p id="excelStockMessage" class="form-message" aria-live="polite">Upload preview validates each part against Part Master. Preview never changes stock.</p>
+                    <div id="excelStockWorkspace" hidden>
+                      <div class="excel-upload-summary"><div><strong id="excelTotalRows">0</strong><span>Total Rows</span></div><div><strong id="excelAcceptedRows">0</strong><span>Accepted</span></div><div><strong id="excelRejectedRows">0</strong><span>Rejected</span></div><div><strong id="excelAcceptedQty">0</strong><span>Accepted Qty</span></div></div>
+                      <div class="excel-stock-toolbar"><strong id="excelBatchLabel">Batch</strong><input id="excelStockSearch" type="search" placeholder="Search part or bin"><select id="excelStockFilter"><option value="ALL">All rows</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option></select><label>Rows <select id="excelRowsPerPage"><option>10</option><option>25</option><option selected>50</option></select></label></div>
+                      <div class="excel-table-wrap"><table class="excel-stock-table"><thead><tr><th>S.No.</th><th>Part Number</th><th>Bin Location</th><th>Qty</th><th>Existing</th><th>Final</th><th>Status</th><th>Check</th><th>Edit</th></tr></thead><tbody id="excelStockRows"></tbody></table></div>
+                      <div class="excel-stock-pager"><label><input id="excelSelectPage" type="checkbox"> Select All Valid Parts on Current Page</label><div><button id="excelPrevPage" class="btn light" type="button">Previous</button><span id="excelPageLabel">Page 1 of 1</span><button id="excelNextPage" class="btn light" type="button">Next</button></div></div>
+                      <div id="excelRejectedSection"><div class="excel-stock-head"><h4>Rejected Parts</h4><button id="excelRejectedDownload" class="btn light" type="button">Download Rejected Parts Excel</button></div><div class="excel-table-wrap"><table class="excel-stock-table"><thead><tr><th>Row</th><th>Original Part Number</th><th>Bin</th><th>Qty</th><th>Reason</th><th>Action</th></tr></thead><tbody id="excelRejectedRows"></tbody></table></div></div>
+                      <div class="excel-confirm-bar"><span>Only checked, valid rows will be added to stock.</span><button id="excelConfirmUpload" class="btn primary" type="button">Confirm &amp; Update Verified Stock</button></div>
+                    </div>
+                    <div id="excelHistoryPanel" hidden><h4>Upload History</h4><div class="excel-table-wrap"><table class="excel-stock-table"><thead><tr><th>Date</th><th>Batch ID</th><th>File</th><th>Accepted</th><th>Rejected</th><th>Qty</th><th>Status</th><th>Open</th></tr></thead><tbody id="excelHistoryRows"></tbody></table></div></div>
+                    <dialog id="excelEditDialog"><form method="dialog" id="excelEditForm"><h3 id="excelEditTitle">Edit Stock Row</h3><label>Part Number<input id="excelEditPart" required></label><label>Qty<input id="excelEditQty" type="number" min="1" step="1" required></label><label>Bin Location<input id="excelEditBin" required></label><p id="excelEditStatus" aria-live="polite"></p><div class="excel-dialog-actions"><button value="cancel" class="btn light">Cancel</button><button id="excelSaveCorrection" value="save" class="btn primary">Save &amp; Revalidate</button></div></form></dialog>
+                  </div>
                 </section>
               </div>
             <p id="scanPartSummary" class="scan-part-summary" role="status" hidden></p>
@@ -1800,7 +1816,7 @@
   <link rel="stylesheet" href="/smart-part-search.css?v=20261011-smart-part-search-v3">
   <link rel="stylesheet" href="/scan-edit-checkboxes.css?v=20261011-scan-edit-checkboxes-v3">
   <script src="/js/smart-part-search.js?v=20261011-smart-part-search-v1"></script>
-  <script src="/ui.js?v=20261012-fast-bin-validation-v1"></script>
+  <script src="/ui.js?v=20261012-excel-stock-upload-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

@@ -12637,6 +12637,9 @@
 
   function setManualEntryTab(tab, options = {}) {
     const local = tab === 'local';
+    $('#excelStockUploadPanel')?.setAttribute('hidden', '');
+    $('#excelStockUploadTab')?.classList.remove('active');
+    $('#excelStockUploadTab')?.setAttribute('aria-selected', 'false');
     const entry = $('#localPartEntry');
     const localPane = $('#localPartEntryTab');
     const regularPane = $('#regularPartEntryTab');
@@ -13487,6 +13490,134 @@
       } else {
         form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       }
+    });
+    let excelStockBatch = null;
+    let excelStockPage = 1;
+    let excelEditingRow = -1;
+    const excelStockApi = '/api/excel-stock-upload';
+    const downloadExcelStockFile = async (path, fileName) => {
+      const headers = {}; if (state.token) headers.Authorization = `Bearer ${state.token}`;
+      const response = await fetch(apiUrl(path), { headers, credentials: 'include' });
+      if (!response.ok) { let detail = 'Excel download failed.'; try { detail = (await response.json()).message || detail; } catch (_) {} throw new Error(detail); }
+      const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a');
+      link.href = url; link.download = fileName; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+    };
+    const excelSelectedDealer = () => cleanDealerCode(selectedScanDealerCode() || activeDealerId() || currentDealerCode());
+    const excelStockNotice = (message, error = false) => {
+      const node = $('#excelStockMessage'); if (!node) return;
+      node.textContent = message; node.className = error ? 'form-message error' : 'form-message';
+    };
+    const excelHtml = (value) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+    const openExcelUploadTab = () => {
+      const panel = $('#excelStockUploadPanel'); const dealerCode = excelSelectedDealer();
+      if (!panel) return;
+      $('#regularPartEntryTab').hidden = true; $('#localPartEntryTab').hidden = true; panel.hidden = false;
+      $('#regularPartTab').classList.remove('active'); $('#regularPartTab').setAttribute('aria-selected', 'false');
+      $('#localPartTab').classList.remove('active'); $('#localPartTab').setAttribute('aria-selected', 'false');
+      $('#excelStockUploadTab').classList.add('active'); $('#excelStockUploadTab').setAttribute('aria-selected', 'true');
+      const dealer = dealerByCode(dealerCode) || {};
+      $('#excelStockDealer').textContent = dealerCode ? `${dealerCode}${dealer.dealerName ? ` · ${dealer.dealerName}` : ''}` : 'Select a dealer to start';
+      $('#excelStockFile').disabled = !dealerCode;
+      if (!dealerCode) excelStockNotice('Select a dealer before choosing a stock file.', true);
+    };
+    const excelStockVisibleRows = () => {
+      if (!excelStockBatch) return [];
+      const query = clean($('#excelStockSearch')?.value).toUpperCase(); const filter = $('#excelStockFilter')?.value || 'ALL';
+      return (excelStockBatch.rows || []).map((row, index) => ({ row, index })).filter(({ row }) =>
+        (filter === 'ALL' || row.status === filter) && (!query || `${row.partNumber} ${row.binLocation}`.toUpperCase().includes(query)));
+    };
+    const renderExcelStockBatch = () => {
+      if (!excelStockBatch) return;
+      const rows = excelStockBatch.rows || []; const accepted = rows.filter(row => row.status === 'ACCEPTED'); const rejected = rows.length - accepted.length;
+      $('#excelStockWorkspace').hidden = false; $('#excelHistoryPanel').hidden = true;
+      $('#excelTotalRows').textContent = rows.length; $('#excelAcceptedRows').textContent = accepted.length; $('#excelRejectedRows').textContent = rejected;
+      $('#excelAcceptedQty').textContent = accepted.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+      $('#excelBatchLabel').textContent = `Batch ${excelStockBatch.batchId} · ${excelStockBatch.status}`;
+      const visible = excelStockVisibleRows(); const pageSize = Number($('#excelRowsPerPage')?.value || 50); const pages = Math.max(1, Math.ceil(visible.length / pageSize));
+      excelStockPage = Math.min(excelStockPage, pages); const start = (excelStockPage - 1) * pageSize; const pageRows = visible.slice(start, start + pageSize);
+      $('#excelStockRows').innerHTML = pageRows.map(({ row, index }) => `<tr><td>${index + 1}</td><td class="part-cell">${excelHtml(row.partNumber)}</td><td>${excelHtml(row.binLocation)}</td><td>${excelHtml(row.qty)}</td><td>${Number(row.existingQty || 0)}</td><td>${row.finalQty ?? '—'}</td><td class="excel-stock-status ${row.status.toLowerCase()}">${row.committed ? 'Uploaded' : row.status === 'ACCEPTED' ? 'Valid' : excelHtml(row.reason)}</td><td>${row.status === 'ACCEPTED' ? `<input type="checkbox" data-excel-check="${index}" ${row.checked ? 'checked' : ''} ${row.committed ? 'disabled' : ''} aria-label="Verify row ${index + 1}">` : '—'}</td><td><button type="button" class="btn light" data-excel-edit="${index}" ${row.committed ? 'disabled' : ''}>Edit</button></td></tr>`).join('') || '<tr><td colspan="9">No rows match this filter.</td></tr>';
+      const rejectedRows = rows.map((row, index) => ({ row, index })).filter(item => item.row.status !== 'ACCEPTED');
+      $('#excelRejectedSection').hidden = !rejectedRows.length;
+      $('#excelRejectedRows').innerHTML = rejectedRows.map(({ row, index }) => `<tr><td>${row.sourceRow}</td><td class="part-cell">${excelHtml(row.originalPartNumber)}</td><td>${excelHtml(row.binLocation)}</td><td>${excelHtml(row.qty)}</td><td class="excel-stock-status rejected">${excelHtml(row.reason)}</td><td><button type="button" class="btn light" data-excel-edit="${index}" ${row.committed ? 'disabled' : ''}>Correct</button></td></tr>`).join('');
+      $('#excelPageLabel').textContent = `Page ${excelStockPage} of ${pages}`; $('#excelPrevPage').disabled = excelStockPage <= 1; $('#excelNextPage').disabled = excelStockPage >= pages;
+      $('#excelSelectPage').checked = pageRows.length > 0 && pageRows.every(({ row }) => row.status === 'ACCEPTED' && row.checked);
+      $('#excelConfirmUpload').disabled = excelStockBatch.status !== 'PENDING' || !accepted.some(row => row.checked);
+    };
+    const saveExcelStockRows = async () => {
+      const response = await api(`${excelStockApi}/batches/${encodeURIComponent(excelStockBatch.batchId)}/rows`, { method: 'PATCH', body: { rows: excelStockBatch.rows } });
+      excelStockBatch = response.batch; renderExcelStockBatch();
+    };
+    const loadExcelUploadHistory = async () => {
+      const dealerCode = excelSelectedDealer(); if (!dealerCode) throw new Error('Select a dealer first.');
+      const response = await api(`${excelStockApi}/batches?dealerCode=${encodeURIComponent(dealerCode)}`);
+      $('#excelStockWorkspace').hidden = true; $('#excelHistoryPanel').hidden = false;
+      $('#excelHistoryRows').innerHTML = response.batches.map(batch => `<tr><td>${new Date(batch.createdAt).toLocaleString()}</td><td>${excelHtml(batch.batchId)}</td><td>${excelHtml(batch.fileName)}</td><td>${batch.acceptedRows}</td><td>${batch.rejectedRows}</td><td>${batch.uploadedQty}</td><td>${excelHtml(batch.status)}</td><td><button class="btn light" type="button" data-excel-open-batch="${excelHtml(batch.batchId)}">Open</button>${isAdminUser() && batch.status === 'COMMITTED' ? ` <button class="btn danger" type="button" data-excel-reverse="${excelHtml(batch.batchId)}">Reverse</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8">No upload history for this dealer.</td></tr>';
+    };
+    const openExcelStockRowEdit = (index) => {
+      if (!excelStockBatch) return; const row = excelStockBatch.rows[index]; if (!row) return;
+      excelEditingRow = index; $('#excelEditTitle').textContent = row.status === 'ACCEPTED' ? 'Edit Accepted Part' : 'Correct Rejected Part';
+      $('#excelEditPart').value = row.partNumber || ''; $('#excelEditQty').value = row.qty || ''; $('#excelEditBin').value = row.binLocation || ''; $('#excelEditStatus').textContent = '';
+      $('#excelEditDialog').showModal();
+    };
+    $('#excelStockUploadTab')?.addEventListener('click', openExcelUploadTab);
+    $('#excelUploadHistoryBtn')?.addEventListener('click', () => loadExcelUploadHistory().catch(error => excelStockNotice(error.message, true)));
+    document.querySelector('#excelStockUploadPanel .excel-upload-actions a')?.addEventListener('click', (event) => {
+      event.preventDefault(); downloadExcelStockFile(`${excelStockApi}/template`, 'daksh-stock-upload-template.xlsx').catch(error => excelStockNotice(error.message, true));
+    });
+    $('#excelStockFile')?.addEventListener('change', async (event) => {
+      const file = event.target.files?.[0]; if (!file) return;
+      try {
+        const dealerCode = excelSelectedDealer(); if (!dealerCode) throw new Error('Select a dealer first.');
+        const body = new FormData(); body.append('file', file); body.append('dealerCode', dealerCode);
+        excelStockNotice('Validating rows against Part Master and current bin stock…');
+        const response = await api(`${excelStockApi}/preview`, { method: 'POST', body }); excelStockBatch = response.batch; excelStockPage = 1;
+        excelStockNotice('Preview ready. No stock was changed. Edit rejected rows, verify accepted rows, then confirm.'); renderExcelStockBatch();
+      } catch (error) { excelStockNotice(error.message || 'The file could not be validated.', true); }
+      event.target.value = '';
+    });
+    $('#excelStockRows')?.addEventListener('change', async (event) => {
+      const index = Number(event.target.dataset.excelCheck); if (!Number.isInteger(index) || !excelStockBatch) return;
+      excelStockBatch.rows[index].checked = event.target.checked; try { await saveExcelStockRows(); } catch (error) { excelStockNotice(error.message, true); }
+    });
+    document.addEventListener('click', async (event) => {
+      const edit = event.target.closest('[data-excel-edit]'); if (edit) { openExcelStockRowEdit(Number(edit.dataset.excelEdit)); return; }
+      const open = event.target.closest('[data-excel-open-batch]'); if (open) {
+        try { const response = await api(`${excelStockApi}/batches/${encodeURIComponent(open.dataset.excelOpenBatch)}`); excelStockBatch = response.batch; excelStockPage = 1; renderExcelStockBatch(); }
+        catch (error) { excelStockNotice(error.message, true); }
+      }
+      const reverse = event.target.closest('[data-excel-reverse]'); if (reverse) {
+        if (!window.confirm(`Record a stock reversal for batch ${reverse.dataset.excelReverse}? This requires the uploaded units to remain available in their original bins.`)) return;
+        try {
+          const response = await api(`${excelStockApi}/batches/${encodeURIComponent(reverse.dataset.excelReverse)}/reverse`, { method: 'POST', body: { dealerCode: excelSelectedDealer() } });
+          excelStockNotice(`${response.reversedRows} reversal transactions recorded (${response.reversedQty} units).`); await loadExcelUploadHistory();
+        } catch (error) { excelStockNotice(error.message, true); }
+      }
+    });
+    $('#excelSaveCorrection')?.addEventListener('click', async (event) => {
+      event.preventDefault(); if (!excelStockBatch || excelEditingRow < 0) return;
+      const row = excelStockBatch.rows[excelEditingRow];
+      row.partNumber = $('#excelEditPart').value; row.qty = $('#excelEditQty').value; row.binLocation = $('#excelEditBin').value;
+      row.checked = false; row.correctedPartNumber = ''; row.correctedQty = undefined; row.correctedBinLocation = '';
+      try { await saveExcelStockRows(); $('#excelEditDialog').close(); excelStockNotice('Correction saved and revalidated. Valid rows are ready for verification.'); }
+      catch (error) { $('#excelEditStatus').textContent = error.message; }
+    });
+    $('#excelStockSearch')?.addEventListener('input', () => { excelStockPage = 1; renderExcelStockBatch(); });
+    $('#excelStockFilter')?.addEventListener('change', () => { excelStockPage = 1; renderExcelStockBatch(); });
+    $('#excelRowsPerPage')?.addEventListener('change', () => { excelStockPage = 1; renderExcelStockBatch(); });
+    $('#excelPrevPage')?.addEventListener('click', () => { excelStockPage = Math.max(1, excelStockPage - 1); renderExcelStockBatch(); });
+    $('#excelNextPage')?.addEventListener('click', () => { excelStockPage += 1; renderExcelStockBatch(); });
+    $('#excelSelectPage')?.addEventListener('change', async (event) => {
+      const size = Number($('#excelRowsPerPage').value || 50); const visible = excelStockVisibleRows().slice((excelStockPage - 1) * size, excelStockPage * size);
+      visible.forEach(({ row }) => { if (row.status === 'ACCEPTED') row.checked = event.target.checked; });
+      try { await saveExcelStockRows(); } catch (error) { excelStockNotice(error.message, true); }
+    });
+    $('#excelRejectedDownload')?.addEventListener('click', () => { if (excelStockBatch) downloadExcelStockFile(`${excelStockApi}/batches/${encodeURIComponent(excelStockBatch.batchId)}/rejected.xlsx`, `${excelStockBatch.batchId}-rejected.xlsx`).catch(error => excelStockNotice(error.message, true)); });
+    $('#excelConfirmUpload')?.addEventListener('click', async () => {
+      if (!excelStockBatch || !window.confirm(`Commit ${excelStockBatch.rows.filter(row => row.status === 'ACCEPTED' && row.checked).length} verified rows to this dealer's stock?`)) return;
+      try {
+        const response = await api(`${excelStockApi}/batches/${encodeURIComponent(excelStockBatch.batchId)}/confirm`, { method: 'POST', body: { dealerCode: excelSelectedDealer() } });
+        const latest = await api(`${excelStockApi}/batches/${encodeURIComponent(excelStockBatch.batchId)}`); excelStockBatch = latest.batch; renderExcelStockBatch(); excelStockNotice(`Saved ${response.acceptedRows} rows (${response.uploadedQty} units). ${response.rejectedRows} rejected rows remain available for correction.`);
+      } catch (error) { excelStockNotice(error.message, true); }
     });
     $('#regularPartTab')?.addEventListener('click', () => setManualEntryTab('regular'));
     $('#localPartTab')?.addEventListener('click', () => setManualEntryTab('local'));
