@@ -1650,6 +1650,13 @@
       : '';
     if (selectedDealer) {
       $$('.dealerSelect').forEach((select) => {
+        // Reconciliation has its own active-audit scope. Do not replace a
+        // user-selected reconciliation dealer when the dashboard audit state
+        // refreshes in the background.
+        if (isReconciliationDealerSelect(select)) {
+          syncDealerSelectDisplay(select);
+          return;
+        }
         if (select.closest('#reportFilters') && isAdminUser()) return;
         if (['dashboardDealerSelect', 'dashboardAuditDealerSelect'].includes(select.id) && state.dashboardDealerCode) {
           setDealerSelectValue(select, state.dashboardDealerCode);
@@ -1679,6 +1686,7 @@
         setMultiSelectValues(createUserDealerAccess, [audit.dealerCode]);
       }
       $$('.dealerSelect').forEach((select) => {
+        if (isReconciliationDealerSelect(select)) return;
         if (select.closest('#reportFilters')) return;
         const current = cleanDealerCode(select.value || '');
         if (!current || (current === 'ALL' && !select.closest('#reportFilters'))) {
@@ -3546,6 +3554,8 @@
       const scopedDealer = activeDealerId();
       const preferred = select.id === 'scanHistoryDealer'
         ? (scopedDealer || activeDealer || selected)
+        : isReconciliationDealerSelect(select)
+          ? (selected || scopedDealer || activeDealer)
         : select.closest('#reportFilters')
           ? (selected || scopedDealer || activeDealer)
           : ['dashboardDealerSelect', 'dashboardAuditDealerSelect'].includes(select.id)
@@ -8543,6 +8553,10 @@
 
   function activeReconDealer() {
     return cleanDealerCode($('#reconDealer')?.value || $('#dealerStockDealer')?.value || '');
+  }
+
+  function isReconciliationDealerSelect(select) {
+    return Boolean(select && (select.id === 'reconDealer' || select.id === 'dealerStockDealer'));
   }
 
   function clearReconciliationScope(message = 'Select a dealer with an active audit to load reconciliation stock.') {
@@ -14437,11 +14451,11 @@
     $$('.recon-tab').forEach((button) => button.addEventListener('click', () => activateReconciliationTab(button.dataset.reconTab)));
     $('#dealerStockDealer')?.addEventListener('change', (event) => {
       syncReconDealer(event.target.value);
-      loadReconciliation().catch((error) => toast(error.message, 'error'));
+      loadDealerStockPreview().catch((error) => toast(error.message, 'error'));
     });
     $('#reconDealer')?.addEventListener('change', (event) => {
       syncReconDealer(event.target.value);
-      loadReconciliation().catch((error) => toast(error.message, 'error'));
+      loadDealerStockPreview().catch((error) => toast(error.message, 'error'));
     });
     $('#dealerStockUploadForm')?.addEventListener('submit', (event) => {
       event.preventDefault();
