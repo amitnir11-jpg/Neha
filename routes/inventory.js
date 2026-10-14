@@ -33,6 +33,7 @@ const { canonicalizePartCategory, resolveCategoryFromMaster } = require('../util
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
 const { applyMovementCountRules, reportTotals } = require('../utils/reportTotals');
 const { summarizeAuditValuation } = require('../utils/auditValuation');
+const { aggregateDealerStockRows } = require('../utils/dmsStockAggregation');
 const { buildSmartBinSuggestion, normalizeBinLocation } = require('../utils/smartBinSuggestion');
 const smartBinSettingsRoute = require('./settings');
 const {
@@ -1094,12 +1095,13 @@ async function dashboardDealerStockSummary(filter = {}) {
     };
   }
 
-  const partNumbers = Array.from(new Set(rows
+  const aggregatedRows = aggregateDealerStockRows(rows);
+  const partNumbers = Array.from(new Set(aggregatedRows
     .map((row) => normalizePartNumber(row.normalizedPartNumber || row.partNumber || row.partNo || row.part))
     .filter(Boolean)));
   const priceByPart = partNumbers.length ? await getPricesFromPartMaster(partNumbers, dealerCode) : new Map();
 
-  const pricedRows = rows.map((row) => {
+  const pricedRows = aggregatedRows.map((row) => {
     const partNumber = normalizePartNumber(row.normalizedPartNumber || row.partNumber || row.partNo || row.part);
     const price = savedAuditPrice(row, priceByPart.get(partNumber) || null);
     return { ...row, dlc: price?.dlc ?? null, mrp: price?.mrp ?? null, actualQuantity: 0, uploadedStockPresent: true };
@@ -1107,7 +1109,7 @@ async function dashboardDealerStockSummary(filter = {}) {
   const valuationSummary = summarizeAuditValuation(pricedRows);
 
   return {
-    partLineCount: rows.length,
+    partLineCount: aggregatedRows.length,
     dmsStockQty: valuationSummary.totalSystemQty,
     stockValue: valuationSummary.totalDmsDlcValue,
     missingPriceLineCount: valuationSummary.dmsPriceMissingParts,
