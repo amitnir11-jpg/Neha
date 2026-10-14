@@ -3,6 +3,27 @@ import 'package:daksh_mobile_scanner/utils/scan_parser.dart';
 import 'package:daksh_mobile_scanner/models/scan_record.dart';
 
 void main() {
+  test('scanner guard rejects plain parts even with a decoder format', () {
+    for (final value in ['20K211S', '20K411S', '41241AAN410S']) {
+      for (final format in ['UNKNOWN', 'code128', 'qrCode']) {
+        expect(isSupportedScannerSequence(value, format), isFalse);
+      }
+    }
+    expect(isSupportedScannerSequence('D/TEST/UPI/PART/BAD/PRICE/A/1/G/000/00', 'qrCode'), isFalse);
+  });
+  test('offline scanner guard preserves Hero formats, padding and quantities', () {
+    for (final value in ['77238KTC900ZCS/G3122000021001', '61108AACH40ZCS/D3533000166001']) {
+      expect(isSupportedScannerSequence(value, 'code128'), isTrue);
+    }
+    for (final qty in [1, 2, 4, 5, 10, 20]) {
+      final raw = 'D/TEST0000000002/TESTUPI00002/12395AANB00S /${qty.toString().padLeft(6, '0')}/0000010.00/AAA/1/G/000/00';
+      expect(isSupportedScannerSequence(raw, 'qrCode'), isTrue);
+    }
+    expect(isSupportedScannerSequence('4006381333931', 'UNKNOWN'), isTrue);
+    expect(isSupportedScannerSequence('4006381333932', 'ean13'), isFalse);
+    expect(isSupportedScannerSequence('ABC12345', 'code128'), isTrue);
+    expect(isSupportedScannerSequence('{"partNumber":"20K211S","qty":4}', 'qrCode'), isTrue);
+  });
   test('a held SKU label cannot keep adding pieces as camera time passes', () {
     var time = DateTime.utc(2026);
     final guard = CameraFrameGuard(clock: () => time);

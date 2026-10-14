@@ -22,7 +22,7 @@
     "test:smart-search": "node --test test/smart-part-search.test.js",
     "test:smart-search:acceptance": "node scripts/smart-part-search-acceptance.js",
     "test:smart-search:browser": "node scripts/smart-part-search-browser-check.js",
-    "test:camera": "node --test test/camera-code-parser.test.js test/camera-decoder.test.js test/camera-recovery.test.js test/sku-barcode.test.js test/upi-and-manual-bin.test.js",
+    "test:camera": "node --test test/camera-code-parser.test.js test/camera-decoder.test.js test/camera-recovery.test.js test/scanner-sequence-validation.test.js test/sku-barcode.test.js test/upi-and-manual-bin.test.js",
     "test:catalogue-upload": "node scripts/catalogue-upload-check.js",
     "test:local-parts-browser": "node scripts/local-parts-browser-smoke.js",
     "license:status": "node scripts/license-status.js",

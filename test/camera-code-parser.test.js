@@ -141,13 +141,13 @@ test('web camera debounce coalesces repeats but accepts a later legitimate frame
     storageGet: () => '', DEDUPE_MS: 1800, decodeResultText: result => result.rawValue, cameraState() {}, byId: () => null,
     console: { debug: (...args) => logs.push(args) }, processDecodedText: (...args) => captures.push(args) });
   vm.runInContext(source.slice(source.indexOf('  function handleDecodeResult('), source.indexOf('  async function processDecodedText(')), context);
-  context.handleDecodeResult({ rawValue: ' 32410ktc920s\r\n', format: 'code_128' });
+  context.handleDecodeResult({ rawValue: ' 32410ktc920s/G3223000065001\r\n', format: 'code_128' });
   now += 500;
-  context.handleDecodeResult({ rawValue: '32410KTC920S', format: 'code_128' });
+  context.handleDecodeResult({ rawValue: '32410KTC920S/G3223000065001', format: 'code_128' });
   now += 1500;
-  context.handleDecodeResult({ rawValue: '32410KTC920S', format: 'code_128' });
+  context.handleDecodeResult({ rawValue: '32410KTC920S/G3223000065001', format: 'code_128' });
   assert.equal(captures.length, 2);
-  assert.equal(captures[0][1].rawDecodedValue, ' 32410ktc920s\r\n');
+  assert.equal(captures[0][1].rawDecodedValue, ' 32410ktc920s/G3223000065001\r\n');
   assert.equal(captures[0][1].barcodeFormat, 'CODE_128');
   assert.equal(logs.length, 2);
 });

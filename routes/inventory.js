@@ -2563,6 +2563,12 @@ async function updateScanDetails(req, res) {
 async function saveScanRequest(req, res) {
   try {
     const rawScanInput = firstValue(req.body, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText']);
+    if (!isManualEntryMode(req.body, rawScanInput, '', 'manual')) {
+      const parser = require('../utils/scanParser');
+      const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(rawScanInput, req.body.barcodeFormat, req.body.dealerCode || req.activeDealerId, req.body.auditId);
+      if (!validation.valid) return res.status(422).json({ success: false, code: 'INVALID_SCANNER_SEQUENCE',
+        title: parser.invalidScannerSequenceTitle, message: parser.invalidScannerSequenceMessage, reason: validation.reason });
+    }
     scanDebug('[MANUAL SCAN] request received', {
       bodyKeys: Object.keys(req.body || {}).slice(0, 30),
       partNumber: req.body.partNumber || req.body.partNo || req.body.part || '',
@@ -3416,6 +3422,12 @@ async function updateScanDetails(req, res) {
 async function saveScanRequest(req, res) {
   try {
     const rawScanInput = firstValue(req.body, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText']);
+    if (!isManualEntryMode(req.body, rawScanInput, '', 'manual')) {
+      const parser = require('../utils/scanParser');
+      const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(rawScanInput, req.body.barcodeFormat, req.body.dealerCode || req.activeDealerId, req.body.auditId);
+      if (!validation.valid) return res.status(422).json({ success: false, code: 'INVALID_SCANNER_SEQUENCE',
+        title: parser.invalidScannerSequenceTitle, message: parser.invalidScannerSequenceMessage, reason: validation.reason });
+    }
     scanDebug('[MANUAL SCAN] request received', {
       bodyKeys: Object.keys(req.body || {}).slice(0, 30),
       partNumber: req.body.partNumber || req.body.partNo || req.body.part || '',
@@ -4021,6 +4033,10 @@ async function handleBluetoothScan(req, res) {
   const body = req.body || {};
   const deviceId = clean(body.deviceId || body.macAddress || body.device);
   const scanValue = clean(firstValue(body, ['scanValue', 'rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanText', 'raw']));
+  const parser = require('../utils/scanParser');
+  const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(scanValue, body.barcodeFormat, body.dealerCode || req.activeDealerId, body.auditId);
+  if (!validation.valid) return res.status(422).json({ success: false, code: 'INVALID_SCANNER_SEQUENCE',
+    title: parser.invalidScannerSequenceTitle, message: parser.invalidScannerSequenceMessage, reason: validation.reason });
   const transactionId = bluetoothTransactionId(body, deviceId);
   const scanTime = new Date();
 
@@ -4564,6 +4580,16 @@ router.post('/sync', auth.requireAuth, async (req, res) => {
     for (const item of incoming) {
       try {
         const rawScanInput = firstValue(item, ['rawScan', 'rawScanString', 'rawBarcode', 'rawScanValue', 'barcode', 'barcodeValue', 'scanValue', 'scanText', 'raw']);
+        if (!isManualEntryMode(item, rawScanInput, '', 'mobile')) {
+          const parser = require('../utils/scanParser');
+          const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(rawScanInput, item.barcodeFormat || item.source?.barcodeFormat, item.dealerCode || req.body.dealerCode, item.auditId);
+          if (!validation.valid) {
+            failed.push({ uniqueScanId: String(item.uniqueScanId || item.scanId || ''),
+              code: 'INVALID_SCANNER_SEQUENCE', title: parser.invalidScannerSequenceTitle,
+              message: parser.invalidScannerSequenceMessage, reason: validation.reason, item });
+            continue;
+          }
+        }
         const parsed = parseRawScan(rawScanInput || item.part);
         const part = upper(parsed.part || firstValue(item, ['part', 'partNo', 'partNumber', 'sku', 'itemCode']));
         const normalizedPartNumber = normalizePartNumber(part);
@@ -4831,6 +4857,12 @@ router.post('/sync', auth.requireAuth, async (req, res) => {
       await emitScanUpdate(req, saved[saved.length - 1]);
     }
 
+    if (incoming.length && failed.length === incoming.length && failed.every(row => row.code === 'INVALID_SCANNER_SEQUENCE')) {
+      return res.status(422).json({ success: false, code: 'INVALID_SCANNER_SEQUENCE',
+        title: require('../utils/scanParser').invalidScannerSequenceTitle,
+        message: require('../utils/scanParser').invalidScannerSequenceMessage,
+        syncedNow: 0, failed: failed.length, failedItems: failed, skippedDuplicates: 0, verificationResults });
+    }
     const [pending, totalSynced] = await Promise.all([
       Inventory.countDocuments({ synced: false }),
       Inventory.countDocuments({ synced: true })
@@ -4880,7 +4912,29 @@ router.get('/part-summary', auth.requireAuth, async (req, res) => {
 router.get('/resolve-code', auth.requireAuth, async (req, res) => {
   try {
     const dealerCode = normalizeDealerCode(req.query.dealerCode);
+    const parser = require('../utils/scanParser');
+    const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(
+      req.query.rawValue,
+      req.query.barcodeFormat, dealerCode, req.query.auditId
+    );
+    if (!validation.valid && req.query.entryMode !== 'manual') {
+      return res.status(422).json({
+        success: false,
+        code: 'INVALID_SCANNER_SEQUENCE',
+        title: parser.invalidScannerSequenceTitle,
+        message: parser.invalidScannerSequenceMessage,
+        rawValue: String(req.query.rawValue || ''),
+        reason: validation.reason
+      });
+    }
     const audit = await getActiveAudit({ dealerCode });
+    if (validation.existingIdentity) {
+      const existing = validation.existingIdentity;
+      return res.json({ success: true, parsedCode: { ...validation.parsed, success: true,
+        type: 'STORED_UPI', identityKind: 'UNIQUE_UPI', hasUniqueItemId: true,
+        partNumber: existing.normalizedPartNumber || existing.partNumber || existing.part,
+        upi: validation.parsed.normalizedValue }, binOptions: [] });
+    }
     const decoded = await require('../services/ScannedCodeService').resolveScannedCode(req.query.rawValue, req.query.barcodeFormat, dealerCode);
     if (!decoded.success) return res.status(422).json({ success: false, message: decoded.message,
       rawValue: decoded.rawValue, extractedPartNumber: decoded.partNumber || '', reason: decoded.reason,

@@ -1,5 +1,13 @@
 # Scan flow and shared stock calculation validation
 
+## Scanner sequence validation — 2026-10-14
+
+Desktop scans, mobile real-time scans, Bluetooth, and offline sync validate scanner sequences before inventory or bin processing. Supported Hero package/QR and structured JSON/query/key-value formats continue through the existing shared parser. Direct numeric EAN/UPC identifiers require a valid checksum. Other supported 1D identifiers carry decoder symbology metadata; bare Hero part-number structures remain rejected even if that metadata is supplied. Standalone saved UPI identifiers require a read-only proof of their existing identity in the same dealer/audit. No raw part-number fallback can create stock. Part-only scanner requests with no raw sequence are also rejected. Rejections return `INVALID_SCANNER_SEQUENCE` and do not create inventory/history or stock movements. Entirely invalid sync batches stop before database writes.
+
+Existing Hero package labels, fixed and generic QR quantity parsing, and padded QR payloads continue through the shared parser unchanged. Manual entry and manual offline records retain their existing part-master validation path; manual source-bin resolution explicitly requests manual mode. The Flutter capture guard rejects invalid input before adding a local history/offline record, while the backend remains authoritative for part, quantity, and UPI mapping. Regression coverage is in `test/scanner-sequence-validation.test.js`, run by `npm run test:camera`, and the mobile parser tests.
+
+The isolated PostgreSQL integration suite verifies all four movement modes, supported Hero 1D labels, numeric EAN-13, manual entry, duplicate UPI/pack protection, existing standalone UPI outward movement, quantities up to 100, offline sync, and consistent stock/report totals. Rejected scanner submissions leave inventory, bin and audit receipts identical to their pre-request snapshots. Test cleanup only removes records created under that run's random fixture dealer in the guarded local database. This fix performs no historical data migration.
+
 ## Mobile Web bin registration and decoder recovery — 2026-10-08
 
 Mobile Web now registers a missing dealer bin when the operator enters it and uses Set Bin or confirms the field. This addresses the reported A1/A5 rejection when those bins had not been created in Bin Master. `POST /api/scans/set-bin` runs through authenticated dealer/audit access checks and a serializable transaction, returns an existing active bin unchanged, creates a missing bin, and rejects inactive bins. Concurrent requests create one record. Manual-entry bin confirmation uses the same operation; typing partial bin codes does not create records.

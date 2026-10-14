@@ -5305,17 +5305,6 @@
   }
 
   async function submitScan(form, options = {}) {
-    if (form.id === 'barcodeScanForm' && !['OUTWARD', 'FITTED', 'VERIFICATION'].includes(String((options.payload || formObject(form)).type || '').toUpperCase()) && !String((options.payload || formObject(form)).binLocation || '').trim()) {
-      toast('Please select or scan Source Bin Location first.', 'error');
-      $('#barcodeBinLocation')?.focus();
-      return;
-    }
-    if (form.id === 'manualScanForm' && $('[name="type"]', form)?.value !== 'VERIFICATION'
-      && !String($('[name="bin"]', form)?.value || '').trim()) {
-      toast('Enter Source Bin Location first.', 'error');
-      $('[name="bin"]', form)?.focus();
-      return;
-    }
     const payload = options.payload || formObject(form);
     const isBarcodeForm = form.id === 'barcodeScanForm';
     payload.deviceId = payload.deviceId || ensureDeviceId();
@@ -5334,6 +5323,41 @@
     normalized.bin = normalized.binLocation;
     normalized.source = isBarcodeForm ? 'barcode' : (normalized.source || 'manual');
     normalized.scanMode = isBarcodeForm ? 'Barcode/Web Scan' : (normalized.scanMode || 'Manual');
+    if (isBarcodeForm) {
+      const rawValue = normalized.rawScan || normalized.rawScanString || normalized.rawBarcode || '';
+      let validation = window.DakshScanParser?.validateScannerSequence(
+        rawValue,
+        normalized.barcodeFormat || payload.source?.barcodeFormat
+      );
+      if (validation?.requiresIdentityLookup) {
+        try {
+          const resolved = await api(`/api/scans/resolve-code?${new URLSearchParams({
+            dealerCode: normalized.dealerCode, rawValue, barcodeFormat: 'UNKNOWN' })}`);
+          validation = { valid: resolved.success === true };
+        } catch (_) { validation = { valid: false }; }
+      }
+      if (!validation?.valid) {
+        const parser = window.DakshScanParser;
+        const title = parser?.invalidScannerSequenceTitle || 'Invalid Barcode / QR Sequence';
+        const message = parser?.invalidScannerSequenceMessage || 'Only valid 1D barcode or 2D QR sequences are allowed here. To enter a part number, use Manual Entry, Local Part, or Excel Stock Upload.';
+        playScanTone('error');
+        toast(`${title}: ${message}`, 'error');
+        setLivePill('barcodeReadyStatus', 'Rejected - Ready', false);
+        resetBarcodeScanFields(form, normalized, options.expectedRaw);
+        setTimeout(focusNextBarcodeField, 700);
+        return;
+      }
+    }
+    if (isBarcodeForm && !['OUTWARD', 'FITTED', 'VERIFICATION'].includes(normalized.scanType) && !String(normalized.binLocation || '').trim()) {
+      toast('Please select or scan Source Bin Location first.', 'error');
+      $('#barcodeBinLocation')?.focus();
+      return;
+    }
+    if (!isBarcodeForm && normalized.scanType !== 'VERIFICATION' && !String(normalized.binLocation || '').trim()) {
+      toast('Enter Source Bin Location first.', 'error');
+      $('[name="bin"]', form)?.focus();
+      return;
+    }
     if (normalized.scanType === 'VERIFICATION') {
       if (!validPartText(normalized.partNumber || normalized.part)) {
         playScanTone('error');
@@ -12932,7 +12956,7 @@
       $('#saveBarcodeManualScan').disabled = true;
       try {
         const resolved = await api(`/api/scans/resolve-code?${new URLSearchParams({ dealerCode: form.elements.dealerCode.value,
-          rawValue: form.elements.part.value.trim(), barcodeFormat: 'UNKNOWN' })}`);
+          rawValue: form.elements.part.value.trim(), barcodeFormat: 'UNKNOWN', entryMode: 'manual' })}`);
         const bins = (resolved.binOptions || []).filter(bin => Number(bin.availableQty) >= Number(form.elements.qty.value));
         if (!bins.length) {
           toast('No eligible physical stock for this quantity. Scan its unique UPI if the stock is individually tracked.', 'error');
@@ -13046,6 +13070,16 @@
     input.autoSaveTimer = setTimeout(() => {
       const capturedRaw = String(input.value || '').trim();
       if (!capturedRaw || acceptBarcodeBinQr(capturedRaw)) return;
+      const parser = window.DakshScanParser;
+      const validation = parser.validateScannerSequence(capturedRaw);
+      if (!validation.valid && !validation.requiresIdentityLookup) {
+        playScanTone('error');
+        toast(`${parser.invalidScannerSequenceTitle}: ${parser.invalidScannerSequenceMessage}`, 'error');
+        setLivePill('barcodeReadyStatus', 'Rejected - Ready', false);
+        resetBarcodeScanFields(form, {}, capturedRaw);
+        focusNextBarcodeField();
+        return;
+      }
       const bin = normalizePartText(form.elements.binLocation.value || '');
       if (!bin && !['OUTWARD', 'FITTED', 'VERIFICATION'].includes(form.elements.type.value)) {
         playScanTone('error');

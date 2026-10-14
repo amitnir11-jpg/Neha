@@ -113,6 +113,44 @@ test('PostgreSQL save pipeline preserves packs across clients, rejects duplicate
     const offline = await getPrismaClient().inventory.findFirst({ where: { dealerCode, uniqueScanId: `${dealerCode}-OFFLINE` } });
     assert.equal(offline.data.quantity, 20);
     assert.equal(offline.data.rawBarcode, syncRaw);
+
+    // Validation failures must leave complete persisted receipts untouched.
+    const beforeInvalid = await Inventory.find({ dealerCode, auditId }).lean();
+    const beforeBins = await Bin.find({ dealerCode }).lean();
+    const beforeAudit = await Audit.find({ dealerCode }).lean();
+    for (const type of ['INWARD', 'OUTWARD', 'FITTED', 'DAMAGE']) {
+      for (const raw of ['20K211S', '20K411S', '41241AAN410S', 'unsupported/payload', genuine.replace('000005', 'BAD')]) {
+        const rejected = await save(raw, { scanType: type, source: 'barcode', cameraDecoded: true, barcodeFormat: 'CODE_128' });
+        assert.equal(rejected.code, 'INVALID_SCANNER_SEQUENCE', JSON.stringify(rejected));
+        assert.equal(rejected.insertedCount, 0);
+      }
+    }
+    assert.deepEqual(await Inventory.find({ dealerCode, auditId }).lean(), beforeInvalid);
+    assert.deepEqual(await Bin.find({ dealerCode }).lean(), beforeBins);
+    assert.deepEqual(await Audit.find({ dealerCode }).lean(), beforeAudit);
+
+    assert.equal((await save('TESTUPI0', { source: 'barcode' })).status, 'duplicate');
+    const storedUpiOutward = await save('TESTUPI0', { source: 'barcode', scanType: 'OUTWARD', binLocation: '' });
+    assert.equal(storedUpiOutward.success, true, JSON.stringify(storedUpiOutward));
+    assert.equal(storedUpiOutward.scan.quantity, 1);
+
+    for (const partNumber of ['20K211S', '77238KTC900ZCS', '61108AACH40ZCS', '4006381333931']) {
+      await MasterCatalogue.create({ dealerCode, partNumber, normalizedPartNumber: partNumber,
+        mrp: 12, dlc: 8, partDescription: 'Scanner validation fixture', activeStatus: true });
+    }
+    const manual = await save('', { source: 'manual', partNumber: '20K211S', quantity: 3 });
+    assert.equal(manual.success, true, JSON.stringify(manual));
+    assert.equal(manual.scan.quantity, 3);
+    assert.equal(calculatePartStock(await Inventory.find({ dealerCode, auditId }).lean(), '20K211S').availableQty, 3);
+    for (const raw of ['77238KTC900ZCS/G3122000021001', '61108AACH40ZCS/D3533000166001']) {
+      const result = await save(raw, { source: 'barcode' });
+      assert.equal(result.success, true, JSON.stringify(result));
+      assert.equal(result.scan.quantity, 1);
+      assert.equal((await save(raw, { source: 'barcode' })).status, 'duplicate');
+    }
+    const numeric = await save('4006381333931', { source: 'mobile', cameraDecoded: true, barcodeFormat: 'EAN_13' });
+    assert.equal(numeric.success, true, JSON.stringify(numeric));
+    assert.equal(numeric.scan.quantity, 1);
   } finally {
     // All cleanup is restricted to this random dealer in the guarded test DB.
     for (const model of [Inventory, MasterCatalogue, Bin, Audit, Dealer]) await model.deleteMany({ dealerCode });

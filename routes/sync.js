@@ -19,6 +19,7 @@ const MasterCatalogue = require('../models/MasterCatalogue');
 const { cataloguePayload } = require('../utils/catalogue');
 const { makeQrFingerprint, isDuplicateKeyError } = require('../utils/scanIdentity');
 const masterValidation = require('../utils/masterValidation');
+const scanParser = require('../utils/scanParser');
 const { dateDebugPayload, formatIstDateTime, validDate: validTimestamp } = require('../utils/time');
 const { decorateScanValue, money } = require('../utils/inventoryValueEngine');
 const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
@@ -1742,6 +1743,35 @@ async function saveNormalizedScan(scan, req, options = {}) {
       scanId: scan.uniqueScanId
     }));
   };
+  const scannerRawValue = clean(scan.rawScanString);
+  if (!isManualEntry(scan) && !options.scanHistoryOutward
+      && (scannerRawValue || clean(scan.partNumber || scan.part))) {
+    const validation = scannerRawValue
+      ? await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(
+        scan.rawScanString,
+        scan.source?.barcodeFormat || scan.barcodeFormat,
+        scan.dealerCode, scan.auditId
+      )
+      : { valid: false, reason: 'EMPTY_SCAN' };
+    if (!validation.valid) {
+      logSync('scan rejected', {
+        reason: validation.reason,
+        partNumber: scan.partNumber,
+        scanId: scan.uniqueScanId
+      });
+      logPerf('invalid-scanner-sequence');
+      return {
+        status: 'failed',
+        httpStatus: 422,
+        code: 'INVALID_SCANNER_SEQUENCE',
+        title: scanParser.invalidScannerSequenceTitle,
+        message: scanParser.invalidScannerSequenceMessage,
+        scan,
+        error: scanParser.invalidScannerSequenceMessage,
+        reason: validation.reason
+      };
+    }
+  }
   if (scan.barcodeError) {
     logSync('scan rejected', {
       reason: scan.barcodeError,
@@ -2483,6 +2513,24 @@ async function pushHandler(req, res) {
     }
 
     const incomingRaw = incomingScansFromBody(body);
+    // Entirely invalid scanner batches stop before audit/device/log writes.
+    // Mixed batches retain per-row acknowledgements and valid manual entries.
+    const invalidSequences = await Promise.all(incomingRaw.map(async (item, index) => {
+      const scan = normalizeScan(item);
+      if (isManualEntry(scan)) return null;
+      const validation = await require('../services/ScannerSequenceValidationService').validateScannerSequenceForStock(
+        scan.rawScanString, item.barcodeFormat, scan.dealerCode || body.dealerCode, scan.auditId || body.auditId);
+      return validation.valid ? null : { row: index + 1, scanId: scan.uniqueScanId,
+        clientScanId: scan.clientScanId, clientSyncKey: scan.clientSyncKey, localId: item.localId || '',
+        status: 'failed', code: 'INVALID_SCANNER_SEQUENCE', reason: validation.reason,
+        errorMessage: scanParser.invalidScannerSequenceMessage };
+    }));
+    if (incomingRaw.length && invalidSequences.every(Boolean)) {
+      return res.status(422).json({ success: false, code: 'INVALID_SCANNER_SEQUENCE',
+        title: scanParser.invalidScannerSequenceTitle, message: scanParser.invalidScannerSequenceMessage,
+        receivedCount: incomingRaw.length, insertedCount: 0, syncedCount: 0,
+        failedCount: incomingRaw.length, failedRows: invalidSequences, logs: invalidSequences });
+    }
     markBatchPerf('decodeAndNormalizeRequest');
     logSync('server request received', {
       route: req.originalUrl,
@@ -2638,6 +2686,7 @@ async function pushHandler(req, res) {
       const normalized = normalizeScan(item);
       return item.cameraDecoded === true || Boolean(duplicatePolicy.uniqueUpiIdentityToken(normalized))
         || (!isManualEntry(normalized) && Boolean(normalized.rawScanString))
+        || (!isManualEntry(normalized) && Boolean(normalized.partNumber))
         || (['OUTWARD', 'FITTED'].includes(normalized.scanType) && Boolean(upiCodeValue(normalized)));
     });
     if (hasUniqueUpiMovement) {
