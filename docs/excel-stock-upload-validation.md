@@ -36,6 +36,9 @@ Run `npm run test:excel-stock-upload` for local workflow coverage:
 - Selecting a sheet waits for an explicit upload click and refreshes history.
 - Re-uploading a wrong pending sheet preserves its prior attempt in history.
 - Correcting part number, quantity, and bin location updates accepted/rejected counts.
+- Partial confirmation and subsequent corrections keep saved accepted/rejected counts consistent with history; uploaded quantity counts only committed stock.
 - Duplicate prevention after stock commit and re-upload after full reversal.
 
-These tests use simulated database/model dependencies and execute the upload route handlers and browser rendering logic. They do not establish live PostgreSQL migration, concurrent transaction, or deployed-browser acceptance. No database connection is configured in the local workspace. The full project test command and build passed before the final upload fixes; the focused upload and related stock/dealer suites passed after those fixes.
+The upload suite also runs as part of `npm test`. These tests use simulated database/model dependencies and execute the upload route handlers and browser rendering logic. They do not establish live PostgreSQL migration, concurrent transaction, or deployed-browser acceptance. No database connection is configured in the local workspace.
+
+Local verification on October 13, 2026: all 17 upload tests, the full project test command, and the build passed. The existing Playwright checks passed for upload history interactions and desktop/mobile row layouts, including correction suggestions, column resizing/reordering, and saved column preferences. Database-dependent tests were skipped where no database connection was configured; deployment and live migration verification remain unverified.

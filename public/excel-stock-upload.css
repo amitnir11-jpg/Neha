@@ -34,6 +34,14 @@
 .excel-stock-panel #excelAcceptedRows { color: #00a64d; }
 .excel-stock-panel #excelRejectedCount { color: #ff2525; }
 .excel-stock-panel .excel-upload-summary span { color: #455063; font-size: 10px; margin-top: 4px; }
+.excel-stock-panel .excel-validation-breakdown,
+.excel-stock-panel .excel-approval-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 16px; }
+.excel-stock-panel .excel-validation-breakdown span,
+.excel-stock-panel .excel-approval-summary span { border: 1px solid #e3e9f1; border-radius: 7px; padding: 8px 10px; color: #526579; font-size: 11px; }
+.excel-stock-panel .excel-validation-breakdown strong,
+.excel-stock-panel .excel-approval-summary b { display: block; color: #142d50; margin-top: 3px; font-size: 14px; }
+.excel-stock-panel .excel-approval-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px; border: 1px solid #dce8f4; border-radius: 9px; background: #f8fbff; }
+.excel-stock-panel .excel-approval-summary > strong { grid-column: 1 / -1; font-size: 13px; color: #173f68; }
 .excel-details-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .excel-details-head h4 { font-size: 16px; font-weight: 600; margin: 0; }
 .excel-details-head p { font-size: 10px; color: #465468; margin: 6px 0 0; }
@@ -91,6 +99,8 @@
   .excel-filter-tabs button { flex: 1; }
   .excel-stock-panel .excel-stock-table { min-width: 460px; }
   .excel-stock-panel .excel-upload-summary span { font-size: 9px; }
+  .excel-stock-panel .excel-validation-breakdown,
+  .excel-stock-panel .excel-approval-summary { grid-template-columns: 1fr; }
 }
 
 /* Keep this panel compact within the shared legacy control and table styles. */

@@ -232,6 +232,7 @@
               <div><strong>Manual</strong><span class="dashboard-distribution-track"><i id="dashboardDistributionManualBar"></i></span><em id="dashboardDistributionManual">0 (0%)</em></div>
               <div><strong>Damage</strong><span class="dashboard-distribution-track"><i id="dashboardDistributionDamageBar"></i></span><em id="dashboardDistributionDamage">0 (0%)</em></div>
               <div><strong>Fitted</strong><span class="dashboard-distribution-track"><i id="dashboardDistributionFittedBar"></i></span><em id="dashboardDistributionFitted">0 (0%)</em></div>
+              <div><strong>Needs review</strong><span class="dashboard-distribution-track"><i id="dashboardDistributionNeedsReviewBar"></i></span><em id="dashboardDistributionNeedsReview">0 (0%)</em></div>
             </div>
           </section>
 
@@ -458,17 +459,19 @@
                   <div id="localPartEntryTab" class="manual-entry-tab-panel local-part-tab-panel" role="tabpanel" aria-labelledby="localPartTab" hidden></div>
                   <div id="excelStockUploadPanel" class="manual-entry-tab-panel excel-stock-panel" role="tabpanel" aria-labelledby="excelStockUploadTab" hidden>
                     <div class="excel-stock-head"><div><h3>Excel Stock Upload</h3><p id="excelStockDealer">Select a dealer to start</p></div><span id="excelReviewStatus" class="excel-badge pending">Pending review</span></div>
-                    <div class="excel-upload-actions"><label class="btn excel-select-file" for="excelStockFile"><span aria-hidden="true">↥</span> Select Excel</label><input id="excelStockFile" type="file" accept=".xlsx" hidden><a class="btn light" href="/api/excel-stock-upload/template"><span aria-hidden="true">↓</span> Template</a><button id="excelUploadHistoryBtn" class="btn light" type="button"><span aria-hidden="true">↶</span> History</button><button id="excelUploadFileBtn" class="btn primary" type="button" disabled hidden>Upload Sheet</button><span id="excelSelectedFileName" hidden>No sheet selected</span></div>
+                    <div class="excel-upload-actions"><label class="btn excel-select-file" for="excelStockFile"><span aria-hidden="true">↥</span> Select Excel / CSV</label><input id="excelStockFile" type="file" accept=".xlsx,.xls,.csv" hidden><a class="btn light" href="/api/excel-stock-upload/template"><span aria-hidden="true">↓</span> Template</a><button id="excelUploadHistoryBtn" class="btn light" type="button"><span aria-hidden="true">↶</span> History</button><button id="excelUploadFileBtn" class="btn primary" type="button" disabled hidden>Validate &amp; Preview Stock</button><span id="excelSelectedFileName" hidden>No sheet selected</span></div>
                     <p id="excelStockMessage" class="form-message" aria-live="polite" hidden></p>
                     <div id="excelStockWorkspace" hidden>
-                      <div class="excel-upload-summary"><div><strong id="excelTotalRows">0</strong><span>Total Rows</span></div><div><strong id="excelAcceptedRows">0</strong><span>Accepted</span></div><div><strong id="excelRejectedCount">0</strong><span>Rejected</span></div><div><strong id="excelAcceptedQty">0</strong><span>Accepted Qty</span></div></div>
+                      <div class="excel-upload-summary"><div><strong id="excelTotalRows">0</strong><span>Total Uploaded</span></div><div><strong id="excelAcceptedRows">0</strong><span>Valid Rows</span></div><div><strong id="excelInvalidPartsCount">0</strong><span>Invalid Parts</span></div><div><strong id="excelMissingPricesCount">0</strong><span>Missing Prices</span></div></div>
+                      <div class="excel-validation-breakdown" aria-label="Upload validation breakdown"><span>Missing DLC <strong id="excelMissingDlcCount">0</strong></span><span>Missing MRP <strong id="excelMissingMrpCount">0</strong></span><span>Both prices missing <strong id="excelBothPricesCount">0</strong></span><span>Duplicate records <strong id="excelDuplicateCount">0</strong></span><span>Total affected quantity <strong id="excelAffectedQty">0</strong></span></div>
                       <div class="excel-details-head"><div><h4>Uploaded Part Details</h4><p id="excelBatchLabel">Batch</p></div><span id="excelStockStatus" class="excel-badge pending">Not uploaded to stock</span></div>
-                      <div class="excel-stock-toolbar"><div class="excel-filter-tabs" role="tablist" aria-label="Filter uploaded parts"><button id="excelFilterAll" type="button" role="tab" aria-selected="true" class="active" data-excel-filter="ALL">All (0)</button><button type="button" role="tab" aria-selected="false" data-excel-filter="ACCEPTED">Accepted</button><button type="button" role="tab" aria-selected="false" data-excel-filter="REJECTED">Rejected</button></div><input id="excelStockSearch" type="search" placeholder="Search part or bin..." aria-label="Search uploaded parts"><select id="excelStockFilter" hidden aria-hidden="true"><option value="ALL">All rows</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option></select></div>
-                      <div class="excel-table-wrap"><table id="excelUploadPartsTable" class="excel-stock-table" aria-label="Uploaded parts. Drag headings to reorder columns; drag column edges to resize."><thead><tr><th>#</th><th>Part Number</th><th>Bin</th><th>Qty</th><th>Status</th><th>Action</th></tr></thead><tbody id="excelStockRows"></tbody></table></div>
-                      <div class="excel-stock-pager"><label>Rows/page <select id="excelRowsPerPage"><option>10</option><option>25</option><option selected>50</option></select></label><div><button id="excelPrevPage" class="btn light" type="button">Previous</button><span id="excelPageLabel">Showing 0 of 0</span><button id="excelNextPage" class="btn light" type="button">Next</button></div></div>
+                      <div class="excel-stock-toolbar"><div class="excel-filter-tabs" role="tablist" aria-label="Filter uploaded parts"><button id="excelFilterAll" type="button" role="tab" aria-selected="true" class="active" data-excel-filter="ALL">All (0)</button><button type="button" role="tab" data-excel-filter="INVALID_PART_NUMBER">Invalid parts</button><button type="button" role="tab" data-excel-filter="DLC_MISSING">Missing DLC</button><button type="button" role="tab" data-excel-filter="MRP_MISSING">Missing MRP</button><button type="button" role="tab" data-excel-filter="BOTH_PRICES_MISSING">Both missing</button><button type="button" role="tab" data-excel-filter="DUPLICATE_RECORD">Duplicates</button></div><input id="excelStockSearch" type="search" placeholder="Search part or bin..." aria-label="Search uploaded parts"><select id="excelStockFilter" hidden aria-hidden="true"><option value="ALL">All rows</option><option value="INVALID_PART_NUMBER">Invalid parts</option><option value="DLC_MISSING">Missing DLC</option><option value="MRP_MISSING">Missing MRP</option><option value="BOTH_PRICES_MISSING">Both missing</option><option value="DUPLICATE_RECORD">Duplicates</option></select></div>
+                      <div class="excel-table-wrap"><table id="excelUploadPartsTable" class="excel-stock-table" aria-label="Invalid and missing-price uploaded parts"><thead><tr><th><input id="excelSelectAllExceptions" type="checkbox" aria-label="Select all filtered exceptions"></th><th>Part Number</th><th>Qty</th><th>Bin</th><th>Issue</th><th>Edit</th></tr></thead><tbody id="excelStockRows"></tbody></table></div>
+                      <div class="excel-stock-pager"><label>Rows/page <select id="excelRowsPerPage"><option>25</option><option selected>50</option><option>100</option></select></label><div><button id="excelPrevPage" class="btn light" type="button">Previous</button><span id="excelPageLabel">Showing 0 of 0</span><button id="excelNextPage" class="btn light" type="button">Next</button></div></div>
                       <div class="excel-table-hint"><span>Drag headings to move columns. Drag column edges to resize.</span><button type="button" class="btn light" data-excel-reset-columns>Reset columns</button></div>
-                      <div class="excel-review-tools"><label id="excelSelectPageLabel" hidden><input id="excelSelectPage" type="checkbox"> Verify valid parts on this page</label><button id="excelRejectedDownload" class="btn light" type="button" hidden>Download Rejected Parts Excel</button></div>
-                      <div class="excel-confirm-bar"><span>Review parts, then submit validated stock.</span><button id="excelConfirmUpload" class="btn primary" type="button"><span aria-hidden="true">ⓥ</span> Submit Upload</button></div>
+                      <div class="excel-review-tools"><button id="excelExceptionsDownload" class="btn light" type="button">Download All Exceptions (.xlsx)</button><button id="excelSelectedExceptionsDownload" class="btn light" type="button" disabled>Download Selected Exceptions (.xlsx)</button></div>
+                      <div class="excel-approval-summary"><strong>Upload Approval Summary</strong><span>Valid rows available for upload <b id="excelApprovedRows">0</b></span><span>Exception rows held for correction <b id="excelExceptionRows">0</b></span><span>Approved stock quantity <b id="excelApprovedQty">0</b></span><span>Pending exception quantity <b id="excelPendingQty">0</b></span><span>Validated DLC value <b id="excelValidatedDlc">₹ 0.00</b></span><span>Validated MRP value <b id="excelValidatedMrp">₹ 0.00</b></span></div>
+                      <div class="excel-confirm-bar"><span>Only approved valid records are saved. Exceptions remain pending in this batch.</span><button id="excelConfirmUpload" class="btn primary" type="button"><span aria-hidden="true">ⓥ</span> Confirm &amp; Save Valid Stock</button></div>
                     </div>
                     <section id="excelHistoryPanel" class="excel-history-panel" aria-label="Upload History" hidden>
                       <div class="excel-history-heading"><div class="excel-history-title"><span class="excel-history-title-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 8V3 M4 8h5 M4 8a8 8 0 1 1-1 8 M12 7v5l3 2"/></svg></span><div><h4>Upload History</h4><p>View, open, edit, reverse or delete uploaded stock files</p></div></div><label class="excel-history-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="excelHistorySearch" type="search" placeholder="Search file, batch ID or date..." aria-label="Search upload history"></label></div>
@@ -486,7 +489,7 @@
                       </tr></thead><tbody id="excelHistoryRows"></tbody></table></div>
                       <div class="excel-history-pager"><label>Rows per page <select id="excelHistoryPageSize"><option selected>5</option><option>10</option><option>25</option><option>50</option></select></label><div><span id="excelHistoryPageLabel">Showing 0–0 of 0</span><button id="excelHistoryPrev" type="button" title="Previous page" aria-label="Previous history page">‹</button><span id="excelHistoryPageNumber">1</span><button id="excelHistoryNext" type="button" title="Next page" aria-label="Next history page">›</button></div></div>
                     </section>
-                    <dialog id="excelEditDialog"><form method="dialog" id="excelEditForm"><h3 id="excelEditTitle">Edit Stock Row</h3><label>Part Number<input id="excelEditPart" required></label><label>Qty<input id="excelEditQty" type="number" min="1" step="1" required></label><label>Bin Location<input id="excelEditBin" required></label><p id="excelEditStatus" aria-live="polite"></p><div class="excel-dialog-actions"><button value="cancel" class="btn light">Cancel</button><button id="excelSaveCorrection" value="save" class="btn primary">Save &amp; Revalidate</button></div></form></dialog>
+                    <dialog id="excelEditDialog"><form method="dialog" id="excelEditForm"><h3 id="excelEditTitle">Edit Stock Row</h3><label>Part Number<input id="excelEditPart" list="excelMasterPartSuggestions" required autocomplete="off"></label><datalist id="excelMasterPartSuggestions"></datalist><label>Qty<input id="excelEditQty" type="number" min="1" step="1" required></label><label>Bin Location<input id="excelEditBin" required></label><p id="excelEditStatus" aria-live="polite"></p><div class="excel-dialog-actions"><button value="cancel" class="btn light">Cancel</button><button id="excelSaveCorrection" value="save" class="btn primary">Save &amp; Revalidate</button></div></form></dialog>
                   </div>
                 </section>
               </div>
@@ -871,8 +874,8 @@
               <h2>Upload Dealer Stock</h2>
               <div class="actions">
                 <button id="dealerStockTemplateDownloadBtn" class="btn light admin-only" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-reports"></use></svg><span>Download Template</span></button>
+                <button id="excelStockOpenReconBtn" class="btn light" type="button"><span>Validate Stock Upload</span></button>
                 <button id="reconPreviewBtn" class="btn light" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span>Preview Uploaded Stock</span></button>
-                <button id="reconStockExportBtn" class="btn light" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-reports"></use></svg><span>Export Uploaded Stock</span></button>
                 <button id="reconDeleteStockBtn" class="btn danger-soft" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-archive"></use></svg><span>Delete Old Dealer Stock</span></button>
                 <button id="reconReprocessBtn" class="btn light" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sync"></use></svg><span>Reprocess Reconciliation</span></button>
               </div>
@@ -884,7 +887,6 @@
             </form>
             <div id="dealerStockUploadMessage" class="form-message">Upload columns: Dealer Code, Part Number, Part Description, Dms Stock, Bin Loc 1, Bin Loc 2, Bin Loc 3. Drag headers to move columns and drag the header edge to resize them.</div>
             <div id="dealerStockErrorReport" class="stock-error-report" hidden></div>
-            <div id="reconPriceExceptions" class="stock-error-report" hidden></div>
             <div id="dealerStockPreviewPanel" class="table-wrap recon-stock-preview-wrap" hidden>
               <table id="dealerStockPreviewTable">
                 <thead><tr><th>Dealer Code</th><th>Part Number</th><th>Part Description</th><th>Dms Stock</th><th>Bin Loc 1</th><th>Bin Loc 2</th><th>Bin Loc 3</th></tr></thead>
@@ -900,7 +902,6 @@
                 <p>Clear comparison between uploaded DMS stock and physically scanned stock.</p>
               </div>
               <div class="recon-summary-meta">
-                <span>Selected Dealer: <strong id="reconSelectedDealer">Select Dealer</strong></span>
                 <span>Summary based on current uploaded dealer stock and scanned data</span>
                 <span>Last updated: <strong id="reconSummaryLastUpdated">-</strong></span>
               </div>
@@ -1830,7 +1831,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="/config.js"></script>
-  <script src="/js/scan-parser.js?v=20261010-qr-quantity-v2"></script>
+  <script src="/js/scan-parser.js?v=20261014-scanner-sequence-v1"></script>
   <script src="/js/runtime.js?v=20261010-qr-quantity-v2"></script>
   <script src="/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="/sku-bin-picker.css?v=20261008-sku-v10">
@@ -1840,7 +1841,7 @@
   <script src="/js/smart-part-search.js?v=20261011-smart-part-search-v1"></script>
   <script src="/js/excel-upload-table.js?v=20261012-adjustable-v1"></script>
   <script src="/js/excel-upload-history.js?v=20261012-compact-v1"></script>
-  <script src="/ui.js?v=20261012-audit-valuation-v1"></script>
+  <script src="/ui.js?v=20261014-quantity-bridge-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>
