@@ -229,7 +229,7 @@ test('bin-wise report uses central store and workshop balances for the golden se
   assert.equal(context.selectRows({ scans }, 'bin-wise-stock').reduce((sum, bin) => sum + bin.qty, 0), 1);
 });
 
-test('successful process response includes central part summary and complete bin breakdown', async () => {
+test('successful process response includes a part summary only when explicitly requested', async () => {
   const rows = [row('in1', 'INWARD', 'A1', { qty: 4, quantity: 4 }), row('out2', 'OUTWARD', 'A1'),
     row('fit3', 'FITTED', 'A1', { fittedQty: 1, status: 'FITTED_PENDING' }), row('damage4', 'DAMAGE', 'A1')];
   const context = vm.createContext({ module: { exports: {} }, process, performance, console,
@@ -241,12 +241,30 @@ test('successful process response includes central part summary and complete bin
     }
   });
   vm.runInContext(fs.readFileSync('services/ScanProcessingService.js', 'utf8'), context);
-  const result = await context.module.exports.processScan(rows.at(-1));
+  const result = await context.module.exports.processScan({ ...rows.at(-1), includePartSummary: true });
   assert.equal(result.success, true);
   assert.equal(result.partSummary.inwardQty, 4);
   assert.equal(result.partSummary.fittedQty, 1);
   assert.equal(result.partSummary.availableQty, 2);
   assert.equal(result.partSummary.binBreakdown[0].storeQty, 1);
+});
+
+test('normal process responses do not wait for a part-stock aggregation', async () => {
+  let summaryReads = 0;
+  const scan = row('in-fast', 'INWARD', 'A1');
+  const context = vm.createContext({ module: { exports: {} }, process, performance, console,
+    require: name => {
+      if (name === '../routes/sync') return { normalizeScan: input => input, saveNormalizedScan: async value => ({ status: 'synced', scan: value }) };
+      if (name === '../routes/inventory') return { publicScan: value => value };
+      if (name === './StockCalculationService') return { loadPartStock: async () => { summaryReads += 1; return {}; } };
+      throw new Error(`Unexpected dependency ${name}`);
+    }
+  });
+  vm.runInContext(fs.readFileSync('services/ScanProcessingService.js', 'utf8'), context);
+  const result = await context.module.exports.processScan(scan);
+  assert.equal(result.success, true);
+  assert.equal(result.partSummary, undefined);
+  assert.equal(summaryReads, 0);
 });
 
 test('legacy quantity parsing is preserved when historical rows have no explicit qty fields', () => {

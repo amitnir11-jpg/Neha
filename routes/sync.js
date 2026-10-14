@@ -1315,10 +1315,12 @@ async function smartBinWarningForScan(scan = {}) {
     partNumber,
     binLocation: currentBin
   }, {
-    // Manual inward bin prompts must agree with current counted inventory. A
-    // stale projection can otherwise advertise bins for deleted or reversed
-    // stock, so refresh this part's scoped projection before showing choices.
-    refresh: isManualEntry(scan) && scanType === 'INWARD',
+    // The part/bin projection is updated for every committed scan.  Rebuilding
+    // it from the complete inventory ledger before each manual save made a
+    // smart-bin confirmation much slower as scan history grew.  If a
+    // projection is missing, getSmartBinSuggestion still bootstraps it from
+    // inventory before returning a choice.
+    refresh: false,
     promptOnLastBin: isManualEntry(scan) && scanType === 'INWARD',
     settings: settings || {}
   }).catch(() => null);
@@ -2096,7 +2098,9 @@ async function saveNormalizedScan(scan, req, options = {}) {
     await emitEnterpriseRealtime(req.io || req.app.get('io'), [updatedFitted]);
     return { status: 'synced', scan: updatedFitted, error: '', updated: true };
   }
-  const smartBinState = skuMovement || (upiCodeValue(scan) && ['OUTWARD', 'FITTED'].includes(scan.scanType))
+  // A manual inward confirmation above already loaded and validated its
+  // suggestion. Do not repeat that lookup and policy work on the retry.
+  const smartBinState = scan._confirmedManualBinChoice || skuMovement || (upiCodeValue(scan) && ['OUTWARD', 'FITTED'].includes(scan.scanType))
     ? null
     : await smartBinWarningForScan(scan);
   if (smartBinState) {
@@ -2428,8 +2432,13 @@ async function saveNormalizedScan(scan, req, options = {}) {
   logSync('saved valid scan', { id: doc._id, partNumber: doc.partNumber, dealerCode: doc.dealerCode, source: 'mobile' });
   scheduleUpiStateRefreshAfterResponse(doc, req);
   markPerf('inventoryStateQueued');
-  await recordPartBinLocationFromScan(doc, { incremental: true }).catch(() => undefined);
-  markPerf('binHistory');
+  // Projection maintenance does not affect the committed stock row. Start it
+  // immediately, but do not make the operator wait for its reads/ranking.
+  // A missing projection still self-heals on the next smart-bin lookup.
+  void recordPartBinLocationFromScan(doc, { incremental: true }).catch((error) => {
+    logSync('part/bin projection update failed', { scanId: doc.uniqueScanId, error: error.message });
+  });
+  markPerf('binHistoryQueued');
   invalidateScanCaches(doc);
   await emitEnterpriseRealtime(req.io || req.app.get('io'), [doc]);
   markPerf('socketEnqueue');
