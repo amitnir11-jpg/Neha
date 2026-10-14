@@ -135,8 +135,12 @@ async function processScan(input = {}, options = {}) {
     source: normalized.source
   }));
 
+  // The scan screen refreshes the part summary after it receives the saved
+  // scan.  Loading it here used to put an additional inventory aggregation on
+  // every write request.  Keep it available for callers that explicitly need
+  // an inline snapshot, but leave the normal save response on the write path.
   let partSummary;
-  if (success && status !== 'verification') {
+  if (input.includePartSummary === true && success && status !== 'verification') {
     try {
       partSummary = await require('./StockCalculationService').loadPartStock({
         dealerCode: scan.dealerCode, auditId: scan.auditId, partNumber: scan.partNumber || scan.part
