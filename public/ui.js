@@ -3314,7 +3314,7 @@
       return `<col data-col-key="${escapeHtml(key)}" style="width:${Math.round(widths[index])}px;min-width:${minWidth}px">`;
     }).join('');
     headers.forEach((th, index) => {
-      th.draggable = true;
+      th.draggable = th.dataset.colKey !== 'select';
       th.style.width = `${Math.round(widths[index])}px`;
       th.style.minWidth = `${tableColumnMinWidth(th.dataset.colKey)}px`;
       if (!th.querySelector('.column-resizer')) {
@@ -8568,6 +8568,7 @@
     if (!review) return;
     const rows = review.rows || [];
     const committed = review.committed || new Set();
+    const selectedExceptions = review.selectedExceptions || new Set();
     const valid = rows.filter(row => row.status === 'VALID' && !committed.has(row.rowNumber));
     const selected = valid.filter(row => !review.excluded.has(row.rowNumber));
     const query = clean($('#stockReviewSearch')?.value).toUpperCase();
@@ -8584,19 +8585,21 @@
     setText('stockReviewMissing', wholeNumber(rows.filter(row => row.status === 'MISSING_PRICE').length));
     setText('stockReviewRejected', wholeNumber(rows.filter(row => row.status === 'REJECTED').length));
     setText('stockReviewDuplicate', wholeNumber(rows.filter(row => row.status === 'DUPLICATE').length));
-    setText('stockReviewSelectedCount', wholeNumber(selected.length));
+    setText('stockReviewSelectedCount', wholeNumber(selected.length + selectedExceptions.size));
     setText('stockReviewQty', wholeNumber(selected.reduce((sum, row) => sum + Number(row.dmsStock || 0), 0)));
     setText('stockReviewDlc', `₹ ${money2(selected.reduce((sum, row) => sum + Number(row.dmsStock || 0) * Number(row.dlc || 0), 0))}`);
     setText('stockReviewMrp', `₹ ${money2(selected.reduce((sum, row) => sum + Number(row.dmsStock || 0) * Number(row.mrp || 0), 0))}`);
-    setText('stockReviewSelected', `${selected.length} valid row(s) ready to upload. ${rows.filter(row => !committed.has(row.rowNumber) && row.status !== 'VALID').length} exception(s) remain for correction.`);
+    setText('stockReviewSelected', `${selected.length} valid row(s) ready to upload. ${selectedExceptions.size} exception(s) selected for correction; invalid rows cannot upload until revalidated.`);
     setText('stockReviewPageLabel', `Showing ${filtered.length ? start + 1 : 0}-${start + pageRows.length} of ${filtered.length}`);
     $('#stockReviewPrev').disabled = review.page <= 1;
     $('#stockReviewNext').disabled = review.page >= pages;
     $('#stockReviewConfirm').disabled = !selected.length || review.dealerCode !== activeReconDealer();
     $('#stockReviewUseDealer').disabled = !rows.some(row => !committed.has(row.rowNumber) && row.reason?.includes('does not match selected dealer'));
-    $('#stockReviewSelectAll').checked = filtered.some(row => row.status === 'VALID') && filtered.filter(row => row.status === 'VALID').every(row => !review.excluded.has(row.rowNumber));
+    const selectedFiltered = filtered.filter(row => row.status === 'VALID' ? !review.excluded.has(row.rowNumber) : selectedExceptions.has(row.rowNumber));
+    $('#stockReviewSelectAll').checked = filtered.length > 0 && selectedFiltered.length === filtered.length;
+    $('#stockReviewSelectAll').indeterminate = selectedFiltered.length > 0 && selectedFiltered.length < filtered.length;
     $('#stockReviewRows').innerHTML = pageRows.map(row => `<tr>
-      <td><input type="checkbox" data-stock-select="${row.rowNumber}" ${row.status === 'VALID' ? '' : 'disabled'} ${row.status === 'VALID' && !review.excluded.has(row.rowNumber) ? 'checked' : ''}></td>
+      <td><input type="checkbox" data-stock-select="${row.rowNumber}" aria-label="Select Excel row ${row.rowNumber} ${row.status === 'VALID' ? 'for upload' : 'for correction'}" ${row.status === 'VALID' ? !review.excluded.has(row.rowNumber) ? 'checked' : '' : selectedExceptions.has(row.rowNumber) ? 'checked' : ''}></td>
       <td>${row.rowNumber}</td>
       <td><input data-stock-row="${row.rowNumber}" data-stock-field="dealerCode" value="${escapeHtml(row.dealerCode || '')}" aria-label="Dealer code at Excel row ${row.rowNumber}" ${row.status === 'VALID' ? 'readonly' : ''}></td>
       <td><div class="stock-review-part-edit"><input list="stockReviewSuggestions" data-stock-row="${row.rowNumber}" data-stock-field="partNumber" value="${escapeHtml(row.partNumber || '')}" title="${escapeHtml(row.partNumber || '')}" aria-label="Part number at Excel row ${row.rowNumber}"><button type="button" class="btn light" data-stock-edit="${row.rowNumber}" aria-label="Edit part number at Excel row ${row.rowNumber}">Edit</button></div></td>
@@ -8730,12 +8733,14 @@
       const current = state.dealerStockReview;
       state.dealerStockReview = {
         dealerCode, file, rows: data.reviewRows || [], corrections: state.dealerStockReview?.corrections || {},
-        excluded: current?.excluded || new Set(), committed: current?.committed || new Set(), page: current?.page || 1
+        excluded: current?.excluded || new Set(), committed: current?.committed || new Set(),
+        selectedExceptions: current?.selectedExceptions || new Set(), page: current?.page || 1
       };
       (data.reviewRows || []).forEach(row => {
         if (row.status === 'VALID' && current?.rows?.find(previousRow => previousRow.rowNumber === row.rowNumber)?.status === 'PENDING') {
           state.dealerStockReview.excluded.delete(row.rowNumber);
         }
+        if (row.status === 'VALID') state.dealerStockReview.selectedExceptions.delete(row.rowNumber);
       });
       renderDealerStockReview();
       if (message) {
@@ -14561,8 +14566,13 @@
       if (!review) return;
       const selectedRow = event.target.dataset.stockSelect;
       if (selectedRow) {
-        if (event.target.checked) review.excluded.delete(Number(selectedRow));
-        else review.excluded.add(Number(selectedRow));
+        const rowNumber = Number(selectedRow);
+        const row = review.rows.find(item => item.rowNumber === rowNumber);
+        if (row?.status === 'VALID') {
+          if (event.target.checked) review.excluded.delete(rowNumber);
+          else review.excluded.add(rowNumber);
+        } else if (event.target.checked) review.selectedExceptions.add(rowNumber);
+        else review.selectedExceptions.delete(rowNumber);
         renderDealerStockReview();
         return;
       }
@@ -14596,9 +14606,12 @@
       if (!review) return;
       const query = clean($('#stockReviewSearch')?.value).toUpperCase();
       const filter = $('#stockReviewFilter')?.value || 'ALL';
-      review.rows.filter(row => row.status === 'VALID' && (filter === 'ALL' || row.status === filter) && (!query || `${row.partNumber} ${row.partDescription}`.toUpperCase().includes(query))).forEach(row => {
-        if (event.target.checked) review.excluded.delete(row.rowNumber);
-        else review.excluded.add(row.rowNumber);
+      review.rows.filter(row => !review.committed.has(row.rowNumber) && (filter === 'ALL' || row.status === filter) && (!query || `${row.partNumber} ${row.partDescription}`.toUpperCase().includes(query))).forEach(row => {
+        if (row.status === 'VALID') {
+          if (event.target.checked) review.excluded.delete(row.rowNumber);
+          else review.excluded.add(row.rowNumber);
+        } else if (event.target.checked) review.selectedExceptions.add(row.rowNumber);
+        else review.selectedExceptions.delete(row.rowNumber);
       });
       renderDealerStockReview();
     });
@@ -14610,7 +14623,7 @@
     $('#stockReviewUseDealer')?.addEventListener('click', () => {
       const review = state.dealerStockReview;
       if (!review || review.dealerCode !== activeReconDealer()) return;
-      review.rows.filter(row => !review.committed.has(row.rowNumber) && row.reason?.includes('does not match selected dealer')).forEach(row => {
+      review.rows.filter(row => !review.committed.has(row.rowNumber) && row.reason?.includes('does not match selected dealer') && (!review.selectedExceptions.size || review.selectedExceptions.has(row.rowNumber))).forEach(row => {
         review.corrections[row.rowNumber] = { ...(review.corrections[row.rowNumber] || {}), dealerCode: review.dealerCode };
         review.excluded.add(row.rowNumber);
         row.dealerCode = review.dealerCode;
