@@ -145,7 +145,8 @@ test('browser review retains only exceptions after upload and selects revalidate
     api: async (_path, options) => { sent.push(options.body.fields); return responses.shift(); },
     cleanDealerCode: value => String(value || '').toUpperCase(), activeReconDealer: () => '1168A',
     clean: value => String(value || ''), wholeNumber: String, money2: value => Number(value || 0).toFixed(2),
-    escapeHtml: value => String(value || ''), setText: (id, value) => { $(`#${id}`).textContent = value; }
+    escapeHtml: value => String(value || ''), enhanceDataTable: () => {},
+    setText: (id, value) => { $(`#${id}`).textContent = value; }
   };
   vm.createContext(context);
   const renderStart = source.indexOf('  function renderDealerStockReview()');
@@ -154,6 +155,7 @@ test('browser review retains only exceptions after upload and selects revalidate
   vm.runInContext(source.slice(uploadStart, source.indexOf('  function syncReconDealer(', uploadStart)), context);
   await context.uploadDealerStock(form);
   assert.match($('#stockReviewRows').innerHTML, /UNKNOWN/);
+  assert.match($('#stockReviewRows').innerHTML, /data-stock-edit="3"/);
   context.state.dealerStockReview.committed.add(2);
   context.renderDealerStockReview();
   assert.doesNotMatch($('#stockReviewRows').innerHTML, /0001/);
@@ -167,4 +169,17 @@ test('browser review retains only exceptions after upload and selects revalidate
   assert.match($('#stockReviewRows').innerHTML, /0002/);
   assert.doesNotMatch($('#stockReviewRows').innerHTML, /0001/);
   assert.equal(JSON.parse(sent[1].corrections)['3'].dealerCode, '1168A');
+  const rowNode = $('#stockReviewRows');
+  const handlers = {};
+  rowNode.addEventListener = (name, handler) => { handlers[name] = handler; };
+  const partInput = { value: '0002', dataset: { stockRow: '3', stockField: 'partNumber' },
+    dispatchEvent() { handlers.change({ target: this }); } };
+  rowNode.querySelectorAll = () => [partInput];
+  context.window.prompt = () => '0003';
+  context.Event = class { constructor(type) { this.type = type; } };
+  const editStart = source.indexOf("    $('#stockReviewRows')?.addEventListener('click'");
+  vm.runInContext(source.slice(editStart, source.indexOf('    let stockSuggestionTimer;', editStart)), context);
+  handlers.click({ target: { closest: () => ({ dataset: { stockEdit: '3' } }) } });
+  assert.equal(context.state.dealerStockReview.corrections[3].partNumber, '0003');
+  assert.equal(context.state.dealerStockReview.rows[1].status, 'PENDING');
 });

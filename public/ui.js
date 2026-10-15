@@ -3167,6 +3167,11 @@
   }
 
   function tableDefaultColumnWidth(table, key) {
+    if (table.id === 'dealerStockReviewTable') return ({
+      'excel-row': 110, 'dealer-code': 150, 'part-number': 300, description: 220,
+      'dms-qty': 110, 'bin-loc-1': 135, 'bin-loc-2': 135, 'bin-loc-3': 135,
+      dlc: 105, mrp: 105, status: 320
+    })[key] || 130;
     const dashboardStreamWidths = {
       time: 160,
       'part-number': 150,
@@ -3243,7 +3248,7 @@
         if (row.dataset.columnOrder === orderSignature) return;
         const cells = Array.from(row.children);
         if (cells.length !== headers.length) return;
-        const sourceIndexes = row.dataset.columnOrder ? currentIndexes : headers.map((th) => Number(th.dataset.originalIndex));
+        const sourceIndexes = row.dataset.columnOrder ? currentIndexes : headers.map((th) => Number(th.dataset.originalIndex)).sort((a, b) => a - b);
         orderedIndexes.map((index) => cells[sourceIndexes.indexOf(index)]).filter(Boolean).forEach((cell) => row.appendChild(cell));
         row.dataset.columnOrder = orderSignature;
       });
@@ -8594,13 +8599,14 @@
       <td><input type="checkbox" data-stock-select="${row.rowNumber}" ${row.status === 'VALID' ? '' : 'disabled'} ${row.status === 'VALID' && !review.excluded.has(row.rowNumber) ? 'checked' : ''}></td>
       <td>${row.rowNumber}</td>
       <td><input data-stock-row="${row.rowNumber}" data-stock-field="dealerCode" value="${escapeHtml(row.dealerCode || '')}" aria-label="Dealer code at Excel row ${row.rowNumber}" ${row.status === 'VALID' ? 'readonly' : ''}></td>
-      <td><input list="stockReviewSuggestions" data-stock-row="${row.rowNumber}" data-stock-field="partNumber" value="${escapeHtml(row.partNumber || '')}" aria-label="Part number at Excel row ${row.rowNumber}"></td>
+      <td><div class="stock-review-part-edit"><input list="stockReviewSuggestions" data-stock-row="${row.rowNumber}" data-stock-field="partNumber" value="${escapeHtml(row.partNumber || '')}" title="${escapeHtml(row.partNumber || '')}" aria-label="Part number at Excel row ${row.rowNumber}"><button type="button" class="btn light" data-stock-edit="${row.rowNumber}" aria-label="Edit part number at Excel row ${row.rowNumber}">Edit</button></div></td>
       <td>${escapeHtml(row.partDescription || '')}</td>
       <td><input type="number" min="0" step="1" data-stock-row="${row.rowNumber}" data-stock-field="dmsStock" value="${escapeHtml(row.dmsStock ?? '')}" aria-label="DMS quantity at Excel row ${row.rowNumber}"></td>
       ${[1, 2, 3].map(index => `<td><input data-stock-row="${row.rowNumber}" data-stock-field="binLoc${index}" value="${escapeHtml(row[`binLoc${index}`] || '')}" aria-label="Bin ${index} at Excel row ${row.rowNumber}"></td>`).join('')}
       <td>${row.status === 'VALID' ? `₹ ${money2(row.dlc)}` : '—'}</td><td>${row.status === 'VALID' ? `₹ ${money2(row.mrp)}` : '—'}</td>
       <td title="${escapeHtml(row.reason || '')}">${escapeHtml(row.reason || row.status)}</td>
     </tr>`).join('') || '<tr><td colspan="12">No rows remain for review.</td></tr>';
+    enhanceDataTable($('#dealerStockReviewTable'), 'daksh_table_dealer_stock_review');
   }
 
   function isReconciliationDealerSelect(select) {
@@ -14537,6 +14543,18 @@
     $('#dealerStockUploadForm [name="file"]')?.addEventListener('change', () => {
       state.dealerStockReview = null;
       renderDealerStockReview();
+    });
+    $('#stockReviewRows')?.addEventListener('click', (event) => {
+      const edit = event.target.closest('[data-stock-edit]');
+      if (!edit) return;
+      const rowNumber = Number(edit.dataset.stockEdit);
+      const input = Array.from($('#stockReviewRows').querySelectorAll('[data-stock-field="partNumber"]'))
+        .find(field => Number(field.dataset.stockRow) === rowNumber);
+      if (!input) return;
+      const value = window.prompt(`Edit full part number at Excel row ${rowNumber}:`, input.value);
+      if (value === null || clean(value) === input.value) return;
+      input.value = clean(value).toUpperCase();
+      input.dispatchEvent(new Event('change', { bubbles: true }));
     });
     $('#stockReviewRows')?.addEventListener('change', (event) => {
       const review = state.dealerStockReview;
