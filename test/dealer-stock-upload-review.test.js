@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const prices = require('../utils/partMasterPrice');
@@ -62,12 +64,14 @@ test('more than 10,000 rows remain reviewable without truncating exceptions', as
   assert.equal(result.records.length, 0);
 });
 
-test('HTTP preview never saves and confirmed mixed-dealer file is rejected', async t => {
+test('HTTP review uploads only selected valid rows, then accepts a corrected dealer row', async t => {
   const User = require('../models/User');
   const Mapping = require('../models/UserDealerMapping');
   const Dealer = require('../models/Dealer');
   const Audit = require('../models/Audit');
   const DealerStock = require('../models/DealerStock');
+  const ScanAuditLog = require('../models/ScanAuditLog');
+  const { prisma } = require('../services/prisma');
   const originals = [];
   const replace = (model, method, implementation) => { originals.push([model, method, model[method]]); model[method] = implementation; };
   t.after(() => originals.forEach(([model, method, original]) => { model[method] = original; }));
@@ -76,18 +80,22 @@ test('HTTP preview never saves and confirmed mixed-dealer file is rejected', asy
   replace(Mapping, 'find', () => query([]));
   replace(Dealer, 'findOne', filter => query({ _id: filter.dealerCode, dealerCode: filter.dealerCode, active: true }));
   replace(Audit, 'findOne', () => query({ dealerCode: '1168A', auditId: 'AUDIT-1', status: 'ACTIVE' }));
-  let writes = 0;
-  replace(DealerStock, 'bulkUpsertBy', async () => { writes += 1; return { insertedCount: 1 }; });
+  const saved = [];
+  replace(prisma, '$transaction', async work => work(prisma));
+  replace(DealerStock, 'find', filter => query(saved.filter(item => item.dealerCode === filter.dealerCode && item.auditId === filter.auditId && (!filter.normalizedPartNumber || filter.normalizedPartNumber.$in.includes(item.normalizedPartNumber)))));
+  replace(DealerStock, 'bulkUpsertBy', async rows => { saved.push(...rows); return { insertedCount: rows.length }; });
+  replace(ScanAuditLog, 'create', async () => ({}));
   const app = express();
   app.use('/api/reconciliation', reconciliation);
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
   const token = jwt.sign({ id: 'admin' }, process.env.JWT_SECRET || 'daksh_inventory_secret');
-  const send = async (confirmed, csv) => {
+  const send = async (confirmed, csv, selectedRows = '[2]', corrections = '{}') => {
     const body = new FormData();
     body.set('dealerCode', '1168A');
-    if (confirmed) { body.set('confirmed', 'true'); body.set('selectedRows', '[2]'); }
+    if (confirmed) { body.set('confirmed', 'true'); body.set('selectedRows', selectedRows); }
+    body.set('corrections', corrections);
     body.set('file', new Blob([csv], { type: 'text/csv' }), 'dealer.csv');
     return fetch(`http://127.0.0.1:${server.address().port}/api/reconciliation/upload-stock?dealerCode=1168A`, {
       method: 'POST', headers: { Authorization: `Bearer ${token}` }, body
@@ -99,9 +107,64 @@ test('HTTP preview never saves and confirmed mixed-dealer file is rejected', asy
   assert.equal(preview.status, 200, JSON.stringify(result));
   assert.equal(result.reviewSummary.validRows, 1);
   assert.equal(result.reviewSummary.wrongParts, 1);
-  assert.equal(writes, 0);
-  const mixed = await send(true, `${header}\n1168A,0001,,2,A-01,,\n12320,0002,,3,B-01,,`);
-  assert.equal(mixed.status, 400);
-  assert.match((await mixed.json()).message, /Dealer code mismatch/);
-  assert.equal(writes, 0);
+  assert.equal(saved.length, 0);
+  const mixed = await send(true, `${header}\n1168A,0001,,2,A-01,,\n12320,0002,,3,B-01,,`, '[3]');
+  assert.equal(mixed.status, 409);
+  assert.match((await mixed.json()).message, /does not match selected dealer/);
+  assert.equal(saved.length, 0);
+  const csv = `${header}\n1168A,0001,,2,A-01,,\n12320,0002,,3,B-01,,`;
+  const valid = await send(true, csv);
+  assert.equal(valid.status, 200, JSON.stringify(await valid.clone().json()));
+  assert.deepEqual(saved.map(item => item.partNumber), ['0001']);
+  const corrected = await send(true, csv, '[3]', '{"3":{"dealerCode":"1168A"}}');
+  assert.equal(corrected.status, 200, JSON.stringify(await corrected.clone().json()));
+  assert.equal((await corrected.json()).summary.systemStockValue, 50);
+  assert.deepEqual(saved.map(item => [item.dealerCode, item.partNumber]), [['1168A', '0001'], ['1168A', '0002']]);
+});
+
+test('browser review retains only exceptions after upload and selects revalidated corrections', async () => {
+  const source = fs.readFileSync('public/ui.js', 'utf8');
+  const nodes = new Map();
+  const file = { name: 'dealer.csv' };
+  const form = { dataset: {}, querySelector: () => ({ disabled: false }) };
+  const $ = (selector) => {
+    if (selector === '[name="dealerCode"]') return { value: '1168A' };
+    if (selector === '[name="file"]') return { files: [file] };
+    if (!nodes.has(selector)) nodes.set(selector, { value: selector === '#stockReviewFilter' ? 'ALL' : '', hidden: false });
+    return nodes.get(selector);
+  };
+  const responses = [
+    { reviewRows: [{ rowNumber: 2, partNumber: '0001', dmsStock: 2, dlc: 10, mrp: 20, status: 'VALID' },
+      { rowNumber: 3, dealerCode: '12320', partNumber: 'UNKNOWN', dmsStock: 3, status: 'REJECTED', reason: 'Dealer code does not match selected dealer' }] },
+    { reviewRows: [{ rowNumber: 2, partNumber: '0001', dmsStock: 2, dlc: 10, mrp: 20, status: 'VALID' },
+      { rowNumber: 3, dealerCode: '1168A', partNumber: '0002', dmsStock: 3, dlc: 10, mrp: 20, status: 'VALID' }] }
+  ];
+  const sent = [];
+  const context = { $, state: {}, window: { crypto: { randomUUID: () => 'review-id' } },
+    FormData: class { constructor() { this.fields = {}; } set(key, value) { this.fields[key] = value; } },
+    api: async (_path, options) => { sent.push(options.body.fields); return responses.shift(); },
+    cleanDealerCode: value => String(value || '').toUpperCase(), activeReconDealer: () => '1168A',
+    clean: value => String(value || ''), wholeNumber: String, money2: value => Number(value || 0).toFixed(2),
+    escapeHtml: value => String(value || ''), setText: (id, value) => { $(`#${id}`).textContent = value; }
+  };
+  vm.createContext(context);
+  const renderStart = source.indexOf('  function renderDealerStockReview()');
+  vm.runInContext(source.slice(renderStart, source.indexOf('  function isReconciliationDealerSelect', renderStart)), context);
+  const uploadStart = source.indexOf('  async function uploadDealerStock(');
+  vm.runInContext(source.slice(uploadStart, source.indexOf('  function syncReconDealer(', uploadStart)), context);
+  await context.uploadDealerStock(form);
+  assert.match($('#stockReviewRows').innerHTML, /UNKNOWN/);
+  context.state.dealerStockReview.committed.add(2);
+  context.renderDealerStockReview();
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /0001/);
+  assert.match($('#stockReviewRows').innerHTML, /UNKNOWN/);
+  context.state.dealerStockReview.corrections[3] = { dealerCode: '1168A', partNumber: '0002' };
+  context.state.dealerStockReview.excluded.add(3);
+  context.state.dealerStockReview.rows[1].status = 'PENDING';
+  await context.uploadDealerStock(form);
+  assert.equal(context.state.dealerStockReview.excluded.has(3), false);
+  assert.equal(context.state.dealerStockReview.committed.has(2), true);
+  assert.match($('#stockReviewRows').innerHTML, /0002/);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /0001/);
+  assert.equal(JSON.parse(sent[1].corrections)['3'].dealerCode, '1168A');
 });

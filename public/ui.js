@@ -8562,41 +8562,45 @@
     panel.hidden = !review;
     if (!review) return;
     const rows = review.rows || [];
-    const valid = rows.filter(row => row.status === 'VALID');
+    const committed = review.committed || new Set();
+    const valid = rows.filter(row => row.status === 'VALID' && !committed.has(row.rowNumber));
     const selected = valid.filter(row => !review.excluded.has(row.rowNumber));
     const query = clean($('#stockReviewSearch')?.value).toUpperCase();
     const filter = $('#stockReviewFilter')?.value || 'ALL';
-    const filtered = rows.filter(row => (filter === 'ALL' || row.status === filter) && (!query || `${row.partNumber} ${row.partDescription}`.toUpperCase().includes(query)));
+    const filtered = rows.filter(row => !committed.has(row.rowNumber) && (filter === 'ALL' || row.status === filter) && (!query || `${row.partNumber} ${row.partDescription}`.toUpperCase().includes(query)));
     const pages = Math.max(1, Math.ceil(filtered.length / 50));
     review.page = Math.min(review.page || 1, pages);
     const start = (review.page - 1) * 50;
     const pageRows = filtered.slice(start, start + 50);
     setText('dealerStockReviewScope', `${review.dealerCode} · ${review.file.name}`);
     setText('stockReviewTotal', wholeNumber(rows.length));
-    setText('stockReviewValid', wholeNumber(valid.length));
+    setText('stockReviewValid', wholeNumber(rows.filter(row => row.status === 'VALID').length));
     setText('stockReviewWrong', wholeNumber(rows.filter(row => row.status === 'WRONG_PART').length));
     setText('stockReviewMissing', wholeNumber(rows.filter(row => row.status === 'MISSING_PRICE').length));
+    setText('stockReviewRejected', wholeNumber(rows.filter(row => row.status === 'REJECTED').length));
     setText('stockReviewDuplicate', wholeNumber(rows.filter(row => row.status === 'DUPLICATE').length));
     setText('stockReviewSelectedCount', wholeNumber(selected.length));
     setText('stockReviewQty', wholeNumber(selected.reduce((sum, row) => sum + Number(row.dmsStock || 0), 0)));
     setText('stockReviewDlc', `₹ ${money2(selected.reduce((sum, row) => sum + Number(row.dmsStock || 0) * Number(row.dlc || 0), 0))}`);
     setText('stockReviewMrp', `₹ ${money2(selected.reduce((sum, row) => sum + Number(row.dmsStock || 0) * Number(row.mrp || 0), 0))}`);
-    setText('stockReviewSelected', `${selected.length} selected. Update mode replaces matching DMS part quantities for this dealer and audit.`);
+    setText('stockReviewSelected', `${selected.length} valid row(s) ready to upload. ${rows.filter(row => !committed.has(row.rowNumber) && row.status !== 'VALID').length} exception(s) remain for correction.`);
     setText('stockReviewPageLabel', `Showing ${filtered.length ? start + 1 : 0}-${start + pageRows.length} of ${filtered.length}`);
     $('#stockReviewPrev').disabled = review.page <= 1;
     $('#stockReviewNext').disabled = review.page >= pages;
     $('#stockReviewConfirm').disabled = !selected.length || review.dealerCode !== activeReconDealer();
+    $('#stockReviewUseDealer').disabled = !rows.some(row => !committed.has(row.rowNumber) && row.reason?.includes('does not match selected dealer'));
     $('#stockReviewSelectAll').checked = filtered.some(row => row.status === 'VALID') && filtered.filter(row => row.status === 'VALID').every(row => !review.excluded.has(row.rowNumber));
     $('#stockReviewRows').innerHTML = pageRows.map(row => `<tr>
       <td><input type="checkbox" data-stock-select="${row.rowNumber}" ${row.status === 'VALID' ? '' : 'disabled'} ${row.status === 'VALID' && !review.excluded.has(row.rowNumber) ? 'checked' : ''}></td>
       <td>${row.rowNumber}</td>
+      <td><input data-stock-row="${row.rowNumber}" data-stock-field="dealerCode" value="${escapeHtml(row.dealerCode || '')}" aria-label="Dealer code at Excel row ${row.rowNumber}" ${row.status === 'VALID' ? 'readonly' : ''}></td>
       <td><input list="stockReviewSuggestions" data-stock-row="${row.rowNumber}" data-stock-field="partNumber" value="${escapeHtml(row.partNumber || '')}" aria-label="Part number at Excel row ${row.rowNumber}"></td>
       <td>${escapeHtml(row.partDescription || '')}</td>
       <td><input type="number" min="0" step="1" data-stock-row="${row.rowNumber}" data-stock-field="dmsStock" value="${escapeHtml(row.dmsStock ?? '')}" aria-label="DMS quantity at Excel row ${row.rowNumber}"></td>
       ${[1, 2, 3].map(index => `<td><input data-stock-row="${row.rowNumber}" data-stock-field="binLoc${index}" value="${escapeHtml(row[`binLoc${index}`] || '')}" aria-label="Bin ${index} at Excel row ${row.rowNumber}"></td>`).join('')}
       <td>${row.status === 'VALID' ? `₹ ${money2(row.dlc)}` : '—'}</td><td>${row.status === 'VALID' ? `₹ ${money2(row.mrp)}` : '—'}</td>
       <td title="${escapeHtml(row.reason || '')}">${escapeHtml(row.reason || row.status)}</td>
-    </tr>`).join('') || '<tr><td colspan="11">No rows match this filter.</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="12">No rows remain for review.</td></tr>';
   }
 
   function isReconciliationDealerSelect(select) {
@@ -8717,10 +8721,16 @@
       uploadBody.set('corrections', JSON.stringify(state.dealerStockReview?.corrections || {}));
       const data = await api(`/api/reconciliation/upload-stock?dealerCode=${encodeURIComponent(dealerCode)}`, { method: 'POST', body: uploadBody });
       if (activeReconDealer() !== dealerCode || $('[name="file"]', form)?.files?.[0] !== file) return null;
+      const current = state.dealerStockReview;
       state.dealerStockReview = {
         dealerCode, file, rows: data.reviewRows || [], corrections: state.dealerStockReview?.corrections || {},
-        excluded: state.dealerStockReview?.excluded || new Set(), page: state.dealerStockReview?.page || 1
+        excluded: current?.excluded || new Set(), committed: current?.committed || new Set(), page: current?.page || 1
       };
+      (data.reviewRows || []).forEach(row => {
+        if (row.status === 'VALID' && current?.rows?.find(previousRow => previousRow.rowNumber === row.rowNumber)?.status === 'PENDING') {
+          state.dealerStockReview.excluded.delete(row.rowNumber);
+        }
+      });
       renderDealerStockReview();
       if (message) {
         message.className = 'form-message success';
@@ -14507,9 +14517,14 @@
       syncReconDealer(event.target.value);
       loadDealerStockPreview().catch((error) => toast(error.message, 'error'));
     });
-    $('#dealerStockUploadForm')?.addEventListener('submit', (event) => {
+    $('#dealerStockUploadForm')?.addEventListener('submit', async (event) => {
       event.preventDefault();
-      uploadDealerStock(event.currentTarget).catch((error) => {
+      try {
+        const result = await uploadDealerStock(event.currentTarget);
+        if (result && state.dealerStockReview?.rows.some(row => row.status === 'VALID' && !state.dealerStockReview.committed.has(row.rowNumber))) {
+          await confirmDealerStockReview(false);
+        }
+      } catch (error) {
         const message = $('#dealerStockUploadMessage');
         renderDealerStockErrors(error.data?.errorRows || [], error.data?.skippedCount || 0, error.data?.errorRowsTruncated);
         if (message) {
@@ -14517,14 +14532,11 @@
           message.textContent = error.message;
         }
         toast(error.message, 'error');
-      });
+      }
     });
     $('#dealerStockUploadForm [name="file"]')?.addEventListener('change', () => {
       state.dealerStockReview = null;
       renderDealerStockReview();
-      if ($('#dealerStockUploadForm [name="file"]')?.files?.[0] && activeReconDealer()) {
-        uploadDealerStock($('#dealerStockUploadForm')).catch(error => toast(error.message, 'error'));
-      }
     });
     $('#stockReviewRows')?.addEventListener('change', (event) => {
       const review = state.dealerStockReview;
@@ -14538,13 +14550,12 @@
       }
       const rowNumber = Number(event.target.dataset.stockRow);
       const field = event.target.dataset.stockField;
-      if (!rowNumber || !['partNumber', 'dmsStock', 'binLoc1', 'binLoc2', 'binLoc3'].includes(field)) return;
+      if (!rowNumber || !['dealerCode', 'partNumber', 'dmsStock', 'binLoc1', 'binLoc2', 'binLoc3'].includes(field)) return;
       review.corrections[rowNumber] = { ...(review.corrections[rowNumber] || {}), [field]: event.target.value };
       review.excluded.add(rowNumber);
       const row = review.rows.find(item => item.rowNumber === rowNumber);
       if (row) { row[field] = event.target.value; row.status = 'PENDING'; row.reason = 'Correction requires revalidation'; }
       renderDealerStockReview();
-      uploadDealerStock($('#dealerStockUploadForm')).catch(error => toast(error.message, 'error'));
     });
     let stockSuggestionTimer;
     $('#stockReviewRows')?.addEventListener('input', (event) => {
@@ -14578,6 +14589,18 @@
     $('#stockReviewPrev')?.addEventListener('click', () => { state.dealerStockReview.page -= 1; renderDealerStockReview(); });
     $('#stockReviewNext')?.addEventListener('click', () => { state.dealerStockReview.page += 1; renderDealerStockReview(); });
     $('#stockReviewRevalidate')?.addEventListener('click', () => uploadDealerStock($('#dealerStockUploadForm')).catch(error => toast(error.message, 'error')));
+    $('#stockReviewUseDealer')?.addEventListener('click', () => {
+      const review = state.dealerStockReview;
+      if (!review || review.dealerCode !== activeReconDealer()) return;
+      review.rows.filter(row => !review.committed.has(row.rowNumber) && row.reason?.includes('does not match selected dealer')).forEach(row => {
+        review.corrections[row.rowNumber] = { ...(review.corrections[row.rowNumber] || {}), dealerCode: review.dealerCode };
+        review.excluded.add(row.rowNumber);
+        row.dealerCode = review.dealerCode;
+        row.status = 'PENDING';
+        row.reason = 'Dealer correction requires revalidation';
+      });
+      renderDealerStockReview();
+    });
     $('#stockReviewExport')?.addEventListener('click', () => {
       const review = state.dealerStockReview;
       if (!review) return;
@@ -14585,14 +14608,14 @@
       downloadPost(`/api/reconciliation/stock-review-exceptions?dealerCode=${encodeURIComponent(review.dealerCode)}`,
         { rows }, `${review.dealerCode}_DMS_Upload_Exceptions.xlsx`).catch(error => toast(error.message, 'error'));
     });
-    $('#stockReviewConfirm')?.addEventListener('click', async () => {
+    const confirmDealerStockReview = async (requireConfirmation = true) => {
       const review = state.dealerStockReview;
       if (!review || review.dealerCode !== activeReconDealer()) return;
-      const selected = review.rows.filter(row => row.status === 'VALID' && !review.excluded.has(row.rowNumber));
+      const selected = review.rows.filter(row => row.status === 'VALID' && !review.excluded.has(row.rowNumber) && !review.committed.has(row.rowNumber));
       const quantity = selected.reduce((sum, row) => sum + Number(row.dmsStock || 0), 0);
       const dlcValue = selected.reduce((sum, row) => sum + Number(row.dmsStock || 0) * Number(row.dlc || 0), 0);
       const mrpValue = selected.reduce((sum, row) => sum + Number(row.dmsStock || 0) * Number(row.mrp || 0), 0);
-      if (!selected.length || !window.confirm(`Confirm DMS stock UPDATE for ${review.dealerCode} / ${review.file.name}?\nExcel rows: ${review.rows.length}; valid: ${review.rows.filter(row => row.status === 'VALID').length}; wrong: ${review.rows.filter(row => row.status === 'WRONG_PART').length}; missing price: ${review.rows.filter(row => row.status === 'MISSING_PRICE').length}.\nSelected: ${selected.length} rows, ${quantity} units. DLC ₹ ${money2(dlcValue)}; MRP ₹ ${money2(mrpValue)}.\nMatching part quantities will be replaced. Other dealer and audit records remain unchanged.`)) return;
+      if (!selected.length || (requireConfirmation && !window.confirm(`Confirm DMS stock UPDATE for ${review.dealerCode} / ${review.file.name}?\nExcel rows: ${review.rows.length}; valid: ${review.rows.filter(row => row.status === 'VALID').length}; wrong: ${review.rows.filter(row => row.status === 'WRONG_PART').length}; missing price: ${review.rows.filter(row => row.status === 'MISSING_PRICE').length}.\nSelected: ${selected.length} rows, ${quantity} units. DLC ₹ ${money2(dlcValue)}; MRP ₹ ${money2(mrpValue)}.\nMatching part quantities will be replaced. Other dealer and audit records remain unchanged.`))) return;
       const button = $('#stockReviewConfirm'); button.disabled = true;
       try {
         const body = new FormData($('#dealerStockUploadForm'));
@@ -14604,13 +14627,14 @@
         renderDealerStockErrors(data.errorRows || [], data.skippedCount || 0, data.errorRowsTruncated);
         $('#dealerStockUploadMessage').textContent = data.message || 'Validated dealer stock uploaded.';
         $('#dealerStockUploadMessage').className = 'form-message success';
-        selected.forEach(row => review.excluded.add(row.rowNumber));
+        selected.forEach(row => review.committed.add(row.rowNumber));
         renderDealerStockReview();
         loadReconciliation({ silent: true }).catch(() => undefined);
       } catch (error) {
         toast(error.message, 'error');
       } finally { renderDealerStockReview(); }
-    });
+    };
+    $('#stockReviewConfirm')?.addEventListener('click', () => confirmDealerStockReview());
     $('#dealerStockInvalidOnly')?.addEventListener('change', () => loadDealerStockPreview().catch(error => toast(error.message, 'error')));
     $('#dealerStockPreviewRows')?.addEventListener('click', async (event) => {
       const action = event.target.closest('[data-stock-correct]');

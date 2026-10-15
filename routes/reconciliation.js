@@ -1715,6 +1715,7 @@ async function uploadDealerStockHandler(req, res) {
     const userName = (req.user && (req.user.name || req.user.username || req.user.email)) || 'System';
     const rows = await readUploadedRows(req.file);
     const header = findHeaderRow(rows);
+    const dealerIndex = header.keys.indexOf('dealerCode');
     const partIndex = header.keys.indexOf('partNumber');
     const qtyIndex = header.keys.indexOf('dmsStock');
     const binIndexes = ['binLoc1', 'binLoc2', 'binLoc3'].map(key => header.keys.indexOf(key));
@@ -1734,6 +1735,7 @@ async function uploadDealerStockHandler(req, res) {
       if (!Number.isSafeInteger(rowNumber) || rowNumber <= header.index + 1 || rowNumber > rows.length || !edit || typeof edit !== 'object') return res.status(400).json({ success: false, message: 'Invalid Excel row correction.' });
       const values = rows[rowNumber - 1];
       if (!Array.isArray(values)) return res.status(400).json({ success: false, message: 'Excel row was not found.' });
+      if (dealerIndex >= 0 && edit.dealerCode !== undefined) values[dealerIndex] = clean(edit.dealerCode);
       if (partIndex >= 0 && edit.partNumber !== undefined) values[partIndex] = clean(edit.partNumber);
       if (qtyIndex >= 0 && edit.dmsStock !== undefined) values[qtyIndex] = clean(edit.dmsStock);
       binIndexes.forEach((index, position) => { if (index >= 0 && edit[`binLoc${position + 1}`] !== undefined) values[index] = clean(edit[`binLoc${position + 1}`]); });
@@ -1744,8 +1746,6 @@ async function uploadDealerStockHandler(req, res) {
     const parsed = await rowsToStockRecords(rows, scope.dealerCode, scope.auditId, userName,
       (processed, total) => sendProgress('validating', processed, total), req.body.confirmed === 'true' ? selectedRows : null);
     markPerf('validationAndMergeMs');
-    const wrongDealer = parsed.reviewRows?.find(row => row.reason?.includes('does not match selected dealer') || row.reason === 'Dealer code missing');
-    if (wrongDealer && req.body.confirmed === 'true') return res.status(400).json({ success: false, message: `Dealer code mismatch at Excel row ${wrongDealer.rowNumber}. No stock was saved.`, reviewRows: parsed.reviewRows });
     if (!parsed.reviewRows) return res.status(400).json({ success: false, message: parsed.errorRows?.[0]?.message || 'Invalid Dealer Stock template.' });
     const reviewSummary = {
       excelRows: parsed.reviewRows?.length || 0,
