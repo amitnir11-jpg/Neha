@@ -18,7 +18,7 @@
       if (requestedView) document.documentElement.dataset.initialView = requestedView;
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20261009-source-bin-multiselect-v2">
+  <link rel="stylesheet" href="/style.css?v=20261015-dealer-stock-review">
   <link rel="stylesheet" href="/variables.css?v=20260714-app-layout-v1">
   <link rel="stylesheet" href="/layout.css?v=20260714-app-layout-v1">
   <link rel="stylesheet" href="/components.css?v=20260714-app-layout-v1">
@@ -874,8 +874,8 @@
               <h2>Upload Dealer Stock</h2>
               <div class="actions">
                 <button id="dealerStockTemplateDownloadBtn" class="btn light admin-only" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-reports"></use></svg><span>Download Template</span></button>
-                <button id="excelStockOpenReconBtn" class="btn light" type="button"><span>Validate Stock Upload</span></button>
                 <button id="reconPreviewBtn" class="btn light" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span>Preview Uploaded Stock</span></button>
+                <button id="stockUploadHistoryBtn" class="btn light" type="button">Upload History</button>
                 <button id="reconDeleteStockBtn" class="btn danger-soft" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-archive"></use></svg><span>Delete Old Dealer Stock</span></button>
                 <button id="reconReprocessBtn" class="btn light" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sync"></use></svg><span>Reprocess Reconciliation</span></button>
               </div>
@@ -883,14 +883,25 @@
             <form id="dealerStockUploadForm" class="recon-upload-form">
               <label>Dealer Code<select name="dealerCode" id="dealerStockDealer" class="dealerSelect" required></select></label>
               <label class="recon-file-field">Upload DMS stock Excel/CSV<input name="file" type="file" accept=".xlsx,.xls,.csv" required></label>
-              <button class="btn primary recon-upload-submit" type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sync"></use></svg><span>Upload & Save Stock</span></button>
+              <button class="btn primary recon-upload-submit" type="submit"><span>Validate & Preview Excel</span></button>
             </form>
+            <section id="dealerStockReview" class="dealer-stock-review" hidden aria-label="Dealer stock upload review">
+              <div class="recon-summary-head"><h3>Dealer Stock Upload Review</h3><span id="dealerStockReviewScope"></span></div>
+              <div class="excel-upload-summary"><div><strong id="stockReviewTotal">0</strong><span>Excel Rows</span></div><div><strong id="stockReviewValid">0</strong><span>Valid Parts</span></div><div><strong id="stockReviewWrong">0</strong><span>Wrong Parts</span></div><div><strong id="stockReviewMissing">0</strong><span>Missing Price</span></div><div><strong id="stockReviewDuplicate">0</strong><span>Duplicates</span></div><div><strong id="stockReviewSelectedCount">0</strong><span>Selected Rows</span></div><div><strong id="stockReviewQty">0</strong><span>Selected DMS Qty</span></div><div><strong id="stockReviewDlc">₹ 0.00</strong><span>DLC Value</span></div><div><strong id="stockReviewMrp">₹ 0.00</strong><span>MRP Value</span></div></div>
+              <div class="excel-stock-toolbar"><label>Status <select id="stockReviewFilter"><option value="ALL">All Parts</option><option value="VALID">Valid Parts</option><option value="WRONG_PART">Wrong Parts</option><option value="MISSING_PRICE">Missing Price</option><option value="DUPLICATE">Duplicates</option><option value="REJECTED">Rejected</option></select></label><input id="stockReviewSearch" type="search" placeholder="Search part or description" aria-label="Search upload rows"><button id="stockReviewRevalidate" class="btn light" type="button">Revalidate Corrections</button><button id="stockReviewExport" class="btn light" type="button">Download Exceptions (.xlsx)</button></div>
+              <datalist id="stockReviewSuggestions"></datalist>
+              <div class="table-wrap recon-stock-preview-wrap"><table><thead><tr><th><input id="stockReviewSelectAll" type="checkbox" aria-label="Select all filtered valid rows"></th><th>Excel Row</th><th>Part Number</th><th>Description</th><th>DMS Qty</th><th>Bin Loc 1</th><th>Bin Loc 2</th><th>Bin Loc 3</th><th>DLC</th><th>MRP</th><th>Status</th></tr></thead><tbody id="stockReviewRows"></tbody></table></div>
+              <div class="excel-stock-pager"><span id="stockReviewPageLabel"></span><div><button id="stockReviewPrev" class="btn light" type="button">Previous</button><button id="stockReviewNext" class="btn light" type="button">Next</button></div></div>
+              <div class="excel-confirm-bar"><span id="stockReviewSelected">0 selected. Update mode replaces matching DMS part quantities for this dealer and audit.</span><button id="stockReviewConfirm" class="btn primary" type="button" disabled>Confirm & Upload Selected</button></div>
+            </section>
             <div id="dealerStockUploadMessage" class="form-message">Upload columns: Dealer Code, Part Number, Part Description, Dms Stock, Bin Loc 1, Bin Loc 2, Bin Loc 3. Drag headers to move columns and drag the header edge to resize them.</div>
             <div id="dealerStockErrorReport" class="stock-error-report" hidden></div>
+            <div id="stockUploadHistory" class="stock-error-report" hidden></div>
+            <label class="dealer-stock-invalid-filter"><input id="dealerStockInvalidOnly" type="checkbox"> Invalid / Not in Part Master or Missing Price</label>
             <div id="dealerStockPreviewPanel" class="table-wrap recon-stock-preview-wrap" hidden>
               <table id="dealerStockPreviewTable">
-                <thead><tr><th>Dealer Code</th><th>Part Number</th><th>Part Description</th><th>Dms Stock</th><th>Bin Loc 1</th><th>Bin Loc 2</th><th>Bin Loc 3</th></tr></thead>
-                <tbody id="dealerStockPreviewRows"><tr><td colspan="7" class="muted">No dealer stock uploaded yet</td></tr></tbody>
+                <thead><tr><th>Dealer Code</th><th>Part Number</th><th>Part Description</th><th>Dms Stock</th><th>Bin Loc 1</th><th>Bin Loc 2</th><th>Bin Loc 3</th><th>Action</th></tr></thead>
+                <tbody id="dealerStockPreviewRows"><tr><td colspan="8" class="muted">No dealer stock uploaded yet</td></tr></tbody>
               </table>
             </div>
           </section>
@@ -1841,7 +1852,7 @@
   <script src="/js/smart-part-search.js?v=20261011-smart-part-search-v1"></script>
   <script src="/js/excel-upload-table.js?v=20261012-adjustable-v1"></script>
   <script src="/js/excel-upload-history.js?v=20261012-compact-v1"></script>
-  <script src="/ui.js?v=20261014-reconciliation-selection-v1"></script>
+  <script src="/ui.js?v=20261015-dealer-stock-review"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

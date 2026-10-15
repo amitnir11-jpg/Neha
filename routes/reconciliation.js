@@ -11,6 +11,7 @@ const autoTableModule = require('jspdf-autotable');
 const DealerStock = require('../models/DealerStock');
 const Inventory = require('../models/Inventory');
 const Dealer = require('../models/Dealer');
+const ScanAuditLog = require('../models/ScanAuditLog');
 const auth = require('./auth');
 const { getActiveAudit } = require('../utils/audit');
 const { validScanClause } = require('../utils/masterValidation');
@@ -23,6 +24,7 @@ const { aggregateDealerStockRows } = require('../utils/dmsStockAggregation');
 const { getPricesFromPartMaster, savedAuditPrice } = require('../utils/partMasterPrice');
 const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
+const { withDatabaseTransaction } = require('../services/prisma');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
@@ -31,7 +33,7 @@ const autoTable = autoTableModule.default || autoTableModule;
 const EXCLUDED_SYNC_STATUSES = ['duplicate', 'rejected', 'failed', 'deleted'];
 const POSITIVE_SCAN_TYPES = ['INWARD', 'AUDIT'];
 const NEGATIVE_SCAN_TYPES = ['OUTWARD', 'FITTED', 'DAMAGE'];
-const UPLOAD_ERROR_LIMIT = 250;
+const UPLOAD_ERROR_LIMIT = 10000;
 const PREVIEW_LIMIT = 500;
 // DealerStock rows contain 34 bound columns. Keep each INSERT below PostgreSQL's
 // 32,767 bind-parameter limit while leaving room for schema additions.
@@ -348,7 +350,7 @@ function mergeRecord(target, item) {
   return target;
 }
 
-async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, onProgress = () => {}) {
+async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, onProgress = () => {}, selectedRows = null) {
   if (!rows.length) return { records: [], errorRows: [{ rowNumber: 0, message: 'File is empty' }], columns: [], duplicateRowsMerged: 0, skippedCount: 1 };
 
   const headerInfo = findHeaderRow(rows);
@@ -364,7 +366,7 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
   const missing = [];
   if (!columnsByKey.partNumber) missing.push('Part Number');
   if (!columnsByKey.dmsStock) missing.push('System Quantity / DMS Stock / Stock In Hand');
-  if (!columnsByKey.dealerCode && !selectedDealerCode) missing.push('Dealer Code or selected dealer');
+  if (!columnsByKey.dealerCode) missing.push('Dealer Code');
   if (!auditId) missing.push('Active Audit ID');
   if (missing.length) {
     return {
@@ -380,6 +382,7 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
   const byPart = new Map();
   const seenSourceRows = new Set();
   const errorRows = [];
+  const reviewRows = [];
   let duplicateRowsMerged = 0;
   let skippedCount = 0;
 
@@ -404,19 +407,25 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
     const partNumber = normalizePart(item.partNumber);
     const errors = [];
     if (!dealerCode) errors.push('Dealer code missing');
+    if (!fileDealerCode) errors.push('Dealer code missing');
     if (selectedDealerCode && fileDealerCode && selectedDealerCode !== fileDealerCode) errors.push(`Dealer code ${fileDealerCode} does not match selected dealer ${selectedDealerCode}`);
     if (!partNumber) errors.push('Part number blank');
-    if (!Number.isFinite(item.dmsStock)) errors.push('DMS stock must be numeric');
+    if (!Number.isSafeInteger(item.dmsStock) || item.dmsStock < 0) errors.push('DMS stock must be a non-negative whole number');
     if (columnsByKey.mrp && !Number.isFinite(item.mrp)) errors.push('MRP must be numeric when provided');
     if (columnsByKey.dlp && !Number.isFinite(item.dlp)) errors.push('DLC / DLP must be numeric when provided');
     if (errors.length) {
       skippedCount += 1;
+      reviewRows.push({ rowNumber, dealerCode: fileDealerCode, partNumber: clean(item.partNumber), partDescription: clean(item.partDescription), dmsStock: item.dmsStock, binLoc1: upper(item.binLoc1), binLoc2: upper(item.binLoc2), binLoc3: upper(item.binLoc3), status: 'REJECTED', reason: errors.join('; ') });
       if (errorRows.length < UPLOAD_ERROR_LIMIT) {
         errorRows.push({ rowNumber, partNumber: clean(item.partNumber), dealerCode: fileDealerCode || dealerCode, message: errors.join('; ') });
       }
       continue;
     }
 
+    if (selectedRows && !selectedRows.has(rowNumber)) {
+      reviewRows.push({ rowNumber, dealerCode, partNumber, partDescription: clean(item.partDescription), dmsStock: item.dmsStock, binLoc1: upper(item.binLoc1), binLoc2: upper(item.binLoc2), binLoc3: upper(item.binLoc3), status: 'EXCLUDED', reason: 'Excluded from this upload' });
+      continue;
+    }
     const sourceSignature = [
       partNumber,
       upper(item.inventoryLocation),
@@ -425,6 +434,7 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
     ].join('|');
     if (seenSourceRows.has(sourceSignature)) {
       duplicateRowsMerged += 1;
+      reviewRows.push({ rowNumber, dealerCode, partNumber, partDescription: clean(item.partDescription), dmsStock: item.dmsStock, binLoc1: upper(item.binLoc1), binLoc2: upper(item.binLoc2), binLoc3: upper(item.binLoc3), status: 'DUPLICATE', reason: 'Repeated source row excluded' });
       continue;
     }
     seenSourceRows.add(sourceSignature);
@@ -472,6 +482,8 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
       uploadedAt: now
     };
 
+    reviewRows.push({ rowNumber, dealerCode, partNumber, partDescription: record.partDescription, dmsStock: record.dmsStock, binLoc1: record.binLoc1, binLoc2: record.binLoc2, binLoc3: record.binLoc3, status: 'VALID', reason: '' });
+
     const existing = byPart.get(partNumber);
     if (existing) {
       duplicateRowsMerged += 1;
@@ -486,8 +498,39 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
   }
   onProgress(sourceRows.length, sourceRows.length);
 
+  const prices = new Map();
+  const parts = Array.from(byPart.keys());
+  for (let index = 0; index < parts.length; index += 500) {
+    const batch = await getPricesFromPartMaster(parts.slice(index, index + 500), selectedDealerCode);
+    for (const [part, price] of batch) prices.set(part, price);
+  }
+  for (const row of reviewRows) {
+    if (row.status !== 'VALID') continue;
+    const price = prices.get(row.partNumber);
+    if (!price || !price.masterFound) { row.status = 'WRONG_PART'; row.reason = 'Part not found in Part Master'; }
+    else if (!(Number(price.dlc) > 0) || !(Number(price.mrp) > 0)) { row.status = 'MISSING_PRICE'; row.reason = `${Number(price.dlc) > 0 ? '' : 'DLC'}${Number(price.dlc) > 0 || Number(price.mrp) > 0 ? '' : ' and '}${Number(price.mrp) > 0 ? '' : 'MRP'} missing in Part Master`; }
+    if (row.status === 'VALID') {
+      row.partDescription = clean(price.description || price.partDescription || price.partName);
+      row.dlc = Number(price.dlc);
+      row.mrp = Number(price.mrp);
+    }
+  }
+  const validParts = new Set(reviewRows.filter(row => row.status === 'VALID').map(row => row.partNumber));
+  const records = Array.from(byPart.values()).filter(record => validParts.has(record.partNumber)).map(record => {
+    const price = prices.get(record.partNumber);
+    const dlc = Number(price.dlc);
+    const mrp = Number(price.mrp);
+    return { ...record, partDescription: clean(price.description || price.partDescription || price.partName), dlc, dlp: dlc, mrp, stockValue: money(record.dmsStock * dlc) };
+  });
+  for (const row of reviewRows) {
+    if (!['WRONG_PART', 'MISSING_PRICE'].includes(row.status)) continue;
+    skippedCount += 1;
+    if (errorRows.length < UPLOAD_ERROR_LIMIT) errorRows.push({ rowNumber: row.rowNumber, dealerCode: row.dealerCode, partNumber: row.partNumber, message: row.reason });
+  }
+
   return {
-    records: Array.from(byPart.values()),
+    records,
+    reviewRows,
     errorRows,
     columns: headers,
     duplicateRowsMerged,
@@ -554,12 +597,18 @@ function publicStock(row, pricing = null) {
 function pricedDealerStockRows(rows = [], priceByPart = new Map()) {
   return rows.map((row) => {
     const partNumber = normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo || row.part);
-    return publicStock(row, resolvePartPricing({
+    const masterPrice = priceByPart.get(partNumber) || null;
+    const priced = publicStock(row, resolvePartPricing({
       partNumber,
-      partMasterPrice: savedAuditPrice(row, priceByPart.get(partNumber) || null),
+      partMasterPrice: savedAuditPrice(row, masterPrice),
       actualQty: 0,
       dmsQty: Number(row.dmsStock || row.systemQty || 0)
     }));
+    if (!masterPrice || !(Number(masterPrice.dlc) > 0) || !(Number(masterPrice.mrp) > 0)) {
+      return { ...priced, dlc: null, dlp: null, mrp: null, stockValue: null,
+        pricingStatus: 'PART_MASTER_PRICE_MISSING', pricingSource: 'PART_MASTER_PRICE_MISSING' };
+    }
+    return priced;
   });
 }
 
@@ -644,33 +693,38 @@ function requireScope(scope, res) {
 }
 
 async function emitReconciliationChanged(req, reason, payload = {}) {
-  const io = req.io || req.app.get('io');
-  if (!io) return;
   invalidateCache({
     tags: ['reconciliation', 'stock', 'report', 'dashboard'],
     scope: { dealerCode: payload.dealerCode || '', auditId: payload.auditId || '' }
   });
+  const io = req.io || req.app.get('io');
+  if (!io) return;
   io.emit('dealer-stock:update', { reason, ...payload, at: new Date() });
   io.emit('reports:update', { reason, ...payload, at: new Date() });
 }
 
-async function saveDealerStockRecords(records = [], onProgress = () => {}) {
-  const now = new Date();
-  let insertedCount = 0;
-  let updatedCount = 0;
-  for (let index = 0; index < records.length; index += DEALER_STOCK_UPLOAD_BATCH_SIZE) {
-    const chunk = records.slice(index, index + DEALER_STOCK_UPLOAD_BATCH_SIZE).map((record) => ({
-      ...record,
-      updatedAt: now
-    }));
-    const result = await DealerStock.bulkUpsertBy(chunk,
-      ['dealerCode', 'auditId', 'normalizedPartNumber'],
-      { lockKey: `dealer-stock:${chunk[0].dealerCode}:${chunk[0].auditId}` });
-    insertedCount += Number(result.insertedCount || 0);
-    updatedCount += Number(result.updatedCount || 0);
-    onProgress(Math.min(index + chunk.length, records.length), records.length);
-  }
-  return { upsertedCount: insertedCount, modifiedCount: updatedCount, matchedCount: updatedCount };
+async function saveDealerStockRecords(records = [], onProgress = () => {}, upload = {}) {
+  return withDatabaseTransaction(async () => {
+    const now = new Date();
+    let insertedCount = 0;
+    let updatedCount = 0;
+    for (let index = 0; index < records.length; index += DEALER_STOCK_UPLOAD_BATCH_SIZE) {
+      const chunk = records.slice(index, index + DEALER_STOCK_UPLOAD_BATCH_SIZE).map((record) => ({ ...record, updatedAt: now }));
+      const previous = await DealerStock.find({ dealerCode: chunk[0].dealerCode, auditId: chunk[0].auditId,
+        normalizedPartNumber: { $in: chunk.map(record => record.normalizedPartNumber) } }).lean();
+      const result = await DealerStock.bulkUpsertBy(chunk,
+        ['dealerCode', 'auditId', 'normalizedPartNumber'],
+        { lockKey: `dealer-stock:${chunk[0].dealerCode}:${chunk[0].auditId}` });
+      await ScanAuditLog.create({ action: 'UPDATE', scanId: upload.batchId, dealerCode: chunk[0].dealerCode,
+        performedByUserId: upload.userId, performedByUsername: upload.username, performedByName: upload.userName,
+        performedByRole: upload.role, reason: `Dealer DMS stock update for audit ${chunk[0].auditId}; source file ${upload.fileName}`,
+        oldData: { rows: previous }, newData: { rows: chunk }, timestamp: now });
+      insertedCount += Number(result.insertedCount || 0);
+      updatedCount += Number(result.updatedCount || 0);
+      onProgress(Math.min(index + chunk.length, records.length), records.length);
+    }
+    return { upsertedCount: insertedCount, modifiedCount: updatedCount, matchedCount: updatedCount };
+  }, { timeout: 120000 });
 }
 
 function scanMatch(scope, filters = {}) {
@@ -1653,10 +1707,53 @@ async function uploadDealerStockHandler(req, res) {
     sendProgress('parsing');
     const userName = (req.user && (req.user.name || req.user.username || req.user.email)) || 'System';
     const rows = await readUploadedRows(req.file);
+    const header = findHeaderRow(rows);
+    const partIndex = header.keys.indexOf('partNumber');
+    const qtyIndex = header.keys.indexOf('dmsStock');
+    const binIndexes = ['binLoc1', 'binLoc2', 'binLoc3'].map(key => header.keys.indexOf(key));
+    let corrections;
+    let selectedRowNumbers;
+    try {
+      corrections = req.body.corrections ? JSON.parse(req.body.corrections) : {};
+      selectedRowNumbers = req.body.selectedRows ? JSON.parse(req.body.selectedRows) : null;
+    } catch (_) {
+      return res.status(400).json({ success: false, message: 'Invalid upload review data.' });
+    }
+    if (!corrections || Array.isArray(corrections) || typeof corrections !== 'object') return res.status(400).json({ success: false, message: 'Invalid row corrections.' });
+    if (rows.length - header.index - 1 > 50000) return res.status(413).json({ success: false, message: 'Upload at most 50,000 rows per file.' });
+    if (Object.keys(corrections).length > 50000 || (selectedRowNumbers !== null && (!Array.isArray(selectedRowNumbers) || selectedRowNumbers.length > 50000))) return res.status(400).json({ success: false, message: 'Invalid upload review size.' });
+    for (const [rowKey, edit] of Object.entries(corrections)) {
+      const rowNumber = Number(rowKey);
+      if (!Number.isSafeInteger(rowNumber) || rowNumber <= header.index + 1 || rowNumber > rows.length || !edit || typeof edit !== 'object') return res.status(400).json({ success: false, message: 'Invalid Excel row correction.' });
+      const values = rows[rowNumber - 1];
+      if (!Array.isArray(values)) return res.status(400).json({ success: false, message: 'Excel row was not found.' });
+      if (partIndex >= 0 && edit.partNumber !== undefined) values[partIndex] = clean(edit.partNumber);
+      if (qtyIndex >= 0 && edit.dmsStock !== undefined) values[qtyIndex] = clean(edit.dmsStock);
+      binIndexes.forEach((index, position) => { if (index >= 0 && edit[`binLoc${position + 1}`] !== undefined) values[index] = clean(edit[`binLoc${position + 1}`]); });
+    }
     markPerf('fileParseMs');
+    const selectedRows = selectedRowNumbers === null ? null : new Set(selectedRowNumbers.map(Number));
+    if (selectedRows && [...selectedRows].some(row => !Number.isSafeInteger(row) || row <= header.index + 1 || row > rows.length)) return res.status(400).json({ success: false, message: 'Invalid row selection.' });
     const parsed = await rowsToStockRecords(rows, scope.dealerCode, scope.auditId, userName,
-      (processed, total) => sendProgress('validating', processed, total));
+      (processed, total) => sendProgress('validating', processed, total), req.body.confirmed === 'true' ? selectedRows : null);
     markPerf('validationAndMergeMs');
+    const wrongDealer = parsed.reviewRows?.find(row => row.reason?.includes('does not match selected dealer') || row.reason === 'Dealer code missing');
+    if (wrongDealer && req.body.confirmed === 'true') return res.status(400).json({ success: false, message: `Dealer code mismatch at Excel row ${wrongDealer.rowNumber}. No stock was saved.`, reviewRows: parsed.reviewRows });
+    if (!parsed.reviewRows) return res.status(400).json({ success: false, message: parsed.errorRows?.[0]?.message || 'Invalid Dealer Stock template.' });
+    const reviewSummary = {
+      excelRows: parsed.reviewRows?.length || 0,
+      validRows: parsed.reviewRows?.filter(row => row.status === 'VALID').length || 0,
+      wrongParts: parsed.reviewRows?.filter(row => row.status === 'WRONG_PART').length || 0,
+      missingPrices: parsed.reviewRows?.filter(row => row.status === 'MISSING_PRICE').length || 0,
+      duplicates: parsed.reviewRows?.filter(row => row.status === 'DUPLICATE').length || 0,
+      selectedQty: parsed.records.reduce((sum, row) => sum + row.dmsStock, 0),
+      dlcValue: money(parsed.records.reduce((sum, row) => sum + row.stockValue, 0)),
+      mrpValue: money(parsed.records.reduce((sum, row) => sum + row.dmsStock * row.mrp, 0))
+    };
+    if (req.body.confirmed !== 'true') return res.json({ success: true, dealerCode: scope.dealerCode, auditId: scope.auditId, reviewRows: parsed.reviewRows, reviewSummary, message: 'Validated for review. No stock was saved.' });
+    if (!selectedRows || !selectedRows.size) return res.status(400).json({ success: false, message: 'Select validated rows before confirming upload.' });
+    const selectedInvalid = parsed.reviewRows.find(row => selectedRows.has(row.rowNumber) && row.status !== 'VALID');
+    if (selectedInvalid) return res.status(409).json({ success: false, message: `Excel row ${selectedInvalid.rowNumber} is ${selectedInvalid.status}: ${selectedInvalid.reason}. Revalidate before uploading.`, reviewRows: parsed.reviewRows });
     sendProgress('processing', 0, parsed.records.length);
     if (!parsed.records.length) {
       return res.status(400).json({
@@ -1677,7 +1774,10 @@ async function uploadDealerStockHandler(req, res) {
       auditId: scope.auditId,
       uploadBatchId
     }));
-    const writeResult = await saveDealerStockRecords(records, (processed, total) => sendProgress('processing', processed, total));
+    const writeResult = await saveDealerStockRecords(records, (processed, total) => sendProgress('processing', processed, total), {
+      batchId: uploadBatchId, fileName: clean(req.file.originalname), userId: String(req.user?.id || req.user?._id || ''),
+      username: clean(req.user?.username), userName, role: clean(req.user?.role)
+    });
     markPerf('bulkSaveMs');
     // Re-read the scoped stock after upsert so split uploads accumulate into
     // the dealer's complete stock and the upload summary reflects that total.
@@ -1735,20 +1835,23 @@ async function previewDealerStockHandler(req, res) {
     if (!requireScope(scope, res)) return null;
     const limit = Math.min(Math.max(Number(req.query.limit || PREVIEW_LIMIT), 1), 2000);
     const query = { dealerCode: scope.dealerCode, auditId: scope.auditId };
-    const [rows, allRows, total] = await Promise.all([
-      DealerStock.find(query).sort({ partNumber: 1 }).limit(limit).lean(),
-      DealerStock.find(query).lean(),
-      DealerStock.countDocuments(query)
-    ]);
+    const allRows = await DealerStock.find(query).sort({ partNumber: 1 }).lean();
     const priceByPart = await getPricesFromPartMaster(allRows.map((row) => row.normalizedPartNumber || row.partNumber), scope.dealerCode);
-    const stock = pricedDealerStockRows(rows, priceByPart);
-    const summaryRows = rows.length === allRows.length ? stock : pricedDealerStockRows(allRows, priceByPart);
-    const summary = dealerStockSummaryFromPublicRows(summaryRows, total, stock.length);
+    const pricedRows = pricedDealerStockRows(allRows, priceByPart).map(row => {
+      const price = priceByPart.get(normalizePart(row.partNumber));
+      return { ...row, validationStatus: !price ? 'WRONG_PART' : (!(Number(price.dlc) > 0) || !(Number(price.mrp) > 0) ? 'MISSING_PRICE' : 'VALID') };
+    });
+    const invalidRows = pricedRows.filter(row => row.validationStatus !== 'VALID');
+    const visible = req.query.invalidOnly === '1' ? invalidRows : pricedRows;
+    const stock = visible.slice(0, limit);
+    const total = visible.length;
+    const summary = dealerStockSummaryFromPublicRows(pricedRows, allRows.length, stock.length);
     return res.json({
       success: true,
       dealerCode: scope.dealerCode,
       auditId: scope.auditId,
       total,
+      invalidCount: invalidRows.length,
       summary,
       previewRange: summary.previewRange,
       lineRange: summary.lineRange,
@@ -1756,6 +1859,78 @@ async function previewDealerStockHandler(req, res) {
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function correctDealerStockPartHandler(req, res) {
+  try {
+    const scope = await resolveScope(req);
+    if (!requireScope(scope, res)) return null;
+    const partNumber = normalizePart(req.body.partNumber);
+    const prices = await getPricesFromPartMaster([partNumber], scope.dealerCode);
+    const price = prices.get(partNumber);
+    if (!price || !price.masterFound) return res.status(400).json({ success: false, message: 'Replacement part is not in Part Master.' });
+    if (!(Number(price.dlc) > 0) || !(Number(price.mrp) > 0)) return res.status(400).json({ success: false, message: 'Correct the replacement part prices in Part Master first.' });
+    const result = await withDatabaseTransaction(async () => {
+      const query = { _id: req.params.id, dealerCode: scope.dealerCode, auditId: scope.auditId };
+      const saved = await DealerStock.findOne(query).lean();
+      if (!saved) throw Object.assign(new Error('Stock row was not found for this active dealer audit.'), { statusCode: 404 });
+      const previous = normalizePart(saved.normalizedPartNumber || saved.partNumber);
+      const previousPrice = (await getPricesFromPartMaster([previous], scope.dealerCode)).get(previous);
+      if (previousPrice && Number(previousPrice.dlc) > 0 && Number(previousPrice.mrp) > 0) throw Object.assign(new Error('This stock row is already valid in Part Master.'), { statusCode: 409 });
+      if (previous === partNumber) throw Object.assign(new Error('Select a different valid Part Master part.'), { statusCode: 400 });
+      const collision = await DealerStock.findOne({ dealerCode: scope.dealerCode, auditId: scope.auditId, normalizedPartNumber: partNumber }).lean();
+      if (collision) throw Object.assign(new Error('Replacement part already has DMS stock. Review it before merging quantities.'), { statusCode: 409 });
+      const changes = { partNumber, normalizedPartNumber: partNumber, partDescription: clean(price.description || price.partDescription || price.partName), dlc: Number(price.dlc), dlp: Number(price.dlc), mrp: Number(price.mrp), stockValue: money(Number(saved.dmsStock || 0) * Number(price.dlc)), correctedAt: new Date(), correctedBy: clean(req.user?.username || req.user?.name || '') };
+      await DealerStock.updateOne(query, { $set: changes });
+      await ScanAuditLog.create({ action: 'UPDATE', scanId: String(saved._id || saved.id), dealerCode: scope.dealerCode, partNumber: previous, performedByUserId: String(req.user?.id || req.user?._id || ''), performedByUsername: clean(req.user?.username), performedByName: clean(req.user?.name), performedByRole: clean(req.user?.role), reason: `Correct invalid uploaded DMS part for audit ${scope.auditId}`, oldData: saved, newData: { ...saved, ...changes }, timestamp: new Date() });
+      return { before: previous, after: partNumber };
+    }, { timeout: 60000 });
+    await emitReconciliationChanged(req, 'dealer-stock-part-corrected', { ...scope, ...result });
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+}
+
+async function exportDealerStockReviewExceptions(req, res) {
+  try {
+    const scope = await resolveScope(req);
+    if (!requireScope(scope, res)) return null;
+    const rows = req.body?.rows;
+    if (!Array.isArray(rows) || rows.length > 50000) return res.status(400).json({ success: false, message: 'Invalid exception rows.' });
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Draft Upload Exceptions');
+    sheet.addRow(['Dealer Code', 'Excel Row', 'Part Number', 'Description', 'DMS Qty', 'Bin Loc 1', 'Bin Loc 2', 'Bin Loc 3', 'Status', 'Reason']);
+    rows.filter(row => row && row.status !== 'VALID').forEach(row => {
+      sheet.addRow([clean(row.dealerCode), Number(row.rowNumber) || 0, clean(row.partNumber), clean(row.partDescription),
+        Number.isFinite(Number(row.dmsStock)) ? Number(row.dmsStock) : '', clean(row.binLoc1), clean(row.binLoc2), clean(row.binLoc3), clean(row.status), clean(row.reason)]);
+    });
+    sheet.getColumn(3).numFmt = '@';
+    sheet.columns.forEach(column => { column.width = 22; });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${scope.dealerCode}_DMS_Upload_Exceptions.xlsx"`);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(Buffer.from(await workbook.xlsx.writeBuffer()));
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+}
+
+async function dealerStockUploadHistoryHandler(req, res) {
+  try {
+    const scope = await resolveScope(req);
+    if (!requireScope(scope, res)) return null;
+    const logs = await ScanAuditLog.find({ dealerCode: scope.dealerCode, reason: { $regex: `^Dealer DMS stock update for audit ${scope.auditId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')};` } })
+      .sort({ timestamp: -1 }).limit(100).lean();
+    return res.json({ success: true, dealerCode: scope.dealerCode, auditId: scope.auditId, uploads: logs.map(log => ({
+      batchId: log.scanId || '', fileName: String(log.reason || '').split('; source file ')[1] || '',
+      timestamp: log.timestamp, uploadedBy: log.performedByName || log.performedByUsername || '',
+      acceptedRows: Array.isArray(log.newData?.rows) ? log.newData.rows.length : 0,
+      replacedRows: Array.isArray(log.oldData?.rows) ? log.oldData.rows.length : 0
+    })) });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 }
 
@@ -1838,6 +2013,9 @@ async function deleteDealerStockHandler(req, res) {
 router.get('/dealer-stock-template', auth.requireAuth, auth.requireAdmin, sendDealerStockTemplate);
 router.post(['/upload-stock', '/upload'], auth.requireAuth, auth.requireAdmin, upload.single('file'), uploadDealerStockHandler);
 router.get(['/stock-preview', '/preview/:dealerCode/:auditId'], auth.requireAuth, previewDealerStockHandler);
+router.patch('/stock/:id', auth.requireAuth, auth.requireAdmin, correctDealerStockPartHandler);
+router.post('/stock-review-exceptions', auth.requireAuth, auth.requireAdmin, exportDealerStockReviewExceptions);
+router.get('/stock-upload-history', auth.requireAuth, auth.requireAdmin, dealerStockUploadHistoryHandler);
 router.get('/stock-export', auth.requireAuth, exportDealerStockHandler);
 router.delete(['/stock', '/delete/:dealerCode/:auditId'], auth.requireAuth, auth.requireAdmin, deleteDealerStockHandler);
 
