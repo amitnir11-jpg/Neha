@@ -322,7 +322,7 @@ async function getPriceFromPartMaster(partNumber, dealerCode = '', options = {})
   );
 }
 
-async function getPricesFromPartMaster(partNumbers = [], dealerCode = '') {
+async function getPricesFromPartMaster(partNumbers = [], dealerCode = '', options = {}) {
   const parts = Array.from(new Set(partNumbers.map(normalizePartNumber).filter(Boolean)));
   const map = new Map();
   if (!parts.length) return map;
@@ -334,7 +334,7 @@ async function getPricesFromPartMaster(partNumbers = [], dealerCode = '') {
   const foundParts = new Set([...catalogueRows, ...masterRows]
     .map((row) => normalizePartNumber(row.normalizedPartNumber || row.partNumber || ''))
     .filter(Boolean));
-  const legacyParts = parts.filter((part) => !foundParts.has(part));
+  const legacyParts = options.exact === true ? [] : parts.filter((part) => !foundParts.has(part));
   if (legacyParts.length) {
     const [legacyCatalogueRows, legacyMasterRows] = await Promise.all([
       MasterCatalogue.find(dealerScopedPartLookup(legacyPartListLookup(legacyParts), dealerCode)).sort({ uploadedAt: -1, updatedAt: -1, createdAt: -1 }).lean(),

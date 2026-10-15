@@ -53,6 +53,10 @@ function normalizePart(value) {
   return normalizePartNumber(value);
 }
 
+function invalidDealerStockPartReason(value) {
+  return clean(value).includes('?') ? 'Part number contains an unresolved ? character. Enter the exact Part Master part number.' : '';
+}
+
 function numberValue(value, fallback = 0) {
   const parsed = parseNumber(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -410,6 +414,8 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
     if (!fileDealerCode) errors.push('Dealer code missing');
     if (selectedDealerCode && fileDealerCode && selectedDealerCode !== fileDealerCode) errors.push(`Dealer code ${fileDealerCode} does not match selected dealer ${selectedDealerCode}`);
     if (!partNumber) errors.push('Part number blank');
+    const partError = invalidDealerStockPartReason(item.partNumber);
+    if (partError) errors.push(partError);
     if (!Number.isSafeInteger(item.dmsStock) || item.dmsStock < 0) errors.push('DMS stock must be a non-negative whole number');
     if (columnsByKey.mrp && !Number.isFinite(item.mrp)) errors.push('MRP must be numeric when provided');
     if (columnsByKey.dlp && !Number.isFinite(item.dlp)) errors.push('DLC / DLP must be numeric when provided');
@@ -501,7 +507,7 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
   const prices = new Map();
   const parts = Array.from(byPart.keys());
   for (let index = 0; index < parts.length; index += 500) {
-    const batch = await getPricesFromPartMaster(parts.slice(index, index + 500), selectedDealerCode);
+    const batch = await getPricesFromPartMaster(parts.slice(index, index + 500), selectedDealerCode, { exact: true });
     for (const [part, price] of batch) prices.set(part, price);
   }
   for (const row of reviewRows) {
@@ -597,10 +603,10 @@ function publicStock(row, pricing = null) {
 function pricedDealerStockRows(rows = [], priceByPart = new Map()) {
   return rows.map((row) => {
     const partNumber = normalizePart(row.normalizedPartNumber || row.partNumber || row.partNo || row.part);
-    const masterPrice = priceByPart.get(partNumber) || null;
+    const masterPrice = invalidDealerStockPartReason(partNumber) ? null : (priceByPart.get(partNumber) || null);
     const priced = publicStock(row, resolvePartPricing({
       partNumber,
-      partMasterPrice: savedAuditPrice(row, masterPrice),
+      partMasterPrice: masterPrice ? savedAuditPrice(row, masterPrice) : null,
       actualQty: 0,
       dmsQty: Number(row.dmsStock || row.systemQty || 0)
     }));
@@ -1054,9 +1060,10 @@ async function buildReconciliationReport(query = {}) {
       const key = normalizePart(stock.normalizedPartNumber || stock.partNumber);
       const physical = physicalByPart.get(key);
       if (physical) usedPhysicalKeys.add(key);
+      const masterPrice = invalidDealerStockPartReason(key) ? null : (priceByPart.get(key) || null);
       const pricing = resolvePartPricing({
         partNumber: key,
-        partMasterPrice: savedAuditPrice(stock, priceByPart.get(key) || null),
+        partMasterPrice: masterPrice ? savedAuditPrice(stock, masterPrice) : null,
         actualQty: physical ? Number(physical.actualStock || 0) : 0,
         dmsQty: Number(stock.dmsStock || stock.systemQty || 0)
       });
@@ -1782,7 +1789,7 @@ async function uploadDealerStockHandler(req, res) {
     // Re-read the scoped stock after upsert so split uploads accumulate into
     // the dealer's complete stock and the upload summary reflects that total.
     const savedStock = await DealerStock.find({ dealerCode: scope.dealerCode, auditId: scope.auditId }).lean();
-    const previewPrices = await getPricesFromPartMaster(savedStock.map((record) => record.partNumber), scope.dealerCode);
+    const previewPrices = await getPricesFromPartMaster(savedStock.map((record) => record.partNumber), scope.dealerCode, { exact: true });
     const pricedStock = pricedDealerStockRows(savedStock, previewPrices);
     const preview = pricedStock.slice(0, 100);
     const summary = dealerStockSummaryFromPublicRows(pricedStock, savedStock.length, preview.length);
@@ -1836,10 +1843,11 @@ async function previewDealerStockHandler(req, res) {
     const limit = Math.min(Math.max(Number(req.query.limit || PREVIEW_LIMIT), 1), 2000);
     const query = { dealerCode: scope.dealerCode, auditId: scope.auditId };
     const allRows = await DealerStock.find(query).sort({ partNumber: 1 }).lean();
-    const priceByPart = await getPricesFromPartMaster(allRows.map((row) => row.normalizedPartNumber || row.partNumber), scope.dealerCode);
+    const priceByPart = await getPricesFromPartMaster(allRows.map((row) => row.normalizedPartNumber || row.partNumber), scope.dealerCode, { exact: true });
     const pricedRows = pricedDealerStockRows(allRows, priceByPart).map(row => {
-      const price = priceByPart.get(normalizePart(row.partNumber));
-      return { ...row, validationStatus: !price ? 'WRONG_PART' : (!(Number(price.dlc) > 0) || !(Number(price.mrp) > 0) ? 'MISSING_PRICE' : 'VALID') };
+      const partError = invalidDealerStockPartReason(row.partNumber);
+      const price = partError ? null : priceByPart.get(normalizePart(row.partNumber));
+      return { ...row, validationStatus: partError || !price ? 'WRONG_PART' : (!(Number(price.dlc) > 0) || !(Number(price.mrp) > 0) ? 'MISSING_PRICE' : 'VALID') };
     });
     const invalidRows = pricedRows.filter(row => row.validationStatus !== 'VALID');
     const visible = req.query.invalidOnly === '1' ? invalidRows : pricedRows;
@@ -1867,7 +1875,8 @@ async function correctDealerStockPartHandler(req, res) {
     const scope = await resolveScope(req);
     if (!requireScope(scope, res)) return null;
     const partNumber = normalizePart(req.body.partNumber);
-    const prices = await getPricesFromPartMaster([partNumber], scope.dealerCode);
+    if (invalidDealerStockPartReason(partNumber)) return res.status(400).json({ success: false, message: invalidDealerStockPartReason(partNumber) });
+    const prices = await getPricesFromPartMaster([partNumber], scope.dealerCode, { exact: true });
     const price = prices.get(partNumber);
     if (!price || !price.masterFound) return res.status(400).json({ success: false, message: 'Replacement part is not in Part Master.' });
     if (!(Number(price.dlc) > 0) || !(Number(price.mrp) > 0)) return res.status(400).json({ success: false, message: 'Correct the replacement part prices in Part Master first.' });
@@ -1876,7 +1885,7 @@ async function correctDealerStockPartHandler(req, res) {
       const saved = await DealerStock.findOne(query).lean();
       if (!saved) throw Object.assign(new Error('Stock row was not found for this active dealer audit.'), { statusCode: 404 });
       const previous = normalizePart(saved.normalizedPartNumber || saved.partNumber);
-      const previousPrice = (await getPricesFromPartMaster([previous], scope.dealerCode)).get(previous);
+      const previousPrice = (await getPricesFromPartMaster([previous], scope.dealerCode, { exact: true })).get(previous);
       if (previousPrice && Number(previousPrice.dlc) > 0 && Number(previousPrice.mrp) > 0) throw Object.assign(new Error('This stock row is already valid in Part Master.'), { statusCode: 409 });
       if (previous === partNumber) throw Object.assign(new Error('Select a different valid Part Master part.'), { statusCode: 400 });
       const collision = await DealerStock.findOne({ dealerCode: scope.dealerCode, auditId: scope.auditId, normalizedPartNumber: partNumber }).lean();

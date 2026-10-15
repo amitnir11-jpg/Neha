@@ -47,6 +47,13 @@ test('required dealer heading and whole nonnegative DMS quantities are enforced'
   assert.equal(invalidQuantity.records.length, 0);
 });
 
+test('an unresolved question-mark part is rejected even if a legacy lookup could return pricing', async () => {
+  const result = await rowsToStockRecords([headings, row('1168A', 'VD?53172ACP320S', '2')], '1168A', 'AUDIT-1', 'Tester');
+  assert.equal(result.reviewRows[0].status, 'REJECTED');
+  assert.match(result.reviewRows[0].reason, /unresolved \? character/);
+  assert.equal(result.records.length, 0);
+});
+
 test('more than 10,000 rows remain reviewable without truncating exceptions', async () => {
   const rows = [headings, ...Array.from({ length: 10001 }, (_, index) => row('1168A', `UNKNOWN${index}`, '1'))];
   const result = await rowsToStockRecords(rows, '1168A', 'AUDIT-1', 'Tester');
