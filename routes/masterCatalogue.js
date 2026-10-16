@@ -8,7 +8,7 @@ const auth = require('./auth');
 const { cleanText, normalizePartNumber } = require('../utils/normalize');
 const { cataloguePayload } = require('../utils/catalogue');
 const { downloadCompletePartMaster } = require('../utils/partMasterExport');
-const { refreshOngoingAuditPrices } = require('../utils/ongoingAuditPricing');
+const { refreshOngoingAuditPrices, refreshAllOngoingAuditPrices } = require('../utils/ongoingAuditPricing');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
 const {
   MAX_UPLOAD_BYTES,
@@ -122,18 +122,24 @@ router.post('/upload', auth.requireAuth, auth.requireAdmin, uploadCatalogueFile,
 });
 
 router.post('/refresh-audit-prices', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  prepareLongUpload(req, res);
   try {
-    const result = await refreshOngoingAuditPrices(req.body, req.user);
+    const allOngoing = req.body && (req.body.allOngoing === true || req.body.allOngoing === 'true');
+    const result = allOngoing
+      ? await refreshAllOngoingAuditPrices(req.user)
+      : await refreshOngoingAuditPrices(req.body, req.user);
     invalidateCache({
       tags: ['inventory', 'reconciliation', 'stock', 'report', 'dashboard', 'audit', 'bin'],
-      scope: { dealerCode: result.dealerCode, auditId: result.auditId }
+      scope: allOngoing ? {} : { dealerCode: result.dealerCode, auditId: result.auditId }
     });
     const event = { reason: 'audit-price-refresh', ...result };
     ['inventory:update', 'reports:update', 'dealer-stock:update', 'audit:prices-refreshed']
       .forEach((name) => req.io?.emit(name, event));
     return res.json({
       success: true, ...result,
-      message: `Audit prices refreshed: ${result.updatedScanCount} scans and ${result.updatedStockCount} stock rows updated.${result.missingPartCount ? ` ${result.missingPartCount} parts were not found in Master; their saved prices were retained.` : ''}`
+      message: allOngoing
+        ? `Prices refreshed for ${result.refreshedAuditCount} ongoing audit(s): ${result.updatedScanCount} scans and ${result.updatedStockCount} stock rows updated.${result.missingPartCount ? ` ${result.missingPartCount} parts were not found in Master; their saved prices were retained.` : ''}`
+        : `Audit prices refreshed: ${result.updatedScanCount} scans and ${result.updatedStockCount} stock rows updated.${result.missingPartCount ? ` ${result.missingPartCount} parts were not found in Master; their saved prices were retained.` : ''}`
     });
   } catch (error) {
     return res.status(error.statusCode || 500).json({ success: false, message: error.message });

@@ -220,7 +220,6 @@
     catalogueUploadSessionId: '',
     catalogueUploadInFlight: false,
     auditPriceRefreshInFlight: false,
-    auditPriceScopeLoading: false,
     catalogueUploadProgress: { stage: '', percent: 0, message: '', processedRows: 0, totalRows: 0, savedRowsCount: 0, failedRowsCount: 0, duplicateRowsCount: 0 },
     masterCatalogueCount: 0,
     partMasterExportInFlight: false,
@@ -9510,69 +9509,6 @@
     return 'NONE';
   }
 
-  function auditPriceRefreshTarget() {
-    const dealerCode = cleanDealerCode($('#auditPriceDealerSelect')?.value || '');
-    const dealer = dealerCode && dealerCode !== 'ALL' ? dealerByCode(dealerCode) : null;
-    const auditId = String(dealer?.currentAuditId || '').trim();
-    const status = String(dealer?.auditStatus || dealer?.status || '').trim().toUpperCase();
-    const ongoing = Boolean(auditId && dealer?.active !== false && ['IN_PROGRESS', 'ACTIVE'].includes(status));
-    return { dealerCode, dealer, auditId, ongoing };
-  }
-
-  function setAuditPriceRefreshMessage(message = '', variant = '') {
-    const node = $('#auditPriceRefreshMessage');
-    if (!node) return;
-    node.hidden = !message;
-    node.className = `form-message ${variant}`.trim();
-    node.textContent = message;
-  }
-
-  function updateAuditPriceRefreshUi() {
-    const select = $('#auditPriceDealerSelect');
-    if (!select) return;
-    const target = auditPriceRefreshTarget();
-    const busy = state.auditPriceRefreshInFlight || state.auditPriceScopeLoading;
-    select.disabled = Boolean(busy || !isAdminUser());
-    syncDealerSelectDisplay(select);
-    $('#auditPriceCurrentAudit').value = target.auditId || '';
-    $('#auditPriceAuditStatus').value = target.dealer ? (target.ongoing ? 'In Progress' : (target.auditId ? 'Not ongoing' : 'No current audit')) : '';
-    const button = $('#refreshAuditPricesBtn');
-    button.disabled = Boolean(!isAdminUser() || busy || state.catalogueUploadInFlight || !target.ongoing);
-    button.textContent = state.auditPriceRefreshInFlight ? 'Refreshing MRP / DLC...' : 'Refresh MRP / DLC from Master';
-    $('#auditPriceRefreshForm').setAttribute('aria-busy', String(Boolean(busy)));
-    setText('auditPriceRefreshHint', state.auditPriceScopeLoading ? 'Checking current audit...' : state.catalogueUploadInFlight
-      ? 'Wait for the catalogue upload to finish before refreshing audit prices.'
-      : !target.dealer ? 'Select one dealer with an ongoing audit.'
-        : !target.ongoing ? 'This dealer has no ongoing current audit. Prices cannot be refreshed.'
-          : `Refresh applies only to ${formatDealerDisplay(target.dealer)}, audit ${target.auditId}.`);
-  }
-
-  function renderAuditPriceDealers() {
-    const select = $('#auditPriceDealerSelect');
-    if (!select) return;
-    const selected = cleanDealerCode(select.value || '');
-    select.innerHTML = '<option value="">Select Dealer</option>' + state.dealers.filter((dealer) => !isTestDealer(dealer)).map((dealer) => (
-      `<option value="${escapeHtml(dealer.dealerCode)}">${escapeHtml(formatDealerDisplay(dealer))}</option>`
-    )).join('');
-    select.value = Array.from(select.options).some((option) => option.value === selected) ? selected : '';
-    updateAuditPriceRefreshUi();
-  }
-
-  async function loadAuditPriceRefreshScope() {
-    if (!isAdminUser() || state.auditPriceScopeLoading) return;
-    state.auditPriceScopeLoading = true;
-    updateAuditPriceRefreshUi();
-    try {
-      await loadDealers({ force: true });
-    } catch (error) {
-      setAuditPriceRefreshMessage(`Could not check the current audit: ${error.message}`, 'error');
-      throw error;
-    } finally {
-      state.auditPriceScopeLoading = false;
-      updateAuditPriceRefreshUi();
-    }
-  }
-
   function refreshViewsAfterAuditPriceRefresh() {
     state.partMasterLookupCache.clear();
     queueRealtimeReportRefresh('manual audit price refresh');
@@ -9580,40 +9516,33 @@
     if ($('#scan')?.classList.contains('active')) queueScanRefresh(400);
   }
 
-  async function refreshAuditPricesFromMaster() {
-    if (state.auditPriceRefreshInFlight || state.auditPriceScopeLoading || state.catalogueUploadInFlight) return;
+  function updateBulkAuditPriceRefreshUi() {
+    const button = $('#refreshPartPricesTopBtn');
+    if (!button) return;
+    const busy = state.auditPriceRefreshInFlight;
+    button.disabled = Boolean(!isAdminUser() || busy || state.catalogueUploadInFlight);
+    button.textContent = busy ? 'Refreshing Ongoing Audits...' : '⟳  Refresh Ongoing Audit Prices';
+  }
+
+  async function refreshAllOngoingAuditPricesFromMaster() {
+    if (state.auditPriceRefreshInFlight || state.catalogueUploadInFlight) return;
     try {
       if (!isAdminUser()) throw new Error('Only administrators can refresh audit prices.');
-      const target = auditPriceRefreshTarget();
-      if (!target.dealer || !target.ongoing) throw new Error('Select one dealer with an ongoing current audit.');
-      const updateFor = $('input[name="updateFor"]:checked')?.value || 'all';
-      const partNumbers = updateFor === 'selected' ? Array.from(state.partMasterSelected) : null;
-      if (updateFor === 'selected' && !partNumbers.length) throw new Error('Select one or more parts from the current Part List first.');
-      const uploadFile = $('#auditPriceUploadFile')?.files?.[0];
-      const source = $('input[name="priceSource"]:checked')?.value || 'master';
-      if (source === 'upload' && !uploadFile) throw new Error('Choose a price file to upload.');
-      if (!window.confirm(`Refresh saved MRP and DLC for ${updateFor === 'selected' ? `${partNumbers.length} selected part(s)` : 'all matched parts'} in ${formatDealerDisplay(target.dealer)}?\n\nAudit: ${target.auditId}\n\nMatched scans in this audit will use the latest master prices and their valuation totals will change. Continue?`)) return;
+      if (!window.confirm('Refresh saved MRP, DLC and valuation totals for every ongoing audit from the Part Master?\n\nCompleted audits will not be changed. Continue?')) return;
       state.auditPriceRefreshInFlight = true;
-      updateAuditPriceRefreshUi();
-      setAuditPriceRefreshMessage(`Refreshing MRP and DLC for audit ${target.auditId}...`);
-      if (source === 'upload') {
-        const uploadBody = new FormData(); uploadBody.append('file', uploadFile); uploadBody.set('mode', 'price-only');
-        await api('/api/master-catalogue/upload', { method: 'POST', body: uploadBody });
-      }
+      updateBulkAuditPriceRefreshUi();
       const data = await api('/api/master-catalogue/refresh-audit-prices', {
         method: 'POST',
-        body: { dealerCode: target.dealerCode, auditId: target.auditId, ...(partNumbers ? { partNumbers } : {}) }
+        body: { allOngoing: true }
       });
       if (!data.success) throw new Error(data.message || 'Audit prices could not be refreshed.');
       refreshViewsAfterAuditPriceRefresh();
-      setAuditPriceRefreshMessage(`${data.message || 'Audit prices refreshed.'} Audit: ${target.auditId}. Updated scans: ${wholeNumber(data.updatedScanCount || 0)}. Matched parts: ${wholeNumber(data.matchedPartCount || 0)}.`, 'success');
-      toast('Audit MRP and DLC refreshed from master', 'success');
+      toast(data.message || 'Ongoing audit prices refreshed from master', 'success');
     } catch (error) {
-      setAuditPriceRefreshMessage(error.message || 'Audit prices could not be refreshed.', 'error');
       toast(error.message || 'Audit prices could not be refreshed.', 'error');
     } finally {
       state.auditPriceRefreshInFlight = false;
-      updateAuditPriceRefreshUi();
+      updateBulkAuditPriceRefreshUi();
     }
   }
 
@@ -9636,7 +9565,6 @@
   }
 
   function renderDealerMaster() {
-    renderAuditPriceDealers();
     const auditors = auditAssignableUsers();
     const modalAuditorSelect = $('#dealerModalAuditUser');
     if (modalAuditorSelect) {
@@ -13425,7 +13353,6 @@
           panel.hidden = !active;
         });
         if (target === 'scanModificationHistoryTab') loadScanModificationHistory().catch((error) => toast(error.message, 'error'));
-        if (target === 'partMasterTab') loadAuditPriceRefreshScope().catch((error) => toast(error.message, 'error'));
       });
     });
     $$('.bin-transfer-tab').forEach((button) => {
@@ -14902,14 +14829,6 @@
       renderReconciliationRows();
     });
 
-    $('#auditPriceDealerSelect')?.addEventListener('change', () => {
-      setAuditPriceRefreshMessage();
-      updateAuditPriceRefreshUi();
-    });
-    $('#auditPriceRefreshForm')?.addEventListener('submit', (event) => {
-      event.preventDefault();
-      refreshAuditPricesFromMaster();
-    });
     $('#partEntryForm')?.addEventListener('submit', submitPartEntry);
     $('#cancelPartEditBtn')?.addEventListener('click', () => { $('#partEntryForm').reset(); setPartEntryMode('add'); });
     $('#addPartTopBtn')?.addEventListener('click', () => setPartEntryMode('add'));
@@ -14918,12 +14837,7 @@
       if (selected.length !== 1) return toast('Select exactly one part in the Part List to edit.', 'error');
       editPartEntry(selected[0]);
     });
-    $('#refreshPartPricesTopBtn')?.addEventListener('click', () => $('#auditPriceRefreshCard')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
-    $('#refreshPriceTemplateBtn')?.addEventListener('click', () => downloadGet('/api/master-catalogue/template', 'Part_Master_Catalogue_Template.xlsx').catch((error) => toast(error.message, 'error')));
-    $('#auditPriceRefreshForm')?.addEventListener('change', (event) => {
-      if (event.target.name === 'priceSource') $('#auditPriceUploadSource').hidden = event.target.value !== 'upload';
-      updateAuditPriceRefreshUi();
-    });
+    $('#refreshPartPricesTopBtn')?.addEventListener('click', () => refreshAllOngoingAuditPricesFromMaster());
     $('#partSelectAll')?.addEventListener('change', (event) => {
       state.masterSearchRows.forEach((part) => {
         const code = String(part.partNumber || part.partNo || '');

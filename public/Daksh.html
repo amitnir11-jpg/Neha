@@ -1027,11 +1027,11 @@
           <section id="partMasterTab" class="master-tab-panel active" role="tabpanel">
             <section class="card part-master-heading-card">
               <header class="part-master-header">
-                <div><h2 id="partMasterHeading">▦ &nbsp;Master Data - Part Master</h2><p id="partMasterSubheading">Manage part catalogue and refresh audit prices (MRP &amp; DLC)</p></div>
+                <div><h2 id="partMasterHeading">▦ &nbsp;Master Data - Part Master</h2><p id="partMasterSubheading">Manage the part catalogue and refresh prices for all ongoing audits.</p></div>
                 <div class="part-master-header-actions">
                   <button id="addPartTopBtn" class="btn primary" type="button">＋ Add Part</button>
                   <button id="editPartTopBtn" class="btn light" type="button">✎ &nbsp;Edit Part</button>
-                  <button id="refreshPartPricesTopBtn" class="btn light part-refresh-top" type="button">⟳ &nbsp;Refresh Audit Prices</button>
+                  <button id="refreshPartPricesTopBtn" class="btn light part-refresh-top" type="button">⟳ &nbsp;Refresh Ongoing Audit Prices</button>
                   <button id="downloadCatalogueTemplateBtn" class="btn light admin-only" type="button">↓ &nbsp;Download Template</button>
                   <details class="part-master-more admin-only"><summary class="btn light">••• &nbsp;More</summary>
                     <div class="part-master-more-menu">
@@ -1097,18 +1097,6 @@
                   <label>Model<input name="model"></label><label>Year<input name="year"></label>
                   <label>MRP (₹)<input name="mrp" type="number" min="0" step="0.01"></label><label>DLC (₹)<input name="dlc" type="number" min="0" step="0.01"></label>
                   <div class="part-entry-actions"><button id="cancelPartEditBtn" class="btn light" type="button" hidden>Cancel</button><button id="savePartBtn" class="btn primary" type="submit">Save Part</button></div>
-                </form>
-              </section>
-              <section id="auditPriceRefreshCard" class="card part-bottom-card audit-price-card">
-                <div class="part-bottom-card-head"><h3>⟳ &nbsp;Refresh Audit Prices (MRP &amp; DLC)</h3></div>
-                <div class="part-price-info">ⓘ &nbsp;This updates MRP and DLC for selected parts or all parts from the master. Existing scan, inventory and audit data is unchanged except allowed audit price values.</div>
-                <form id="auditPriceRefreshForm" class="audit-price-form" aria-busy="false">
-                  <div class="audit-price-field-row"><label>Dealer<select id="auditPriceDealerSelect" name="dealerCode" required><option value="">Select Dealer</option></select></label><label>Current Audit<input id="auditPriceCurrentAudit" readonly placeholder="Select a dealer"></label><label>Status<input id="auditPriceAuditStatus" readonly placeholder="Select a dealer"></label></div>
-                  <fieldset><legend>Update For</legend><label><input name="updateFor" type="radio" value="all" checked> All Parts</label><label><input name="updateFor" type="radio" value="selected"> Selected Parts (from table)</label></fieldset>
-                  <fieldset><legend>Price Source</legend><label><input name="priceSource" type="radio" value="master" checked> From Master</label><label><input name="priceSource" type="radio" value="upload"> From Upload File (Excel/CSV)</label></fieldset>
-                  <div id="auditPriceUploadSource" class="audit-price-upload-source" hidden><input id="auditPriceUploadFile" type="file" accept=".xlsx,.xls,.csv"><button id="refreshPriceTemplateBtn" class="btn light" type="button">Download Template</button></div>
-                  <p id="auditPriceRefreshHint" class="muted">Select one dealer with an ongoing audit.</p><div id="auditPriceRefreshMessage" class="form-message" role="status" aria-live="polite" hidden></div>
-                  <div class="part-entry-actions"><button id="cancelPriceRefreshBtn" class="btn light" type="button">Cancel</button><button id="refreshAuditPricesBtn" class="btn primary" type="submit" disabled>Refresh Prices</button></div>
                 </form>
               </section>
             </div>
