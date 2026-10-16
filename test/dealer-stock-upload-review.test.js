@@ -200,7 +200,7 @@ test('browser review retains only exceptions after upload and selects revalidate
   context.Event = class { constructor(type) { this.type = type; } };
   const editStart = source.indexOf("    $('#stockReviewRows')?.addEventListener('click'");
   vm.runInContext(source.slice(editStart, source.indexOf('    let stockSuggestionTimer;', editStart)), context);
-  handlers.click({ target: { closest: () => ({ dataset: { stockEdit: '3' } }) } });
+  handlers.click({ target: { closest: selector => selector === '[data-stock-edit]' ? ({ dataset: { stockEdit: '3' } }) : null } });
   assert.equal(context.state.dealerStockReview.corrections[3].partNumber, '0003');
   assert.equal(context.state.dealerStockReview.rows[1].status, 'PENDING');
 
@@ -290,5 +290,40 @@ test('browser review retains only exceptions after upload and selects revalidate
   assert.doesNotMatch($('#stockReviewRows').innerHTML, /value="0002"/);
   assert.match($('#stockReviewRows').innerHTML, /value="0003"/);
   assert.equal(context.state.dealerStockReview.committed.has(4), false);
+  assert.match($('#stockReviewRows').innerHTML, /data-stock-delete="4"/);
+  assert.match($('#stockReviewRows').innerHTML, /class="btn light stock-review-icon"/);
+
+  // Reproduce the screenshot: selected dealer mismatch transfers without a
+  // separate dealer-correction click, while other exceptions stay behind.
+  context.state.dealerStockReview = null;
+  responses.push({ reviewRows: initialRows });
+  await context.uploadDealerStock(form);
+  handlers.change({ target: { dataset: { stockSelect: '3' }, checked: true } });
+  const dealerCorrectedRows = initialRows.map(row => row.rowNumber === 3
+    ? { ...row, dealerCode: '1168A', status: 'VALID', reason: '', dlc: 10, mrp: 20 } : row);
+  responses.push({ reviewRows: dealerCorrectedRows }, { summary: {} });
+  await toolbarHandlers.click();
+  assert.equal(JSON.parse(sent.at(-2).corrections)['3'].dealerCode, '1168A');
+  assert.equal(JSON.parse(sent.at(-2).corrections)['4'], undefined);
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows), [2, 3]);
+  assert.equal(context.state.dealerStockReview.committed.has(3), true);
+  assert.equal(context.state.dealerStockReview.committed.has(4), false);
+  assert.match($('#stockReviewRows').innerHTML, /value="0003"/);
+  assert.equal($('#stockReviewFeedback').textContent, $('#dealerStockUploadMessage').textContent);
+
+  // Deletion removes only the pending upload row and survives validation.
+  handlers.click({ target: { closest: selector => selector === '[data-stock-delete]' ? { dataset: { stockDelete: '4' } } : null } });
+  assert.equal(context.state.dealerStockReview.deleted.has(4), true);
+  assert.equal(context.state.dealerStockReview.committed.has(4), false);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /value="0003"/);
+  assert.equal($('#stockReviewRevalidate').disabled, true);
+  selectAllHandlers.change({ target: { checked: true } });
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(4), false);
+  responses.push({ reviewRows: correctedRows });
+  const beforeDeletedValidation = sent.length;
+  await toolbarHandlers.click();
+  assert.equal(sent.length, beforeDeletedValidation + 1, 'deleted row cannot trigger a stock save');
+  assert.equal(context.state.dealerStockReview.deleted.has(4), true);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /value="0003"/);
   assert.match(fs.readFileSync('public/Daksh.html', 'utf8'), /id="stockReviewRevalidate"[^>]*>Validate and Transfer</);
 });

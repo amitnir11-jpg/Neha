@@ -1492,6 +1492,9 @@ a:focus-visible,
 .dealer-stock-review .stock-review-part-edit { display: flex; align-items: center; gap: 6px; }
 .dealer-stock-review .stock-review-part-edit input { flex: 1; min-width: 0 !important; }
 .dealer-stock-review .stock-review-part-edit button { flex: none; padding: 7px 10px; }
+.dealer-stock-review .stock-review-icon { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 38px; }
+.dealer-stock-review .stock-review-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.dealer-stock-review .stock-review-delete { color: #c62828; }
 .dealer-stock-review td:last-child { min-width: 260px; white-space: normal; }
 .dealer-stock-review .excel-confirm-bar { margin-top: 12px; }
 .dealer-stock-invalid-filter { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; }
