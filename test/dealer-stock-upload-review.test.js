@@ -140,9 +140,12 @@ test('browser review retains only exceptions after upload and selects revalidate
       { rowNumber: 3, dealerCode: '1168A', partNumber: '0002', dmsStock: 3, dlc: 10, mrp: 20, status: 'VALID' }] }
   ];
   const sent = [];
-  const context = { $, state: {}, window: { crypto: { randomUUID: () => 'review-id' } },
+  const context = { $, state: {}, URLSearchParams, window: { crypto: { randomUUID: () => 'review-id' } },
     FormData: class { constructor() { this.fields = {}; } set(key, value) { this.fields[key] = value; } },
-    api: async (_path, options) => { sent.push(options.body.fields); return responses.shift(); },
+    api: async (path, options) => {
+      if (path.startsWith('/api/parts/suggestions?')) return { suggestions: [{ partNumber: '0003', partDescription: 'MASTER 0003' }] };
+      sent.push(options.body.fields); return responses.shift();
+    },
     cleanDealerCode: value => String(value || '').toUpperCase(), activeReconDealer: () => '1168A',
     clean: value => String(value || ''), wholeNumber: String, money2: value => Number(value || 0).toFixed(2),
     escapeHtml: value => String(value || ''), enhanceDataTable: () => {},
@@ -160,7 +163,7 @@ test('browser review retains only exceptions after upload and selects revalidate
   const selectionHandlers = {};
   $('#stockReviewRows').addEventListener = (name, handler) => { selectionHandlers[name] = handler; };
   const changeStart = source.indexOf("    $('#stockReviewRows')?.addEventListener('change'");
-  vm.runInContext(source.slice(changeStart, source.indexOf('    let stockSuggestionTimer;', changeStart)), context);
+  vm.runInContext(source.slice(changeStart, source.indexOf("    $('#stockReviewSelectAll')?.addEventListener", changeStart)), context);
   selectionHandlers.change({ target: { dataset: { stockSelect: '3' }, checked: true } });
   assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), true);
   assert.equal($('#stockReviewSelectedCount').textContent, '2');
@@ -192,14 +195,27 @@ test('browser review retains only exceptions after upload and selects revalidate
   const rowNode = $('#stockReviewRows');
   const handlers = {};
   rowNode.addEventListener = (name, handler) => { handlers[name] = handler; };
+  let boundSearch, selected = false, destroyed = false;
   const partInput = { value: '0002', dataset: { stockRow: '3', stockField: 'partNumber' },
-    dispatchEvent() { handlers.change({ target: this }); } };
+    focus() { handlers.focusin({ target: this }); }, select() { selected = true; },
+    dispatchEvent() { selectionHandlers.change({ target: this }); } };
   rowNode.querySelectorAll = () => [partInput];
-  context.window.prompt = () => '0003';
+  context.state.token = 'test-token';
+  context.window.SmartPartSearch = { bind(_input, options) {
+    boundSearch = options;
+    return { search() {}, destroy() { destroyed = true; } };
+  } };
   context.Event = class { constructor(type) { this.type = type; } };
   const editStart = source.indexOf("    $('#stockReviewRows')?.addEventListener('click'");
-  vm.runInContext(source.slice(editStart, source.indexOf('    let stockSuggestionTimer;', editStart)), context);
+  vm.runInContext(source.slice(editStart, source.indexOf("    $('#stockReviewRows')?.addEventListener('change'", editStart)), context);
   handlers.click({ target: { closest: () => ({ dataset: { stockEdit: '3' } }) } });
+  assert.equal(selected, true);
+  assert.equal(boundSearch.isEnabled(), true);
+  assert.match(boundSearch.getScope(), /1168A/);
+  assert.deepEqual((await boundSearch.fetchSuggestions('000')).suggestions.map(part => part.partNumber), ['0003']);
+  partInput.value = '0003';
+  boundSearch.onSelect({ partNumber: '0003' });
   assert.equal(context.state.dealerStockReview.corrections[3].partNumber, '0003');
   assert.equal(context.state.dealerStockReview.rows[1].status, 'PENDING');
+  assert.equal(destroyed, true);
 });

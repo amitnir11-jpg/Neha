@@ -19,6 +19,8 @@
     input.setAttribute('aria-controls', menu.id);
     input.setAttribute('aria-expanded', 'false');
     input.setAttribute('autocomplete', 'off');
+    const listeners = new AbortController();
+    const signal = listeners.signal;
     let sequence = 0, timer, controller, rows = [], active = -1, composing = false, displayedScope = '';
     const scope = () => String(options.getScope?.() || '');
 
@@ -142,10 +144,10 @@
       }, Number(options.debounceMs) || 180);
     }
 
-    input.addEventListener('input', search);
-    input.addEventListener('focus', search);
-    input.addEventListener('compositionstart', () => { composing = true; close(); });
-    input.addEventListener('compositionend', () => { composing = false; search(); });
+    input.addEventListener('input', search, { signal });
+    input.addEventListener('focus', search, { signal });
+    input.addEventListener('compositionstart', () => { composing = true; close(); }, { signal });
+    input.addEventListener('compositionend', () => { composing = false; search(); }, { signal });
     input.addEventListener('keydown', event => {
       if (event.key === 'Escape') { close(); return; }
       if (menu.hidden || !rows.length) return;
@@ -158,16 +160,16 @@
       } else if (event.key === 'Enter' && active >= 0) {
         event.preventDefault(); event.stopImmediatePropagation(); choose(active);
       }
-    }, true);
-    input.addEventListener('blur', () => { setTimeout(() => { if (document.activeElement !== input) close(); }, 0); });
-    input.form?.addEventListener('reset', close);
-    document.addEventListener('pointerdown', event => { if (event.target !== input && !menu.contains(event.target)) close(); });
-    document.addEventListener('change', () => { if (!menu.hidden) close(); });
-    root.addEventListener('resize', position);
-    root.addEventListener('scroll', position, true);
-    root.visualViewport?.addEventListener('resize', position);
-    root.visualViewport?.addEventListener('scroll', position);
-    const instance = { close, search };
+    }, { capture: true, signal });
+    input.addEventListener('blur', () => { setTimeout(() => { if (document.activeElement !== input) close(); }, 0); }, { signal });
+    input.form?.addEventListener('reset', close, { signal });
+    document.addEventListener('pointerdown', event => { if (event.target !== input && !menu.contains(event.target)) close(); }, { signal });
+    document.addEventListener('change', () => { if (!menu.hidden) close(); }, { signal });
+    root.addEventListener('resize', position, { signal });
+    root.addEventListener('scroll', position, { capture: true, signal });
+    root.visualViewport?.addEventListener('resize', position, { signal });
+    root.visualViewport?.addEventListener('scroll', position, { signal });
+    const instance = { close, search, destroy() { close(); listeners.abort(); menu.remove(); instances.delete(input); } };
     instances.set(input, instance);
     return instance;
   }

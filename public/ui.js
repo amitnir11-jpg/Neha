@@ -8561,6 +8561,8 @@
   }
 
   function renderDealerStockReview() {
+    state.stockReviewPartSearch?.destroy();
+    state.stockReviewPartSearch = null;
     const review = state.dealerStockReview;
     const panel = $('#dealerStockReview');
     if (!panel) return;
@@ -8602,7 +8604,7 @@
       <td><input type="checkbox" data-stock-select="${row.rowNumber}" aria-label="Select Excel row ${row.rowNumber} ${row.status === 'VALID' ? 'for upload' : 'for correction'}" ${row.status === 'VALID' ? !review.excluded.has(row.rowNumber) ? 'checked' : '' : selectedExceptions.has(row.rowNumber) ? 'checked' : ''}></td>
       <td>${row.rowNumber}</td>
       <td><input data-stock-row="${row.rowNumber}" data-stock-field="dealerCode" value="${escapeHtml(row.dealerCode || '')}" aria-label="Dealer code at Excel row ${row.rowNumber}" ${row.status === 'VALID' ? 'readonly' : ''}></td>
-      <td><div class="stock-review-part-edit"><input list="stockReviewSuggestions" data-stock-row="${row.rowNumber}" data-stock-field="partNumber" value="${escapeHtml(row.partNumber || '')}" title="${escapeHtml(row.partNumber || '')}" aria-label="Part number at Excel row ${row.rowNumber}"><button type="button" class="btn light" data-stock-edit="${row.rowNumber}" aria-label="Edit part number at Excel row ${row.rowNumber}">Edit</button></div></td>
+      <td><div class="stock-review-part-edit"><input data-stock-row="${row.rowNumber}" data-stock-field="partNumber" value="${escapeHtml(row.partNumber || '')}" title="${escapeHtml(row.partNumber || '')}" aria-label="Part number at Excel row ${row.rowNumber}"><button type="button" class="btn light" data-stock-edit="${row.rowNumber}" aria-label="Edit part number at Excel row ${row.rowNumber}">Edit</button></div></td>
       <td>${escapeHtml(row.partDescription || '')}</td>
       <td><input type="number" min="0" step="1" data-stock-row="${row.rowNumber}" data-stock-field="dmsStock" value="${escapeHtml(row.dmsStock ?? '')}" aria-label="DMS quantity at Excel row ${row.rowNumber}"></td>
       ${[1, 2, 3].map(index => `<td><input data-stock-row="${row.rowNumber}" data-stock-field="binLoc${index}" value="${escapeHtml(row[`binLoc${index}`] || '')}" aria-label="Bin ${index} at Excel row ${row.rowNumber}"></td>`).join('')}
@@ -14556,10 +14558,22 @@
       const input = Array.from($('#stockReviewRows').querySelectorAll('[data-stock-field="partNumber"]'))
         .find(field => Number(field.dataset.stockRow) === rowNumber);
       if (!input) return;
-      const value = window.prompt(`Edit full part number at Excel row ${rowNumber}:`, input.value);
-      if (value === null || clean(value) === input.value) return;
-      input.value = clean(value).toUpperCase();
-      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.focus();
+      input.select();
+    });
+    $('#stockReviewRows')?.addEventListener('focusin', (event) => {
+      const input = event.target;
+      if (input.dataset.stockField !== 'partNumber') return;
+      state.stockReviewPartSearch?.destroy();
+      const dealerCode = state.dealerStockReview?.dealerCode;
+      state.stockReviewPartSearch = window.SmartPartSearch.bind(input, {
+        getScope: () => `${state.token || ''}|${state.dealerStockReview?.dealerCode || ''}`,
+        isEnabled: () => Boolean(state.token && dealerCode && state.dealerStockReview?.dealerCode === dealerCode),
+        fetchSuggestions: (q, options) => api(`/api/parts/suggestions?${new URLSearchParams({ q, dealerCode, limit: '10' })}`, { ...options, timeoutMs: 5000 }),
+        widthMode: 'wide', maxWidth: 560, displayPrice: false,
+        onSelect: () => input.dispatchEvent(new Event('change', { bubbles: true }))
+      });
+      state.stockReviewPartSearch.search();
     });
     $('#stockReviewRows')?.addEventListener('change', (event) => {
       const review = state.dealerStockReview;
@@ -14579,27 +14593,12 @@
       const rowNumber = Number(event.target.dataset.stockRow);
       const field = event.target.dataset.stockField;
       if (!rowNumber || !['dealerCode', 'partNumber', 'dmsStock', 'binLoc1', 'binLoc2', 'binLoc3'].includes(field)) return;
+      const row = review.rows.find(item => item.rowNumber === rowNumber);
+      if (!row || String(row[field] ?? '') === event.target.value) return;
       review.corrections[rowNumber] = { ...(review.corrections[rowNumber] || {}), [field]: event.target.value };
       review.excluded.add(rowNumber);
-      const row = review.rows.find(item => item.rowNumber === rowNumber);
-      if (row) { row[field] = event.target.value; row.status = 'PENDING'; row.reason = 'Correction requires revalidation'; }
+      row[field] = event.target.value; row.status = 'PENDING'; row.reason = 'Correction requires revalidation';
       renderDealerStockReview();
-    });
-    let stockSuggestionTimer;
-    $('#stockReviewRows')?.addEventListener('input', (event) => {
-      if (event.target.dataset.stockField !== 'partNumber') return;
-      clearTimeout(stockSuggestionTimer);
-      const query = clean(event.target.value);
-      const dealerCode = state.dealerStockReview?.dealerCode;
-      if (query.length < 2 || !dealerCode) return;
-      stockSuggestionTimer = setTimeout(async () => {
-        try {
-          const response = await api(`/api/parts/suggestions?${new URLSearchParams({ q: query, dealerCode, limit: '10' })}`);
-          if (state.dealerStockReview?.dealerCode !== dealerCode || clean(event.target.value) !== query) return;
-          const parts = response.parts || response.suggestions || response.rows || [];
-          $('#stockReviewSuggestions').innerHTML = parts.map(part => `<option value="${escapeHtml(part.partNumber || part.part || '')}" label="${escapeHtml(part.partDescription || part.partName || '')}"></option>`).join('');
-        } catch (_) { /* Server validation remains authoritative. */ }
-      }, 250);
     });
     $('#stockReviewSelectAll')?.addEventListener('change', (event) => {
       const review = state.dealerStockReview;
