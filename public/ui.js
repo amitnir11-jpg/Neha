@@ -8739,7 +8739,7 @@
         selectedExceptions: current?.selectedExceptions || new Set(), page: current?.page || 1
       };
       (data.reviewRows || []).forEach(row => {
-        if (row.status === 'VALID' && current?.rows?.find(previousRow => previousRow.rowNumber === row.rowNumber)?.status === 'PENDING') {
+        if (row.status === 'VALID' && current?.selectedExceptions?.has(row.rowNumber)) {
           state.dealerStockReview.excluded.delete(row.rowNumber);
         }
         if (row.status === 'VALID') state.dealerStockReview.selectedExceptions.delete(row.rowNumber);
@@ -14532,11 +14532,30 @@
     });
     const validateAndTransferDealerStock = async (form) => {
       if (state.dealerStockTransferring || state.dealerStockConfirming) return;
+      const previous = state.dealerStockReview;
+      const selectedRows = previous ? new Set(previous.rows.filter(row => !previous.committed.has(row.rowNumber)
+        && (row.status === 'VALID' ? !previous.excluded.has(row.rowNumber) : previous.selectedExceptions.has(row.rowNumber)))
+        .map(row => row.rowNumber)) : null;
       state.dealerStockTransferring = true;
       renderDealerStockReview();
       try {
         const result = await uploadDealerStock(form);
-        if (result) await confirmDealerStockReview(false);
+        if (result) {
+          const review = state.dealerStockReview;
+          if (selectedRows) review.rows.forEach(row => {
+            if (row.status === 'VALID' && !selectedRows.has(row.rowNumber)) review.excluded.add(row.rowNumber);
+          });
+          const transferable = review.rows.some(row => row.status === 'VALID' && !review.excluded.has(row.rowNumber) && !review.committed.has(row.rowNumber));
+          if (transferable) await confirmDealerStockReview(false);
+          else {
+            const blocked = review.rows.filter(row => !review.committed.has(row.rowNumber) && (!selectedRows || selectedRows.has(row.rowNumber)));
+            const message = $('#dealerStockUploadMessage');
+            message.className = 'form-message error';
+            message.textContent = blocked.length
+              ? `No rows transferred. Excel row ${blocked[0].rowNumber}: ${blocked[0].reason || blocked[0].status}. Correct the selected rows and try Validate and Transfer again.`
+              : 'No rows transferred. Select the rows you want to transfer first.';
+          }
+        }
       } finally {
         state.dealerStockTransferring = false;
         renderDealerStockReview();
@@ -14592,6 +14611,7 @@
       if (!rowNumber || !['dealerCode', 'partNumber', 'dmsStock', 'binLoc1', 'binLoc2', 'binLoc3'].includes(field)) return;
       review.corrections[rowNumber] = { ...(review.corrections[rowNumber] || {}), [field]: event.target.value };
       review.excluded.add(rowNumber);
+      review.selectedExceptions.add(rowNumber);
       const row = review.rows.find(item => item.rowNumber === rowNumber);
       if (row) { row[field] = event.target.value; row.status = 'PENDING'; row.reason = 'Correction requires revalidation'; }
       renderDealerStockReview();
@@ -14637,6 +14657,7 @@
       review.rows.filter(row => !review.committed.has(row.rowNumber) && row.reason?.includes('does not match selected dealer') && (!review.selectedExceptions.size || review.selectedExceptions.has(row.rowNumber))).forEach(row => {
         review.corrections[row.rowNumber] = { ...(review.corrections[row.rowNumber] || {}), dealerCode: review.dealerCode };
         review.excluded.add(row.rowNumber);
+        review.selectedExceptions.add(row.rowNumber);
         row.dealerCode = review.dealerCode;
         row.status = 'PENDING';
         row.reason = 'Dealer correction requires revalidation';
@@ -14670,11 +14691,15 @@
         renderDealerStockErrors(data.errorRows || [], data.skippedCount || 0, data.errorRowsTruncated);
         $('#dealerStockUploadMessage').textContent = data.message || 'Validated dealer stock uploaded.';
         $('#dealerStockUploadMessage').className = 'form-message success';
-        selected.forEach(row => review.committed.add(row.rowNumber));
+        selected.forEach(row => { review.committed.add(row.rowNumber); review.selectedExceptions.delete(row.rowNumber); });
+        const remaining = review.rows.filter(row => !review.committed.has(row.rowNumber));
+        $('#dealerStockUploadMessage').textContent = `${selected.length} row(s) transferred to main stock. ${remaining.length} row(s) remain for correction or selection.`;
         renderDealerStockReview();
         loadReconciliation({ silent: true }).catch(() => undefined);
       } catch (error) {
         toast(error.message, 'error');
+        $('#dealerStockUploadMessage').className = 'form-message error';
+        $('#dealerStockUploadMessage').textContent = error.message;
       } finally { state.dealerStockConfirming = false; renderDealerStockReview(); }
     };
     $('#stockReviewConfirm')?.addEventListener('click', () => confirmDealerStockReview());

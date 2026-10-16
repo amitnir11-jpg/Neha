@@ -238,11 +238,17 @@ test('browser review retains only exceptions after upload and selects revalidate
   assert.equal(context.state.dealerStockReview.committed.has(4), false);
   assert.doesNotMatch($('#stockReviewRows').innerHTML, /0003/);
   assert.match($('#stockReviewRows').innerHTML, /UNKNOWN4/);
-  assert.equal($('#dealerStockUploadMessage').textContent, 'Transferred');
+  assert.equal($('#dealerStockUploadMessage').textContent, '1 row(s) transferred to main stock. 1 row(s) remain for correction or selection.');
   assert.equal($('#stockReviewRevalidate').disabled, false);
   responses.push({ reviewRows: validatedRows });
   await toolbarHandlers.click();
   assert.equal(sent.length, beforeTransfer + 3, 'unresolved errors alone do not trigger another save');
+  assert.match($('#dealerStockUploadMessage').textContent, /Select the rows/);
+  selectionHandlers.change({ target: { dataset: { stockSelect: '4' }, checked: true } });
+  responses.push({ reviewRows: validatedRows });
+  await toolbarHandlers.click();
+  assert.match($('#dealerStockUploadMessage').textContent, /No rows transferred.*Excel row 4.*WRONG_PART/);
+  assert.equal(context.state.dealerStockReview.committed.has(4), false);
   assert.equal(notices.length, 0);
   handlers.change({ target: { dataset: { stockRow: '4', stockField: 'partNumber' }, value: '0004' } });
   const finalRows = validatedRows.map(row => row.rowNumber === 4 ? { ...row, partNumber: '0004', status: 'VALID', dlc: 10, mrp: 20 } : row);
@@ -258,5 +264,31 @@ test('browser review retains only exceptions after upload and selects revalidate
   assert.equal(context.state.dealerStockReview.committed.has(4), true);
   assert.equal($('#stockReviewRevalidate').disabled, true);
   assert.match($('#stockReviewRows').innerHTML, /No rows remain/);
+
+  // Initial Validate and Import saves valid rows and leaves exceptions below.
+  context.state.dealerStockReview = null;
+  const initialRows = [
+    { rowNumber: 2, partNumber: '0001', status: 'VALID', dmsStock: 2, dlc: 10, mrp: 20 },
+    { rowNumber: 3, partNumber: '0002', status: 'REJECTED', dmsStock: 3, reason: 'Dealer code 12320 does not match selected dealer 1168A' },
+    { rowNumber: 4, partNumber: '0003', status: 'MISSING_PRICE', dmsStock: 4, reason: 'DLC missing' }
+  ];
+  responses.push({ reviewRows: initialRows }, { summary: {} });
+  await toolbarHandlers.click();
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows), [2]);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /value="0001"/);
+  assert.match($('#stockReviewRows').innerHTML, /value="0002"/);
+  assert.match($('#stockReviewRows').innerHTML, /value="0003"/);
+
+  // A corrected but unchecked row must not accompany the selected correction.
+  handlers.change({ target: { dataset: { stockRow: '3', stockField: 'dealerCode' }, value: '1168A' } });
+  handlers.change({ target: { dataset: { stockRow: '4', stockField: 'partNumber' }, value: '0003' } });
+  handlers.change({ target: { dataset: { stockSelect: '4' }, checked: false } });
+  const correctedRows = initialRows.map(row => ({ ...row, status: 'VALID', reason: '', dlc: 10, mrp: 20 }));
+  responses.push({ reviewRows: correctedRows }, { summary: {} });
+  await toolbarHandlers.click();
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows), [3]);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /value="0002"/);
+  assert.match($('#stockReviewRows').innerHTML, /value="0003"/);
+  assert.equal(context.state.dealerStockReview.committed.has(4), false);
   assert.match(fs.readFileSync('public/Daksh.html', 'utf8'), /id="stockReviewRevalidate"[^>]*>Validate and Transfer</);
 });
