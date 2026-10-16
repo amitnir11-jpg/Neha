@@ -8707,13 +8707,28 @@
       <td>${row.rowNumber}${Object.keys(review.corrections?.[row.rowNumber] || {}).length ? '<span class="stock-review-corrected" title="Correction saved in this upload review. Validate and Transfer will check the part and prices before saving to stock.">✓ Corrected</span>' : ''}</td>
       <td><input data-stock-row="${row.rowNumber}" data-stock-field="dealerCode" value="${escapeHtml(row.dealerCode || '')}" aria-label="Dealer code at Excel row ${row.rowNumber}" ${row.status === 'VALID' ? 'readonly' : ''}></td>
       <td><div class="stock-review-part-edit"><input list="stockReviewSuggestions" data-stock-row="${row.rowNumber}" data-stock-field="partNumber" value="${escapeHtml(row.partNumber || '')}" title="${escapeHtml(row.partNumber || '')}" aria-label="Part number at Excel row ${row.rowNumber}"><button type="button" class="btn light stock-review-icon" data-stock-edit="${row.rowNumber}" title="Edit part number" aria-label="Edit part number at Excel row ${row.rowNumber}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12H4v-5L16 3Z M14 5l5 5"/></svg></button><button type="button" class="btn light stock-review-icon stock-review-delete" data-stock-delete="${row.rowNumber}" title="Remove row from this upload" aria-label="Delete Excel row ${row.rowNumber}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7"/></svg></button></div></td>
-      <td>${escapeHtml(row.partDescription || '')}</td>
+      <td data-stock-description="${row.rowNumber}">${escapeHtml(row.partDescription || '')}</td>
       <td><input type="number" min="0" step="1" data-stock-row="${row.rowNumber}" data-stock-field="dmsStock" value="${escapeHtml(row.dmsStock ?? '')}" aria-label="DMS quantity at Excel row ${row.rowNumber}"></td>
-      ${[1, 2, 3].map(index => `<td><input data-stock-row="${row.rowNumber}" data-stock-field="binLoc${index}" value="${escapeHtml(row[`binLoc${index}`] || '')}" aria-label="Bin ${index} at Excel row ${row.rowNumber}"></td>`).join('')}
       <td>${row.status === 'VALID' ? `₹ ${money2(row.dlc)}` : '—'}</td><td>${row.status === 'VALID' ? `₹ ${money2(row.mrp)}` : '—'}</td>
       <td title="${escapeHtml(row.reason || '')}">${escapeHtml(row.reason || row.status)}</td>
-    </tr>`).join('') || '<tr><td colspan="12">No rows remain for review.</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="9">No rows remain for review.</td></tr>';
     enhanceDataTable($('#dealerStockReviewTable'), 'daksh_table_dealer_stock_review');
+  }
+
+  async function fillDealerStockDescription(review, rowNumber) {
+    const row = review.rows.find(item => item.rowNumber === rowNumber);
+    const partNumber = clean(row?.partNumber).toUpperCase();
+    if (!partNumber) return;
+    try {
+      const response = await api(`/api/parts/suggestions?${new URLSearchParams({ q: partNumber, dealerCode: review.dealerCode, limit: '1' })}`);
+      if (state.dealerStockReview !== review || review.deleted?.has(rowNumber)
+        || clean(row.partNumber).toUpperCase() !== partNumber) return;
+      const parts = response.parts || response.suggestions || response.rows || [];
+      const match = parts.find(part => clean(part.partNumber || part.part || '').toUpperCase() === partNumber);
+      row.partDescription = match ? clean(match.partDescription || match.partName || match.description || '') : '';
+      const cell = $(`#stockReviewRows [data-stock-description="${rowNumber}"]`);
+      if (cell) cell.textContent = row.partDescription;
+    } catch (_) { /* Validate and Transfer retries the authoritative master lookup. */ }
   }
 
   function isReconciliationDealerSelect(select) {
@@ -14754,7 +14769,9 @@
       review.selectedExceptions.add(rowNumber);
       const row = review.rows.find(item => item.rowNumber === rowNumber);
       if (row) { row[field] = event.target.value; row.status = 'PENDING'; row.reason = 'Correction requires revalidation'; }
+      if (row && field === 'partNumber') row.partDescription = '';
       renderDealerStockReview();
+      if (row && field === 'partNumber') fillDealerStockDescription(review, rowNumber);
     });
     let stockSuggestionTimer;
     $('#stockReviewRows')?.addEventListener('input', (event) => {

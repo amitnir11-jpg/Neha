@@ -1487,7 +1487,7 @@ a:focus-visible,
 .dealer-stock-review .excel-upload-summary { margin: 12px 0; }
 .dealer-stock-review .excel-stock-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .dealer-stock-review .excel-stock-toolbar input { flex: 1; min-width: 220px; }
-.dealer-stock-review .recon-stock-preview-wrap table { min-width: 1650px; }
+.dealer-stock-review .recon-stock-preview-wrap table { min-width: 1300px; }
 .dealer-stock-review td input:not([type="checkbox"]) { width: 100%; min-width: 105px; box-sizing: border-box; }
 .dealer-stock-review .stock-review-part-edit { display: flex; align-items: center; gap: 6px; }
 .dealer-stock-review .stock-review-part-edit input { flex: 1; min-width: 0 !important; }

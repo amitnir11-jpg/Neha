@@ -17,6 +17,45 @@ prices.getPricesFromPartMaster = originalLookup;
 const headings = ['Dealer Code', 'Part Number', 'Part Description', 'Dms Stock', 'Bin Loc 1', 'Bin Loc 2', 'Bin Loc 3'];
 const row = (dealer, part, qty, bin = '') => [dealer, part, 'Spreadsheet description', qty, bin, '', ''];
 
+test('part corrections fill the exact master description and ignore stale lookups', async () => {
+  const source = fs.readFileSync('public/ui.js', 'utf8');
+  const item = { rowNumber: 3, partNumber: 'OLD', partDescription: 'Old description' };
+  const review = { dealerCode: '1168A', rows: [item], corrections: {}, excluded: new Set(), selectedExceptions: new Set(), deleted: new Set() };
+  const requests = [];
+  const cell = {};
+  let change;
+  const context = { state: { dealerStockReview: review }, URLSearchParams,
+    clean: value => String(value || '').trim(), renderDealerStockReview() {},
+    $: selector => selector === '#stockReviewRows' ? { addEventListener: (_type, handler) => { change = handler; } } : cell,
+    api: path => new Promise(resolve => requests.push({ path, resolve })) };
+  vm.createContext(context);
+  const start = source.indexOf('  async function fillDealerStockDescription(');
+  vm.runInContext(source.slice(start, source.indexOf('  function isReconciliationDealerSelect', start)), context);
+  const handlerStart = source.indexOf("    $('#stockReviewRows')?.addEventListener('change'");
+  vm.runInContext(source.slice(handlerStart, source.indexOf('    let stockSuggestionTimer;', handlerStart)), context);
+  change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: '35150AAB800S' } });
+  assert.equal(item.partDescription, '');
+  assert.match(requests[0].path, /dealerCode=1168A/);
+  requests[0].resolve({ suggestions: [{ partNumber: '35150AAB800S', partDescription: 'SWITCH ASSEMBLY START' }] });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(item.partDescription, 'SWITCH ASSEMBLY START');
+  assert.equal(cell.textContent, 'SWITCH ASSEMBLY START');
+  change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: 'PART2' } });
+  change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: 'PART3' } });
+  requests[2].resolve({ suggestions: [{ partNumber: 'PART3', partDescription: 'Latest part' }] });
+  requests[1].resolve({ suggestions: [{ partNumber: 'PART2', partDescription: 'Stale part' }] });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(item.partDescription, 'Latest part');
+  change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: 'PART' } });
+  requests[3].resolve({ suggestions: [{ partNumber: 'PART3', partDescription: 'Prefix result must not fill' }] });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(item.partDescription, '');
+  const table = fs.readFileSync('public/Daksh.html', 'utf8').split('<table id="dealerStockReviewTable">')[1].split('</table>')[0];
+  assert.doesNotMatch(table, /Bin Loc [123]/);
+  const render = source.slice(source.indexOf('  function renderDealerStockReview()'), start);
+  assert.doesNotMatch(render, /data-stock-field="binLoc/);
+});
+
 test('DMS review preserves row numbers, leading zeros, invalid rows and authoritative prices', async () => {
   const result = await rowsToStockRecords([headings,
     row('1168A', '0001', '2', 'A-01'), row('1168A', 'UNKNOWN', '3'), row('1168A', 'NO-DLC', '4'),
