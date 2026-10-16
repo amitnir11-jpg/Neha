@@ -8596,7 +8596,7 @@
     $('#stockReviewPrev').disabled = review.page <= 1;
     $('#stockReviewNext').disabled = review.page >= pages;
     $('#stockReviewConfirm').disabled = !selected.length || review.dealerCode !== activeReconDealer();
-    $('#stockReviewUseDealer').disabled = !rows.some(row => !committed.has(row.rowNumber) && row.reason?.includes('does not match selected dealer'));
+    $('#stockReviewUseDealer').disabled = !rows.some(row => !committed.has(row.rowNumber) && cleanDealerCode(row.dealerCode) !== review.dealerCode);
     const selectedFiltered = filtered.filter(row => row.status === 'VALID' ? !review.excluded.has(row.rowNumber) : selectedExceptions.has(row.rowNumber));
     $('#stockReviewSelectAll').checked = filtered.length > 0 && selectedFiltered.length === filtered.length;
     $('#stockReviewSelectAll').indeterminate = selectedFiltered.length > 0 && selectedFiltered.length < filtered.length;
@@ -14622,7 +14622,7 @@
     $('#stockReviewUseDealer')?.addEventListener('click', () => {
       const review = state.dealerStockReview;
       if (!review || review.dealerCode !== activeReconDealer()) return;
-      review.rows.filter(row => !review.committed.has(row.rowNumber) && row.reason?.includes('does not match selected dealer') && (!review.selectedExceptions.size || review.selectedExceptions.has(row.rowNumber))).forEach(row => {
+      review.rows.filter(row => !review.committed.has(row.rowNumber) && cleanDealerCode(row.dealerCode) !== review.dealerCode && (!review.selectedExceptions.size || review.selectedExceptions.has(row.rowNumber))).forEach(row => {
         review.corrections[row.rowNumber] = { ...(review.corrections[row.rowNumber] || {}), dealerCode: review.dealerCode };
         review.excluded.add(row.rowNumber);
         row.dealerCode = review.dealerCode;
