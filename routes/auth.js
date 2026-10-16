@@ -817,7 +817,6 @@ async function mobileLoginHandler(req, res, next) {
     const secret = String(req.body.passwordOrPin || req.body.secret || req.body.password || req.body.pin || '').trim();
     debugMobileLogin('LOGIN_VALUE', login);
     debugMobileLogin('DEALER_CODE', dealerCode);
-    if (!dealerCode) return res.status(400).json({ success: false, message: 'Dealer code required' });
     if (!login) return res.status(404).json({ success: false, message: 'User not found' });
     if (!secret) return res.status(401).json({ success: false, message: 'Password/PIN incorrect' });
 
@@ -831,16 +830,6 @@ async function mobileLoginHandler(req, res, next) {
 
     const dealerAccess = await userDealerAccessCodes(user);
     debugMobileLogin('DEALER_ACCESS', dealerAccess);
-    const accessCheck = await validateUserDealerAccess(user, dealerCode);
-    if (!accessCheck.allowed) {
-      return res.status(403).json({
-        success: false,
-        message: 'User does not have access to this dealer',
-        requestedDealer: accessCheck.requestedDealer,
-        userDealerAccess: accessCheck.userDealerAccess
-      });
-    }
-
     let passwordMatch = await compareAndUpgradeSecret(user, secret, ['passwordHash', 'password']);
     let pinMatch = false;
     if (!passwordMatch) pinMatch = await compareAndUpgradeSecret(user, secret, ['pinHash', 'pin']);
@@ -848,11 +837,22 @@ async function mobileLoginHandler(req, res, next) {
     debugMobileLogin('PIN_MATCH', pinMatch);
     if (!passwordMatch && !pinMatch) return res.status(401).json({ success: false, message: 'Password/PIN incorrect' });
 
-    const [assignedDealers, activeAudit, dealer] = await Promise.all([
-      activeDealersForUser(user),
+    const assignedDealers = await activeDealersForUser(user);
+    if (!assignedDealers.length) return res.status(403).json({ success: false, message: 'No active dealer is assigned to this user.' });
+    if (!dealerCode && assignedDealers.length > 1) {
+      return res.json({ success: true, needsDealerSelection: true, assignedDealers });
+    }
+    const selectedDealerCode = dealerCode || assignedDealers[0].dealerCode;
+    const accessCheck = await validateUserDealerAccess(user, selectedDealerCode);
+    if (!accessCheck.allowed || !assignedDealers.some((item) => item.dealerCode === selectedDealerCode)) {
+      return res.status(403).json({ success: false, message: 'User does not have access to this dealer.' });
+    }
+
+    const [activeAudit, dealer] = await Promise.all([
       getActiveAudit({ dealerCode: accessCheck.requestedDealer }).catch(() => null),
       Dealer.findOne({ dealerCode: accessCheck.requestedDealer }).lean()
     ]);
+    if (!activeAudit) return res.status(409).json({ success: false, message: 'No active audit exists for this dealer. Ask an administrator to start one.' });
 
     debugMobileLogin('LOGIN_SUCCESS', {
       username: user.username,

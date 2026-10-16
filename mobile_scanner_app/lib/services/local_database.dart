@@ -96,37 +96,52 @@ class LocalDatabase {
   }
 
   Future<List<ScanRecord>> pendingScans(
-      {int limit = 200, bool includeFailed = false}) async {
+      {required String dealerCode,
+      required String auditId,
+      required String userId,
+      int limit = 200,
+      bool includeFailed = false}) async {
+    if (dealerCode.isEmpty || auditId.isEmpty || userId.isEmpty) return [];
     final db = await database;
     final rows = await db.query(
       'scans',
       where: includeFailed
-          ? 'status IN (?, ?) AND scanType != ?'
-          : 'status = ? AND scanType != ?',
+          ? 'status IN (?, ?) AND scanType != ? AND dealerCode = ? AND auditId = ? AND userId = ?'
+          : 'status = ? AND scanType != ? AND dealerCode = ? AND auditId = ? AND userId = ?',
       whereArgs: includeFailed
-          ? ['Pending', 'Failed', 'VERIFICATION']
-          : ['Pending', 'VERIFICATION'],
+          ? ['Pending', 'Failed', 'VERIFICATION', dealerCode, auditId, userId]
+          : ['Pending', 'VERIFICATION', dealerCode, auditId, userId],
       orderBy: 'createdAt ASC',
       limit: limit,
     );
     return rows.map(ScanRecord.fromMap).toList();
   }
 
-  Future<List<ScanRecord>> lastScans({int limit = 10}) async {
+  Future<List<ScanRecord>> lastScans(
+      {required String dealerCode,
+      required String auditId,
+      required String userId,
+      int limit = 10}) async {
+    if (dealerCode.isEmpty || auditId.isEmpty || userId.isEmpty) return [];
     final db = await database;
     final rows = await db.query('scans',
-        where: 'scanType != ?',
-        whereArgs: ['VERIFICATION'],
+        where:
+            'scanType != ? AND dealerCode = ? AND auditId = ? AND userId = ?',
+        whereArgs: ['VERIFICATION', dealerCode, auditId, userId],
         orderBy: 'createdAt DESC',
         limit: limit);
     return rows.map(ScanRecord.fromMap).toList();
   }
 
-  Future<int> countByStatus(String status) async {
+  Future<int> countByStatus(String status,
+      {required String dealerCode,
+      required String auditId,
+      required String userId}) async {
+    if (dealerCode.isEmpty || auditId.isEmpty || userId.isEmpty) return 0;
     final db = await database;
     final result = Sqflite.firstIntValue(await db.rawQuery(
-        'SELECT COUNT(*) FROM scans WHERE status = ? AND scanType != ?',
-        [status, 'VERIFICATION']));
+        'SELECT COUNT(*) FROM scans WHERE status = ? AND scanType != ? AND dealerCode = ? AND auditId = ? AND userId = ?',
+        [status, 'VERIFICATION', dealerCode, auditId, userId]));
     return result ?? 0;
   }
 
@@ -179,9 +194,16 @@ class LocalDatabase {
     return ScanRecord.fromMap(rows.first);
   }
 
-  Future<String> exportJson() async {
+  Future<String> exportJson(
+      {required String dealerCode,
+      required String auditId,
+      required String userId}) async {
+    if (dealerCode.isEmpty || auditId.isEmpty || userId.isEmpty) return '[]';
     final db = await database;
-    final rows = await db.query('scans', orderBy: 'createdAt ASC');
+    final rows = await db.query('scans',
+        where: 'dealerCode = ? AND auditId = ? AND userId = ?',
+        whereArgs: [dealerCode, auditId, userId],
+        orderBy: 'createdAt ASC');
     return const JsonEncoder.withIndent('  ').convert(rows);
   }
 }

@@ -97,7 +97,7 @@ class SyncService {
       matched = true;
     }
 
-    if (!matched && data['success'] == false) {
+    if (!matched && data['success'] == false && data['permanent'] == true) {
       for (final record in pending) {
         await database.updateStatus(record.localId, 'Failed',
             errorMessage: fallbackMessage);
@@ -122,18 +122,22 @@ class SyncService {
       return SyncResult(false, 'Offline', synced: 0, serverReached: false);
     }
 
-    final queued = await database.pendingScans(includeFailed: includeFailed);
-    // Each batch retains its original dealer even after the login dealer changes.
-    final batchDealer = queued.isEmpty ? '' : queued.first.dealerCode;
-    final pending = queued.where((record) => record.dealerCode == batchDealer).toList();
-    if (pending.isNotEmpty && batchDealer.trim().isEmpty) {
-      for (final record in pending) {
-        await database.updateStatus(record.localId, 'Failed',
-            errorMessage: 'Original dealer is missing. Review this scan before syncing.');
-      }
-      return SyncResult(false, 'Queued scans have no original dealer',
+    final session = await settings.session;
+    final dealerCode = (session['dealerCode'] ?? '').trim();
+    final auditId = (session['auditId'] ?? '').trim();
+    final userId = (session['userId'] ?? '').trim();
+    if (dealerCode.isEmpty ||
+        auditId.isEmpty ||
+        userId.isEmpty ||
+        await settings.token == '') {
+      return SyncResult(false, 'Sign in to an active audit before syncing',
           synced: 0, serverReached: false);
     }
+    final pending = await database.pendingScans(
+        dealerCode: dealerCode,
+        auditId: auditId,
+        userId: userId,
+        includeFailed: includeFailed);
     if (pending.isEmpty) {
       try {
         await ApiClient(settings).health();
@@ -204,13 +208,7 @@ class SyncService {
       final touchedLocalIds = <String>{};
       final completedAt = (data['completedAt'] ?? '').toString();
 
-      if (logs.isEmpty && data['success'] == true) {
-        for (final record in pending) {
-          await database.updateStatus(record.localId, 'Synced',
-              serverSyncId: completedAt);
-          synced += 1;
-        }
-      } else {
+      if (logs.isNotEmpty) {
         for (final item in logs) {
           final log = Map<String, dynamic>.from(item as Map);
           final keys = _logKeys(log);
@@ -265,7 +263,8 @@ class SyncService {
                 errorMessage: duplicateByKey[duplicateKey] ?? '');
             duplicateRecords.add(record.copyWith(
                 status: 'Duplicate',
-                errorMessage: duplicateByKey[duplicateKey] ?? 'This code was already scanned.'));
+                errorMessage: duplicateByKey[duplicateKey] ??
+                    'This code was already scanned.'));
             touchedLocalIds.add(record.localId);
             continue;
           }
@@ -276,25 +275,13 @@ class SyncService {
             synced += 1;
           }
         }
-
-        final failedCount =
-            int.tryParse('${data['failedCount'] ?? data['failed'] ?? 0}') ?? 0;
-        final responseHasFailures = failedByKey.isNotEmpty || failedCount > 0;
-        if (data['success'] == true &&
-            !responseHasFailures &&
-            pending
-                .any((record) => !touchedLocalIds.contains(record.localId))) {
-          for (final record in pending) {
-            if (touchedLocalIds.contains(record.localId)) continue;
-            await database.updateStatus(record.localId, 'Synced',
-                serverSyncId: completedAt);
-            synced += 1;
-          }
-        }
       }
 
-      return SyncResult(true, (data['message'] ?? 'Sync completed').toString(),
-          synced: synced, serverReached: true, hasClockSkew: hasClockSkew,
+      return SyncResult(data['success'] != false,
+          (data['message'] ?? 'Sync completed').toString(),
+          synced: synced,
+          serverReached: true,
+          hasClockSkew: hasClockSkew,
           duplicateRecords: duplicateRecords);
     } on ApiException catch (error) {
       final statusCode = error.statusCode ?? 0;
@@ -302,14 +289,16 @@ class SyncService {
               (error.data['logs'] as List).isNotEmpty) ||
           (error.data['failedRows'] is List &&
               (error.data['failedRows'] as List).isNotEmpty);
-      final shouldMarkFailed = error.data['success'] == false ||
-          statusCode == 422 ||
-          (hasRowFailureDetails &&
-              statusCode >= 400 &&
-              statusCode < 500 &&
-              statusCode != 401 &&
-              statusCode != 403 &&
-              statusCode != 408);
+      final shouldMarkFailed = statusCode != 401 &&
+          statusCode != 403 &&
+          !error.retryable &&
+          (statusCode == 422 ||
+              (hasRowFailureDetails &&
+                  statusCode >= 400 &&
+                  statusCode < 500 &&
+                  statusCode != 401 &&
+                  statusCode != 403 &&
+                  statusCode != 408));
       if (shouldMarkFailed) {
         await _markFailuresFromResponse(pending, error.data, error.message);
       }

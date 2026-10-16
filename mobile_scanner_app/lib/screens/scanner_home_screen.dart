@@ -206,7 +206,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     final dealerCode = await _settings.dealerCode;
     final dealerName = await _settings.dealerName;
     final deviceId = await _settings.deviceId;
-    final savedAuditId = await _settings.auditContextForDealer(dealerCode);
+    final savedAuditId = (session['auditId'] ?? '').trim();
     if (!mounted) return;
     setState(() {
       _online = network != ConnectivityResult.none;
@@ -235,8 +235,10 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   }
 
   Future<void> _refreshLocalState({bool refreshRecent = false}) async {
-    final pending = await _database.countByStatus('Pending');
-    final failed = await _database.countByStatus('Failed');
+    final pending = await _database.countByStatus('Pending',
+        dealerCode: _dealerCode, auditId: _activeAuditId, userId: _userId);
+    final failed = await _database.countByStatus('Failed',
+        dealerCode: _dealerCode, auditId: _activeAuditId, userId: _userId);
     if (!mounted) return;
     setState(() {
       _pendingCount = pending;
@@ -257,10 +259,15 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
           : (data['auditId'] ?? '');
       final refreshedAuditId = auditId.toString().trim();
       if (!mounted) return;
+      final session = await _settings.session;
+      if (refreshedAuditId != (session['auditId'] ?? '').trim()) {
+        setState(() => _activeAuditId = '');
+        _setStatus('Audit changed. Sign in again before scanning.', Colors.red);
+        return;
+      }
       setState(() {
         _activeAuditId = refreshedAuditId;
       });
-      await _settings.saveAuditContext(_dealerCode, refreshedAuditId);
     } catch (_) {}
   }
 
@@ -291,7 +298,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       } catch (_) {}
     }
     if (!_online) {
-      rows = await _database.lastScans(limit: 20);
+      rows = await _database.lastScans(
+          dealerCode: _dealerCode,
+          auditId: _activeAuditId,
+          userId: _userId,
+          limit: 20);
     }
     if (!mounted) return;
     setState(() {
@@ -299,8 +310,10 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     });
     if (_online && rows.isNotEmpty && rows.first.partNumber.isNotEmpty) {
       try {
-        final totals = await ApiClient(_settings).partStock(rows.first.partNumber,
-            dealerCode: _dealerCode, auditId: _activeAuditId);
+        final totals = await ApiClient(_settings).partStock(
+            rows.first.partNumber,
+            dealerCode: _dealerCode,
+            auditId: _activeAuditId);
         if (mounted) setState(() => _partStock = totals);
       } catch (_) {}
     }
@@ -572,16 +585,25 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   }
 
   Future<String?> _chooseSkuBin(List<Map<String, dynamic>> bins) {
-    return showDialog<String>(context: context, builder: (dialogContext) => SimpleDialog(
-      title: const Text('Choose SKU source bin'),
-      children: [
-        const Padding(padding: EdgeInsets.all(16), child: Text('This barcode identifies a part, not a unique piece. Choose the bin you are taking it from.')),
-        ...bins.map((bin) => SimpleDialogOption(
-          onPressed: () => Navigator.pop(dialogContext, '${bin['binLocation']}'),
-          child: Text('${bin['binLocation']} — ${bin['availableQty']} available'))),
-        SimpleDialogOption(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-      ],
-    ));
+    return showDialog<String>(
+        context: context,
+        builder: (dialogContext) => SimpleDialog(
+              title: const Text('Choose SKU source bin'),
+              children: [
+                const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text(
+                        'This barcode identifies a part, not a unique piece. Choose the bin you are taking it from.')),
+                ...bins.map((bin) => SimpleDialogOption(
+                    onPressed: () =>
+                        Navigator.pop(dialogContext, '${bin['binLocation']}'),
+                    child: Text(
+                        '${bin['binLocation']} — ${bin['availableQty']} available'))),
+                SimpleDialogOption(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Cancel')),
+              ],
+            ));
   }
 
   Future<Map<String, String>?> _fittedDetails() async {
@@ -589,30 +611,52 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     final job = TextEditingController();
     final formKey = GlobalKey<FormState>();
     try {
-      return await showDialog<Map<String, String>>(context: context, builder: (dialogContext) => AlertDialog(
-        title: const Text('Fitted vehicle details'),
-        content: Form(key: formKey, child: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextFormField(controller: vehicle, decoration: const InputDecoration(labelText: 'Vehicle registration'),
-            validator: (value) => (value ?? '').trim().isEmpty ? 'Required' : null),
-          TextFormField(controller: job, decoration: const InputDecoration(labelText: 'Job card number'),
-            validator: (value) => (value ?? '').trim().isEmpty ? 'Required' : null),
-        ])),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          FilledButton(onPressed: () {
-            if (formKey.currentState?.validate() == true) {
-              Navigator.pop(dialogContext, {
-                'regdNo': _upper(vehicle.text), 'jobCardNo': _upper(job.text)
-              });
-            }
-          }, child: const Text('Save fitted')),
-        ],
-      ));
-    } finally { vehicle.dispose(); job.dispose(); }
+      return await showDialog<Map<String, String>>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+                title: const Text('Fitted vehicle details'),
+                content: Form(
+                    key: formKey,
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      TextFormField(
+                          controller: vehicle,
+                          decoration: const InputDecoration(
+                              labelText: 'Vehicle registration'),
+                          validator: (value) =>
+                              (value ?? '').trim().isEmpty ? 'Required' : null),
+                      TextFormField(
+                          controller: job,
+                          decoration: const InputDecoration(
+                              labelText: 'Job card number'),
+                          validator: (value) =>
+                              (value ?? '').trim().isEmpty ? 'Required' : null),
+                    ])),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () {
+                        if (formKey.currentState?.validate() == true) {
+                          Navigator.pop(dialogContext, {
+                            'regdNo': _upper(vehicle.text),
+                            'jobCardNo': _upper(job.text)
+                          });
+                        }
+                      },
+                      child: const Text('Save fitted')),
+                ],
+              ));
+    } finally {
+      vehicle.dispose();
+      job.dispose();
+    }
   }
 
   Future<void> _onDetect(BarcodeCapture capture) async {
-    if (_movementPromptOpen) { return; }
+    if (_movementPromptOpen) {
+      return;
+    }
     if (_requiresBinBeforeScan && _upper(_defaultBinController.text).isEmpty) {
       _setStatus('Enter bin location before scanning', Colors.red);
       return;
@@ -652,7 +696,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   Future<void> _handleDraft(_ScanDraft draft, {required String source}) async {
     if (source != 'manual' &&
         !isSupportedScannerSequence(draft.rawValue, draft.barcodeFormat)) {
-      _setStatus('$invalidScannerSequenceTitle\n$invalidScannerSequenceMessage', Colors.red);
+      _setStatus('$invalidScannerSequenceTitle\n$invalidScannerSequenceMessage',
+          Colors.red);
       return;
     }
     if (_dealerCode.isEmpty) {
@@ -680,15 +725,17 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       // Use the cached audit context on the capture path. The server validates
       // the active audit on every save, and the user can explicitly refresh
       // connection context if the audit changes while this screen is open.
-      if (_online && _activeAuditId.isEmpty) {
+      if (_activeAuditId.isEmpty) {
         _setStatus(
-            'No active audit context available. Refresh the server before scanning.',
+            'No authorized audit context. Sign in again before scanning.',
             Colors.red);
         return;
       }
 
-      final currentBin = ['OUTWARD', 'FITTED'].contains(_scanType) && source != 'manual'
-          ? '' : _upper(draft.binLocation);
+      final currentBin =
+          ['OUTWARD', 'FITTED'].contains(_scanType) && source != 'manual'
+              ? ''
+              : _upper(draft.binLocation);
       final api = ApiClient(_settings);
       Future<Map<String, dynamic>?>? smartBinFuture;
       if (source == 'manual' &&
@@ -712,12 +759,12 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       }
 
       final duplicateRecord = await _database.latestMatchingScan(
-              rawValue: draft.rawValue,
-              scanType: _scanType,
-              dealerCode: _dealerCode,
-              auditId: _activeAuditId,
-              userId: _userId,
-            );
+        rawValue: draft.rawValue,
+        scanType: _scanType,
+        dealerCode: _dealerCode,
+        auditId: _activeAuditId,
+        userId: _userId,
+      );
       if (duplicateRecord != null) {
         await _showDuplicateScanAlert(
           draft,
@@ -747,38 +794,69 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       if (source != 'manual' && _online) {
         _movementPromptOpen = true;
         try {
-          final resolved = await api.resolveCode(draft.rawValue, draft.barcodeFormat, dealerCode: _dealerCode);
-          final parsed = Map<String, dynamic>.from(resolved['parsedCode'] as Map? ?? {});
+          final resolved = await api.resolveCode(
+              draft.rawValue, draft.barcodeFormat,
+              dealerCode: _dealerCode);
+          final parsed =
+              Map<String, dynamic>.from(resolved['parsedCode'] as Map? ?? {});
           resolvedPart = '${parsed['partNumber'] ?? ''}';
           final decodedQuantity = parsed['quantity'];
-          if (parsed['type'] == 'HERO_QR' && decodedQuantity is num && decodedQuantity.toInt() > 0) {
+          if (parsed['type'] == 'HERO_QR' &&
+              decodedQuantity is num &&
+              decodedQuantity.toInt() > 0) {
             resolvedQuantity = decodedQuantity.toInt();
           }
           metadata['parsedCode'] = parsed;
-          final master = Map<String, dynamic>.from(resolved['master'] as Map? ?? {});
-          metadata['partDescription'] = master['partDescription'] ?? master['partName'] ?? '';
-          if (parsed['identityKind'] == 'SKU' && ['OUTWARD', 'FITTED', 'DAMAGE'].contains(captureMode)) {
-            final bins = (resolved['binOptions'] as List? ?? []).whereType<Map>().map((bin) => Map<String, dynamic>.from(bin)).toList();
-            if (bins.isEmpty) { _setStatus('No eligible physical SKU stock. Scan a unique UPI for tracked stock.', Colors.red); return; }
-            if (resolvedBin.isEmpty || !bins.any((bin) => bin['binLocation'] == resolvedBin)) {
-              resolvedBin = bins.length == 1 ? '${bins.first['binLocation']}'
+          final master =
+              Map<String, dynamic>.from(resolved['master'] as Map? ?? {});
+          metadata['partDescription'] =
+              master['partDescription'] ?? master['partName'] ?? '';
+          if (parsed['identityKind'] == 'SKU' &&
+              ['OUTWARD', 'FITTED', 'DAMAGE'].contains(captureMode)) {
+            final bins = (resolved['binOptions'] as List? ?? [])
+                .whereType<Map>()
+                .map((bin) => Map<String, dynamic>.from(bin))
+                .toList();
+            if (bins.isEmpty) {
+              _setStatus(
+                  'No eligible physical SKU stock. Scan a unique UPI for tracked stock.',
+                  Colors.red);
+              return;
+            }
+            if (resolvedBin.isEmpty ||
+                !bins.any((bin) => bin['binLocation'] == resolvedBin)) {
+              resolvedBin = bins.length == 1
+                  ? '${bins.first['binLocation']}'
                   : await _chooseSkuBin(bins) ?? '';
-              if (resolvedBin.isEmpty) { _setStatus('Source bin selection cancelled', Colors.orange); return; }
+              if (resolvedBin.isEmpty) {
+                _setStatus('Source bin selection cancelled', Colors.orange);
+                return;
+              }
             }
           }
         } on ApiException catch (error) {
           // A plain existing UPI may have no standalone Part Master match.
           if (error.data['code'] == 'INVALID_SCANNER_SEQUENCE') rethrow;
-          if (!['OUTWARD', 'FITTED'].contains(captureMode) || draft.rawValue.contains('/')) rethrow;
+          if (!['OUTWARD', 'FITTED'].contains(captureMode) ||
+              draft.rawValue.contains('/')) rethrow;
           if (error.statusCode != 422) rethrow;
-        } finally { _movementPromptOpen = false; }
+        } finally {
+          _movementPromptOpen = false;
+        }
       }
       if (_scanType != captureMode) return;
       if (captureMode == 'FITTED') {
         _movementPromptOpen = true;
         Map<String, String>? details;
-        try { details = await _fittedDetails(); } finally { _movementPromptOpen = false; }
-        if (details == null) { _setStatus('Fitted details cancelled', Colors.orange); return; }
+        try {
+          details = await _fittedDetails();
+        } finally {
+          _movementPromptOpen = false;
+        }
+        if (details == null) {
+          _setStatus('Fitted details cancelled', Colors.orange);
+          return;
+        }
         metadata.addAll(details);
       }
       if (draft.partDescription.isNotEmpty) {
@@ -1195,7 +1273,8 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
     if (result is _ScanDraft) {
       await _handleDraft(result, source: 'manual');
     } else if (result is _LocalPartSaved && mounted) {
-      _setStatus('Local Part saved separately from regular stock', Colors.green);
+      _setStatus(
+          'Local Part saved separately from regular stock', Colors.green);
     }
   }
 
@@ -1570,8 +1649,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
                   ],
                 ),
               ),
-              if (_partStock.isNotEmpty) Padding(padding: const EdgeInsets.all(12), child: Text(
-                '${_partStock['partNumber']} | Inward ${_partStock['inwardQty']} | Outward ${_partStock['outwardQty']} | Fitted ${_partStock['fittedQty']} | Damage ${_partStock['damageQty']} | Available ${_partStock['availableQty']}')),
+              if (_partStock.isNotEmpty)
+                Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                        '${_partStock['partNumber']} | Inward ${_partStock['inwardQty']} | Outward ${_partStock['outwardQty']} | Fitted ${_partStock['fittedQty']} | Damage ${_partStock['damageQty']} | Available ${_partStock['availableQty']}')),
               Container(
                 width: double.infinity,
                 color: Colors.white,
@@ -1834,7 +1916,8 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     final bin = _upper(_binController.text);
     final qty = int.tryParse(_qtyController.text.trim()) ?? 1;
     if (part.isEmpty || bin.isEmpty || qty <= 0) {
-      setState(() => _error = 'Enter a part, bin and quantity greater than zero.');
+      setState(
+          () => _error = 'Enter a part, bin and quantity greater than zero.');
       return;
     }
     Navigator.pop(
@@ -1856,11 +1939,14 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     final mrp = _mrpController.text.trim();
     final dlc = _dlcController.text.trim();
     final description = _descriptionController.text.trim();
-    if (part.isEmpty || _upper(_binController.text).isEmpty || description.isEmpty ||
+    if (part.isEmpty ||
+        _upper(_binController.text).isEmpty ||
+        description.isEmpty ||
         (double.tryParse(quantity) ?? 0) <= 0 ||
         (double.tryParse(mrp) ?? -1) < 0 ||
         (double.tryParse(dlc) ?? -1) < 0) {
-      setState(() => _error = 'Enter bin, part, description, positive quantity, MRP and DLC.');
+      setState(() => _error =
+          'Enter bin, part, description, positive quantity, MRP and DLC.');
       return;
     }
     setState(() {
@@ -1879,11 +1965,16 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
         category: _localCategoryController.text,
         remarks: _remarksController.text,
       );
-      if (mounted) Navigator.pop(context, const _LocalPartSaved());
+      if (mounted) {
+        Navigator.pop(context, const _LocalPartSaved());
+      }
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Local Part could not be saved. Check the connection and try again.');
+      if (mounted) {
+        setState(() => _error =
+            'Local Part could not be saved. Check the connection and try again.');
+      }
     } finally {
       if (mounted) setState(() => _savingLocalPart = false);
     }
@@ -1917,7 +2008,8 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
               search: (query) => ApiClient(widget.settings).masterSearchParts(
                   query: query, dealerCode: widget.dealerCode, limit: 8),
               onSelected: (part) => setState(() {
-                _selectedDescription = (part['partDescription'] ?? '').toString();
+                _selectedDescription =
+                    (part['partDescription'] ?? '').toString();
               }),
               onEdited: () => _selectedDescription = '',
             ),
@@ -1962,39 +2054,47 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
             const SizedBox(height: 8),
             TextField(
               controller: _localQtyController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
               decoration: const InputDecoration(labelText: 'Quantity'),
             ),
             const SizedBox(height: 8),
             Row(children: [
-              Expanded(child: TextField(
+              Expanded(
+                  child: TextField(
                 controller: _mrpController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(labelText: 'MRP'),
               )),
               const SizedBox(width: 10),
-              Expanded(child: TextField(
+              Expanded(
+                  child: TextField(
                 controller: _dlcController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(labelText: 'DLC'),
               )),
             ]),
             const SizedBox(height: 8),
             TextField(
               controller: _localCategoryController,
-              decoration: const InputDecoration(labelText: 'Category (optional)'),
+              decoration:
+                  const InputDecoration(labelText: 'Category (optional)'),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: _remarksController,
               maxLines: 2,
-              decoration: const InputDecoration(labelText: 'Remarks (optional)'),
+              decoration:
+                  const InputDecoration(labelText: 'Remarks (optional)'),
             ),
           ],
           if (_error.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text(_error, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              child: Text(_error,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
             ),
         ],
       ),
@@ -2003,8 +2103,11 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel')),
         FilledButton(
-          onPressed: _savingLocalPart ? null : (_localPart ? _saveLocalPart : _submit),
-          child: Text(_savingLocalPart ? 'Saving…' : (_localPart ? 'Save Local Part' : 'Save')),
+          onPressed:
+              _savingLocalPart ? null : (_localPart ? _saveLocalPart : _submit),
+          child: Text(_savingLocalPart
+              ? 'Saving…'
+              : (_localPart ? 'Save Local Part' : 'Save')),
         ),
       ],
     );

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/scan_record.dart';
 import '../services/local_database.dart';
 import '../services/sync_service.dart';
+import '../services/settings_store.dart';
 import '../widgets/status_chip.dart';
 
 class PendingSyncScreen extends StatefulWidget {
@@ -24,8 +25,13 @@ class _PendingSyncScreenState extends State<PendingSyncScreen> {
   }
 
   Future<void> _load() async {
-    final records = await LocalDatabase.instance
-        .pendingScans(limit: 500, includeFailed: true);
+    final session = await SettingsStore().session;
+    final records = await LocalDatabase.instance.pendingScans(
+        dealerCode: session['dealerCode'] ?? '',
+        auditId: session['auditId'] ?? '',
+        userId: session['userId'] ?? '',
+        limit: 500,
+        includeFailed: true);
     if (!mounted) return;
     setState(() => _records = records);
   }
@@ -58,7 +64,11 @@ class _PendingSyncScreenState extends State<PendingSyncScreen> {
   }
 
   Future<void> _export() async {
-    final data = await LocalDatabase.instance.exportJson();
+    final session = await SettingsStore().session;
+    final data = await LocalDatabase.instance.exportJson(
+        dealerCode: session['dealerCode'] ?? '',
+        auditId: session['auditId'] ?? '',
+        userId: session['userId'] ?? '');
     if (!mounted) return;
     showDialog(
       context: context,

@@ -18,7 +18,7 @@ class SettingsStore {
   static const localServerUrl = 'http://$localHostname:$localServerPort';
   static const productionServerUrl = String.fromEnvironment(
     'DAKSH_CLOUD_URL',
-    defaultValue: '',
+    defaultValue: 'https://dakshinventory.up.railway.app',
   );
   static const _secure = FlutterSecureStorage();
   static const _tokenKey = 'daksh_token';
@@ -80,18 +80,11 @@ class SettingsStore {
   }
 
   Future<String> get serverUrl async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = normalizeServerUrl(prefs.getString(_serverUrlKey) ?? '');
-    if (saved.isNotEmpty && !isPhoneLocalhostUrl(saved)) return saved;
-    final production = normalizeServerUrl(productionServerUrl);
-    if (production.isNotEmpty) return production;
-    return localServerUrl;
+    return normalizeServerUrl(productionServerUrl);
   }
 
   Future<String> get savedServerUrl async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = normalizeServerUrl(prefs.getString(_serverUrlKey) ?? '');
-    return saved.isNotEmpty && !isPhoneLocalhostUrl(saved) ? saved : '';
+    return serverUrl;
   }
 
   Future<String> get serverId async {
@@ -164,10 +157,7 @@ class SettingsStore {
 
   Future<void> saveServerUrl(String value) async {
     final prefs = await SharedPreferences.getInstance();
-    final normalized = normalizeServerUrl(value);
-    final url = normalized.isEmpty || isPhoneLocalhostUrl(normalized)
-        ? localServerUrl
-        : normalized;
+    final url = await serverUrl;
     if (prefs.getString(_serverUrlKey) != url) {
       await prefs.remove(_serverIdKey);
       await prefs.remove(_serverHostnameKey);
@@ -220,6 +210,7 @@ class SettingsStore {
     await prefs.setString(_sessionKey, jsonEncode(session.toPrefs()));
     await prefs.setString(_dealerCodeKey, session.dealerCode);
     await prefs.setString(_dealerNameKey, session.dealerName);
+    await saveAuditContext(session.dealerCode, session.auditId);
   }
 
   Future<void> saveDealer(String code, String name) async {

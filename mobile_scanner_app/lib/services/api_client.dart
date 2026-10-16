@@ -8,7 +8,7 @@ import '../models/scan_record.dart';
 import '../models/session.dart';
 import 'settings_store.dart';
 
-const mobileAppVersionName = 'Daksh Scan Lite v1.2.20';
+const mobileAppVersionName = 'Daksh Inventory Solution v2 · 1.2.21';
 
 class ApiException implements Exception {
   ApiException(this.message,
@@ -21,6 +21,12 @@ class ApiException implements Exception {
   @override
   String toString() => message;
 }
+
+class DealerSelectionRequired implements Exception {
+  DealerSelectionRequired(this.dealers);
+  final List<Dealer> dealers;
+}
+
 class ApiClient {
   ApiClient(this.settings, {http.Client? client})
       : _client = client ?? _defaultClient;
@@ -35,7 +41,6 @@ class ApiClient {
     String localServerUrl = SettingsStore.localServerUrl,
     String productionServerUrl = SettingsStore.productionServerUrl,
   }) {
-    final normalizedSaved = SettingsStore.normalizeServerUrl(savedBaseUrl);
     final candidates = <String>[];
     void addCandidate(String value) {
       final normalized = SettingsStore.normalizeServerUrl(value);
@@ -47,14 +52,7 @@ class ApiClient {
       candidates.add(normalized);
     }
 
-    addCandidate(normalizedSaved);
-    if (normalizedSaved.isEmpty) {
-      addCandidate(productionServerUrl);
-      addCandidate(localServerUrl);
-    } else if (SettingsStore.isLocalNetworkServerUrl(normalizedSaved)) {
-      addCandidate(productionServerUrl);
-      addCandidate(localServerUrl);
-    }
+    addCandidate(productionServerUrl);
     return candidates;
   }
 
@@ -107,7 +105,7 @@ class ApiClient {
         ? 'the configured Daksh server'
         : candidates.join(', ');
     final detail = error == null ? '' : ' Last error: ${error.toString()}';
-    return 'Cannot reach Daksh server at $target. Make sure the Daksh PC app is running, the phone and PC are on the same WiFi/hotspot, and Windows Firewall allows port ${SettingsStore.localServerPort}.$detail';
+    return 'Cannot reach Daksh Railway server at $target. Check the internet connection and try again.$detail';
   }
 
   Future<Map<String, dynamic>> _requestOnce(
@@ -120,7 +118,10 @@ class ApiClient {
   }) async {
     var uri = Uri.parse('$baseUrl$path');
     if (auth && !uri.path.startsWith('/api/auth/')) {
-      final dealer = (body?['dealerCode'] ?? uri.queryParameters['dealerCode'] ?? await settings.dealerCode).toString();
+      final dealer = (body?['dealerCode'] ??
+              uri.queryParameters['dealerCode'] ??
+              await settings.dealerCode)
+          .toString();
       if (dealer.isNotEmpty) {
         uri = uri.replace(queryParameters: {
           ...uri.queryParameters,
@@ -189,15 +190,22 @@ class ApiClient {
 
   Future<Map<String, dynamic>> health() => _request('/api/health', auth: false);
 
-  Future<Map<String, dynamic>> resolveCode(String rawValue, String barcodeFormat,
-      {required String dealerCode}) => _request('/api/scans/resolve-code?${Uri(queryParameters: {
-        'rawValue': rawValue, 'barcodeFormat': barcodeFormat, 'dealerCode': dealerCode
-      }).query}');
+  Future<Map<String, dynamic>> resolveCode(
+          String rawValue, String barcodeFormat,
+          {required String dealerCode}) =>
+      _request('/api/scans/resolve-code?${Uri(queryParameters: {
+            'rawValue': rawValue,
+            'barcodeFormat': barcodeFormat,
+            'dealerCode': dealerCode
+          }).query}');
 
   Future<Map<String, dynamic>> partStock(String partNumber,
-      {required String dealerCode, required String auditId}) => _request('/api/scans/part-summary?${Uri(queryParameters: {
-        'partNumber': partNumber, 'dealerCode': dealerCode, 'auditId': auditId
-      }).query}');
+          {required String dealerCode, required String auditId}) =>
+      _request('/api/scans/part-summary?${Uri(queryParameters: {
+            'partNumber': partNumber,
+            'dealerCode': dealerCode,
+            'auditId': auditId
+          }).query}');
 
   Future<Map<String, dynamic>> mobileStatus({String deviceId = ''}) async {
     final id = deviceId.isEmpty ? await settings.deviceId : deviceId;
@@ -287,7 +295,7 @@ class ApiClient {
     required String username,
     required String password,
     required String pin,
-    required String dealerCode,
+    String dealerCode = '',
     required String deviceId,
   }) async {
     final data = await _request(
@@ -303,7 +311,19 @@ class ApiClient {
         'appVersion': mobileAppVersionName,
       },
     );
-    return UserSession.fromLogin(data);
+    if (data['needsDealerSelection'] == true) {
+      final rows = (data['assignedDealers'] as List? ?? const []);
+      throw DealerSelectionRequired(rows
+          .whereType<Map>()
+          .map((row) => Dealer.fromJson(Map<String, dynamic>.from(row)))
+          .toList());
+    }
+    final session = UserSession.fromLogin(data);
+    if (session.dealerCode.isEmpty ||
+        (data['auditId'] ?? '').toString().isEmpty) {
+      throw ApiException('No active dealer audit is available for this login.');
+    }
+    return session;
   }
 
   Future<String> requestPasswordReset(String identifier) async {
@@ -364,7 +384,8 @@ class ApiClient {
     final deviceId = await settings.deviceId;
     final dealerCodes = scans.map((scan) => scan.dealerCode).toSet();
     if (dealerCodes.length != 1 || dealerCodes.first.trim().isEmpty) {
-      throw ApiException('Sync requires one original dealer per batch', retryable: false);
+      throw ApiException('Sync requires one original dealer per batch',
+          retryable: false);
     }
     final dealerCode = dealerCodes.first;
     final scopedSession = Map<String, dynamic>.from(session)
@@ -382,8 +403,8 @@ class ApiClient {
         'dealerCode': dealerCode,
         'appVersion': mobileAppVersionName,
         'serverUrl': serverUrl,
-          ...scopedSession,
-          'activeDealerId': dealerCode,
+        ...scopedSession,
+        'activeDealerId': dealerCode,
         'scans': scans.map((scan) => scan.toApiPayload()).toList(),
       },
     );

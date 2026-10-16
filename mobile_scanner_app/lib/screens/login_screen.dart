@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../models/dealer.dart';
+import '../models/session.dart';
 import '../services/api_client.dart';
-import '../services/server_discovery.dart';
 import '../services/settings_store.dart';
-import 'server_qr_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.onLoggedIn});
@@ -18,11 +17,8 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _settings = SettingsStore();
-  final _serverController = TextEditingController();
   final _userController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _pinController = TextEditingController();
-  final _dealerController = TextEditingController();
   bool _busy = true;
   String _message = '';
 
@@ -34,13 +30,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _load() async {
     try {
-      final serverUrl = await _settings.serverUrl;
-      final dealerCode = await _settings.dealerCode;
       if (!mounted) return;
-      _serverController.text = serverUrl;
-      _dealerController.text = dealerCode;
-      setState(() {});
-      await _autoDetectServer(silent: true);
+      await _testServer(silent: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -48,56 +39,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _serverController.dispose();
     _userController.dispose();
     _passwordController.dispose();
-    _pinController.dispose();
-    _dealerController.dispose();
     super.dispose();
-  }
-
-  Future<void> _scanServerQr() async {
-    final url = await Navigator.of(context).push<String>(
-        MaterialPageRoute(builder: (_) => const ServerQrScreen()));
-    if (!mounted || url == null || url.isEmpty) return;
-    final wasLocalhost = SettingsStore.isPhoneLocalhostUrl(url);
-    await _settings.saveServerUrl(url);
-    final savedUrl = await _settings.serverUrl;
-    if (!mounted) return;
-    _serverController.text = savedUrl;
-    setState(() => _message = wasLocalhost
-        ? 'The QR contained a PC-only address. Automatic discovery will select the reachable server.'
-        : 'Server URL loaded from QR');
-  }
-
-  Future<void> _autoDetectServer({bool silent = false}) async {
-    if (!silent) {
-      setState(() {
-        _busy = true;
-        _message = 'Searching for Daksh PC server on this WiFi...';
-      });
-    }
-    try {
-      final server = await ServerDiscovery().discoverAndSave(_settings);
-      if (!mounted) return;
-      if (server == null) {
-        if (!silent && mounted) {
-          setState(
-              () => _message = 'Daksh PC server not found on this network.');
-        }
-        return;
-      }
-      _serverController.text = server.serverUrl;
-      if (mounted) {
-        setState(() {
-          _message = silent
-              ? _message
-              : 'Connected to ${server.serverUrl}${server.displayStatus.isNotEmpty ? ' - ${server.displayStatus}' : ''}';
-        });
-      }
-    } finally {
-      if (!silent && mounted) setState(() => _busy = false);
-    }
   }
 
   Future<void> _testServer({bool silent = false}) async {
@@ -108,18 +52,11 @@ class _LoginScreenState extends State<LoginScreen> {
       });
     }
     try {
-      final wasLocalhost =
-          SettingsStore.isPhoneLocalhostUrl(_serverController.text);
-      await _settings.saveServerUrl(_serverController.text);
-      _serverController.text = await _settings.serverUrl;
       final data = await ApiClient(_settings).health();
-      final connectedUrl = await _settings.serverUrl;
       if (!mounted) return;
-      _serverController.text = connectedUrl;
       if (!silent && mounted) {
-        setState(() => _message = wasLocalhost
-            ? 'The PC-only address was replaced. Server connected: ${data['db'] ?? data['postgresStatus'] ?? 'OK'}'
-            : 'Server connected: ${data['db'] ?? data['postgresStatus'] ?? 'OK'}');
+        setState(() => _message =
+            'Railway connected: ${data['db'] ?? data['postgresStatus'] ?? 'OK'}');
       }
     } catch (error) {
       if (!silent && mounted) setState(() => _message = error.toString());
@@ -135,25 +72,32 @@ class _LoginScreenState extends State<LoginScreen> {
       _message = '';
     });
     try {
-      final enteredWasLocalhost =
-          SettingsStore.isPhoneLocalhostUrl(_serverController.text);
-      if (enteredWasLocalhost) {
-        await _autoDetectServer(silent: true);
-      }
-      await _settings.saveServerUrl(_serverController.text);
-      _serverController.text = await _settings.serverUrl;
       final deviceId = await _settings.deviceId;
       final passwordText = _passwordController.text.trim();
-      final pinText = _pinController.text.trim();
-      final passwordLooksLikePin =
-          pinText.isEmpty && RegExp(r'^\d{4}$').hasMatch(passwordText);
-      final session = await ApiClient(_settings).login(
-        username: _userController.text.trim(),
-        password: passwordLooksLikePin ? '' : passwordText,
-        pin: passwordLooksLikePin ? passwordText : pinText,
-        dealerCode: _dealerController.text.trim().toUpperCase(),
-        deviceId: deviceId,
-      );
+      final client = ApiClient(_settings);
+      UserSession session;
+      try {
+        session = await client.login(
+            username: _userController.text.trim(),
+            password: passwordText,
+            pin: '',
+            deviceId: deviceId);
+      } on DealerSelectionRequired catch (selection) {
+        if (!mounted) return;
+        final dealer = await showModalBottomSheet<Dealer>(
+            context: context,
+            showDragHandle: true,
+            builder: (_) => _DealerSheet(
+                dealers: selection.dealers,
+                onPick: (value) => Navigator.pop(context, value)));
+        if (dealer == null) return;
+        session = await client.login(
+            username: _userController.text.trim(),
+            password: passwordText,
+            pin: '',
+            dealerCode: dealer.code,
+            deviceId: deviceId);
+      }
       await _settings.saveSession(session);
       await ApiClient(_settings).registerDevice(
         deviceId: deviceId,
@@ -169,33 +113,9 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _showDealerHint() async {
-    setState(() => _busy = true);
-    try {
-      await _settings.saveServerUrl(_serverController.text);
-      final dealers = await ApiClient(_settings).dealers();
-      if (!mounted) return;
-      await showModalBottomSheet(
-        context: context,
-        showDragHandle: true,
-        builder: (_) => _DealerSheet(
-          dealers: dealers,
-          onPick: (dealer) {
-            _dealerController.text = dealer.code;
-            Navigator.pop(context);
-          },
-        ),
-      );
-    } catch (error) {
-      setState(
-          () => _message = 'Login first or enter dealer code manually: $error');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
   Future<void> _forgotPassword() async {
-    final identifierController = TextEditingController(text: _userController.text.trim());
+    final identifierController =
+        TextEditingController(text: _userController.text.trim());
     final identifier = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -204,22 +124,30 @@ class _LoginScreenState extends State<LoginScreen> {
           controller: identifierController,
           autofocus: true,
           textInputAction: TextInputAction.done,
-          decoration: const InputDecoration(labelText: 'User ID or registered email'),
+          decoration:
+              const InputDecoration(labelText: 'User ID or registered email'),
           onSubmitted: (value) => Navigator.of(dialogContext).pop(value.trim()),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(dialogContext).pop(identifierController.text.trim()), child: const Text('Send link')),
+          TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(dialogContext)
+                  .pop(identifierController.text.trim()),
+              child: const Text('Send link')),
         ],
       ),
     );
     identifierController.dispose();
     if (!mounted || identifier == null || identifier.isEmpty) return;
-    setState(() { _busy = true; _message = ''; });
+    setState(() {
+      _busy = true;
+      _message = '';
+    });
     try {
-      await _settings.saveServerUrl(_serverController.text);
-      _serverController.text = await _settings.serverUrl;
-      final message = await ApiClient(_settings).requestPasswordReset(identifier);
+      final message =
+          await ApiClient(_settings).requestPasswordReset(identifier);
       if (mounted) setState(() => _message = message);
     } catch (error) {
       if (mounted) setState(() => _message = error.toString());
@@ -281,58 +209,12 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
                 const SizedBox(height: 18),
-                TextFormField(
-                  controller: _serverController,
-                  enabled: !_busy,
-                  keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(
-                      labelText: 'Daksh Server',
-                      prefixIcon: Icon(Icons.cloud),
-                      helperText:
-                          'Automatic: saved identity → daksh.local → mDNS → QR'),
-                  validator: (_) => null,
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                        child: OutlinedButton.icon(
-                            onPressed: _busy ? null : _scanServerQr,
-                            icon: const Icon(Icons.qr_code_scanner),
-                            label: const Text('Scan Server QR'))),
-                    const SizedBox(width: 10),
-                    Expanded(
-                        child: OutlinedButton.icon(
-                            onPressed: _busy ? null : _autoDetectServer,
-                            icon: const Icon(Icons.wifi_tethering),
-                            label: const Text('Auto Detect'))),
-                  ],
-                ),
+                const Text('Daksh Railway server', textAlign: TextAlign.center),
                 const SizedBox(height: 10),
                 OutlinedButton.icon(
                     onPressed: _busy ? null : _testServer,
                     icon: const Icon(Icons.network_check),
-                    label: const Text('Test Server')),
-                const SizedBox(height: 14),
-                TextFormField(
-                  controller: _dealerController,
-                  textCapitalization: TextCapitalization.characters,
-                  decoration: InputDecoration(
-                    labelText: 'Dealer Code',
-                    prefixIcon: const Icon(Icons.store),
-                    suffixIcon: IconButton(
-                        onPressed: _busy ? null : _showDealerHint,
-                        icon: const Icon(Icons.list_alt)),
-                  ),
-                  validator: (value) => (value ?? '').trim().isEmpty
-                      ? 'Dealer code is mandatory'
-                      : null,
-                  onChanged: (value) => _dealerController.value =
-                      _dealerController.value.copyWith(
-                          text: value.toUpperCase(),
-                          selection:
-                              TextSelection.collapsed(offset: value.length)),
-                ),
+                    label: const Text('Check Railway Connection')),
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _userController,
@@ -348,15 +230,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   obscureText: true,
                   decoration: const InputDecoration(
                       labelText: 'Password', prefixIcon: Icon(Icons.lock)),
-                ),
-                const SizedBox(height: 14),
-                TextFormField(
-                  controller: _pinController,
-                  obscureText: true,
-                  keyboardType: TextInputType.number,
-                  maxLength: 4,
-                  decoration: const InputDecoration(
-                      labelText: '4-digit PIN', prefixIcon: Icon(Icons.pin)),
+                  validator: (value) => (value ?? '').trim().isEmpty
+                      ? 'Password is required'
+                      : null,
                 ),
                 const SizedBox(height: 18),
                 FilledButton.icon(

@@ -32,14 +32,18 @@ bool isSupportedScannerSequence(String raw, String format) {
   if (fields.length >= 5) {
     for (var i = 1; i < fields.length - 1; i++) {
       if (part(fields[i]) && !RegExp(r'^\d+$').hasMatch(fields[i]) &&
-          quantity(fields[i + 1])) return true;
+          quantity(fields[i + 1])) {
+        return true;
+      }
     }
   }
   final keyed = <String, dynamic>{};
   try {
     final decoded = jsonDecode(value);
-    if (decoded is Map) keyed.addAll(decoded.map((key, val) =>
-        MapEntry(key.toString().replaceAll(RegExp(r'[^A-Z0-9]'), ''), val)));
+    if (decoded is Map) {
+      keyed.addAll(decoded.map((key, val) =>
+          MapEntry(key.toString().replaceAll(RegExp(r'[^A-Z0-9]'), ''), val)));
+    }
   } catch (_) {}
   if (keyed.isEmpty) {
     final query = value.contains('?') ? value.substring(value.indexOf('?') + 1) : value;

@@ -7,6 +7,7 @@ class UserSession {
     required this.role,
     required this.dealerCode,
     this.dealerName = '',
+    this.auditId = '',
   });
 
   final String token;
@@ -16,6 +17,7 @@ class UserSession {
   final String role;
   final String dealerCode;
   final String dealerName;
+  final String auditId;
 
   factory UserSession.fromLogin(Map<String, dynamic> json) {
     final user = Map<String, dynamic>.from(json['user'] ?? {});
@@ -27,6 +29,7 @@ class UserSession {
       role: (user['role'] ?? '').toString(),
       dealerCode: (json['dealerCode'] ?? '').toString().toUpperCase(),
       dealerName: (json['dealerName'] ?? '').toString(),
+      auditId: (json['auditId'] ?? '').toString(),
     );
   }
 
@@ -37,5 +40,6 @@ class UserSession {
         'role': role,
         'dealerCode': dealerCode,
         'dealerName': dealerName,
+        'auditId': auditId,
       };
 }
