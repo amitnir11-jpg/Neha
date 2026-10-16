@@ -8670,7 +8670,10 @@
     const selected = valid.filter(row => !review.excluded.has(row.rowNumber));
     const query = clean($('#stockReviewSearch')?.value).toUpperCase();
     const filter = $('#stockReviewFilter')?.value || 'ALL';
-    const filtered = rows.filter(row => !committed.has(row.rowNumber) && (filter === 'ALL' || row.status === filter) && (!query || `${row.partNumber} ${row.partDescription}`.toUpperCase().includes(query)));
+    const filtered = rows.filter(row => !committed.has(row.rowNumber)
+      && (filter === 'ALL' || (filter === 'CORRECTED' ? Object.keys(review.corrections?.[row.rowNumber] || {}).length > 0
+        : filter === 'UNCORRECTED' ? !Object.keys(review.corrections?.[row.rowNumber] || {}).length : row.status === filter))
+      && (!query || `${row.partNumber} ${row.partDescription}`.toUpperCase().includes(query)));
     const pages = Math.max(1, Math.ceil(filtered.length / 50));
     review.page = Math.min(review.page || 1, pages);
     const start = (review.page - 1) * 50;
@@ -8701,7 +8704,7 @@
     $('#stockReviewSelectAll').indeterminate = selectedFiltered.length > 0 && selectedFiltered.length < filtered.length;
     $('#stockReviewRows').innerHTML = pageRows.map(row => `<tr>
       <td><input type="checkbox" data-stock-select="${row.rowNumber}" aria-label="Select Excel row ${row.rowNumber} ${row.status === 'VALID' ? 'for upload' : 'for correction'}" ${row.status === 'VALID' ? !review.excluded.has(row.rowNumber) ? 'checked' : '' : selectedExceptions.has(row.rowNumber) ? 'checked' : ''}></td>
-      <td>${row.rowNumber}</td>
+      <td>${row.rowNumber}${Object.keys(review.corrections?.[row.rowNumber] || {}).length ? '<span class="stock-review-corrected" title="Correction saved in this upload review. Validate and Transfer will check the part and prices before saving to stock.">✓ Corrected</span>' : ''}</td>
       <td><input data-stock-row="${row.rowNumber}" data-stock-field="dealerCode" value="${escapeHtml(row.dealerCode || '')}" aria-label="Dealer code at Excel row ${row.rowNumber}" ${row.status === 'VALID' ? 'readonly' : ''}></td>
       <td><div class="stock-review-part-edit"><input list="stockReviewSuggestions" data-stock-row="${row.rowNumber}" data-stock-field="partNumber" value="${escapeHtml(row.partNumber || '')}" title="${escapeHtml(row.partNumber || '')}" aria-label="Part number at Excel row ${row.rowNumber}"><button type="button" class="btn light stock-review-icon" data-stock-edit="${row.rowNumber}" title="Edit part number" aria-label="Edit part number at Excel row ${row.rowNumber}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12H4v-5L16 3Z M14 5l5 5"/></svg></button><button type="button" class="btn light stock-review-icon stock-review-delete" data-stock-delete="${row.rowNumber}" title="Remove row from this upload" aria-label="Delete Excel row ${row.rowNumber}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7"/></svg></button></div></td>
       <td>${escapeHtml(row.partDescription || '')}</td>
@@ -14774,7 +14777,10 @@
       if (!review) return;
       const query = clean($('#stockReviewSearch')?.value).toUpperCase();
       const filter = $('#stockReviewFilter')?.value || 'ALL';
-      review.rows.filter(row => !review.deleted?.has(row.rowNumber) && !review.committed.has(row.rowNumber) && (filter === 'ALL' || row.status === filter) && (!query || `${row.partNumber} ${row.partDescription}`.toUpperCase().includes(query))).forEach(row => {
+      review.rows.filter(row => !review.deleted?.has(row.rowNumber) && !review.committed.has(row.rowNumber)
+        && (filter === 'ALL' || (filter === 'CORRECTED' ? Object.keys(review.corrections?.[row.rowNumber] || {}).length > 0
+          : filter === 'UNCORRECTED' ? !Object.keys(review.corrections?.[row.rowNumber] || {}).length : row.status === filter))
+        && (!query || `${row.partNumber} ${row.partDescription}`.toUpperCase().includes(query))).forEach(row => {
         if (row.status === 'VALID') {
           if (event.target.checked) review.excluded.delete(row.rowNumber);
           else review.excluded.add(row.rowNumber);
@@ -14804,6 +14810,22 @@
         row.status = 'PENDING';
         row.reason = 'Dealer correction requires revalidation';
       });
+      renderDealerStockReview();
+    });
+    $('#stockReviewSelectCorrected')?.addEventListener('click', () => {
+      const review = state.dealerStockReview;
+      if (!review || state.dealerStockTransferring || state.dealerStockConfirming) return;
+      review.selectedExceptions.clear();
+      review.rows.forEach(row => {
+        review.excluded.add(row.rowNumber);
+        if (review.deleted?.has(row.rowNumber) || review.committed.has(row.rowNumber)
+          || !Object.keys(review.corrections?.[row.rowNumber] || {}).length) return;
+        if (row.status === 'VALID') review.excluded.delete(row.rowNumber);
+        else review.selectedExceptions.add(row.rowNumber);
+      });
+      $('#stockReviewFilter').value = 'CORRECTED';
+      $('#stockReviewSearch').value = '';
+      review.page = 1;
       renderDealerStockReview();
     });
     $('#stockReviewExport')?.addEventListener('click', () => {
