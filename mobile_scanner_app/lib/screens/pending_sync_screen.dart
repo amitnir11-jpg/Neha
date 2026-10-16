@@ -29,7 +29,7 @@ class _PendingSyncScreenState extends State<PendingSyncScreen> {
     final records = await LocalDatabase.instance.pendingScans(
         dealerCode: session['dealerCode'] ?? '',
         auditId: session['auditId'] ?? '',
-        userId: session['userId'] ?? '',
+            userId: session['loginId'] ?? session['userId'] ?? '',
         limit: 500,
         includeFailed: true);
     if (!mounted) return;
@@ -68,7 +68,7 @@ class _PendingSyncScreenState extends State<PendingSyncScreen> {
     final data = await LocalDatabase.instance.exportJson(
         dealerCode: session['dealerCode'] ?? '',
         auditId: session['auditId'] ?? '',
-        userId: session['userId'] ?? '');
+        userId: session['loginId'] ?? session['userId'] ?? '');
     if (!mounted) return;
     showDialog(
       context: context,

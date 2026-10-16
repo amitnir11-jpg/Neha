@@ -125,7 +125,7 @@ class SyncService {
     final session = await settings.session;
     final dealerCode = (session['dealerCode'] ?? '').trim();
     final auditId = (session['auditId'] ?? '').trim();
-    final userId = (session['userId'] ?? '').trim();
+    final userId = (session['loginId'] ?? session['userId'] ?? '').trim();
     if (dealerCode.isEmpty ||
         auditId.isEmpty ||
         userId.isEmpty ||

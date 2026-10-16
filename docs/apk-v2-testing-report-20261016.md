@@ -5,7 +5,7 @@ Status: **testing build only; production release is unchanged**.
 ## Build and rollback
 
 - Branch: `mobile/apk-v2-production-connection`.
-- Test APK: `D:\Daksh\Neha-main-github\.codex-artifacts\apk-v2-testing-20261016\daksh-inventory-v2-testing-1.2.21+28-release.apk` (69,914,422 bytes; SHA-256 `AA513D1D43DF8879F8D521FC1558C9B737AEB00E23B7F6606038B87019C8FCF3`).
+- Test APK: `D:\Daksh\Neha-main-github\.codex-artifacts\apk-v2-testing-20261016\daksh-inventory-v2-testing-1.2.21+28-release.apk` (69,914,425 bytes; SHA-256 `6821CB75A24BE0A4AD0692E1796A0DCDBF1E996CDA4D5B6E19B5441C3D5542F0`).
 - Package/version: `com.daksh.inventory.scanner`, `1.2.21` (code 28). This test build is compiled for `https://neha-testing-testing.up.railway.app`.
 - APK signing certificate SHA-256: `14f0191a2dde8cbe83e44c36051632fa67307cb717d0d45290602bf842071f97`, matching the existing production APK. The project currently signs release builds with the Android debug key; this is compatible with the existing APK, but a dedicated production signing setup should be planned before wider distribution.
 - Current production APK backup: `D:\Daksh\Neha-main-github\.codex-artifacts\apk-v2-backup-20261016\daksh-mobile-scanner-before-v2.apk` (SHA-256 `CEEF7FD118EBDF6C570193619894D002E405A0D44A17883B4BED0181FC773C1B`). The production download has the same checksum and was not overwritten.
