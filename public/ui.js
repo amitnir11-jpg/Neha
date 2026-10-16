@@ -8593,7 +8593,9 @@
     setText('stockReviewPageLabel', `Showing ${filtered.length ? start + 1 : 0}-${start + pageRows.length} of ${filtered.length}`);
     $('#stockReviewPrev').disabled = review.page <= 1;
     $('#stockReviewNext').disabled = review.page >= pages;
-    $('#stockReviewConfirm').disabled = !selected.length || review.dealerCode !== activeReconDealer();
+    const busy = state.dealerStockTransferring || state.dealerStockConfirming;
+    $('#stockReviewRevalidate').disabled = Boolean(busy) || review.dealerCode !== activeReconDealer() || !rows.some(row => !committed.has(row.rowNumber));
+    $('#stockReviewConfirm').disabled = Boolean(busy) || !selected.length || review.dealerCode !== activeReconDealer();
     $('#stockReviewUseDealer').disabled = !rows.some(row => !committed.has(row.rowNumber) && row.reason?.includes('does not match selected dealer'));
     const selectedFiltered = filtered.filter(row => row.status === 'VALID' ? !review.excluded.has(row.rowNumber) : selectedExceptions.has(row.rowNumber));
     $('#stockReviewSelectAll').checked = filtered.length > 0 && selectedFiltered.length === filtered.length;
@@ -14528,13 +14530,22 @@
       syncReconDealer(event.target.value);
       loadDealerStockPreview().catch((error) => toast(error.message, 'error'));
     });
+    const validateAndTransferDealerStock = async (form) => {
+      if (state.dealerStockTransferring || state.dealerStockConfirming) return;
+      state.dealerStockTransferring = true;
+      renderDealerStockReview();
+      try {
+        const result = await uploadDealerStock(form);
+        if (result) await confirmDealerStockReview(false);
+      } finally {
+        state.dealerStockTransferring = false;
+        renderDealerStockReview();
+      }
+    };
     $('#dealerStockUploadForm')?.addEventListener('submit', async (event) => {
       event.preventDefault();
       try {
-        const result = await uploadDealerStock(event.currentTarget);
-        if (result && state.dealerStockReview?.rows.some(row => row.status === 'VALID' && !state.dealerStockReview.committed.has(row.rowNumber))) {
-          await confirmDealerStockReview(false);
-        }
+        await validateAndTransferDealerStock(event.currentTarget);
       } catch (error) {
         const message = $('#dealerStockUploadMessage');
         renderDealerStockErrors(error.data?.errorRows || [], error.data?.skippedCount || 0, error.data?.errorRowsTruncated);
@@ -14619,7 +14630,7 @@
     $('#stockReviewSearch')?.addEventListener('input', () => { if (state.dealerStockReview) state.dealerStockReview.page = 1; renderDealerStockReview(); });
     $('#stockReviewPrev')?.addEventListener('click', () => { state.dealerStockReview.page -= 1; renderDealerStockReview(); });
     $('#stockReviewNext')?.addEventListener('click', () => { state.dealerStockReview.page += 1; renderDealerStockReview(); });
-    $('#stockReviewRevalidate')?.addEventListener('click', () => uploadDealerStock($('#dealerStockUploadForm')).catch(error => toast(error.message, 'error')));
+    $('#stockReviewRevalidate')?.addEventListener('click', () => validateAndTransferDealerStock($('#dealerStockUploadForm')).catch(error => toast(error.message, 'error')));
     $('#stockReviewUseDealer')?.addEventListener('click', () => {
       const review = state.dealerStockReview;
       if (!review || review.dealerCode !== activeReconDealer()) return;
@@ -14641,13 +14652,14 @@
     });
     const confirmDealerStockReview = async (requireConfirmation = true) => {
       const review = state.dealerStockReview;
-      if (!review || review.dealerCode !== activeReconDealer()) return;
+      if (!review || review.dealerCode !== activeReconDealer() || state.dealerStockConfirming || $('#dealerStockUploadForm')?.dataset.uploading === 'true') return;
       const selected = review.rows.filter(row => row.status === 'VALID' && !review.excluded.has(row.rowNumber) && !review.committed.has(row.rowNumber));
       const quantity = selected.reduce((sum, row) => sum + Number(row.dmsStock || 0), 0);
       const dlcValue = selected.reduce((sum, row) => sum + Number(row.dmsStock || 0) * Number(row.dlc || 0), 0);
       const mrpValue = selected.reduce((sum, row) => sum + Number(row.dmsStock || 0) * Number(row.mrp || 0), 0);
       if (!selected.length || (requireConfirmation && !window.confirm(`Confirm DMS stock UPDATE for ${review.dealerCode} / ${review.file.name}?\nExcel rows: ${review.rows.length}; valid: ${review.rows.filter(row => row.status === 'VALID').length}; wrong: ${review.rows.filter(row => row.status === 'WRONG_PART').length}; missing price: ${review.rows.filter(row => row.status === 'MISSING_PRICE').length}.\nSelected: ${selected.length} rows, ${quantity} units. DLC ₹ ${money2(dlcValue)}; MRP ₹ ${money2(mrpValue)}.\nMatching part quantities will be replaced. Other dealer and audit records remain unchanged.`))) return;
-      const button = $('#stockReviewConfirm'); button.disabled = true;
+      state.dealerStockConfirming = true;
+      renderDealerStockReview();
       try {
         const body = new FormData($('#dealerStockUploadForm'));
         body.set('confirmed', 'true');
@@ -14663,7 +14675,7 @@
         loadReconciliation({ silent: true }).catch(() => undefined);
       } catch (error) {
         toast(error.message, 'error');
-      } finally { renderDealerStockReview(); }
+      } finally { state.dealerStockConfirming = false; renderDealerStockReview(); }
     };
     $('#stockReviewConfirm')?.addEventListener('click', () => confirmDealerStockReview());
     $('#dealerStockInvalidOnly')?.addEventListener('change', () => loadDealerStockPreview().catch(error => toast(error.message, 'error')));
