@@ -26,7 +26,7 @@ function harness() {
     multer: Object.assign(() => ({ single: () => () => {} }), { memoryStorage: () => ({}) }),
     './auth': { requireAuth() {}, requireAdmin() {}, validateUserDealerAccess: async (_user, code) => ({ allowed: code === 'D1' }) },
     '../models/Dealer': { findOne: () => ({ lean: async () => ({ dealerName: 'Dealer One' }) }) },
-    '../utils/partMasterPrice': { getPricesFromPartMaster: async (parts, dealerCode) => new Map(parts.filter(part => part === 'PART1' && dealerCode === 'D1').map(part => [part, { masterRecord: { partNumber: part, dealerCode, partDescription: 'Catalogue test part', source: 'MASTER_CATALOGUE' } }])) },
+    '../utils/partMasterPrice': { getPricesFromPartMaster: async (parts, dealerCode) => new Map(parts.filter(part => part === 'PART1' && dealerCode === 'D1').map(part => [part, { dlc: 10, mrp: 20, masterRecord: { partNumber: part, dealerCode, partDescription: 'Catalogue test part', source: 'MASTER_CATALOGUE' } }])) },
     '../models/Bin': { findOne: () => ({ lean: async () => ({}) }), create: async () => ({}) },
     '../models/Inventory': {
       create: async row => { ledger.push({ _id: `scan-${ledger.length}`, ...clone(row) }); },
@@ -190,6 +190,37 @@ test('manual Excel upload previews, partially commits, corrects remaining rows, 
   assert.equal((await h.call('post', '/batches/:batchId/reverse', { dealerCode: 'D1' })).status, 409);
 });
 
+test('partial upload corrections keep detail and history counts consistent without changing stock', async () => {
+  const h = harness(); await h.preview();
+  let rows = h.batch().rows; rows[0].checked = true;
+  rows[1].partNumber = 'PART1';
+  await h.call('patch', '/batches/:batchId/rows', { rows });
+  await h.call('post', '/batches/:batchId/confirm', { dealerCode: 'D1' });
+  assert.equal(h.batch().acceptedRows, 2, 'accepted counts include valid unchecked rows');
+  assert.equal(h.batch().uploadedQty, 2, 'only checked rows add stock');
+  rows = h.batch().rows; rows[1].partNumber = 'UNKNOWN';
+  await h.call('patch', '/batches/:batchId/rows', { rows });
+  assert.equal(h.batch().acceptedRows, 1);
+  assert.equal(h.batch().rejectedRows, 1);
+  rows = h.batch().rows; rows[1].partNumber = 'PART1';
+  const corrected = await h.call('patch', '/batches/:batchId/rows', { rows });
+  assert.equal(corrected.status, 200);
+  assert.equal(corrected.data.batch.acceptedRows, 2);
+  assert.equal(corrected.data.batch.rejectedRows, 0);
+  assert.equal(corrected.data.batch.uploadedQty, 2);
+  assert.equal(h.ledger().length, 1);
+  const history = (await h.call('get', '/batches', { dealerCode: 'D1' })).data.batches[0];
+  assert.equal(history.acceptedRows, corrected.data.batch.acceptedRows);
+  assert.equal(history.rejectedRows, corrected.data.batch.rejectedRows);
+  assert.equal(history.uploadedQty, corrected.data.batch.uploadedQty);
+  rows = h.batch().rows; rows[1].qty = 0;
+  const rejected = await h.call('patch', '/batches/:batchId/rows', { rows });
+  assert.equal(rejected.data.batch.acceptedRows, 1);
+  assert.equal(rejected.data.batch.rejectedRows, 1);
+  assert.equal(rejected.data.batch.uploadedQty, 2);
+  assert.equal(h.ledger().length, 1);
+});
+
 test('row edits cannot forge upload receipts, replace original rows, or erase committed flags', async () => {
   const h = harness(); await h.preview();
   let rows = h.batch().rows; rows[0].committed = true; rows[0].checked = true; rows[0].originalPartNumber = 'FORGED';
@@ -286,7 +317,7 @@ test('selecting a sheet does not send it; Upload Sheet sends it once and refresh
   assert.equal(requests.length, 1, 'a second click without selecting another sheet does nothing');
 });
 
-test('upload UI enables confirmation for verified remaining rows after a partial commit', () => {
+test('upload UI only presents exception rows and disables confirmation after a closed batch', () => {
   const source = fs.readFileSync('public/ui.js', 'utf8');
   const nodes = new Map();
   const $ = selector => {
@@ -301,15 +332,33 @@ test('upload UI enables confirmation for verified remaining rows after a partial
   vm.createContext(context);
   vm.runInContext(source.slice(start, source.indexOf('const saveExcelStockRows =', start)) + '\nrenderExcelStockBatch();', context);
   assert.equal($('#excelConfirmUpload').disabled, false);
-  context.excelStockBatch.rows[1].checked = false;
-  vm.runInContext('renderExcelStockBatch();', context);
-  assert.equal($('#excelConfirmUpload').disabled, true, 'already uploaded rows do not enable confirmation');
   context.excelStockBatch.status = 'REVERSED';
   vm.runInContext('renderExcelStockBatch();', context);
-  assert.equal($('#excelSelectPage').disabled, true);
+  assert.equal($('#excelConfirmUpload').disabled, true);
   const html = fs.readFileSync('public/Daksh.html', 'utf8');
   assert.equal((html.match(/id="excelStockRows"/g) || []).length, 1);
-  assert.equal((html.match(/id="excelRejectedCount"/g) || []).length, 1);
-  assert.match($('#excelStockRows').innerHTML, /excel-badge accepted/);
+  assert.equal((html.match(/id="excelInvalidPartsCount"/g) || []).length, 1);
+  assert.match($('#excelStockRows').innerHTML, /data-excel-exception-check/);
   assert.equal($('#excelReviewStatus').textContent, 'Reversed');
+});
+
+test('CSV preview stays draft-only and applies the same part-master validation', async () => {
+  const h = harness();
+  const file = { originalname: 'dealer-stock.csv', buffer: Buffer.from('Part Number,Qty,Bin Location\nPART1,4,BIN1\nUNKNOWN,2,BIN2\n') };
+  const result = await h.call('post', '/preview', { dealerCode: 'D1' }, file);
+  assert.equal(result.status, 201);
+  assert.equal(result.data.batch.validationSummary.validRows, 1);
+  assert.equal(result.data.batch.validationSummary.invalidPartRows, 1);
+  assert.equal(h.ledger().length, 0, 'validation does not save inventory');
+});
+
+test('duplicate part/bin rows are clearly flagged while retaining source-row receipts', async () => {
+  const h = harness(); await h.preview();
+  const rows = h.batch().rows;
+  rows[1].partNumber = 'PART1'; rows[1].binLocation = 'BIN1';
+  const result = await h.call('patch', '/batches/:batchId/rows', { rows });
+  assert.equal(result.status, 200);
+  assert.equal(result.data.batch.rows[1].validationStatus, 'DUPLICATE_RECORD');
+  assert.equal(result.data.batch.rows[1].status, 'ACCEPTED');
+  assert.equal(result.data.batch.validationSummary.duplicateRows, 1);
 });

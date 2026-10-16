@@ -59,6 +59,7 @@ const stockValuationTotals = typeof stockValuationModule.stockValuationTotals ==
     };
 const { resolvePartPricing } = require('../utils/partPricing');
 const { summarizeAuditValuation } = require('../utils/auditValuation');
+const { aggregateDealerStockRows } = require('../utils/dmsStockAggregation');
 const categoryResolver = require('../utils/categoryResolver');
 const canonicalizePartCategory = typeof categoryResolver.canonicalizePartCategory === 'function'
   ? categoryResolver.canonicalizePartCategory
@@ -2297,6 +2298,7 @@ async function buildReportData(query = {}) {
   rawScans = applyMovementCountRules(uniqueReportScans(rawScans.map(inventoryRoute.publicScan)))
     .sort((a, b) => new Date(b.timestamp || b.createdAt || 0) - new Date(a.timestamp || a.createdAt || 0));
   const mergedDuplicateScanRows = rawScanCountBeforeDedupe - rawScans.length;
+  dealerStockRows = aggregateDealerStockRows(dealerStockRows);
   rawScans = await enrichScanUsers(rawScans);
   const realScansForLookup = rawScans.filter((scan) => !/^SYNC/i.test(normalizePartNumber(scan.normalizedPartNumber || scan.partNumber || scan.part)));
   const partNumbers = Array.from(new Set([...realScansForLookup, ...dealerStockRows]

@@ -1,6 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
+const XLSX = require('xlsx');
 const { randomUUID, createHash } = require('crypto');
 const auth = require('./auth');
 const Dealer = require('../models/Dealer');
@@ -27,6 +28,32 @@ function integerQty(value) {
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
+function sourceValue(row, headings, names) {
+  const index = headings.findIndex(value => names.includes(value));
+  return index >= 0 ? clean(row[index]) : '';
+}
+
+function parseUploadRows(file) {
+  const workbook = XLSX.read(file.buffer, { type: 'buffer', raw: false });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  if (!sheet) throw Object.assign(new Error('The workbook has no worksheet.'), { statusCode: 400 });
+  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+  const headings = (data[0] || []).map(value => clean(value).toLowerCase());
+  const partNames = ['part number', 'partnumber', 'part no', 'partno'];
+  const qtyNames = ['qty', 'quantity', 'dms stock', 'dms qty'];
+  const binNames = ['bin location', 'bin', 'bin loc', 'bin loc 1'];
+  if (!headings.some(value => partNames.includes(value)) || !headings.some(value => qtyNames.includes(value)) || !headings.some(value => binNames.includes(value))) {
+    throw Object.assign(new Error('Required columns: Part Number, Qty, Bin Location.'), { statusCode: 400 });
+  }
+  return data.slice(1).map((values, index) => {
+    const partNumber = sourceValue(values, headings, partNames);
+    const qty = sourceValue(values, headings, qtyNames);
+    const binLocation = sourceValue(values, headings, binNames);
+    if (!partNumber && !qty && !binLocation) return null;
+    return { sourceRow: index + 2, originalPartNumber: partNumber, originalQty: qty, originalBinLocation: binLocation, partNumber, qty, binLocation, corrections: [] };
+  }).filter(Boolean);
+}
+
 async function resolveScope(req, requestedCode) {
   const dealerCode = upper(requestedCode);
   if (!dealerCode || dealerCode === 'ALL') throw Object.assign(new Error('Select one dealer before uploading.'), { statusCode: 400 });
@@ -44,7 +71,7 @@ async function resolveScope(req, requestedCode) {
 async function validateRows(dealerCode, auditId, inputRows) {
   const partNumbers = [...new Set(inputRows.map(row => normalizePartNumber(row.correctedPartNumber || row.partNumber || '')).filter(Boolean))];
   const pricesByPart = await getPricesFromPartMaster(partNumbers, dealerCode);
-  const masterByPart = new Map([...pricesByPart].map(([part, price]) => [part, price.masterRecord || price]));
+  const masterByPart = new Map([...pricesByPart].map(([part, price]) => [part, { price, master: price.masterRecord || price }]));
   const stockEntries = await Promise.all(partNumbers.map(async partNumber => [partNumber, await loadPartStock({ dealerCode, auditId, partNumber })]));
   const stockByPart = new Map(stockEntries);
   const rows = [];
@@ -54,12 +81,23 @@ async function validateRows(dealerCode, auditId, inputRows) {
     const partNumber = normalizePartNumber(row.correctedPartNumber || row.partNumber || '');
     const binLocation = upper(row.correctedBinLocation || row.binLocation || '');
     const qty = integerQty(row.correctedQty ?? row.qty);
-    let reason = '';
+    let reason = ''; let validationStatus = 'VALID';
     let master = null;
     if (!partNumber) reason = 'Part number is required';
     else {
-      master = masterByPart.get(partNumber) || null;
-      if (!master || master.activeStatus === false) reason = 'Part not found in Part Master';
+      const matched = masterByPart.get(partNumber) || null;
+      master = matched && matched.master;
+      if (!master || master.activeStatus === false) { reason = 'Part not found in Part Master'; validationStatus = 'INVALID_PART_NUMBER'; }
+      else {
+        const pricing = matched.price || {};
+        const dlc = Number(pricing.dlc ?? master.dlc ?? master.dlp ?? 0);
+        const mrp = Number(pricing.mrp ?? master.mrp ?? 0);
+        row.masterDlc = dlc > 0 ? dlc : null;
+        row.masterMrp = mrp > 0 ? mrp : null;
+        if (!(dlc > 0) && !(mrp > 0)) { reason = 'Both DLC and MRP are missing in Part Master'; validationStatus = 'BOTH_PRICES_MISSING'; }
+        else if (!(dlc > 0)) { reason = 'DLC is missing in Part Master'; validationStatus = 'DLC_MISSING'; }
+        else if (!(mrp > 0)) { reason = 'MRP is missing in Part Master'; validationStatus = 'MRP_MISSING'; }
+      }
     }
     if (!reason && qty === null) reason = 'Quantity must be a positive whole number';
     if (!reason && !binLocation) reason = 'Bin missing';
@@ -75,18 +113,42 @@ async function validateRows(dealerCode, auditId, inputRows) {
     row.existingQty = existing;
     row.finalQty = reason ? null : existing + qty;
     row.partDescription = clean(master?.partDescription || master?.partName || '');
+    row.validationStatus = reason ? validationStatus : 'VALID';
+    row.valuationStatus = reason && /DLC|MRP|Part Master/.test(reason) ? 'PENDING_UNVALUED' : 'VALUED';
     row.status = reason ? 'REJECTED' : 'ACCEPTED';
     row.reason = reason;
     row.checked = reason ? false : input.checked === true;
     rows.push(row);
   }
+  // Surface repeated part/bin rows to the reviewer. They remain accepted because
+  // a stock sheet may legitimately split one bin balance across rows; commit
+  // retains a separate immutable receipt for each source row.
+  const seen = new Map();
+  rows.forEach(row => {
+    if (row.status !== 'ACCEPTED') return;
+    const key = `${normalizePartNumber(row.partNumber)}::${upper(row.binLocation)}`;
+    if (seen.has(key)) {
+      row.validationStatus = 'DUPLICATE_RECORD';
+      row.reason = `Duplicate part and bin (matches Excel row ${seen.get(key)})`;
+    } else seen.set(key, row.sourceRow);
+  });
   return rows;
 }
 
 function summarize(rows) {
   const accepted = rows.filter(row => row.status === 'ACCEPTED');
   const rejected = rows.filter(row => row.status === 'REJECTED').length;
-  return { acceptedRows: accepted.length, rejectedRows: rejected, uploadedQty: accepted.reduce((sum, row) => sum + Number(row.qty || 0), 0) };
+  const issues = rows.filter(row => row.status === 'REJECTED');
+  const count = status => issues.filter(row => row.validationStatus === status);
+  const acceptedQty = accepted.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+  const issueQty = issues.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+  return { acceptedRows: accepted.length, rejectedRows: rejected, uploadedQty: accepted.reduce((sum, row) => sum + Number(row.qty || 0), 0),
+    validationSummary: { totalRows: rows.length, validRows: accepted.length, invalidPartRows: count('INVALID_PART_NUMBER').length,
+      missingDlcRows: count('DLC_MISSING').length, missingMrpRows: count('MRP_MISSING').length, bothPricesMissingRows: count('BOTH_PRICES_MISSING').length,
+      duplicateRows: rows.filter(row => row.validationStatus === 'DUPLICATE_RECORD').length, affectedQty: issueQty, pendingExceptionQty: issueQty,
+      approvedStockQty: acceptedQty, uniqueAffectedSkus: new Set(issues.map(row => row.partNumber).filter(Boolean)).size,
+      validatedDlcValue: accepted.reduce((sum, row) => sum + Number(row.qty || 0) * Number(row.masterDlc || 0), 0),
+      validatedMrpValue: accepted.reduce((sum, row) => sum + Number(row.qty || 0) * Number(row.masterMrp || 0), 0) } };
 }
 
 router.get('/template', auth.requireAuth, async (_req, res, next) => {
@@ -109,23 +171,7 @@ router.post('/preview', auth.requireAuth, upload.single('file'), async (req, res
   try {
     if (!req.file) return res.status(400).json({ success: false, message: 'Choose an Excel file first.' });
     const scope = await resolveScope(req, req.body.dealerCode);
-    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(req.file.buffer);
-    const sheet = workbook.worksheets[0];
-    if (!sheet) return res.status(400).json({ success: false, message: 'The workbook has no worksheet.' });
-    const headings = sheet.getRow(1).values.slice(1).map(value => clean(value).toLowerCase());
-    const partCol = headings.findIndex(value => value === 'part number' || value === 'partnumber') + 1;
-    const qtyCol = headings.findIndex(value => value === 'qty' || value === 'quantity') + 1;
-    const binCol = headings.findIndex(value => value === 'bin location' || value === 'bin') + 1;
-    if (!partCol || !qtyCol || !binCol) return res.status(400).json({ success: false, message: 'Required columns: Part Number, Qty, Bin Location.' });
-    const sourceRows = [];
-    sheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
-      const partNumber = clean(row.getCell(partCol).text || row.getCell(partCol).value);
-      const qtyText = clean(row.getCell(qtyCol).text || row.getCell(qtyCol).value);
-      const binLocation = clean(row.getCell(binCol).text || row.getCell(binCol).value);
-      if (!partNumber && !qtyText && !binLocation) return;
-      sourceRows.push({ sourceRow: rowNumber, originalPartNumber: partNumber, originalQty: qtyText, originalBinLocation: binLocation, partNumber, qty: qtyText, binLocation, corrections: [] });
-    });
+    const sourceRows = parseUploadRows(req.file);
     if (!sourceRows.length) return res.status(400).json({ success: false, message: 'No stock rows were found.' });
     if (sourceRows.length > 10000) return res.status(413).json({ success: false, message: 'A batch can contain at most 10,000 rows.' });
     const rows = await validateRows(scope.dealerCode, scope.auditId, sourceRows);
@@ -145,13 +191,14 @@ router.post('/preview', auth.requireAuth, upload.single('file'), async (req, res
             ...(duplicate.status === 'PENDING' ? { status: 'SUPERSEDED' } : {})
           } });
         }
-        return db.excelStockUploadBatch.create({ data: { batchId, dealerCode: scope.dealerCode, dealerName: scope.dealerName, auditId: scope.auditId, fileName: req.file.originalname.slice(0, 240), fileHash, uploadedBy: actor(req), uploadedByName: actorName(req), status: 'PENDING', ...summary, rows } });
+        return db.excelStockUploadBatch.create({ data: { batchId, dealerCode: scope.dealerCode, dealerName: scope.dealerName, auditId: scope.auditId, fileName: req.file.originalname.slice(0, 240), fileHash, uploadedBy: actor(req), uploadedByName: actorName(req), status: 'PENDING', acceptedRows: summary.acceptedRows, rejectedRows: summary.rejectedRows, uploadedQty: 0, rows } });
       }, { timeout: 60000 });
     } catch (error) {
       if (error.code === 'P2002') return res.status(409).json({ success: false, message: 'This file was submitted by another user at the same time. Refresh Upload History.' });
       throw error;
     }
-    res.status(201).json({ success: true, batch });
+    const responseSummary = summarize(batch.rows || []);
+    res.status(201).json({ success: true, batch: { ...batch, acceptedRows: responseSummary.acceptedRows, rejectedRows: responseSummary.rejectedRows, validationSummary: responseSummary.validationSummary } });
   } catch (error) { next(error); }
 });
 
@@ -176,7 +223,8 @@ router.get('/batches/:batchId', auth.requireAuth, async (req, res, next) => {
     if (!batch) return res.status(404).json({ success: false, message: 'Upload batch not found.' });
     const access = await auth.validateUserDealerAccess(req.user, batch.dealerCode);
     if (!access.allowed) return res.status(403).json({ success: false, message: 'Unauthorized dealer access.' });
-    res.json({ success: true, batch });
+    const responseSummary = summarize((batch.rows || []).filter(row => !row.deleted));
+    res.json({ success: true, batch: { ...batch, acceptedRows: responseSummary.acceptedRows, rejectedRows: responseSummary.rejectedRows, validationSummary: responseSummary.validationSummary } });
   } catch (error) { next(error); }
 });
 
@@ -211,12 +259,13 @@ router.patch('/batches/:batchId/rows', auth.requireAuth, async (req, res, next) 
     const summary = summarize(validated);
     return db.excelStockUploadBatch.update({ where: { id: batch.id }, data: {
       rows: validated,
-      acceptedRows: batch.status === 'PARTIALLY_COMMITTED' ? batch.acceptedRows : summary.acceptedRows,
-      rejectedRows: validated.filter(row => row.status === 'REJECTED').length,
+      acceptedRows: summary.acceptedRows,
+      rejectedRows: summary.rejectedRows,
       uploadedQty: batch.status === 'PARTIALLY_COMMITTED' ? batch.uploadedQty : summary.uploadedQty
     }, select: batchFields });
     }, { timeout: 60000 });
-    res.json({ success: true, batch: updated });
+    const responseSummary = summarize((updated.rows || []).filter(row => !row.deleted));
+    res.json({ success: true, batch: { ...updated, acceptedRows: responseSummary.acceptedRows, rejectedRows: responseSummary.rejectedRows, validationSummary: responseSummary.validationSummary } });
   } catch (error) { next(error); }
 });
 
@@ -261,7 +310,7 @@ router.post('/batches/:batchId/confirm', auth.requireAuth, async (req, res, next
       const previouslyUploadedQty = previouslyCommittedRows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
       const cumulativeQty = previouslyUploadedQty + eligible.reduce((sum, row) => sum + Number(row.qty), 0);
       const rejectedRows = updatedRows.filter(row => row.status === 'REJECTED').length;
-      await db.excelStockUploadBatch.update({ where: { id: batch.id }, data: { status: allCommitted ? 'COMMITTED' : 'PARTIALLY_COMMITTED', rows: updatedRows, acceptedRows: previouslyCommitted + eligible.length, rejectedRows, uploadedQty: cumulativeQty } });
+      await db.excelStockUploadBatch.update({ where: { id: batch.id }, data: { status: allCommitted ? 'COMMITTED' : 'PARTIALLY_COMMITTED', rows: updatedRows, acceptedRows: summarize(updatedRows).acceptedRows, rejectedRows, uploadedQty: cumulativeQty } });
       return { acceptedRows: eligible.length, rejectedRows, uploadedQty: eligible.reduce((sum, row) => sum + Number(row.qty), 0), totalAcceptedRows: previouslyCommitted + eligible.length, totalUploadedQty: cumulativeQty, status: allCommitted ? 'COMMITTED' : 'PARTIALLY_COMMITTED', dealerCode: batch.dealerCode, auditId: batch.auditId, committedRows: eligible };
     }, { timeout: 60000 });
     const { committedRows, ...summary } = result;
@@ -418,23 +467,44 @@ router.post('/batches/:batchId/reverse', auth.requireAuth, auth.requireAdmin, as
   } catch (error) { next(error); }
 });
 
-router.get('/batches/:batchId/rejected.xlsx', auth.requireAuth, async (req, res, next) => {
+async function writeExceptionsWorkbook(req, res, next) {
   try {
     const batch = await getPrismaClient().excelStockUploadBatch.findUnique({ where: { batchId: req.params.batchId } });
     if (!batch) return res.status(404).json({ success: false, message: 'Upload batch not found.' });
     const access = await auth.validateUserDealerAccess(req.user, batch.dealerCode);
     if (!access.allowed) return res.status(403).json({ success: false, message: 'Unauthorized dealer access.' });
-    const workbook = new ExcelJS.Workbook(); const sheet = workbook.addWorksheet('Rejected Parts');
+    const selectedRows = new Set(clean(req.query.sourceRows).split(',').map(Number).filter(Number.isInteger));
+    const exceptions = (batch.rows || []).filter(row => (row.status === 'REJECTED' || row.validationStatus === 'DUPLICATE_RECORD') && !row.deleted && (!selectedRows.size || selectedRows.has(Number(row.sourceRow))));
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Daksh Inventory Solution V2'; workbook.created = new Date();
+    const summary = workbook.addWorksheet('Summary', { views: [{ state: 'frozen', ySplit: 1 }] });
+    summary.columns = [{ header: 'Field', key: 'field', width: 34 }, { header: 'Value', key: 'value', width: 28 }];
+    summary.addRows([
+      { field: 'Dealer Code', value: batch.dealerCode }, { field: 'Dealer Name', value: batch.dealerName },
+      { field: 'Audit ID', value: batch.auditId }, { field: 'Upload Batch', value: batch.batchId },
+      { field: 'Exception Rows Exported', value: exceptions.length }, { field: 'Generated At', value: new Date().toISOString() }
+    ]);
+    const sheet = workbook.addWorksheet('Exceptions', { views: [{ state: 'frozen', ySplit: 1 }] });
     sheet.columns = [
-      { header: 'Original Excel Row Number', key: 'sourceRow', width: 22 }, { header: 'Original Part Number', key: 'originalPartNumber', width: 24 },
-      { header: 'Corrected Part Number', key: 'partNumber', width: 24 }, { header: 'Qty', key: 'qty', width: 12 },
-      { header: 'Bin Location', key: 'binLocation', width: 20 }, { header: 'Rejection Reason', key: 'reason', width: 32 },
-      { header: 'Suggested Correction', key: 'suggestion', width: 28 }, { header: 'Final Status', key: 'status', width: 18 }
+      { header: 'Dealer Code', key: 'dealerCode', width: 16 }, { header: 'Audit ID', key: 'auditId', width: 20 },
+      { header: 'Original Excel Row Number', key: 'sourceRow', width: 22 }, { header: 'Part Number', key: 'partNumber', width: 24 },
+      { header: 'Part Description', key: 'partDescription', width: 32 }, { header: 'Uploaded Quantity', key: 'qty', width: 18 },
+      { header: 'Bin Location', key: 'binLocation', width: 20 }, { header: 'DLC', key: 'masterDlc', width: 14 }, { header: 'MRP', key: 'masterMrp', width: 14 },
+      { header: 'Issue Type', key: 'validationStatus', width: 24 }, { header: 'Issue Detail', key: 'reason', width: 42 },
+      { header: 'Correction Status', key: 'correctionStatus', width: 22 }
     ];
-    sheet.getRow(1).font = { bold: true }; sheet.addRows((batch.rows || []).filter(row => row.status === 'REJECTED').map(row => ({ ...row, suggestion: row.reason === 'Part not found in Part Master' ? 'Check Part Master spelling' : '' })));
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); res.setHeader('Content-Disposition', `attachment; filename="${batch.batchId}-rejected.xlsx"`);
+    exceptions.forEach(row => sheet.addRow({ ...row, dealerCode: batch.dealerCode, auditId: batch.auditId, correctionStatus: (row.corrections || []).length ? 'Corrected — revalidation pending' : 'Correction required' }));
+    for (const worksheet of [summary, sheet]) {
+      worksheet.autoFilter = { from: 'A1', to: `${String.fromCharCode(64 + worksheet.columnCount)}1` };
+      worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF173F68' } };
+    }
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); res.setHeader('Content-Disposition', `attachment; filename="${batch.batchId}-exceptions.xlsx"`);
     await workbook.xlsx.write(res); res.end();
   } catch (error) { next(error); }
-});
+}
+
+router.get('/batches/:batchId/exceptions.xlsx', auth.requireAuth, writeExceptionsWorkbook);
+router.get('/batches/:batchId/rejected.xlsx', auth.requireAuth, writeExceptionsWorkbook);
 
 module.exports = router;

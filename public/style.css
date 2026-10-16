@@ -1483,6 +1483,22 @@ a:focus-visible,
   max-height: 360px;
 }
 
+.dealer-stock-review { margin-top: 18px; }
+.dealer-stock-review .excel-upload-summary { margin: 12px 0; }
+.dealer-stock-review .excel-stock-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.dealer-stock-review .excel-stock-toolbar input { flex: 1; min-width: 220px; }
+.dealer-stock-review .recon-stock-preview-wrap table { min-width: 1650px; }
+.dealer-stock-review td input:not([type="checkbox"]) { width: 100%; min-width: 105px; box-sizing: border-box; }
+.dealer-stock-review .stock-review-part-edit { display: flex; align-items: center; gap: 6px; }
+.dealer-stock-review .stock-review-part-edit input { flex: 1; min-width: 0 !important; }
+.dealer-stock-review .stock-review-part-edit button { flex: none; padding: 7px 10px; }
+.dealer-stock-review .stock-review-icon { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 38px; }
+.dealer-stock-review .stock-review-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.dealer-stock-review .stock-review-delete { color: #c62828; }
+.dealer-stock-review td:last-child { min-width: 260px; white-space: normal; }
+.dealer-stock-review .excel-confirm-bar { margin-top: 12px; }
+.dealer-stock-invalid-filter { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; }
+
 .recon-upload-card,
 .recon-summary-card,
 .recon-filter-card,
