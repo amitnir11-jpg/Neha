@@ -8657,7 +8657,7 @@
     const review = state.dealerStockReview;
     const panel = $('#dealerStockReview');
     if (!panel) return;
-    panel.hidden = !review;
+    panel.hidden = !review || Boolean(review.dismissed);
     if (!review) return;
     const rows = (review.rows || []).filter(row => !review.deleted?.has(row.rowNumber));
     const committed = review.committed || new Set();
@@ -14789,8 +14789,12 @@
         $('#dealerStockUploadMessage').textContent = data.message || 'Validated dealer stock uploaded.';
         $('#dealerStockUploadMessage').className = 'form-message success';
         selected.forEach(row => { review.committed.add(row.rowNumber); review.selectedExceptions.delete(row.rowNumber); });
-        const remaining = review.rows.filter(row => !review.deleted?.has(row.rowNumber) && !review.committed.has(row.rowNumber));
-        $('#dealerStockUploadMessage').textContent = `${selected.length} row(s) transferred to main stock. ${remaining.length} row(s) remain for correction or selection.`;
+        // Once a stock transfer succeeds, close the editable review. Invalid
+        // source rows remain available only in the skipped-row report below;
+        // operators correct them in the source sheet and upload it again.
+        review.dismissed = true;
+        const skippedCount = Number(data.skippedCount || (data.errorRows || []).length || 0);
+        $('#dealerStockUploadMessage').textContent = `${selected.length} row(s) transferred to main stock.${skippedCount ? ` ${skippedCount} skipped row(s) are shown below.` : ''}`;
         renderDealerStockReview();
         loadReconciliation({ silent: true }).catch(() => undefined);
       } catch (error) {

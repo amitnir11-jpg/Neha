@@ -283,7 +283,8 @@ test('browser review retains only exceptions after upload and selects revalidate
   assert.equal(context.state.dealerStockReview.committed.has(4), false);
   assert.doesNotMatch($('#stockReviewRows').innerHTML, /0003/);
   assert.match($('#stockReviewRows').innerHTML, /UNKNOWN4/);
-  assert.equal($('#dealerStockUploadMessage').textContent, '1 row(s) transferred to main stock. 1 row(s) remain for correction or selection.');
+  assert.equal($('#dealerStockUploadMessage').textContent, '1 row(s) transferred to main stock.');
+  assert.equal($('#dealerStockReview').hidden, true, 'a completed transfer closes the correction review');
   assert.equal($('#stockReviewRevalidate').disabled, false);
   responses.push({ reviewRows: validatedRows });
   await toolbarHandlers.click();
