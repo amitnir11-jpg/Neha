@@ -3404,7 +3404,6 @@
     const scanHistoryTable = $('#scanHistoryRows')?.closest('table');
     enhanceDataTable(scanHistoryTable, scanHistoryLayoutStorageKey());
     initScanHistorySorting(scanHistoryTable);
-    enhanceDataTable($('#dealerStockPreviewTable'), 'daksh_table_dealer_stock_preview');
     enhanceDataTable($('#localPartHistoryTable'), 'daksh_table_local_part_history');
   }
 
@@ -8629,8 +8628,6 @@
     setReconciliationSummary({}, null, 0);
     renderDealerStockPreview([]);
     renderDealerStockErrors([]);
-    const panel = $('#dealerStockPreviewPanel');
-    if (panel) panel.hidden = true;
     const message = $('#dealerStockUploadMessage');
     if (message) {
       message.className = 'form-message';
@@ -8778,8 +8775,6 @@
 
   function renderDealerStockPreview(rows = [], total = rows.length, summary = {}) {
     const safeRows = Array.isArray(rows) ? rows : [];
-    const panel = $('#dealerStockPreviewPanel');
-    if (panel) panel.hidden = false;
     const totalRows = dealerStockSummaryCount({ partLineCount: summary.partLineCount ?? summary.totalPartsUploaded ?? summary.rows ?? total ?? safeRows.length });
     const fallbackSummary = {
       partLineCount: totalRows,
@@ -8787,19 +8782,6 @@
       stockValue: safeRows.reduce((sum, row) => sum + Number(row.stockValue || 0), 0)
     };
     setDealerStockUploadSummary({ ...fallbackSummary, ...summary, partLineCount: totalRows });
-    $('#dealerStockPreviewRows').innerHTML = safeRows.map((row) => `
-      <tr>
-        <td>${escapeHtml(row.dealerCode)}</td>
-        <td>${partLink(row.partNumber)}</td>
-        <td>${escapeHtml(row.partDescription)}</td>
-        <td>${escapeHtml(row.dmsStock || row.systemQty || 0)}</td>
-        <td>${escapeHtml(row.binLoc1 || row.systemBinLoc1 || '')}</td>
-        <td>${escapeHtml(row.binLoc2 || row.systemBinLoc2 || '')}</td>
-        <td>${escapeHtml(row.binLoc3 || row.systemBinLoc3 || '')}</td>
-        <td>${row.validationStatus === 'VALID' || !isAdmin() ? '—' : `<button type="button" class="btn light" data-stock-correct="${escapeHtml(row.id || '')}" data-stock-part="${escapeHtml(row.partNumber || '')}" data-stock-qty="${escapeHtml(row.dmsStock || 0)}">Correct</button>`}</td>
-      </tr>
-    `).join('') || '<tr><td colspan="8" class="muted">No dealer stock uploaded yet</td></tr>';
-    enhanceDataTable($('#dealerStockPreviewTable'), 'daksh_table_dealer_stock_preview');
     const message = $('#dealerStockUploadMessage');
     if (message && safeRows.length) {
       message.className = 'form-message success';
@@ -14891,23 +14873,7 @@
       } finally { state.dealerStockConfirming = false; renderDealerStockReview(); }
     };
     $('#stockReviewConfirm')?.addEventListener('click', () => confirmDealerStockReview());
-    $('#dealerStockInvalidOnly')?.addEventListener('change', () => loadDealerStockPreview().catch(error => toast(error.message, 'error')));
-    $('#dealerStockPreviewRows')?.addEventListener('click', async (event) => {
-      const action = event.target.closest('[data-stock-correct]');
-      if (!action || !isAdmin()) return;
-      const dealerCode = activeReconDealer();
-      const oldPart = action.dataset.stockPart || '';
-      const partNumber = clean(window.prompt(`Correct uploaded part ${oldPart} (${action.dataset.stockQty} units) for dealer ${dealerCode}. Enter the verified Part Master number:`, oldPart) || '').toUpperCase();
-      if (!partNumber || partNumber === oldPart || !window.confirm(`Change ${oldPart} to ${partNumber} for dealer ${dealerCode}? The DMS correction will be recorded in the audit log.`)) return;
-      action.disabled = true;
-      try {
-        await api(`/api/reconciliation/stock/${encodeURIComponent(action.dataset.stockCorrect)}?dealerCode=${encodeURIComponent(dealerCode)}`, { method: 'PATCH', body: { partNumber } });
-        await loadDealerStockPreview();
-        toast(`Corrected uploaded DMS part ${oldPart} to ${partNumber}`);
-      } catch (error) { action.disabled = false; toast(error.message, 'error'); }
-    });
     $('#dealerStockTemplateDownloadBtn')?.addEventListener('click', () => downloadGet('/api/reconciliation/dealer-stock-template', 'Daksh_Dealer_Stock_Upload_Template.xlsx').catch((error) => toast(error.message, 'error')));
-    $('#reconPreviewBtn')?.addEventListener('click', () => loadDealerStockPreview().catch((error) => toast(error.message, 'error')));
     $('#stockUploadHistoryBtn')?.addEventListener('click', async () => {
       const dealerCode = activeReconDealer();
       if (!dealerCode) return toast('Select Dealer Code first', 'error');

@@ -18,7 +18,7 @@
       if (requestedView) document.documentElement.dataset.initialView = requestedView;
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20261016-report-calculations-v1">
+  <link rel="stylesheet" href="/style.css?v=20261016-remove-extra-correction-v1">
   <link rel="stylesheet" href="/variables.css?v=20260714-app-layout-v1">
   <link rel="stylesheet" href="/layout.css?v=20260714-app-layout-v1">
   <link rel="stylesheet" href="/components.css?v=20260714-app-layout-v1">
@@ -877,7 +877,6 @@
               <h2>Upload Dealer Stock</h2>
               <div class="actions">
                 <button id="dealerStockTemplateDownloadBtn" class="btn light admin-only" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-reports"></use></svg><span>Download Template</span></button>
-                <button id="reconPreviewBtn" class="btn light" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span>Preview Uploaded Stock</span></button>
                 <button id="stockUploadHistoryBtn" class="btn light" type="button">Upload History</button>
                 <button id="reconDeleteStockBtn" class="btn danger-soft" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-archive"></use></svg><span>Delete Old Dealer Stock</span></button>
                 <button id="reconReprocessBtn" class="btn light" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-sync"></use></svg><span>Reprocess Reconciliation</span></button>
@@ -904,13 +903,6 @@
             <div id="dealerStockErrorReport" class="stock-error-report" hidden></div>
             <div id="reconPriceHealthSummary" class="card" hidden></div>
             <div id="stockUploadHistory" class="stock-error-report" hidden></div>
-            <label class="dealer-stock-invalid-filter"><input id="dealerStockInvalidOnly" type="checkbox"> Invalid / Not in Part Master or Missing Price</label>
-            <div id="dealerStockPreviewPanel" class="table-wrap recon-stock-preview-wrap" hidden>
-              <table id="dealerStockPreviewTable">
-                <thead><tr><th>Dealer Code</th><th>Part Number</th><th>Part Description</th><th>Dms Stock</th><th>Bin Loc 1</th><th>Bin Loc 2</th><th>Bin Loc 3</th><th>Action</th></tr></thead>
-                <tbody id="dealerStockPreviewRows"><tr><td colspan="8" class="muted">No dealer stock uploaded yet</td></tr></tbody>
-              </table>
-            </div>
           </section>
 
           <section class="card recon-summary-card">
@@ -1860,7 +1852,7 @@
   <script src="/js/smart-part-search.js?v=20261011-smart-part-search-v1"></script>
   <script src="/js/excel-upload-table.js?v=20261012-adjustable-v1"></script>
   <script src="/js/excel-upload-history.js?v=20261012-compact-v1"></script>
-  <script src="/ui.js?v=20261016-report-calculations-v1"></script>
+  <script src="/ui.js?v=20261016-remove-extra-correction-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>
