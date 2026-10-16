@@ -4,18 +4,26 @@ const Audit = require('../models/Audit');
 const { normalizePartNumber } = require('../utils/normalize');
 
 function matches(row,q) {
-  const includes=(value,filter)=>!filter||String(value||'').toUpperCase().includes(String(filter).toUpperCase());
+  const includes=(value,filter)=>!filter||/^all$/i.test(filter)||String(value||'').toUpperCase().includes(String(filter).toUpperCase());
   if (!includes(row.partNumber,normalizePartNumber(q.partNumber||''))) return false;
   if (!includes(row.category,q.productCategory||q.category)||!includes(row.binLocation,q.bin||q.binLocation)) return false;
   if(!includes(row.productGroup,q.productGroup)||!includes(row.partSubGroup,q.partSubGroup||q.productSubGroup)||!includes(row.model,q.model)||!includes(row.year,q.year))return false;
   if(q.status && !includes(row.status,q.status==='Short'?'Shortage':q.status))return false;
-  if(q.varianceType && q.varianceType!=='ALL' && !includes(row.status,q.varianceType))return false;
+  const varianceType=String(q.varianceType||'').toLowerCase();
+  if(varianceType && varianceType!=='all') {
+    const checks={matched:row.varianceQty===0,short:row.varianceQty<0,shortage:row.varianceQty<0,excess:row.varianceQty>0,
+      extra:!row.uploadedStockPresent&&row.actualQuantity>0,'inventory-addition':!row.uploadedStockPresent&&row.actualQuantity>0,
+      'not-scanned':row.dmsQuantity>0&&row.actualQuantity===0,'non-moving':row.dmsQuantity>0&&row.actualQuantity===0,
+      damage:Number(row.damageQty)>0};
+    if(varianceType in checks ? !checks[varianceType] : !includes(row.status,q.varianceType))return false;
+  }
+  if(!includes(`${row.movementType||''} ${row.movementStatus||''}`,q.movement||q.movementStatus))return false;
   if(['1','true','yes'].includes(String(q.dealerStockOnly))&&!row.uploadedStockPresent)return false;
   return true;
 }
 function summaryAliases(v, scope) {
   return {...scope,...v,valuationSummary:v,valuationComplete:v.valuationComplete,
-    totalPartsUploaded:v.uploadedRowCount,totalDmsStockQty:v.totalSystemQty,totalActualScannedQty:v.totalPhysicalQty,
+    totalPartsUploaded:v.dmsParts,totalDmsStockQty:v.totalSystemQty,totalActualScannedQty:v.totalPhysicalQty,
     totalMatchedParts:v.matchedSkuCount,totalShortageParts:v.shortageSkuCount,totalExcessParts:v.excessSkuCount,
     totalInventoryValue:v.totalDmsDlcValue,dmsStockValueDLC:v.totalDmsDlcValue,dmsStockValueMRP:v.totalDmsMrpValue,
     actualStockValueDLC:v.totalPhysicalDlcValue,actualStockValueMRP:v.totalPhysicalMrpValue,
@@ -41,7 +49,7 @@ async function project(query,kind='raw') {
   summary.dealerName=selectedDealer?.dealerName||snapshot.scope.dealerCode;
   const shared={scope:snapshot.scope,filters:query,rows,summary,selectedDealer,selectedAudit,
     valuationSummary:v,priceExceptions:v.priceExceptions,pricingIssues:v.priceExceptions,
-    snapshotId:snapshot.snapshotId,calculationVersion:snapshot.calculationVersion,stockCount:v.uploadedRowCount,
+    snapshotId:snapshot.snapshotId,calculationVersion:snapshot.calculationVersion,stockCount:v.dmsParts,
     totalRows:rows.length,pricingCoverage:{totalDmsQuantity:v.totalSystemQty,totalActualQuantity:v.totalPhysicalQty,
       totalDmsValue:v.totalDmsDlcValue,totalActualValue:v.totalPhysicalDlcValue},
     validationLog:{totalVarianceQuantity:v.totalVarianceQty,totalVarianceOnDLC:v.totalVarianceDlcValue,totalVarianceOnMRP:v.totalVarianceMrpValue,
@@ -59,14 +67,17 @@ async function project(query,kind='raw') {
       matched:totals.matchedSkuCount,short:totals.shortageSkuCount,excess:totals.excessSkuCount});
   }
   const matrix=(category,totals)=>({category,dmsValue:totals.totalDmsDlcValue,dmsQuantity:totals.totalSystemQty,dmsPartLines:totals.dmsParts,
-    physicalValue:totals.totalPhysicalDlcValue,physicalQuantity:totals.totalPhysicalQty,physicalPartLines:totals.totalParts,
+    physicalValue:totals.totalPhysicalDlcValue,physicalQuantity:totals.totalPhysicalQty,physicalPartLines:totals.physicalParts,
     excessValue:totals.totalExcessValue,excessPartLines:totals.excessSkuCount,shortValue:totals.totalShortValue,
     shortPartLines:totals.shortageSkuCount,netDifference:totals.totalVarianceDlcValue,valuationComplete:totals.valuationComplete});
   const reconciliationCategory=(category,totals)=>({category,dmsQty:totals.totalSystemQty,actualQty:totals.totalPhysicalQty,
     varianceQty:totals.totalVarianceQty,dmsValue:totals.totalDmsDlcValue,actualValue:totals.totalPhysicalDlcValue,
     shortValue:totals.totalShortValue,excessValue:totals.totalExcessValue,netDifference:totals.totalVarianceDlcValue,
     valuationComplete:totals.valuationComplete,status:totals.valuationComplete?'Calculated':'Incomplete'});
-  if(kind==='reconciliation')return {...shared,mismatchRecords:rows.filter(r=>r.varianceQty!==0),
+  if(kind==='reconciliation')return {...shared,summary:{...summary,
+    totalFastMovingParts:rows.filter(r=>r.uploadedStockPresent&&r.movementStatus==='Fast Moving').length,
+    totalSlowMovingParts:rows.filter(r=>r.uploadedStockPresent&&r.movementStatus==='Slow Moving').length,
+    totalDeadStockParts:rows.filter(r=>r.uploadedStockPresent&&r.movementStatus==='Dead Stock').length},mismatchRecords:rows.filter(r=>r.varianceQty!==0),
     centralCategoryRows:categories.map(c=>reconciliationCategory(c.category,c.valuationSummary)).concat([{...reconciliationCategory('Grand Total',v),rowType:'grandTotal'}])};
   if(kind==='stock'){
     const matrixRows=categories.map(c=>matrix(c.category,c.valuationSummary)),grandTotal={...matrix('Grand Total',v),rowType:'total'};
@@ -88,11 +99,14 @@ async function project(query,kind='raw') {
       sumVarianceOnMRP:t.totalVarianceMrpValue,sumVarianceOnDLC:t.totalVarianceDlcValue,rowType:'subtotal'});
     return {...shared,rows:categories.map(c=>categoryRow(c.category,c.valuationSummary)),grandTotal:categoryRow('Grand Total',v)};
   }
-  const scans=snapshot.scans||[];
+  const selectedParts=new Set(rows.map(row=>row.partNumber));
+  const scans=(snapshot.scans||[]).filter(scan=>selectedParts.has(normalizePartNumber(scan.normalizedPartNumber||scan.partNumber||scan.part)));
   return {...shared,summary:[summary],allFinalRows:partwiseRows,finalRows:partwiseRows,scans,categoryRows:categories,
-    rawLogRows:scans,binRows:snapshot.binRows,openingRows:rows,oilRows:rows.filter(r=>/oil|lube/i.test(r.category)),
+    rawLogRows:scans,binRows:(snapshot.binRows||[]).filter(row=>selectedParts.has(normalizePartNumber(row.partNumber))),openingRows:rows,oilRows:rows.filter(r=>/oil|lube|lubricant/i.test(`${r.category} ${r.partDescription}`)),
     accessoryRows:rows.filter(r=>/accessor/i.test(r.category)),damageRows:scans.filter(r=>r.scanType==='DAMAGE'),
-    nonMovingRows:[],highValueNonMovingRows:[],dealers:[selectedDealer],audits:[selectedAudit],dealerBackupRows:[selectedDealer]};
+    nonMovingRows:rows.filter(r=>r.dmsQuantity>0&&r.actualQuantity===0),
+    highValueNonMovingRows:rows.filter(r=>r.dmsQuantity>0&&r.actualQuantity===0&&r.mrp>=5000).sort((a,b)=>b.mrp-a.mrp),
+    dealers:[selectedDealer],audits:[selectedAudit],dealerBackupRows:[selectedDealer]};
 }
 async function productGroups(query={},options={}) {
   if(!query.auditId)query={...query,auditId:(await require('./InventoryCalculationService').resolveCurrentAudit(query.dealerCode)).auditId};

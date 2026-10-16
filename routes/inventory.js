@@ -5224,7 +5224,7 @@ router.get('/dashboard', auth.requireAuth, async (req, res) => {
         totalScannedValue:v.totalPhysicalDlcValue,actualStockValueDLC:v.totalPhysicalDlcValue,actualStockValueMRP:v.totalPhysicalMrpValue,
         systemStockValue:v.totalDmsDlcValue,masterStockValue:v.totalDmsDlcValue,totalSystemValue:v.totalDmsDlcValue,
         dealerStockDmsQty:v.totalSystemQty,dealerStockValue:v.totalDmsDlcValue,totalDealerStockQty:v.totalPhysicalQty,
-        uploadedPartLineCount:v.uploadedRowCount,dealerStockPartLines:v.uploadedRowCount,
+        uploadedPartLineCount:v.dmsParts,dealerStockPartLines:v.dmsParts,
         totalScanRecords:v.scanTransactionCount,totalScannedQuantity:v.scanTransactionUnits,
         physicalBinStockQty:v.totalPhysicalBinQty,fittedWorkshopQty:v.totalFittedWorkshopQty,valuationComplete:v.valuationComplete});
     }

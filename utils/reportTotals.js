@@ -164,7 +164,65 @@ function applyMovementCountRules(scans = [], options = {}) {
   return options.includeExcluded ? sortedOutput : sortedOutput.filter((scan) => scan._reportExcluded !== true);
 }
 
+function codeTokens(value) {
+  return upper(value).split(/[^A-Z0-9]+/).filter(Boolean);
+}
+
+function hasCode(value, candidates) {
+  const tokens = codeTokens(value);
+  return candidates.some((candidate) => tokens.includes(upper(candidate)));
+}
+
+function classifyMovement(stock = {}, actualStock = 0) {
+  const dmsStock = Number(stock.dmsStock || stock.systemQty || 0);
+  const averageDemand = Number(stock.averageDemand || 0);
+  const forecast = Number(stock.forecast || 0);
+  const safetyStock = Number(stock.safetyStock || 0);
+  const rop = Number(stock.rop || 0);
+  const movementCodeA = stock.movementCodeA || '';
+  const movementCodeB = stock.movementCodeB || '';
+
+  const highDemand = averageDemand >= 10 || forecast >= 10 || (dmsStock > 0 && averageDemand >= dmsStock * 0.25);
+  const lowDemand = averageDemand <= 2;
+  const fast = hasCode(movementCodeA, ['A']) || hasCode(movementCodeB, ['6']) || highDemand;
+  const dead = dmsStock > 0 && averageDemand === 0 && forecast === 0;
+  const slow = hasCode(movementCodeA, ['B', 'C']) || (lowDemand && dmsStock > 0);
+
+  let movementStatus = 'Normal';
+  if (dead) movementStatus = 'Dead Stock';
+  else if (fast) movementStatus = 'Fast Moving';
+  else if (slow) movementStatus = 'Slow Moving';
+
+  const criticalShortage = rop > 0 && (dmsStock < rop || Number(actualStock || 0) < rop);
+  const excessStock = dmsStock > forecast + safetyStock;
+  let movementType = 'Normal';
+  if (criticalShortage) movementType = 'Critical Shortage';
+  else if (dead) movementType = 'Dead Stock';
+  else if (excessStock) movementType = 'Excess Stock';
+  else if (movementStatus !== 'Normal') movementType = movementStatus;
+
+  const movementLabels = [];
+  if (fast) movementLabels.push('Fast Moving');
+  if (slow) movementLabels.push('Slow Moving');
+  if (dead) movementLabels.push('Dead Stock');
+  if (criticalShortage) movementLabels.push('Critical Shortage');
+  if (excessStock) movementLabels.push('Excess Stock');
+
+  return {
+    movementType,
+    movementStatus,
+    priorityMovementStatus: movementType,
+    movementLabels,
+    fastMoving: fast,
+    slowMoving: slow,
+    deadStock: dead,
+    criticalShortage,
+    excessStock
+  };
+}
+
 module.exports = {
+  classifyMovement,
   applyMovementCountRules,
   reportTotals,
   scanPartNumber,

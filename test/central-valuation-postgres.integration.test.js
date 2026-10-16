@@ -66,6 +66,11 @@ run('one database snapshot survives price exceptions, concurrent readers, correc
   assert.equal(packResponse.status,200);const pack=new ExcelJS.Workbook();await pack.xlsx.load(Buffer.from(await packResponse.arrayBuffer()));
   assert.ok(pack.worksheets.length>=5);const contents=JSON.stringify(pack.worksheets.map(s=>s.getSheetValues()));
   assert.match(contents,/10\.54/);assert.match(contents,/7\.04/);
+  const pendingPackResponse=await request('/api/reports/download-complete-audit-pack',{...a,snapshotId:initial.snapshotId,reports:['audit-summary','category-wise-variance-summary','reconciliation-summary']});
+  assert.equal(pendingPackResponse.status,200);const pendingPack=new ExcelJS.Workbook();await pendingPack.xlsx.load(Buffer.from(await pendingPackResponse.arrayBuffer()));
+  const pendingContents=JSON.stringify(pendingPack.worksheets.map(sheet=>sheet.getSheetValues()));
+  assert.ok(pendingContents.includes(initial.snapshotId),'audit pack retains the requested historical snapshot after prices change');
+  assert.match(pendingContents,/PRICE MISSING|Incomplete|INCOMPLETE/);
   const exportResponse=await request('/api/reconciliation/price-validation?'+new URLSearchParams({...a,snapshotId:initial.snapshotId,format:'excel'}));assert.equal(exportResponse.status,200);
   const exceptionBook=new ExcelJS.Workbook();await exceptionBook.xlsx.load(Buffer.from(await exportResponse.arrayBuffer()));assert.match(JSON.stringify(exceptionBook.getWorksheet('Price Validation').getSheetValues()),new RegExp(`MISSING${suffix}`));
   const before=await Inventory.findOne({_id:scan._id}).lean();
@@ -86,6 +91,45 @@ run('one database snapshot survives price exceptions, concurrent readers, correc
 });
 after(async()=>{if(prisma)await prisma.$disconnect();});
 
+run('screenshot totals, filtered counts, movement and missing prices agree across report projections',async()=>{
+  const {prisma:db}=require('../services/prisma');prisma=db;
+  const suffix=Date.now().toString(36).toUpperCase();
+  const scope={dealerCode:`CALC${suffix}`,auditId:`CALC-AUD-${suffix}`};
+  const Dealer=require('../models/Dealer'),Audit=require('../models/Audit'),Master=require('../models/MasterCatalogue');
+  const Stock=require('../models/DealerStock'),Inventory=require('../models/Inventory');
+  await Dealer.create({...scope,currentAuditId:scope.auditId});await Audit.create({...scope,status:'IN_PROGRESS'});
+  const numbers=['SHORTA','SHORTB','EXTRA'].map(part=>part+suffix);
+  for(const [index,dlc,mrp] of [[0,66.02,80],[1,292.18,350],[2,998.69,1210]]) {
+    await Master.create({partNumber:numbers[index],dlc,mrp,productCategory:index===1?'VIDA Parts':'HHML Parts'});
+  }
+  await Stock.create({...scope,partNumber:numbers[0],dmsStock:8,binLoc1:'A1'});
+  await Stock.create({...scope,partNumber:numbers[1],dmsStock:2,binLoc1:'B1'});
+  await Inventory.create({...scope,partNumber:numbers[2],qty:1,scanType:'INWARD',syncStatus:'synced',scanStatus:'ACCEPTED',masterFound:true,bin:'C1',uniqueScanId:`CALC-${suffix}`});
+  const central=require('../services/CentralValuationService'),projection=require('../services/ValuationReportProjection');
+  const report=require('../routes/report'),reconciliation=require('../routes/reconciliation');
+  const snapshot=await central.getSnapshot(scope);const query={...scope,snapshotId:snapshot.snapshotId};
+  const expected={totalSystemQty:10,totalPhysicalQty:1,totalShortQty:10,totalExcessQty:1,totalVarianceQty:-9,
+    totalDmsDlcValue:1112.52,totalPhysicalDlcValue:998.69,totalShortValue:1112.52,totalExcessValue:998.69,
+    totalVarianceDlcValue:-113.83,totalVarianceMrpValue:-130,shortageSkuCount:2,excessSkuCount:1,matchedSkuCount:0};
+  const results=await Promise.all([report.buildReportData(query),report.buildPartwiseInventoryAuditReport(query),
+    report.buildStockSummaryReport(query),report.buildCategoryWiseVarianceSummary(query),reconciliation.buildReconciliationReport(query)]);
+  for(const result of results)for(const [field,value] of Object.entries(expected))assert.equal(result.valuationSummary[field],value,field);
+  assert.equal(results[2].sections.grandTotal.physicalPartLines,1,'DMS-only parts are not physical part lines');
+  assert.equal(results[4].summary.totalDeadStockParts,2);
+  assert.equal(results[0].nonMovingRows.length,2);
+  const validation=await report.validateValuationReports(query);assert.equal(validation.calculationTotalsMatch,true);assert.equal(validation.passed,true);
+  const filtered=await report.buildReportData({...query,partNumber:numbers[1]});
+  assert.equal(filtered.valuationSummary.totalSystemQty,2);assert.equal(filtered.valuationSummary.totalDmsDlcValue,584.36);
+  assert.equal(filtered.valuationSummary.uploadedRowCount,1);assert.equal(filtered.valuationSummary.scanTransactionCount,0);
+  assert.equal(filtered.rawLogRows.length,0);assert.equal(filtered.binRows.length,0);
+  const extra=await projection.project({...query,varianceType:'extra'},'partwise');assert.equal(extra.rows.length,1);assert.equal(extra.rows[0].partNumber,numbers[2]);
+  const dead=await reconciliation.buildReconciliationReport({...query,movement:'Dead Stock'});assert.equal(dead.rows.length,2);assert.equal(dead.summary.totalActualScannedQty,0);
+  const all=await projection.project({...query,status:'ALL',category:'ALL'},'raw');assert.equal(all.finalRows.length,3);
+  await Stock.create({...scope,partNumber:`UNPRICED${suffix}`,dmsStock:2});
+  const pending=await report.buildCategoryWiseVarianceSummary(scope);assert.equal(pending.grandTotal.sumDmsValueOnDLC,null);
+  const incomplete=await report.validateValuationReports(scope);assert.equal(incomplete.calculationTotalsMatch,true);assert.equal(incomplete.passed,false);
+});
+
 run('pending fitted stock remains dealer-owned and billing removes it without changing transaction quantities',async()=>{
   const {prisma:db}=require('../services/prisma');prisma=db;
   const suffix=Date.now().toString(36).toUpperCase(),scope={dealerCode:`FIT-${suffix}`,auditId:`FIT-AUD-${suffix}`},partNumber=`FITTED${suffix}`;
@@ -102,14 +146,14 @@ run('pending fitted stock remains dealer-owned and billing removes it without ch
   assert.equal((await Inventory.findOne({_id:fitted._id}).lean()).qty,2);assert.equal(billed.summary.totalSystemQty,6);
 });
 
-run('quantity-only high-volume upload is confirmed atomically and serves ten simultaneous users',async()=>{
+run('dealer-scoped high-volume upload is confirmed atomically and serves ten simultaneous users',async()=>{
   const {prisma:db}=require('../services/prisma');prisma=db;
   const suffix=Date.now().toString(36).toUpperCase();const scope={dealerCode:`LOAD-${suffix}`,auditId:`LOAD-AUD-${suffix}`};
   await require('../models/Dealer').create({...scope,currentAuditId:scope.auditId});await require('../models/Audit').create({...scope,status:'IN_PROGRESS'});
   const rows=Array.from({length:5000},(_,i)=>({partNumber:`LOAD${suffix}${i}`,dlc:1.23456789,mrp:2.34567891}));
   const master=require('../models/MasterCatalogue');
   for(let i=0;i<rows.length;i+=400)await master.bulkUpsertBy(rows.slice(i,i+400),['normalizedPartNumber']);
-  const file={originalname:'quantity-only.csv',buffer:Buffer.from('Part Number,Quantity\n'+rows.map(r=>`${r.partNumber},3`).join('\n'))};
+  const file={originalname:'dealer-stock.csv',buffer:Buffer.from('Dealer Code,Part Number,Quantity\n'+rows.map(r=>`${scope.dealerCode},${r.partNumber},3`).join('\n'))};
   const routes=require('../routes/reconciliation');const workflow=require('../services/ValuationWorkflow');
   const started=Date.now();const preview=await workflow.previewUpload({user:{id:'load-test-admin'},file},scope,async()=>routes.rowsToStockRecords(await routes.readUploadedRows(file),scope.dealerCode,scope.auditId,'Synthetic load test'));
   assert.equal(preview.acceptedRows,5000);assert.ok(preview.preview.every(r=>r.dlc>0&&r.mrp>0));

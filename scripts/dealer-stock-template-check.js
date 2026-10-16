@@ -33,8 +33,8 @@ assert.ok(!routeSource.includes('DEALER_STOCK_TEMPLATE_COLUMNS'), 'Download rout
 
 const previewTable = htmlSource.match(/<table id="dealerStockPreviewTable">([\s\S]*?)<\/table>/)?.[1] || '';
 const previewColumns = Array.from(previewTable.matchAll(/<th>([^<]+)<\/th>/g), (match) => match[1].trim());
-assert.deepStrictEqual(previewColumns, expectedColumns, 'Dealer-stock preview must contain the same seven columns as the template');
-assert.ok(previewTable.includes('colspan="7"'), 'Empty dealer-stock preview must span seven columns');
+assert.deepStrictEqual(previewColumns, [...expectedColumns, 'Action'], 'Dealer-stock preview must contain the template columns and the correction action');
+assert.ok(previewTable.includes('colspan="8"'), 'Empty dealer-stock preview must span all eight columns');
 assert.ok(htmlSource.includes('id="dealerStockUploadedLineCount"'), 'Dealer-stock upload tab must show uploaded part-line count');
 assert.ok(htmlSource.includes('id="dealerStockUploadedLineRange"'), 'Dealer-stock upload tab must show uploaded part-line range');
 assert.ok(htmlSource.includes('id="dealerStockUploadedSystemValue"'), 'Dealer-stock upload tab must show uploaded system stock value');
@@ -48,7 +48,7 @@ assert.ok(
   uiSource.includes("enhanceDataTable($('#dealerStockPreviewTable'), 'daksh_table_dealer_stock_preview')"),
   'Dealer-stock preview must use persisted drag-to-move and resize behavior'
 );
-assert.ok(uiSource.includes("colspan=\"7\""), 'Rendered empty dealer-stock preview must span seven columns');
+assert.ok(uiSource.includes("colspan=\"8\""), 'Rendered empty dealer-stock preview must span eight columns');
 assert.ok(uiSource.includes('function setDealerStockUploadSummary'), 'Dealer-stock upload UI must populate the uploaded stock summary strip');
 assert.ok(uiSource.includes('dashboardDealerStockLineCount'), 'Dashboard UI must render uploaded dealer-stock line count');
 assert.ok(routeSource.includes('dealerStockSummaryFromPublicRows'), 'Reconciliation API must include uploaded dealer-stock summary totals');

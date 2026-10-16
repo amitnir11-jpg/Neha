@@ -415,5 +415,18 @@ test('browser review retains only exceptions after upload and selects revalidate
   $('#stockReviewFilter').value = 'UNCORRECTED';
   context.renderDealerStockReview();
   assert.match($('#stockReviewRows').innerHTML, /UNKNOWN5/);
+  // A later transfer for the same SKU includes earlier rows from this sheet;
+  // the server replaces that SKU with their combined quantity, not the last row.
+  context.state.dealerStockReview = null;
+  const splitRows=[{rowNumber:2,partNumber:'SPLIT',status:'VALID',dmsStock:2},
+    {rowNumber:3,partNumber:'SPLIT',status:'VALID',dmsStock:3}];
+  responses.push({reviewRows:splitRows});await context.uploadDealerStock(form);
+  handlers.change({target:{dataset:{stockSelect:'3'},checked:false}});
+  responses.push({reviewRows:splitRows},{summary:{}});await toolbarHandlers.click();
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows),[2]);
+  handlers.change({target:{dataset:{stockSelect:'3'},checked:true}});
+  responses.push({reviewRows:splitRows},{summary:{}});await toolbarHandlers.click();
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows),[2,3]);
+  assert.equal(context.state.dealerStockReview.committed.size,2);
   assert.match(fs.readFileSync('public/Daksh.html', 'utf8'), /id="stockReviewRevalidate"[^>]*>Validate and Transfer</);
 });

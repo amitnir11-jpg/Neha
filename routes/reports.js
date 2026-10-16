@@ -2055,6 +2055,7 @@ function normalizeAuditPackSelection(payload = {}) {
     dealerCode: selectedDealerCode(payload),
     auditId,
     _includeAllAudits: !auditId,
+    ...(payload.snapshotId ? { snapshotId: clean(payload.snapshotId) } : {}),
     fromDate: clean(payload.fromDate || payload.from || ''),
     toDate: clean(payload.toDate || payload.to || ''),
     includeSummary: payload.includeSummary !== false && payload.includeSummary !== 'false',
@@ -2286,8 +2287,8 @@ function buildAuditSummaryRows(reportData = {}, context = null, productGroupSumm
       ['Total Groups', packNumber(Array.isArray(productGroupSummary.rows) ? productGroupSummary.rows.length : 0, 0)],
       ['Total Scans', packNumber(groupTotals.totalScans || 0, 0)],
       ['Total Quantity', packNumber(groupTotals.totalQuantity || 0, 0)],
-      ['Actual Stock Value (DLC)', packCurrency(groupTotals.totalDlcValue || 0)],
-      ['MRP Value Reference', packCurrency(groupTotals.totalMrpValue || 0)]
+      ['Actual Stock Value (DLC)', packCurrency(groupTotals.totalDlcValue === undefined ? 0 : groupTotals.totalDlcValue)],
+      ['MRP Value Reference', packCurrency(groupTotals.totalMrpValue === undefined ? 0 : groupTotals.totalMrpValue)]
     ]),
     ...packMetricRows('Final Remarks', [
       ['Valuation Status', totals.reconciliationComplete === false ? 'INCOMPLETE — STOCK UPLOAD REQUIRED' : totals.valuationComplete === false ? 'INCOMPLETE — PRICE MISSING' : 'Verified valuation'],
@@ -2445,6 +2446,7 @@ function buildUserWiseSummaryRows(reportData = {}) {
 
 function buildCategoryVarianceRows(data = {}, context = null) {
   const rows = Array.isArray(data.rows) ? data.rows.slice() : [];
+  if (data.snapshotId && data.grandTotal) return rows.concat([{ ...data.grandTotal, rowType: 'grandTotal' }]);
   const totals = context && context.totals ? context.totals : {};
   return rows.concat([{
     productCategory: 'Grand Total',
@@ -2529,7 +2531,7 @@ function buildReconciliationSummaryRows(report = {}, context = null) {
     ['Total Fast Moving Parts', totals.fastMovingCount || summary.totalFastMovingParts || 0],
     ['Total Slow Moving Parts', totals.slowMovingCount || summary.totalSlowMovingParts || 0],
     ['Total Dead Stock Parts', totals.deadStockCount || summary.totalDeadStockParts || 0],
-    ['Total Inventory Value', amount('totalPhysicalDlcValue', 'actualStockValueDLC')],
+    ['Total Inventory Value', amount('totalDmsDlcValue', 'totalInventoryValue')],
     ['Actual Stock Value (DLC)', amount('totalPhysicalDlcValue', 'actualStockValueDLC')],
     ['DMS Stock Value (DLC)', amount('totalDmsDlcValue', 'dmsStockValueDLC')],
     ['Total Shortage Value', amount('totalShortValue', 'totalShortageValue')],

@@ -3821,7 +3821,18 @@ async function buildStockSummaryReport(query = {}, providedPartwise = null) {
 async function validateValuationReports(query = {}, provided = {}) {
   if(require('../services/CentralValuationService').enabled()){
     const scoped=await resolveReportAuditQuery(query);const snapshot=await require('../services/CentralValuationService').getSnapshot(scoped);const v=snapshot.summary;
-    return {passed:true,calculationTotalsMatch:true,valuationComplete:v.valuationComplete,snapshotId:snapshot.snapshotId,totals:{dashboard:v.totalPhysicalDlcValue,partwise:v.totalPhysicalDlcValue,stockSummary:v.totalPhysicalDlcValue,category:v.totalPhysicalDlcValue},valuationSummary:v};
+    const {decimalSum}=require('../utils/auditValuation');
+    const fields={totalSystemQty:'dmsQuantity',totalPhysicalQty:'actualQuantity',totalVarianceQty:'varianceQty',
+      totalDmsDlcValue:'dmsDlcValue',totalPhysicalDlcValue:'actualDlcValue',totalDmsMrpValue:'dmsMrpValue',
+      totalPhysicalMrpValue:'actualMrpValue',totalVarianceDlcValue:'dlcDifference',totalVarianceMrpValue:'mrpDifference'};
+    const lineTotals=Object.fromEntries(Object.entries(fields).map(([total,key])=>[total,
+      snapshot.rows.some(row=>row[key]===null)?null:decimalSum(snapshot.rows.map(row=>row[key]),/Qty$/.test(total)?8:2)]));
+    const mismatches=Object.keys(fields).filter(key=>lineTotals[key]===null||v[key]===null
+      ?lineTotals[key]!==v[key]:Math.abs(lineTotals[key]-v[key])>0.00000001);
+    const calculationTotalsMatch=mismatches.length===0;
+    return {passed:calculationTotalsMatch&&v.valuationComplete&&v.reconciliationComplete,calculationTotalsMatch,mismatches,
+      valuationComplete:v.valuationComplete,snapshotId:snapshot.snapshotId,
+      totals:{dashboard:v.totalPhysicalDlcValue,partwise:lineTotals.totalPhysicalDlcValue,stockSummary:v.totalPhysicalDlcValue,category:v.totalPhysicalDlcValue},valuationSummary:v};
   }
   const reportQuery = requireDealerForReport(query);
   const partwise = provided.partwise || await cachedBuildPartwiseInventoryAuditReport(reportQuery);

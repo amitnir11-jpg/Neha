@@ -8961,8 +8961,8 @@
     if (body) {
       body.innerHTML = visibleRows.map((row) => {
         const status = row.status || '';
-        const dmsValue = reconciliationValue(row.stockValue, row.dmsStockValue, row.dmsMrpValue);
-        const scannedValue = reconciliationValue(row.actualStockValue, row.actualMrpValue, row.finalInventoryValue);
+        const dmsValue = row.dmsDlcValue === null || row.stockValue === null ? null : reconciliationValue(row.stockValue, row.dmsStockValue, row.dmsMrpValue);
+        const scannedValue = row.actualDlcValue === null || row.actualStockValue === null ? null : reconciliationValue(row.actualStockValue, row.actualMrpValue, row.finalInventoryValue);
         return `
           <tr>
             <td>${partLink(row.partNumber || row.partNo)}</td>
@@ -8972,10 +8972,10 @@
             <td>${escapeHtml(wholeNumber(row.actualStock ?? row.physicalStock ?? 0))}</td>
             <td>${escapeHtml(wholeNumber(row.variance ?? row.netDifference ?? 0))}</td>
             <td><span class="recon-status ${reconciliationStatusClass(status)}">${escapeHtml(status)}</span></td>
-            <td>${escapeHtml(money2(row.mrp || 0))}</td>
-            <td>${escapeHtml(money2(row.dlp || row.dlc || 0))}</td>
-            <td>${escapeHtml(money2(dmsValue))}</td>
-            <td>${escapeHtml(money2(scannedValue))}</td>
+            <td>${row.mrp === null ? 'Pending' : escapeHtml(money2(row.mrp || 0))}</td>
+            <td>${row.dlc === null ? 'Pending' : escapeHtml(money2(row.dlp || row.dlc || 0))}</td>
+            <td>${dmsValue === null ? 'Pending' : escapeHtml(money2(dmsValue))}</td>
+            <td>${scannedValue === null ? 'Pending' : escapeHtml(money2(scannedValue))}</td>
             <td>${escapeHtml(row.binLocation || row.bin || '')}</td>
             <td>${escapeHtml(row.movementType || '')}</td>
             <td>${escapeHtml(row.movementStatus || row.fastSlowDeadStatus || '')}</td>
@@ -14866,7 +14866,14 @@
         const body = new FormData($('#dealerStockUploadForm'));
         body.set('confirmed', 'true');
         body.set('corrections', JSON.stringify(review.corrections));
-        body.set('selectedRows', JSON.stringify(selected.map(row => row.rowNumber)));
+        const partKey = row => clean(row.partNumber).toUpperCase().replace(/[\s*-]/g, '');
+        const selectedParts = new Set(selected.map(partKey));
+        const selectedRowNumbers = new Set(selected.map(row => row.rowNumber));
+        // Recompute a split SKU from this sheet's already transferred rows as
+        // well, so a later correction cannot replace its earlier quantity.
+        const included = review.rows.filter(row => selectedRowNumbers.has(row.rowNumber)
+          || (review.committed.has(row.rowNumber) && selectedParts.has(partKey(row))));
+        body.set('selectedRows', JSON.stringify(included.map(row => row.rowNumber)));
         const data = await api(`/api/reconciliation/upload-stock?dealerCode=${encodeURIComponent(review.dealerCode)}`, { method: 'POST', body });
         renderDealerStockPreview(data.preview || [], data.summary?.partLineCount || 0, data.summary || {});
         renderDealerStockErrors(data.errorRows || [], data.skippedCount || 0, data.errorRowsTruncated);

@@ -7,11 +7,11 @@ const Inventory = require('../models/Inventory');
 const { normalizePartNumber } = require('../utils/normalize');
 const { getPricesFromPartMaster } = require('../utils/partMasterPrice');
 const { uniqueReportScans } = require('../utils/reportScanIdentity');
-const { applyMovementCountRules } = require('../utils/reportTotals');
+const { applyMovementCountRules, classifyMovement } = require('../utils/reportTotals');
 const { stockAvailableQuantity, stockMovementQuantity, stockWorkshopQuantity, stockUnitQuantity, activeStockTransaction, stockMovementType, stockMovementBin } = require('../utils/stockQuantity');
 const { validScanClause } = require('../utils/masterValidation');
 
-const ENGINE = 'central-pg-numeric-v7';
+const ENGINE = 'central-pg-numeric-v8';
 const flights = new Map();
 const readFlights = new Map();
 function sourceFilters(query={}) {
@@ -60,7 +60,7 @@ async function loadSource(scope,filters={}) {
   const get = key => {
     if (!groups.has(key)) groups.set(key, { partNumber: key, ...scope, dmsQuantity: 0, actualQuantity: 0, physicalBinQty: 0,
       fittedWorkshopQty: 0, inwardQty:0,outwardQty:0,damageQty:0,fittedMovementQty:0,
-      uploadedStockPresent: false, bins: [], scanCount: 0 });
+      uploadedStockPresent: false, uploadedStockRowCount: 0, bins: [], scanCount: 0 });
     return groups.get(key);
   };
   for (const row of stock) {
@@ -68,6 +68,7 @@ async function loadSource(scope,filters={}) {
     const group = get(key);
     group.dmsQuantity += Number(row.dmsStock ?? row.systemQty ?? 0);
     group.uploadedStockPresent = true;
+    group.uploadedStockRowCount++;
     group.stock = row;
     group.bins.push(...[row.binLoc1,row.binLoc2,row.binLoc3,row.binLocation,row.bin].filter(Boolean));
   }
@@ -179,6 +180,7 @@ async function aggregate(db, id, selectedParts=null) {
     FROM valuation_items WHERE snapshot_id=${id} AND (${selectedParts===null} OR part_number IN (SELECT jsonb_array_elements_text(${JSON.stringify(selectedParts||[])}::jsonb)))
   ) SELECT jsonb_build_object(
     'totalParts',count(*),'dmsParts',count(*) FILTER(WHERE (details->>'uploadedStockPresent')::boolean),
+    'physicalParts',count(*) FILTER(WHERE physical_qty<>0),
     'totalSystemQty',coalesce(sum(dms_qty),0),'totalPhysicalQty',coalesce(sum(physical_qty),0),
     'totalPhysicalBinQty',coalesce(sum((details->>'physicalBinQty')::numeric),0),
     'totalFittedWorkshopQty',coalesce(sum((details->>'fittedWorkshopQty')::numeric),0),
@@ -219,7 +221,8 @@ function publicRow(row) {
   const variance = row.varianceQty;
   const dlcDiff = row.dlcDifference;
   const mrpDiff = row.mrpDifference;
-  return { ...row.stock, ...row, partNo:row.partNumber, partNum:row.partNumber, physicalStock:row.actualQuantity,
+  return { ...row.stock, ...row, ...classifyMovement({...row.stock, dmsStock:row.dmsQuantity}, row.actualQuantity),
+    partNo:row.partNumber, partNum:row.partNumber, physicalStock:row.actualQuantity,
     netDifference:variance,differenceQty:variance,short:row.shortageQty,excess:row.excessQty,
     status: variance<0?'Shortage':variance>0?'Excess':'Matched',notInDms:!row.uploadedStockPresent,
     pricingStatus:row.missingDlc||row.missingMrp?'PRICE MISSING':'VERIFIED',
@@ -277,6 +280,7 @@ async function getSnapshot(query) {
     const priceExceptions=rows.filter(r=>r.missingDlc||r.missingMrp);
     const {scans:storedScans,...counts}=snapshot.metadata;
     return {scope,rows,scans:scanItems.map(r=>r.row),binRows:binItems.map(r=>r.row),summary:{...scope,...snapshot.summary,...counts,priceExceptions,
+      physicalParts:snapshot.summary.physicalParts??rows.filter(row=>row.actualQuantity!==0).length,
       snapshotId:snapshot.id,calculationVersion:snapshot.engine_version,dataRevision:String(snapshot.revision),generatedAt:snapshot.created_at},
       snapshotId:snapshot.id,calculationVersion:snapshot.engine_version,priceExceptions};
   })().finally(()=>readFlights.delete(snapshot.id)));
@@ -284,6 +288,13 @@ async function getSnapshot(query) {
 }
 async function summarizeSelection(snapshot, rows) {
   const summary=await aggregate(getPrismaClient(),snapshot.snapshotId,rows.map(r=>r.partNumber));
-  return {...snapshot.summary,...summary,priceExceptions:rows.filter(r=>r.missingDlc||r.missingMrp)};
+  const parts=new Set(rows.map(r=>r.partNumber));
+  const scans=(snapshot.scans||[]).filter(scan=>parts.has(part(scan)));
+  return {...snapshot.summary,...summary,
+    uploadedRowCount:rows.reduce((sum,row)=>sum+Number(row.uploadedStockRowCount ?? (row.uploadedStockPresent?1:0)),0),
+    uniqueDmsSkuCount:summary.dmsParts, scanTransactionCount:scans.length,
+    scanTransactionUnits:scans.reduce((sum,scan)=>sum+stockUnitQuantity(scan),0),
+    finalStatus:!snapshot.summary.reconciliationComplete?'STOCK UPLOAD REQUIRED':summary.valuationComplete?'Valuation Complete':'Final valuation pending',
+    priceExceptions:rows.filter(r=>r.missingDlc||r.missingMrp)};
 }
 module.exports={enabled,getSnapshot,validateScope,summarizeSelection,ENGINE};

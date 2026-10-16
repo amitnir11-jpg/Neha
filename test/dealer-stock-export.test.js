@@ -67,8 +67,8 @@ test('uploaded stock export is complete, preserves upload values and isolates de
   assert.equal(summary.getCell('B3').value, 2594);
   assert.equal(summary.getCell('B4').value, 2593 * 1.5);
   const empty = await request('?dealerCode=D-A&auditId=EMPTY');
-  assert.equal(empty.status, 404);
-  assert.match((await empty.json()).message, /No uploaded dealer stock/);
+  assert.equal(empty.status, 400);
+  assert.match((await empty.json()).message, /Active Audit ID/);
   assert.equal((await request('?dealerCode=D-A')).status, 200, 'UI download resolves the active audit');
   assert.equal((await request('?dealerCode=ALL')).status, 400);
   const otherDealer = await request('?dealerCode=D-B&auditId=CURRENT');
