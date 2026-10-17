@@ -164,3 +164,12 @@ test('admin sees pending phone approvals across dealers without changing the sel
   assert.equal(userResponse.pendingDevices.length, 0);
   assert.equal(queries.length, 1, 'non-admin listing must not query other dealers');
 });
+
+test('dashboard keeps valuation health in reconciliation instead of the dashboard header', () => {
+  const html = fs.readFileSync('public/Daksh.html', 'utf8');
+  const ui = fs.readFileSync('public/ui.js', 'utf8');
+  assert.doesNotMatch(html, /id="dashboardPriceHealth"/);
+  assert.doesNotMatch(ui, /dashboardPriceHealth/);
+  assert.match(html, /id="reconPriceHealthSummary"/);
+  assert.match(ui, /reconPriceHealthSummary/);
+});

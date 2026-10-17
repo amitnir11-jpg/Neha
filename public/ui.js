@@ -3724,7 +3724,6 @@
     const scannedValue = Number(stats.valuationSummary?.totalPhysicalDlcValue===null?stats.valuationSummary.totalPhysicalDlcValueKnownSubtotal:stats.actualStockValueDLC ?? stats.totalScannedValue ?? 0);
     const systemValue = Number(stats.valuationSummary?.totalDmsDlcValue===null ? stats.valuationSummary.totalDmsDlcValueKnownSubtotal : stats.systemStockValue ?? stats.masterStockValue ?? stats.totalSystemValue ?? 0);
     const chartMax = Math.max(systemValue, scannedValue, 1);
-    const priceHealth=$('#dashboardPriceHealth');if(priceHealth){priceHealth.innerHTML=priceHealthHtml(stats.valuationSummary||{});priceHealth.hidden=!stats.valuationSummary?.snapshotId;}
     setDashboardKpiValue('dashboardSystemValue', stats.valuationSummary?.totalDmsDlcValue === null ? '₹ '+money2(stats.valuationSummary.totalDmsDlcValueKnownSubtotal)+' (subtotal)' : `₹ ${money2(systemValue)}`);
     setDashboardKpiValue('dashboardScannedValue', `₹ ${money2(scannedValue)}${stats.valuationSummary?.totalPhysicalDlcValue===null?' (subtotal)':''}`);
     const systemBar = $('#dashboardSystemValueBar');
