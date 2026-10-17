@@ -119,6 +119,82 @@ async function createClosedAuditBackup(audit, completedBy = '') {
   return { archiveId, archivePath, scanCount: scans.length };
 }
 
+// Older dealer rows can retain currentAuditId after their corresponding Audit
+// record was not migrated. The Dealer Master used that stale ID to offer
+// "Complete Current Audit", but the completion route could not find a row to
+// update. Recover only the exact current, still-active dealer reference; never
+// infer an audit from scans or accept an arbitrary client-supplied ID.
+async function resolveCompletionAudit(auditId, dealerCode, req) {
+  const normalizedAuditId = clean(auditId);
+  const normalizedDealerCode = cleanCode(dealerCode);
+  let audit = await Audit.findOne({ auditId: normalizedAuditId, dealerCode: normalizedDealerCode });
+  if (audit) return audit;
+
+  const dealer = await Dealer.findOne({ dealerCode: normalizedDealerCode }).lean();
+  const currentAuditId = clean(dealer && dealer.currentAuditId);
+  // Legacy dealer rows often have no persisted audit status; the Dealer
+  // Master previously displayed those rows as In Progress from the presence
+  // of currentAuditId. The exact dealer-owned ID is the authority here.
+  const dealerStatus = clean(dealer && (dealer.auditStatus || dealer.status)).toUpperCase();
+  if (!dealer || dealer.active === false || !currentAuditId) {
+    return null;
+  }
+
+  // The Dealer Master can contain a legacy currentAuditId while an active
+  // Audit record has a different stored identifier. Complete the server's
+  // current audit for that dealer rather than trusting the stale browser ID.
+  // There can be only one active audit per dealer.
+  const recoveryAuditId = currentAuditId;
+  if (currentAuditId !== normalizedAuditId) {
+    const activeAudit = await getActiveAudit({ dealerCode: normalizedDealerCode });
+    if (activeAudit) return activeAudit;
+  }
+
+  const auditUser = await auditUserPayload({
+    auditUserId: dealer.auditUserId,
+    auditorUsername: dealer.auditorUsername,
+    auditorName: dealer.auditorName
+  });
+  audit = await Audit.findOneAndUpdate(
+    { auditId: recoveryAuditId, dealerCode: normalizedDealerCode },
+    {
+      $setOnInsert: {
+        auditId: recoveryAuditId,
+        auditName: clean(dealer.auditName || `${normalizedDealerCode} Audit`),
+        dealerCode: normalizedDealerCode,
+        dealerName: clean(dealer.dealerName),
+        brand: clean(dealer.brand),
+        location: clean(dealer.location),
+        auditStartDate: dealer.auditStartDate || dealer.createdAt || new Date(),
+        auditUserId: auditUser.auditUserId,
+        auditorUsername: auditUser.auditorUsername,
+        auditorName: auditUser.auditorName,
+        auditStatus: ['ACTIVE', 'IN_PROGRESS'].includes(dealerStatus) ? dealerStatus : 'IN_PROGRESS',
+        status: ['ACTIVE', 'IN_PROGRESS'].includes(dealerStatus) ? dealerStatus : 'IN_PROGRESS'
+      }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  await AuditLogService.record({
+    req,
+    eventType: 'AUDIT_SESSION_RECOVERED',
+    module: 'audit',
+    message: `Recovered missing current audit ${recoveryAuditId} for dealer ${normalizedDealerCode} before completion`,
+    dealerCode: normalizedDealerCode,
+    auditId: recoveryAuditId,
+    metadata: { recoverySource: 'dealer-current-audit-reference' }
+  });
+  return audit;
+}
+
+function auditUpdateFilter(audit = {}, fallbackAuditId = '', dealerCode = '') {
+  const base = { dealerCode: cleanCode(dealerCode) };
+  if (clean(audit.auditId)) return { ...base, auditId: clean(audit.auditId) };
+  if (audit.id) return { ...base, id: audit.id };
+  if (audit._id) return { ...base, _id: audit._id };
+  return { ...base, auditId: clean(fallbackAuditId) };
+}
+
 router.get('/active', auth.requireAuth, async (req, res) => {
   try {
     if (!cleanCode(req.query.dealerCode || req.activeDealerId)) {
@@ -287,7 +363,7 @@ router.post('/:auditId/status/complete', auth.requireAuth, auth.requireAdmin, as
     const remark = clean(req.body.remark || '');
     const completedAt = new Date();
     const completedByUser = req.user ? (req.user.name || req.user.username || req.user.email || '') : 'System';
-    const audit = await Audit.findOne({ auditId, dealerCode: req.activeDealerId });
+    const audit = await resolveCompletionAudit(auditId, req.activeDealerId, req);
 
     if (!audit) {
       return res.status(404).json({ success: false, message: 'Audit not found' });
@@ -307,8 +383,9 @@ router.post('/:auditId/status/complete', auth.requireAuth, auth.requireAdmin, as
     };
 
     // Update audit status
+    const resolvedAuditId = clean(audit.auditId || audit.id || audit._id || auditId);
     const updatedAudit = await Audit.findOneAndUpdate(
-      { auditId, dealerCode: req.activeDealerId },
+      auditUpdateFilter(audit, auditId, req.activeDealerId),
       {
         $set: {
           auditStatus: 'COMPLETED',
@@ -333,7 +410,7 @@ router.post('/:auditId/status/complete', auth.requireAuth, auth.requireAdmin, as
 
     const io = req.io || req.app.get('io');
     if (io) {
-      io.emit('audit:completed', { auditId, dealerCode: updatedAudit.dealerCode });
+      io.emit('audit:completed', { auditId: resolvedAuditId, dealerCode: updatedAudit.dealerCode });
       io.emit('dealers:update');
     }
 
@@ -467,3 +544,4 @@ router.post('/:auditId/status', auth.requireAuth, auth.requireAdmin, async (req,
 });
 
 module.exports = router;
+module.exports.resolveCompletionAudit = resolveCompletionAudit;

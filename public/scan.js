@@ -3463,6 +3463,12 @@
     const formatValue = typeof result?.getBarcodeFormat === 'function' ? result.getBarcodeFormat() : result?.format;
     const format = typeof formatValue === 'number' ? window.ZXing?.BarcodeFormat?.[formatValue] : formatValue;
     const parsed = window.DakshScanParser.parseScannedCode(rawValue, format);
+    const validation = window.DakshScanParser.validateScannerSequence(rawValue, parsed.barcodeFormat);
+    if (!validation.valid && !validation.requiresIdentityLookup) {
+      cameraState(window.DakshScanParser.invalidScannerSequenceTitle);
+      toast(`${window.DakshScanParser.invalidScannerSequenceTitle}: ${window.DakshScanParser.invalidScannerSequenceMessage}`, 'error');
+      return;
+    }
     const raw = parsed.normalizedValue;
     if (!raw) return;
     const seenAt = Date.now();
@@ -3491,6 +3497,18 @@
   }
 
   async function processDecodedText(raw, decodeMetadata = null) {
+    const validation = window.DakshScanParser.validateScannerSequence(raw, decodeMetadata?.barcodeFormat);
+    if (validation.requiresIdentityLookup) {
+      try {
+        const resolved = await api(`/api/scans/resolve-code?${new URLSearchParams({
+          dealerCode: activeDealerCode(), auditId: activeAuditId(), rawValue: raw, barcodeFormat: 'UNKNOWN' })}`);
+        if (!resolved.success) throw new Error('Unsupported scanner identity');
+      } catch (_) {
+        cameraState(window.DakshScanParser.invalidScannerSequenceTitle);
+        toast(`${window.DakshScanParser.invalidScannerSequenceTitle}: ${window.DakshScanParser.invalidScannerSequenceMessage}`, 'error');
+        return;
+      }
+    }
     const mode = currentScanType();
     if (requiresBin() && !ensureActiveBinReady()) {
       cameraState('Ready to scan');

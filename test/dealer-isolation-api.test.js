@@ -168,3 +168,35 @@ test('scanner registration and heartbeat resolve only their original dealer audi
   await assert.rejects(manager.heartbeat({ deviceId: 'device-a' }), error => error === failure);
   assert.deepEqual(lookups, ['D-A', 'D-A']);
 });
+
+test('dealer-list audit actions retain the dealer selected in their own row', async () => {
+  const source = fs.readFileSync('public/ui.js', 'utf8');
+  const start = source.indexOf('  async function handleAuditComplete(');
+  const end = source.indexOf('  async function loadBins()', start);
+  const requests = [];
+  const dealerLoads = [];
+  const context = {
+    window: { prompt: () => 'completed after verification', confirm: () => true },
+    alert() {}, toast() {},
+    api: async (path, options) => {
+      requests.push({ path, body: options.body });
+      return { success: true, activeAudit: null };
+    },
+    loadActiveAudit: async () => null,
+    loadDealers: async options => { dealerLoads.push(options || {}); },
+    loadDashboard: async () => null,
+    $: () => null,
+    encodeURIComponent
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+  await context.handleAuditComplete('AUD-B', 'D-B');
+  await context.handleAuditReopen('AUD-B', 'D-B');
+  await context.handleAuditLock('AUD-B', 'D-B');
+  assert.equal(requests.length, 3);
+  requests.forEach(({ path, body }) => {
+    assert.match(path, /AUD-B/);
+    assert.equal(body.dealerCode, 'D-B');
+  });
+  assert.equal(dealerLoads[0].force, true, 'completion refreshes Dealer Master without using its cached status');
+});

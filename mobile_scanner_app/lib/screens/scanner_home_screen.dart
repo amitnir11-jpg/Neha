@@ -650,6 +650,11 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
   }
 
   Future<void> _handleDraft(_ScanDraft draft, {required String source}) async {
+    if (source != 'manual' &&
+        !isSupportedScannerSequence(draft.rawValue, draft.barcodeFormat)) {
+      _setStatus('$invalidScannerSequenceTitle\n$invalidScannerSequenceMessage', Colors.red);
+      return;
+    }
     if (_dealerCode.isEmpty) {
       _setStatus('Dealer code required', Colors.red);
       return;
@@ -763,6 +768,7 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
           }
         } on ApiException catch (error) {
           // A plain existing UPI may have no standalone Part Master match.
+          if (error.data['code'] == 'INVALID_SCANNER_SEQUENCE') rethrow;
           if (!['OUTWARD', 'FITTED'].contains(captureMode) || draft.rawValue.contains('/')) rethrow;
           if (error.statusCode != 422) rethrow;
         } finally { _movementPromptOpen = false; }
@@ -849,6 +855,14 @@ class _ScannerHomeScreenState extends State<ScannerHomeScreen>
       unawaited(_playScanBeep());
       unawaited(HapticFeedback.mediumImpact());
       unawaited(_saveScanLocally(record));
+    } on ApiException catch (error) {
+      if (error.data['code'] == 'INVALID_SCANNER_SEQUENCE') {
+        final title =
+            error.data['title']?.toString() ?? 'Invalid Barcode / QR Sequence';
+        _setStatus('$title\n${error.message}', Colors.red);
+      } else {
+        _setStatus(error.toString(), Colors.red);
+      }
     } catch (error) {
       _setStatus(error.toString(), Colors.red);
     }

@@ -25,30 +25,40 @@ router.get('/', auth.requireAuth, async (req, res) => {
     
     // Map audit status to dealers
     const auditMap = {};
+    const activeAuditByDealer = {};
     audits.forEach(audit => {
-      if (audit.auditId && !auditMap[audit.auditId]) {
-        auditMap[audit.auditId] = {
-          auditStatus: auditWorkflowStatus(audit),
-          completedAt: audit.completedAt,
-          auditUserId: audit.auditUserId || '',
-          auditorName: audit.auditorName || '',
-          auditorUsername: audit.auditorUsername || ''
-        };
+      const auditStatus = auditWorkflowStatus(audit);
+      const mappedAudit = {
+        auditId: audit.auditId || String(audit._id || ''),
+        auditStatus,
+        completedAt: audit.completedAt,
+        auditUserId: audit.auditUserId || '',
+        auditorName: audit.auditorName || '',
+        auditorUsername: audit.auditorUsername || ''
+      };
+      if (audit.auditId && !auditMap[audit.auditId]) auditMap[audit.auditId] = mappedAudit;
+      if (audit.dealerCode && ['ACTIVE', 'IN_PROGRESS'].includes(auditStatus) && !activeAuditByDealer[audit.dealerCode]) {
+        activeAuditByDealer[audit.dealerCode] = mappedAudit;
       }
     });
     
     // Add audit status to each dealer
-    const dealersWithStatus = dealers.map(dealer => ({
-      ...dealer,
-      auditStatus: dealer.currentAuditId && auditMap[dealer.currentAuditId] 
-        ? auditMap[dealer.currentAuditId].auditStatus 
-        : 'IN_PROGRESS',
-      ...(dealer.currentAuditId && auditMap[dealer.currentAuditId] ? {
-        auditUserId: auditMap[dealer.currentAuditId].auditUserId,
-        auditorName: auditMap[dealer.currentAuditId].auditorName,
-        auditorUsername: auditMap[dealer.currentAuditId].auditorUsername
-      } : {})
-    }));
+    const dealersWithStatus = dealers.map(dealer => {
+      const currentAudit = dealer.currentAuditId ? auditMap[dealer.currentAuditId] : null;
+      const effectiveAudit = currentAudit && ['ACTIVE', 'IN_PROGRESS'].includes(currentAudit.auditStatus)
+        ? currentAudit
+        : (activeAuditByDealer[dealer.dealerCode] || currentAudit);
+      return {
+        ...dealer,
+        ...(effectiveAudit && effectiveAudit.auditId ? { currentAuditId: effectiveAudit.auditId } : {}),
+        auditStatus: effectiveAudit ? effectiveAudit.auditStatus : 'NOT_STARTED',
+        ...(effectiveAudit ? {
+          auditUserId: effectiveAudit.auditUserId,
+          auditorName: effectiveAudit.auditorName,
+          auditorUsername: effectiveAudit.auditorUsername
+        } : {})
+      };
+    });
     
     res.json({ success: true, dealers: dealersWithStatus, audits });
   } catch (error) {

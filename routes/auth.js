@@ -7,7 +7,7 @@ const Dealer = require('../models/Dealer');
 const UserDealerMapping = require('../models/UserDealerMapping');
 const Audit = require('../models/Audit');
 const passwordReset = require('../services/PasswordResetService');
-const { getActiveAudit, publicAudit } = require('../utils/audit');
+const { activeStatusFilter, getActiveAudit, publicAudit } = require('../utils/audit');
 const { isDatabaseConnectionError } = require('../utils/databaseErrors');
 
 const router = express.Router();
@@ -448,16 +448,30 @@ async function activeDealersForUser(user = {}) {
   };
   if (!canSeeAll) filter.dealerCode = access.length ? { $in: access } : '__none__';
   const dealers = await Dealer.find(filter).sort({ dealerName: 1, dealerCode: 1 }).lean();
-  return dealers.map((dealer) => ({
+  const dealerCodes = dealers.map((dealer) => dealer.dealerCode).filter(Boolean);
+  if (!dealerCodes.length) return [];
+  const audits = await Audit.find({
+    dealerCode: { $in: dealerCodes },
+    ...activeStatusFilter()
+  }).sort({ auditStartDate: -1, createdAt: -1 }).lean();
+  const activeAuditByDealer = new Map();
+  audits.forEach((audit) => {
+    const dealerCode = String(audit.dealerCode || '').trim().toUpperCase();
+    if (dealerCode && !activeAuditByDealer.has(dealerCode)) activeAuditByDealer.set(dealerCode, audit);
+  });
+  return dealers.filter((dealer) => activeAuditByDealer.has(String(dealer.dealerCode || '').trim().toUpperCase())).map((dealer) => {
+    const audit = activeAuditByDealer.get(String(dealer.dealerCode || '').trim().toUpperCase());
+    return {
     id: dealer.dealerCode,
     dealerId: dealer.dealerCode,
     dealerCode: dealer.dealerCode,
     dealerName: dealer.dealerName || dealer.dealerCode,
-    currentAuditId: dealer.currentAuditId || '',
-    auditId: dealer.currentAuditId || '',
+    currentAuditId: audit.auditId || audit.id || audit._id || '',
+    auditId: audit.auditId || audit.id || audit._id || '',
     brand: dealer.brand || '',
     location: dealer.location || ''
-  }));
+    };
+  });
 }
 
 function isPermanentCleanupRequest(req = {}) {

@@ -21,6 +21,11 @@ movements. Audit price snapshots take precedence over the current part master.
 4. Dashboard event facets are still presentation metrics. The report ledger is
    the financial source for audit quantities and value totals; raw scan count
    must remain a separately labelled transaction count.
+5. The dashboard now exposes a quantity bridge. If the KPI and the displayed
+   movement types differ, the residual is shown as **Needs review** and the API
+   returns `scanQuantityBridge` with reported, classified, and residual totals.
+   For the reported figures this is `19,297 - 19,135 = 162`; it is a review
+   queue, not a newly invented movement type.
 
 ## Required database-backed evidence before sign-off
 

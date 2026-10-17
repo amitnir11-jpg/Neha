@@ -25,6 +25,7 @@ function scannerHarness(options = {}) {
     regdNo: node('#barcodeScanForm [name="regdNo"]'), jobCardNo: node('#barcodeScanForm [name="jobCardNo"]')
   };
   const context = {
+    window: { DakshScanParser: require('../utils/scanParser') },
     $: node, $$: () => [], state: { barcodeCaptureQueue: [], barcodeAutoSaving: false, barcodeLastRaw: '', barcodeLastAt: 0 },
     normalizePartText: value => String(value).trim().toUpperCase(),
     Date: { now: () => clock },
@@ -33,6 +34,7 @@ function scannerHarness(options = {}) {
     currentDealerCode: () => '11646', activeAuditIdForScope: () => 'AUD1',
     lockBarcodeDuplicateNotice: () => false, setLivePill: () => {}, setStatusPill: () => {},
     playScanTone: () => {}, toast: () => {}, fillBarcodePartFromRaw: () => {}, focusNextBarcodeField: () => {},
+    resetBarcodeScanFields: () => { node('#barcodeRaw').value = ''; },
     acceptBarcodeBinQr: () => false,
     formObject: () => ({ dealerCode: '11646', binLocation: node('[name="binLocation"]').value, type: node('[name="type"]').value, rawScan: node('#barcodeRaw').value }),
     submitScan: async (_form, saveOptions) => { saves.push(saveOptions.expectedRaw); if (options.waitForSave) await options.waitForSave(); }
@@ -63,23 +65,23 @@ test('scanner without an Enter suffix saves once after the input settles', async
   const h = scannerHarness();
   h.input('35010');
   await h.advance(100);
-  h.input('35010ACK00099S');
+  h.input('35010ACK00099S/G3223000065001');
   await h.advance(199);
   assert.equal(h.saves.length, 0, 'must not submit partial scanner input');
   await h.advance(1);
-  assert.deepEqual(h.saves, ['35010ACK00099S']);
+  assert.deepEqual(h.saves, ['35010ACK00099S/G3223000065001']);
   assert.equal(h.context.state.barcodeAutoSaving, false);
 });
 
 for (const key of ['Enter', 'Tab']) {
   test(`${key} scanner suffix replaces the idle timer with an immediate save`, async () => {
     const h = scannerHarness();
-    h.input('35010ACK00099S');
+    h.input('35010ACK00099S/G3223000065001');
     let prevented = false;
     h.node('#barcodeRaw').listeners.keydown({ key, shiftKey: false, preventDefault() { prevented = true; } });
     await h.advance(20);
     assert.equal(prevented, true);
-    assert.deepEqual(h.saves, ['35010ACK00099S']);
+    assert.deepEqual(h.saves, ['35010ACK00099S/G3223000065001']);
     await h.advance(200);
     assert.equal(h.saves.length, 1);
   });
@@ -87,11 +89,11 @@ for (const key of ['Enter', 'Tab']) {
 
 test('Save Web Scan uses the same autosave guard as scanner events', async () => {
   const h = scannerHarness();
-  h.input('35010ACK00099S');
+  h.input('35010ACK00099S/G3223000065001');
   h.node('#barcodeScanForm').listeners.submit({ preventDefault() {} });
   await h.advance(0);
   await h.advance(200);
-  assert.deepEqual(h.saves, ['35010ACK00099S']);
+  assert.deepEqual(h.saves, ['35010ACK00099S/G3223000065001']);
 });
 
 test('consecutive scanner captures are preserved while a prior save is in flight', async () => {

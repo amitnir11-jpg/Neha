@@ -83,6 +83,13 @@ function modelMirrorFieldTypes(modelName) {
   }
 }
 
+function modelScalarFields(modelName) {
+  try {
+    const model = Prisma.dmmf.datamodel.models.find((m) => m.name.toLowerCase() === String(modelName || '').toLowerCase());
+    return model ? model.fields.filter((field) => field.kind === 'scalar').map((field) => field.name) : [];
+  } catch (_) { return []; }
+}
+
 const DATE_FIELDS = new Set([
   'timestamp',
   'scanTime',
@@ -157,7 +164,11 @@ function hydrateDates(row) {
   return row;
 }
 
-function publicRow(record = {}, mirrorFields = MIRROR_FIELDS) {
+function publicRow(record = {}, mirrorFields = MIRROR_FIELDS, hasDataColumn = true) {
+  if (!hasDataColumn) {
+    const output = { ...record, _id: record.id };
+    return hydrateDates(output);
+  }
   const data = isPlainObject(record.data) ? { ...record.data } : {};
   const output = { ...data };
   mirrorFields.forEach((field) => {
@@ -200,10 +211,18 @@ function valueForMirror(data, field, fieldInfo = null) {
   return String(value);
 }
 
-function buildRow(data, id, mirrorFields, mirrorFieldTypes = new Map()) {
+function buildRow(data, id, mirrorFields, mirrorFieldTypes = new Map(), hasDataColumn = true) {
   const fields = mirrorFields || MIRROR_FIELDS;
   const now = new Date();
   const clean = cleanObject({ ...data });
+  if (!hasDataColumn) {
+    const row = {};
+    mirrorFields.forEach((field) => {
+      if (field === 'id') row.id = id;
+      else if (clean[field] !== undefined) row[field] = valueForMirror(clean, field, mirrorFieldTypes.get(field));
+    });
+    return row;
+  }
   const createdAt = asDate(clean.createdAt) || now;
   const updatedAt = asDate(clean.updatedAt) || now;
   clean.createdAt = createdAt.toISOString();
@@ -405,31 +424,32 @@ function columnSql(field, mirrorFields = MIRROR_FIELDS) {
   return null;
 }
 
-function fieldTextSql(field, mirrorFields = MIRROR_FIELDS) {
+function fieldTextSql(field, mirrorFields = MIRROR_FIELDS, hasDataColumn = true) {
   const normalized = field === '_id' ? 'id' : field;
   const column = columnSql(normalized, mirrorFields);
-  if (column) return Prisma.sql`COALESCE(${column}::text, "data"->>${normalized})`;
+  if (column) return hasDataColumn ? Prisma.sql`COALESCE(${column}::text, "data"->>${normalized})` : Prisma.sql`${column}::text`;
+  if (!hasDataColumn) return Prisma.raw('NULL');
   return Prisma.sql`"data"->>${normalized}`;
 }
 
-function fieldCompareSql(field, sample, mirrorFields = MIRROR_FIELDS) {
+function fieldCompareSql(field, sample, mirrorFields = MIRROR_FIELDS, hasDataColumn = true) {
   const normalized = field === '_id' ? 'id' : field;
   const column = columnSql(normalized, mirrorFields);
   if (DATE_FIELDS.has(normalized) || sample instanceof Date) {
     if (column) return column;
-    return Prisma.sql`NULLIF("data"->>${normalized}, '')::timestamptz`;
+    return hasDataColumn ? Prisma.sql`NULLIF("data"->>${normalized}, '')::timestamptz` : Prisma.raw('NULL');
   }
   if (typeof sample === 'number') {
-    const text = fieldTextSql(normalized, mirrorFields);
+    const text = fieldTextSql(normalized, mirrorFields, hasDataColumn);
     return Prisma.sql`CASE WHEN ${text} ~ '^-?[0-9]+(\.[0-9]+)?$' THEN (${text})::double precision ELSE NULL END`;
   }
-  return fieldTextSql(normalized, mirrorFields);
+  return fieldTextSql(normalized, mirrorFields, hasDataColumn);
 }
 
-function regexSql(field, regex, options = '', mirrorFields = MIRROR_FIELDS) {
+function regexSql(field, regex, options = '', mirrorFields = MIRROR_FIELDS, hasDataColumn = true) {
   const pattern = regex instanceof RegExp ? regex.source : String(regex || '');
   const flags = regex instanceof RegExp ? regex.flags : String(options || 'i');
-  const text = fieldTextSql(field, mirrorFields);
+  const text = fieldTextSql(field, mirrorFields, hasDataColumn);
   return flags.includes('i')
     ? Prisma.sql`COALESCE(${text}, '') ~* ${pattern}`
     : Prisma.sql`COALESCE(${text}, '') ~ ${pattern}`;
@@ -441,12 +461,12 @@ function scalarText(value) {
   return String(value);
 }
 
-function predicateSql(filter = {}, mirrorFields = MIRROR_FIELDS) {
+function predicateSql(filter = {}, mirrorFields = MIRROR_FIELDS, hasDataColumn = true) {
   const clauses = [];
   let supported = true;
   for (const [key, expected] of Object.entries(filter || {})) {
     if (key === '$or' || key === '$and') {
-      const children = (Array.isArray(expected) ? expected : []).map((child) => predicateSql(child, mirrorFields));
+      const children = (Array.isArray(expected) ? expected : []).map((child) => predicateSql(child, mirrorFields, hasDataColumn));
       if (!children.length) continue;
       supported = children.every((child) => child.supported) && supported;
       const joined = Prisma.join(children.map((child) => child.sql), key === '$or' ? ' OR ' : ' AND ');
@@ -454,15 +474,20 @@ function predicateSql(filter = {}, mirrorFields = MIRROR_FIELDS) {
       continue;
     }
     if (key === '$nor') {
-      const children = (Array.isArray(expected) ? expected : []).map((child) => predicateSql(child, mirrorFields));
+      const children = (Array.isArray(expected) ? expected : []).map((child) => predicateSql(child, mirrorFields, hasDataColumn));
       if (!children.length) continue;
       supported = children.every((child) => child.supported) && supported;
       clauses.push(Prisma.sql`NOT (${Prisma.join(children.map((child) => child.sql), ' OR ')})`);
       continue;
     }
 
+    if (!hasDataColumn && !columnSql(key, mirrorFields)) {
+      supported = false;
+      continue;
+    }
+
     if (expected instanceof RegExp) {
-      clauses.push(regexSql(key, expected, '', mirrorFields));
+      clauses.push(regexSql(key, expected, '', mirrorFields, hasDataColumn));
       continue;
     }
 
@@ -476,29 +501,30 @@ function predicateSql(filter = {}, mirrorFields = MIRROR_FIELDS) {
           const scalarItems = items.filter((item) => !(item instanceof RegExp)).map(scalarText).filter((item) => item !== null);
           const nullWanted = items.some((item) => item === null || item === undefined);
           const parts = [];
-          if (scalarItems.length) parts.push(Prisma.sql`${fieldTextSql(key, mirrorFields)} IN (${Prisma.join(scalarItems)})`);
-          regexItems.forEach((item) => parts.push(regexSql(key, item, '', mirrorFields)));
-          if (nullWanted) parts.push(Prisma.sql`${fieldTextSql(key, mirrorFields)} IS NULL`);
+          if (scalarItems.length) parts.push(Prisma.sql`${fieldTextSql(key, mirrorFields, hasDataColumn)} IN (${Prisma.join(scalarItems)})`);
+          regexItems.forEach((item) => parts.push(regexSql(key, item, '', mirrorFields, hasDataColumn)));
+          if (nullWanted) parts.push(Prisma.sql`${fieldTextSql(key, mirrorFields, hasDataColumn)} IS NULL`);
           const clause = parts.length ? Prisma.sql`(${Prisma.join(parts, ' OR ')})` : Prisma.sql`FALSE`;
           fieldClauses.push(operator === '$nin' ? Prisma.sql`NOT ${clause}` : clause);
         } else if (operator === '$ne') {
           const scalar = scalarText(value);
-          fieldClauses.push(scalar === null ? Prisma.sql`${fieldTextSql(key, mirrorFields)} IS NOT NULL` : Prisma.sql`${fieldTextSql(key, mirrorFields)} IS DISTINCT FROM ${scalar}`);
+          fieldClauses.push(scalar === null ? Prisma.sql`${fieldTextSql(key, mirrorFields, hasDataColumn)} IS NOT NULL` : Prisma.sql`${fieldTextSql(key, mirrorFields, hasDataColumn)} IS DISTINCT FROM ${scalar}`);
         } else if (operator === '$exists') {
-          fieldClauses.push(Boolean(value) ? Prisma.sql`${fieldTextSql(key, mirrorFields)} IS NOT NULL` : Prisma.sql`${fieldTextSql(key, mirrorFields)} IS NULL`);
+          fieldClauses.push(Boolean(value) ? Prisma.sql`${fieldTextSql(key, mirrorFields, hasDataColumn)} IS NOT NULL` : Prisma.sql`${fieldTextSql(key, mirrorFields, hasDataColumn)} IS NULL`);
         } else if (['$gt', '$gte', '$lt', '$lte'].includes(operator)) {
-          const compare = fieldCompareSql(key, value, mirrorFields);
+          const compare = fieldCompareSql(key, value, mirrorFields, hasDataColumn);
           const op = { $gt: '>', $gte: '>=', $lt: '<', $lte: '<=' }[operator];
           fieldClauses.push(Prisma.sql`${compare} ${Prisma.raw(op)} ${value instanceof Date ? value : value}`);
         } else if (operator === '$regex') {
-          fieldClauses.push(regexSql(key, value, expected.$options, mirrorFields));
+          fieldClauses.push(regexSql(key, value, expected.$options, mirrorFields, hasDataColumn));
         } else if (operator === '$not') {
-          if (value instanceof RegExp) fieldClauses.push(Prisma.sql`NOT (${regexSql(key, value, '', mirrorFields)})`);
+          if (value instanceof RegExp) fieldClauses.push(Prisma.sql`NOT (${regexSql(key, value, '', mirrorFields, hasDataColumn)})`);
           else {
             supported = false;
           }
         } else if (operator === '$type') {
-          if (value === 'string') fieldClauses.push(Prisma.sql`jsonb_typeof("data"->${key}) = 'string'`);
+          if (!hasDataColumn) supported = false;
+          else if (value === 'string') fieldClauses.push(Prisma.sql`jsonb_typeof("data"->${key}) = 'string'`);
           else supported = false;
         } else {
           supported = false;
@@ -509,20 +535,20 @@ function predicateSql(filter = {}, mirrorFields = MIRROR_FIELDS) {
     }
 
     if (expected === null || expected === undefined) {
-      clauses.push(Prisma.sql`${fieldTextSql(key, mirrorFields)} IS NULL`);
+      clauses.push(Prisma.sql`${fieldTextSql(key, mirrorFields, hasDataColumn)} IS NULL`);
     } else {
-      clauses.push(Prisma.sql`${fieldTextSql(key, mirrorFields)} = ${scalarText(expected)}`);
+      clauses.push(Prisma.sql`${fieldTextSql(key, mirrorFields, hasDataColumn)} = ${scalarText(expected)}`);
     }
   }
   return { sql: clauses.length ? Prisma.sql`${Prisma.join(clauses, ' AND ')}` : Prisma.sql`TRUE`, supported };
 }
 
-function orderSql(sortSpec = {}, mirrorFields = MIRROR_FIELDS) {
+function orderSql(sortSpec = {}, mirrorFields = MIRROR_FIELDS, hasDataColumn = true) {
   const entries = Object.entries(normalizeSort(sortSpec));
   if (!entries.length) return Prisma.empty;
   const parts = entries.map(([field, direction]) => {
     const normalized = field === '_id' ? 'id' : field;
-    const expr = columnSql(normalized, mirrorFields) || fieldTextSql(normalized, mirrorFields);
+    const expr = columnSql(normalized, mirrorFields) || fieldTextSql(normalized, mirrorFields, hasDataColumn);
     return Prisma.sql`${expr} ${Prisma.raw(Number(direction) < 0 ? 'DESC' : 'ASC')} NULLS LAST`;
   });
   return Prisma.sql` ORDER BY ${Prisma.join(parts, ', ')}`;
@@ -969,7 +995,8 @@ function createModel(config) {
   const tableName = config.tableName;
   const indexes = config.indexes || [];
   const defaults = config.defaults || {};
-  const resolvedMirrorFields = modelMirrorFields(config.name);
+  const hasDataColumn = config.storage !== 'relational';
+  const resolvedMirrorFields = hasDataColumn ? modelMirrorFields(config.name) : modelScalarFields(config.name);
   const resolvedMirrorFieldTypes = modelMirrorFieldTypes(config.name);
 
   class Model extends Document {
@@ -1007,26 +1034,26 @@ function createModel(config) {
       const prepared = await this.__prepare({ ...input, id, _id: id }, options);
       prepared.id = id;
       prepared._id = id;
-      const row = buildRow(prepared, id, resolvedMirrorFields, resolvedMirrorFieldTypes);
+      const row = buildRow(prepared, id, resolvedMirrorFields, resolvedMirrorFieldTypes, hasDataColumn);
       const saved = await this.__delegate.upsert({
         where: { id },
         create: row,
         update: row
       });
-      return new Document(this, publicRow(saved, resolvedMirrorFields), false);
+      return new Document(this, publicRow(saved, resolvedMirrorFields, hasDataColumn), false);
     }
 
     static async __findRows(filter = {}, options = {}) {
-      const where = predicateSql(filter, resolvedMirrorFields);
+      const where = predicateSql(filter, resolvedMirrorFields, hasDataColumn);
       const limit = Number(options.limit || 0);
       const skip = Number(options.skip || 0);
-      const order = orderSql(options.sort, resolvedMirrorFields);
+      const order = orderSql(options.sort, resolvedMirrorFields, hasDataColumn);
       const limitSql = where.supported && limit ? Prisma.sql` LIMIT ${limit}` : Prisma.empty;
       const offsetSql = where.supported && skip ? Prisma.sql` OFFSET ${skip}` : Prisma.empty;
       const sql = Prisma.sql`SELECT * FROM ${Prisma.raw(quoteIdent(tableName))} WHERE ${where.sql}${order}${limitSql}${offsetSql}`;
       let records = await getPrismaClient().$queryRaw(sql);
       const membershipCache = new WeakMap();
-      let rows = records.map((record) => publicRow(record, resolvedMirrorFields)).filter((row) => matchesFilter(row, filter, membershipCache));
+      let rows = records.map((record => publicRow(record, resolvedMirrorFields, hasDataColumn))).filter((row) => matchesFilter(row, filter, membershipCache));
       if (!where.supported) {
         rows = sortRows(rows, options.sort || {});
         if (skip) rows = rows.slice(skip);
@@ -1073,7 +1100,7 @@ function createModel(config) {
     }
 
     static async countDocuments(filter = {}) {
-      const where = predicateSql(filter, resolvedMirrorFields);
+      const where = predicateSql(filter, resolvedMirrorFields, hasDataColumn);
       if (where.supported) {
         const rows = await getPrismaClient().$queryRaw(Prisma.sql`SELECT COUNT(*)::int AS count FROM ${Prisma.raw(quoteIdent(tableName))} WHERE ${where.sql}`);
         return Number(rows[0]?.count || 0);
@@ -1138,7 +1165,7 @@ function createModel(config) {
     }
 
     static async deleteMany(filter = {}) {
-      const where = predicateSql(filter, resolvedMirrorFields);
+      const where = predicateSql(filter, resolvedMirrorFields, hasDataColumn);
       if (where.supported) {
         const deletedCount = await getPrismaClient().$executeRaw(Prisma.sql`DELETE FROM ${Prisma.raw(quoteIdent(tableName))} WHERE ${where.sql}`);
         return { deletedCount: Number(deletedCount) || 0 };
@@ -1238,15 +1265,14 @@ function createModel(config) {
       const tuples = records.map((record) => Prisma.sql`(${Prisma.join(keys.map((field) => String(record[field] ?? '')))})`);
       const keyColumns = Prisma.join(keys.map((field) => Prisma.raw(quoteIdent(field))));
       const existingRows = await getPrismaClient().$queryRaw(Prisma.sql`
-        SELECT id, data, "createdAt", "updatedAt"
+        SELECT *
         FROM ${Prisma.raw(quoteIdent(tableName))}
         WHERE (${keyColumns}) IN (${Prisma.join(tuples)})
       `);
       const keyOf = (record) => keys.map((field) => String(record[field] ?? '')).join('\u0000');
       const existingByKey = new Map();
       existingRows.forEach((row) => {
-        const data = isPlainObject(row.data) ? row.data : {};
-        const hydrated = { ...data, _id: row.id, id: row.id, createdAt: row.createdAt, updatedAt: row.updatedAt };
+        const hydrated = publicRow(row, resolvedMirrorFields, hasDataColumn);
         existingByKey.set(keyOf(hydrated), hydrated);
       });
 
@@ -1257,7 +1283,7 @@ function createModel(config) {
         const id = existing ? String(existing._id) : randomUUID();
         if (!existing) insertedCount += 1;
         const prepared = await this.__prepare({ ...(existing || {}), ...record, id, _id: id }, { upsert: true });
-        preparedRows.push(buildRow({ ...prepared, id, _id: id }, id, resolvedMirrorFields, resolvedMirrorFieldTypes));
+        preparedRows.push(buildRow({ ...prepared, id, _id: id }, id, resolvedMirrorFields, resolvedMirrorFieldTypes, hasDataColumn));
       }
 
       const columns = Object.keys(preparedRows[0]);
@@ -1289,8 +1315,12 @@ function createModel(config) {
 
 module.exports = {
   booleanMirrorValue,
+  buildRow,
   createModel,
+  fieldTextSql,
   modelMirrorFields,
   matchesFilter,
+  predicateSql,
+  publicRow,
   valueForMirror
 };

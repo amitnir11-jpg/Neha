@@ -39,6 +39,9 @@ function passwordProblem(value) {
 function ipOf(req) {
   return String(req.ip || req.socket?.remoteAddress || '').replace('::ffff:', '').slice(0, 128);
 }
+function exactIgnoreCase(value) {
+  return new RegExp(`^${String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+}
 function recordAudit(eventType, user, req, result, extra = {}) {
   const actor = extra.adminTriggered && req.user ? req.user : (user || {});
   return AuditLogService.record({
@@ -75,8 +78,15 @@ function transporter() {
   if (!user) throw new Error('EMAIL_USER (or GMAIL_USER / SMTP_USER) is not configured');
   if (!pass) throw new Error('EMAIL_APP_PASSWORD (or GMAIL_PASS / SMTP_PASS) is not configured');
   if (user.toLowerCase() !== 'dakshinventory@gmail.com') throw new Error('Password reset sender must be dakshinventory@gmail.com');
+  const host = String(process.env.SMTP_HOST || 'smtp.gmail.com').trim();
+  const port = Number(process.env.SMTP_PORT || 465);
+  const secureSetting = String(process.env.SMTP_SECURE || '').trim().toLowerCase();
+  if (!host) throw new Error('SMTP_HOST must not be empty');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SMTP_PORT must be a valid TCP port');
+  if (secureSetting && !['true', 'false'].includes(secureSetting)) throw new Error('SMTP_SECURE must be true or false');
+  const secure = secureSetting ? secureSetting === 'true' : port === 465;
   return { user, transport: nodemailer.createTransport({
-    host: 'smtp.gmail.com', port: 465, secure: true, connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
+    host, port, secure, requireTLS: !secure, connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
     auth: { user, pass }
   }) };
 }
@@ -97,7 +107,7 @@ async function sendResetMail(user, token) {
     'If you did not request a password reset, please ignore this email. Your existing password will remain unchanged.', '',
     'Daksh Inventory Solution v2', 'Official System Email: dakshinventory@gmail.com'
   ].join('\n');
-  await transport.sendMail({
+  return transport.sendMail({
     from: { name: fromName, address: email }, to: user.email,
     subject: 'Password Reset – Daksh Inventory Solution v2', text,
     html: `<p>Dear User,</p><p>We received a request to reset the password for your Daksh Inventory Solution v2 account.</p><p><a href="${escapeHtml(url)}" style="display:inline-block;padding:12px 20px;background:#174a7e;color:#fff;text-decoration:none;border-radius:6px">Reset Password</a></p><p>This password reset link is valid for ${expiryMinutes()} minutes and can be used only once.</p><p>If you did not request a password reset, please ignore this email. Your existing password will remain unchanged.</p><p>Daksh Inventory Solution v2<br>Official System Email: dakshinventory@gmail.com</p>`
@@ -105,23 +115,39 @@ async function sendResetMail(user, token) {
 }
 async function requestReset(identifier, req, { admin = false } = {}) {
   const normalized = String(identifier || '').trim().toLowerCase();
-  if (!allowAttempt(req, normalized || 'empty')) return { limited: true, message: admin ? TOO_MANY_RESPONSE : GENERIC_RESPONSE };
+  if (!allowAttempt(req, normalized || 'empty')) {
+    console.warn('Password reset request throttled', JSON.stringify({ scope: 'ip_or_identifier' }));
+    return { limited: true, message: admin ? TOO_MANY_RESPONSE : GENERIC_RESPONSE };
+  }
   if (normalized.length > 254) return { sent: false, message: GENERIC_RESPONSE };
-  let user = normalized ? await User.findOne({ username: normalized }) : null;
+  let user = normalized ? await User.findOne({ username: exactIgnoreCase(normalized) }) : null;
   if (!user && normalized) {
-    const emailMatches = await User.find({ email: normalized }).limit(2);
+    const emailMatches = await User.find({ email: exactIgnoreCase(normalized) }).limit(2);
     if (emailMatches.length === 1) user = emailMatches[0];
   }
+  console.info('Password reset account lookup', JSON.stringify({
+    matched: Boolean(user), userId: user?.id || user?._id || null, registeredEmail: user?.email || null,
+    emailNormalized: user?.email ? String(user.email).trim().toLowerCase() : null,
+    active: user ? user.active !== false && user.isActive !== false : null,
+    approved: user?.approved ?? null
+  }));
   await recordAudit('PASSWORD_RESET_REQUEST', user, req, user ? 'REQUESTED' : 'NO_MATCH', {
     adminTriggered: admin, requestedIdentifier: normalized.slice(0, 254), adminUsername: admin ? String(req.user?.username || '') : ''
   });
   if (!user || !user.email || user.approved === false || user.active === false || user.isActive === false) {
+    if (user) console.info('Password reset skipped for ineligible account', JSON.stringify({
+      userId: user.id || user._id || null, emailPresent: Boolean(user.email),
+      active: user.active !== false && user.isActive !== false, approved: user.approved ?? null
+    }));
     return { sent: false, message: GENERIC_RESPONSE };
   }
   const recentRequests = await PasswordResetToken.countDocuments({
     userId: user._id, appEnv: appEnv(), createdAt: { $gt: new Date(Date.now() - 15 * 60 * 1000) }
   });
-  if (recentRequests >= 3) return { limited: true, message: admin ? TOO_MANY_RESPONSE : GENERIC_RESPONSE };
+  if (recentRequests >= 3) {
+    console.warn('Password reset request limit reached', JSON.stringify({ userId: user.id || user._id || null, recentRequests }));
+    return { limited: true, message: admin ? TOO_MANY_RESPONSE : GENERIC_RESPONSE };
+  }
 
   const token = crypto.randomBytes(32).toString('base64url');
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
@@ -146,9 +172,11 @@ async function requestReset(identifier, req, { admin = false } = {}) {
     if (admin) return { sent: false, message: MAIL_ERROR };
     return { sent: false, message: GENERIC_RESPONSE };
   }
+  console.info('Password reset token persisted', JSON.stringify({ userId: user.id || user._id || null, expiresAt: expiresAt.toISOString(), appEnv: appEnv() }));
 
   try {
-    await sendResetMail(user, token);
+    const mailResult = await sendResetMail(user, token);
+    console.info('Password reset email accepted by SMTP', JSON.stringify({ messageId: String(mailResult?.messageId || '') }));
     await recordAudit('PASSWORD_RESET_EMAIL', user, req, 'EMAIL_SENT', { adminTriggered: admin });
     return { sent: true, message: GENERIC_RESPONSE };
   } catch (error) {
@@ -216,4 +244,4 @@ async function completeReset(token, password, req) {
   return { ok: true, message: 'Password reset successfully. Please login again using your new password.' };
 }
 
-module.exports = { GENERIC_RESPONSE, INVALID_RESPONSE, MAIL_ERROR, TOO_MANY_RESPONSE, completeReset, passwordProblem, requestReset };
+module.exports = { GENERIC_RESPONSE, INVALID_RESPONSE, MAIL_ERROR, TOO_MANY_RESPONSE, completeReset, exactIgnoreCase, passwordProblem, requestReset, transporter };

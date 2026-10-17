@@ -1055,7 +1055,29 @@ function dashboardAggregateSummary(rows = [], now = new Date()) {
     } : null,
     activeUserCount: activeUsers.size,
     distribution,
+    distributionQuantity: Array.from(distribution.values()).reduce((sum, quantity) => sum + Number(quantity || 0), 0),
     multipleBinPartCount
+  };
+}
+
+// The dashboard KPI is a report transaction count while its distribution is
+// grouped independently for display. Keep the residual visible: it identifies
+// records whose movement classification must be investigated instead of making
+// a chart appear to reconcile by silently changing either total.
+function scanQuantityBridge(reportedQuantity = 0, distributionQuantity = 0) {
+  const reported = Math.max(0, Number(reportedQuantity) || 0);
+  const distributed = Math.max(0, Number(distributionQuantity) || 0);
+  const difference = reported - distributed;
+  return {
+    reportedQuantity: reported,
+    classifiedQuantity: distributed,
+    unclassifiedQuantity: Math.max(0, difference),
+    overclassifiedQuantity: Math.max(0, -difference),
+    difference,
+    reconciled: Math.abs(difference) < 0.000001,
+    message: difference === 0
+      ? 'All reported scan quantity is classified by movement type.'
+      : 'Some reported scan quantity is not represented by the displayed movement types. Review the transaction-level reconciliation before sign-off.'
   };
 }
 
@@ -1185,6 +1207,10 @@ async function dashboardStats(filter, reportQuery = filter) {
   const damageCount = Number(distribution.DAMAGE || 0);
   const fittedCount = Number(distribution.FITTED || 0);
   const distributionTotal = inwardCount + outwardCount + manualCount + damageCount + fittedCount;
+  const quantityBridge = scanQuantityBridge(
+    Number(summary.totalQuantity || summary.partsScanned || 0),
+    distributionTotal
+  );
   const totalMasterParts = Number(cataloguePartCount || summary.totalMasterParts || 0);
   const uniqueParts = Number(summary.uniqueParts || 0);
   const auditCompletionPercent = totalMasterParts > 0 ? Math.min(100, (uniqueParts / totalMasterParts) * 100) : 0;
@@ -1197,6 +1223,7 @@ async function dashboardStats(filter, reportQuery = filter) {
     totalUniqueScannedParts: uniqueParts,
     totalScanRecords: Number(summary.scanRows || summary.totalScans || 0),
     totalScannedQuantity: Number(summary.totalQuantity || summary.partsScanned || 0),
+    scanQuantityBridge: quantityBridge,
     physicalBinStockQty: Number(summary.totalPhysicalQty || 0),
     fittedWorkshopQty: Number(summary.totalFittedWorkshopQty || 0),
     totalDealerStockQty: Number(summary.totalDealerStockQty || 0),
@@ -1225,7 +1252,10 @@ async function dashboardStats(filter, reportQuery = filter) {
       manual: manualCount,
       damage: damageCount,
       fitted: fittedCount,
-      total: distributionTotal
+      needsReview: quantityBridge.unclassifiedQuantity,
+      total: distributionTotal + quantityBridge.unclassifiedQuantity,
+      classifiedTotal: distributionTotal,
+      difference: quantityBridge.difference
     },
     totalScannedValue: Number(summary.totalDealerStockValueDLC || summary.totalActualStockValue || summary.totalPhysicalDlcValue || 0),
     actualStockValueDLC: Number(summary.totalDealerStockValueDLC || summary.totalActualStockValue || summary.totalPhysicalDlcValue || 0),
@@ -5553,6 +5583,7 @@ module.exports.findMasterPart = findMasterPart;
 module.exports.numberValue = numberValue;
 module.exports.dashboardStats = dashboardStats;
 module.exports.dashboardAggregateSummary = dashboardAggregateSummary;
+module.exports.scanQuantityBridge = scanQuantityBridge;
 module.exports.dashboardRecentRows = dashboardRecentRows;
 module.exports.publicScan = publicScan;
 module.exports.manualDuplicatePayload = manualDuplicatePayload;
