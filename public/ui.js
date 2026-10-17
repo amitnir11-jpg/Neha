@@ -8701,15 +8701,23 @@
     $('#stockReviewSelectAll').indeterminate = selectedFiltered.length > 0 && selectedFiltered.length < filtered.length;
     $('#stockReviewRows').innerHTML = pageRows.map(row => `<tr>
       <td><input type="checkbox" data-stock-select="${row.rowNumber}" aria-label="Select Excel row ${row.rowNumber} ${row.status === 'VALID' ? 'for upload' : 'for correction'}" ${row.status === 'VALID' ? !review.excluded.has(row.rowNumber) ? 'checked' : '' : selectedExceptions.has(row.rowNumber) ? 'checked' : ''}></td>
-      <td>${row.rowNumber}${Object.keys(review.corrections?.[row.rowNumber] || {}).length ? '<span class="stock-review-corrected" title="Correction saved in this upload review. Validate and Transfer will check the part and prices before saving to stock.">✓ Corrected</span>' : ''}</td>
+      <td>${row.rowNumber}${dealerStockValidationBadge(review, row)}</td>
       <td><input data-stock-row="${row.rowNumber}" data-stock-field="dealerCode" value="${escapeHtml(row.dealerCode || '')}" aria-label="Dealer code at Excel row ${row.rowNumber}" ${row.status === 'VALID' ? 'readonly' : ''}></td>
       <td><div class="stock-review-part-edit"><input list="stockReviewSuggestions" data-stock-row="${row.rowNumber}" data-stock-field="partNumber" value="${escapeHtml(row.partNumber || '')}" title="${escapeHtml(row.partNumber || '')}" aria-label="Part number at Excel row ${row.rowNumber}"><button type="button" class="btn light stock-review-icon" data-stock-edit="${row.rowNumber}" title="Edit part number" aria-label="Edit part number at Excel row ${row.rowNumber}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12H4v-5L16 3Z M14 5l5 5"/></svg></button><button type="button" class="btn light stock-review-icon stock-review-delete" data-stock-delete="${row.rowNumber}" title="Remove row from this upload" aria-label="Delete Excel row ${row.rowNumber}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7"/></svg></button></div></td>
       <td data-stock-description="${row.rowNumber}">${escapeHtml(row.partDescription || '')}</td>
       <td><input type="number" min="0" step="1" data-stock-row="${row.rowNumber}" data-stock-field="dmsStock" value="${escapeHtml(row.dmsStock ?? '')}" aria-label="DMS quantity at Excel row ${row.rowNumber}"></td>
-      <td>${row.status === 'VALID' ? `₹ ${money2(row.dlc)}` : '—'}</td><td>${row.status === 'VALID' ? `₹ ${money2(row.mrp)}` : '—'}</td>
-      <td title="${escapeHtml(row.reason || '')}">${escapeHtml(row.reason || row.status)}</td>
+      <td>${row.status === 'VALID' || review.rowValidation?.[row.rowNumber]?.isValidated ? `₹ ${money2(row.dlc)}` : '—'}</td><td>${row.status === 'VALID' || review.rowValidation?.[row.rowNumber]?.isValidated ? `₹ ${money2(row.mrp)}` : '—'}</td>
+      <td title="${escapeHtml(review.rowValidation?.[row.rowNumber]?.validationError || row.reason || '')}">${escapeHtml(review.rowValidation?.[row.rowNumber]?.validationError || row.reason || row.status)}</td>
     </tr>`).join('') || '<tr><td colspan="9">No rows remain for review.</td></tr>';
     enhanceDataTable($('#dealerStockReviewTable'), 'daksh_table_dealer_stock_review');
+  }
+
+  function dealerStockValidationBadge(review, row) {
+    const validation = review.rowValidation?.[row.rowNumber];
+    if (!validation?.isEdited) return '';
+    if (validation.isValidated && validation.validationStatus === 'VALIDATED') return '<span class="stock-review-corrected" title="Verified against Part Master">✓ Corrected &amp; Validated</span>';
+    if (validation.validationStatus === 'INVALID') return '<span class="stock-review-invalid" title="Part Master validation failed">✗ Invalid Part Number</span>';
+    return '<span class="stock-review-pending" title="Waiting for Part Master validation">● Pending Validation</span>';
   }
 
   async function fillDealerStockDescription(review, rowNumber) {
@@ -8722,10 +8730,27 @@
         || clean(row.partNumber).toUpperCase() !== partNumber) return;
       const parts = response.parts || response.suggestions || response.rows || [];
       const match = parts.find(part => clean(part.partNumber || part.part || '').toUpperCase() === partNumber);
-      row.partDescription = match ? clean(match.partDescription || match.partName || match.description || '') : '';
+      const validation = review.rowValidation ||= {};
+      const entry = validation[rowNumber] || (validation[rowNumber] = { isEdited: true });
+      if (match && Number(match.dlc) > 0 && Number(match.mrp) > 0) {
+        row.partDescription = clean(match.partDescription || match.partName || match.description || '');
+        row.dlc = Number(match.dlc); row.mrp = Number(match.mrp);
+        entry.validationStatus = 'VALIDATED'; entry.isValidated = true; entry.validationError = '';
+        row.reason = 'Validated against Part Master. Validate and Transfer will verify again before saving.';
+      } else {
+        row.partDescription = match ? clean(match.partDescription || match.partName || match.description || '') : '';
+        entry.validationStatus = 'INVALID'; entry.isValidated = false;
+        entry.validationError = match ? 'DLC or MRP is missing in Part Master' : 'Part number not found in Part Master';
+        row.reason = entry.validationError;
+      }
       const cell = $(`#stockReviewRows [data-stock-description="${rowNumber}"]`);
       if (cell) cell.textContent = row.partDescription;
-    } catch (_) { /* Validate and Transfer retries the authoritative master lookup. */ }
+      renderDealerStockReview();
+    } catch (_) {
+      const entry = (review.rowValidation ||= {})[rowNumber] ||= { isEdited: true };
+      entry.validationStatus = 'PENDING'; entry.isValidated = false; entry.validationError = 'Part Master validation could not be completed';
+      renderDealerStockReview();
+    }
   }
 
   function isReconciliationDealerSelect(select) {
@@ -8838,9 +8863,15 @@
         dealerCode, file, rows: data.reviewRows || [], corrections: state.dealerStockReview?.corrections || {},
         excluded: current?.excluded || new Set(), committed: current?.committed || new Set(),
         deleted: current?.deleted || new Set(),
-        selectedExceptions: current?.selectedExceptions || new Set(), page: current?.page || 1
+        selectedExceptions: current?.selectedExceptions || new Set(), rowValidation: current?.rowValidation || {}, page: current?.page || 1
       };
       (data.reviewRows || []).forEach(row => {
+        const validation = state.dealerStockReview.rowValidation[row.rowNumber];
+        if (validation?.isEdited) {
+          validation.isValidated = row.status === 'VALID';
+          validation.validationStatus = row.status === 'VALID' ? 'VALIDATED' : 'INVALID';
+          validation.validationError = row.status === 'VALID' ? '' : (row.reason || row.status);
+        }
         if (row.status === 'VALID' && current?.selectedExceptions?.has(row.rowNumber)) {
           state.dealerStockReview.excluded.delete(row.rowNumber);
         }
@@ -14691,6 +14722,8 @@
       const row = review.rows.find(item => item.rowNumber === rowNumber);
       if (!row || String(row[field] ?? '') === event.target.value) return;
       review.corrections[rowNumber] = { ...(review.corrections[rowNumber] || {}), [field]: event.target.value };
+      review.rowValidation ||= {};
+      review.rowValidation[rowNumber] = { isEdited: true, isSelected: review.selectedExceptions.has(rowNumber), validationStatus: 'PENDING', isValidated: false, validationError: '' };
       review.excluded.add(rowNumber);
       review.selectedExceptions.add(rowNumber);
       if (row) { row[field] = event.target.value; row.status = 'PENDING'; row.reason = 'Correction requires revalidation'; }

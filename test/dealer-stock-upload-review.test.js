@@ -36,9 +36,12 @@ test('part corrections fill the exact master description and ignore stale lookup
   change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: '35150AAB800S' } });
   assert.equal(item.partDescription, '');
   assert.match(requests[0].path, /dealerCode=1168A/);
-  requests[0].resolve({ suggestions: [{ partNumber: '35150AAB800S', partDescription: 'SWITCH ASSEMBLY START' }] });
+  review.rowValidation = { 3: { isEdited: true, validationStatus: 'PENDING', isValidated: false } };
+  requests[0].resolve({ suggestions: [{ partNumber: '35150AAB800S', partDescription: 'SWITCH ASSEMBLY START', dlc: 10, mrp: 20 }] });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(item.partDescription, 'SWITCH ASSEMBLY START');
+  assert.equal(review.rowValidation[3].validationStatus, 'VALIDATED');
+  assert.equal(review.rowValidation[3].isValidated, true);
   assert.equal(cell.textContent, 'SWITCH ASSEMBLY START');
   change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: 'PART2' } });
   change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: 'PART3' } });
@@ -50,6 +53,8 @@ test('part corrections fill the exact master description and ignore stale lookup
   requests[3].resolve({ suggestions: [{ partNumber: 'PART3', partDescription: 'Prefix result must not fill' }] });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(item.partDescription, '');
+  assert.equal(review.rowValidation[3].validationStatus, 'INVALID');
+  assert.equal(review.rowValidation[3].isValidated, false);
   const table = fs.readFileSync('public/Daksh.html', 'utf8').split('<table id="dealerStockReviewTable">')[1].split('</table>')[0];
   assert.doesNotMatch(table, /Bin Loc [123]/);
   const render = source.slice(source.indexOf('  function renderDealerStockReview()'), start);
@@ -190,7 +195,7 @@ test('browser review retains only exceptions after upload and selects revalidate
     FormData: class { constructor() { this.fields = {}; } set(key, value) { this.fields[key] = value; } },
     api: async (path, options) => {
       if (path.startsWith('/api/parts/suggestions?')) {
-        return { suggestions: [{ partNumber: '0003', partDescription: 'MASTER 0003' }] };
+        return { suggestions: [{ partNumber: '0003', partDescription: 'MASTER 0003', dlc: 10, mrp: 20 }] };
       }
       sent.push(options.body.fields);
       const response = responses.shift();
@@ -406,7 +411,8 @@ test('browser review retains only exceptions after upload and selects revalidate
   await context.uploadDealerStock(form);
   handlers.change({ target: { dataset: { stockRow: '3', stockField: 'dealerCode' }, value: '1168A' } });
   handlers.change({ target: { dataset: { stockRow: '4', stockField: 'dmsStock' }, value: '5' } });
-  assert.equal(($('#stockReviewRows').innerHTML.match(/✓ Corrected/g) || []).length, 2);
+  assert.equal(($('#stockReviewRows').innerHTML.match(/Pending Validation/g) || []).length, 2);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /✓ Corrected &amp; Validated/);
   $('#stockReviewFilter').value = 'CORRECTED';
   context.renderDealerStockReview();
   assert.match($('#stockReviewRows').innerHTML, /value="0002"/);
