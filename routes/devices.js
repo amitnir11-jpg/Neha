@@ -303,11 +303,14 @@ function cleanDevice(device) {
 async function listDevices(req, res) {
   try {
     const scope = { dealerCode: req.activeDealerId };
+    const pendingScope = auth.isAdminRole(req.user && req.user.role) ? {} : scope;
     const manager = req.app.get('scannerManager');
     if (manager) {
-      const [listed, activeAudit] = await Promise.all([
+      const [listed, activeAudit, adminPending] = await Promise.all([
         manager.list(scope),
-        getActiveAudit(scope)
+        getActiveAudit(scope),
+        pendingScope === scope ? null : Device.find({ ...pendingScope, deviceType: 'mobile', removedAt: null, approved: false })
+          .sort({ approvalRequestedAt: -1, lastSeen: -1 }).limit(100).lean()
       ]);
       const summary = await manager.summary(listed, scope);
       return res.json({
@@ -321,6 +324,7 @@ async function listDevices(req, res) {
         wifiOnline: summary.wifiOnline,
         usbOnline: summary.usbOnline,
         devices: listed.online,
+        pendingDevices: adminPending ? adminPending.map((device) => manager.publicDevice(device)) : listed.pending,
         oldDevices: listed.offline,
         activeAudit: publicAudit(activeAudit),
         mobileSyncEnabled: Boolean(activeAudit),
@@ -329,14 +333,16 @@ async function listDevices(req, res) {
     }
     await markExpiredDevicesOffline();
     const cutoff = liveCutoff();
-    const [devices, oldDevices, activeAudit] = await Promise.all([
+    const [devices, oldDevices, pendingDevices, activeAudit] = await Promise.all([
       Device.find({ ...scope, deviceType: 'mobile', removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).sort({ lastSeen: -1 }).lean(),
       Device.find({
         ...scope,
         deviceType: 'mobile',
         removedAt: null,
+        approved: { $ne: false },
         $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }]
       }).sort({ lastSeen: -1 }).limit(50).lean(),
+      Device.find({ ...pendingScope, deviceType: 'mobile', removedAt: null, approved: false }).sort({ approvalRequestedAt: -1, lastSeen: -1 }).limit(100).lean(),
       getActiveAudit(scope)
     ]);
     res.json({
@@ -344,6 +350,7 @@ async function listDevices(req, res) {
       activeCount: devices.length,
       devices: devices.map(cleanDevice),
       oldDevices: oldDevices.map(cleanDevice),
+      pendingDevices: pendingDevices.map(cleanDevice),
       activeAudit: publicAudit(activeAudit),
       mobileSyncEnabled: Boolean(activeAudit),
       message: activeAudit ? 'Mobile sync enabled' : 'No active audit found. Mobile sync is disabled.'

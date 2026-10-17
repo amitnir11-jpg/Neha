@@ -22,7 +22,7 @@
     "test:smart-search": "node --test test/smart-part-search.test.js",
     "test:smart-search:acceptance": "node scripts/smart-part-search-acceptance.js",
     "test:smart-search:browser": "node scripts/smart-part-search-browser-check.js",
-    "test:camera": "node --test test/camera-code-parser.test.js test/camera-decoder.test.js test/camera-recovery.test.js test/sku-barcode.test.js test/upi-and-manual-bin.test.js",
+    "test:camera": "node --test test/camera-code-parser.test.js test/camera-decoder.test.js test/camera-recovery.test.js test/scanner-sequence-validation.test.js test/sku-barcode.test.js test/upi-and-manual-bin.test.js",
     "test:catalogue-upload": "node scripts/catalogue-upload-check.js",
     "test:local-parts-browser": "node scripts/local-parts-browser-smoke.js",
     "license:status": "node scripts/license-status.js",
@@ -36,7 +36,8 @@
     "backfill:scan-categories": "node scripts/backfill-scan-categories.js",
     "start": "node scripts/railway-start.js",
     "test:reports": "node --test test/report-*.test.js test/complete-audit-workbook.test.js test/audit-pack-download.test.js",
-    "test:excel-stock-upload": "node --test test/excel-stock-upload.test.js"
+    "test:excel-stock-upload": "node --test test/excel-stock-upload.test.js",
+    "test:central-valuation": "node --test test/audit-valuation.test.js test/central-valuation-ui.test.js test/central-valuation-postgres.integration.test.js"
   },
   "keywords": [
     "inventory",

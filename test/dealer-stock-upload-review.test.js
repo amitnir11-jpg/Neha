@@ -17,6 +17,45 @@ prices.getPricesFromPartMaster = originalLookup;
 const headings = ['Dealer Code', 'Part Number', 'Part Description', 'Dms Stock', 'Bin Loc 1', 'Bin Loc 2', 'Bin Loc 3'];
 const row = (dealer, part, qty, bin = '') => [dealer, part, 'Spreadsheet description', qty, bin, '', ''];
 
+test('part corrections fill the exact master description and ignore stale lookups', async () => {
+  const source = fs.readFileSync('public/ui.js', 'utf8');
+  const item = { rowNumber: 3, partNumber: 'OLD', partDescription: 'Old description' };
+  const review = { dealerCode: '1168A', rows: [item], corrections: {}, excluded: new Set(), selectedExceptions: new Set(), deleted: new Set() };
+  const requests = [];
+  const cell = {};
+  let change;
+  const context = { state: { dealerStockReview: review }, URLSearchParams,
+    clean: value => String(value || '').trim(), renderDealerStockReview() {},
+    $: selector => selector === '#stockReviewRows' ? { addEventListener: (_type, handler) => { change = handler; } } : cell,
+    api: path => new Promise(resolve => requests.push({ path, resolve })) };
+  vm.createContext(context);
+  const start = source.indexOf('  async function fillDealerStockDescription(');
+  vm.runInContext(source.slice(start, source.indexOf('  function isReconciliationDealerSelect', start)), context);
+  const handlerStart = source.indexOf("    $('#stockReviewRows')?.addEventListener('change'");
+  vm.runInContext(source.slice(handlerStart, source.indexOf("    $('#stockReviewSelectAll')?.addEventListener", handlerStart)), context);
+  change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: '35150AAB800S' } });
+  assert.equal(item.partDescription, '');
+  assert.match(requests[0].path, /dealerCode=1168A/);
+  requests[0].resolve({ suggestions: [{ partNumber: '35150AAB800S', partDescription: 'SWITCH ASSEMBLY START' }] });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(item.partDescription, 'SWITCH ASSEMBLY START');
+  assert.equal(cell.textContent, 'SWITCH ASSEMBLY START');
+  change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: 'PART2' } });
+  change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: 'PART3' } });
+  requests[2].resolve({ suggestions: [{ partNumber: 'PART3', partDescription: 'Latest part' }] });
+  requests[1].resolve({ suggestions: [{ partNumber: 'PART2', partDescription: 'Stale part' }] });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(item.partDescription, 'Latest part');
+  change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: 'PART' } });
+  requests[3].resolve({ suggestions: [{ partNumber: 'PART3', partDescription: 'Prefix result must not fill' }] });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(item.partDescription, '');
+  const table = fs.readFileSync('public/Daksh.html', 'utf8').split('<table id="dealerStockReviewTable">')[1].split('</table>')[0];
+  assert.doesNotMatch(table, /Bin Loc [123]/);
+  const render = source.slice(source.indexOf('  function renderDealerStockReview()'), start);
+  assert.doesNotMatch(render, /data-stock-field="binLoc/);
+});
+
 test('DMS review preserves row numbers, leading zeros, invalid rows and authoritative prices', async () => {
   const result = await rowsToStockRecords([headings,
     row('1168A', '0001', '2', 'A-01'), row('1168A', 'UNKNOWN', '3'), row('1168A', 'NO-DLC', '4'),
@@ -65,6 +104,12 @@ test('more than 10,000 rows remain reviewable without truncating exceptions', as
 });
 
 test('HTTP review uploads only selected valid rows, then accepts a corrected dealer row', async t => {
+  const previousCentralValuation = process.env.CENTRAL_VALUATION_ENABLED;
+  process.env.CENTRAL_VALUATION_ENABLED = 'true';
+  t.after(() => {
+    if (previousCentralValuation === undefined) delete process.env.CENTRAL_VALUATION_ENABLED;
+    else process.env.CENTRAL_VALUATION_ENABLED = previousCentralValuation;
+  });
   const User = require('../models/User');
   const Mapping = require('../models/UserDealerMapping');
   const Dealer = require('../models/Dealer');
@@ -144,8 +189,13 @@ test('browser review retains only exceptions after upload and selects revalidate
   const context = { $, state: {}, URLSearchParams, window: { crypto: { randomUUID: () => 'review-id' } },
     FormData: class { constructor() { this.fields = {}; } set(key, value) { this.fields[key] = value; } },
     api: async (path, options) => {
-      if (path.startsWith('/api/parts/suggestions?')) return { suggestions: [{ partNumber: '0003', partDescription: 'MASTER 0003' }] };
-      sent.push(options.body.fields); const response = responses.shift(); if (response instanceof Error) throw response; return response;
+      if (path.startsWith('/api/parts/suggestions?')) {
+        return { suggestions: [{ partNumber: '0003', partDescription: 'MASTER 0003' }] };
+      }
+      sent.push(options.body.fields);
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      return response;
     },
     cleanDealerCode: value => String(value || '').toUpperCase(), activeReconDealer: () => '1168A',
     clean: value => String(value || ''), wholeNumber: String, money2: value => Number(value || 0).toFixed(2),
@@ -189,7 +239,7 @@ test('browser review retains only exceptions after upload and selects revalidate
   const dealerHandlers = {};
   $('#stockReviewUseDealer').addEventListener = (name, handler) => { dealerHandlers[name] = handler; };
   const dealerStart = source.indexOf("    $('#stockReviewUseDealer')?.addEventListener('click'");
-  vm.runInContext(source.slice(dealerStart, source.indexOf("    $('#stockReviewExport')?.addEventListener", dealerStart)), context);
+  vm.runInContext(source.slice(dealerStart, source.indexOf("    $('#stockReviewSelectCorrected')?.addEventListener", dealerStart)), context);
   dealerHandlers.click();
   assert.equal(context.state.dealerStockReview.corrections[3].dealerCode, '1168A');
   await context.uploadDealerStock(form);
@@ -215,17 +265,15 @@ test('browser review retains only exceptions after upload and selects revalidate
   } };
   context.Event = class { constructor(type) { this.type = type; } };
   const editStart = source.indexOf("    $('#stockReviewRows')?.addEventListener('click'");
-  vm.runInContext(source.slice(editStart, source.indexOf("    $('#stockReviewRows')?.addEventListener('change'", editStart)), context);
-  handlers.click({ target: { closest: () => ({ dataset: { stockEdit: '3' } }) } });
+  vm.runInContext(source.slice(editStart, source.indexOf("    $('#stockReviewSelectAll')?.addEventListener", editStart)), context);
+  handlers.click({ target: { closest: selector => selector === '[data-stock-edit]' ? ({ dataset: { stockEdit: '3' } }) : null } });
   assert.equal(selected, true);
   assert.equal(boundSearch.isEnabled(), true);
-  assert.match(boundSearch.getScope(), /1168A/);
-  assert.deepEqual((await boundSearch.fetchSuggestions('000')).suggestions.map(part => part.partNumber), ['0003']);
   partInput.value = '0003';
   boundSearch.onSelect({ partNumber: '0003' });
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(context.state.dealerStockReview.corrections[3].partNumber, '0003');
   assert.equal(context.state.dealerStockReview.rows[1].status, 'PENDING');
-  assert.equal(destroyed, true);
 
   // Exercise the toolbar through validation and the existing dealer-stock save handler.
   const notices = [];
@@ -261,13 +309,20 @@ test('browser review retains only exceptions after upload and selects revalidate
   assert.equal(context.state.dealerStockReview.committed.has(4), false);
   assert.doesNotMatch($('#stockReviewRows').innerHTML, /0003/);
   assert.match($('#stockReviewRows').innerHTML, /UNKNOWN4/);
-  assert.equal($('#dealerStockUploadMessage').textContent, 'Transferred');
+  assert.equal($('#dealerStockUploadMessage').textContent, '1 row(s) transferred to main stock.');
+  assert.equal($('#dealerStockReview').hidden, true, 'a completed transfer closes the correction review');
   assert.equal($('#stockReviewRevalidate').disabled, false);
   responses.push({ reviewRows: validatedRows });
   await toolbarHandlers.click();
   assert.equal(sent.length, beforeTransfer + 3, 'unresolved errors alone do not trigger another save');
+  assert.match($('#dealerStockUploadMessage').textContent, /Select the rows/);
+  selectionHandlers.change({ target: { dataset: { stockSelect: '4' }, checked: true } });
+  responses.push({ reviewRows: validatedRows });
+  await toolbarHandlers.click();
+  assert.match($('#dealerStockUploadMessage').textContent, /No rows transferred.*Excel row 4.*WRONG_PART/);
+  assert.equal(context.state.dealerStockReview.committed.has(4), false);
   assert.equal(notices.length, 0);
-  selectionHandlers.change({ target: { dataset: { stockRow: '4', stockField: 'partNumber' }, value: '0004' } });
+  handlers.change({ target: { dataset: { stockRow: '4', stockField: 'partNumber' }, value: '0004' } });
   const finalRows = validatedRows.map(row => row.rowNumber === 4 ? { ...row, partNumber: '0004', status: 'VALID', dlc: 10, mrp: 20 } : row);
   responses.push({ reviewRows: finalRows }, new Error('Save failed'));
   await toolbarHandlers.click();
@@ -281,5 +336,124 @@ test('browser review retains only exceptions after upload and selects revalidate
   assert.equal(context.state.dealerStockReview.committed.has(4), true);
   assert.equal($('#stockReviewRevalidate').disabled, true);
   assert.match($('#stockReviewRows').innerHTML, /No rows remain/);
+
+  // Initial Validate and Import saves valid rows and leaves exceptions below.
+  context.state.dealerStockReview = null;
+  const initialRows = [
+    { rowNumber: 2, partNumber: '0001', status: 'VALID', dmsStock: 2, dlc: 10, mrp: 20 },
+    { rowNumber: 3, partNumber: '0002', status: 'REJECTED', dmsStock: 3, reason: 'Dealer code 12320 does not match selected dealer 1168A' },
+    { rowNumber: 4, partNumber: '0003', status: 'MISSING_PRICE', dmsStock: 4, reason: 'DLC missing' }
+  ];
+  responses.push({ reviewRows: initialRows }, { summary: {} });
+  await toolbarHandlers.click();
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows), [2]);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /value="0001"/);
+  assert.match($('#stockReviewRows').innerHTML, /value="0002"/);
+  assert.match($('#stockReviewRows').innerHTML, /value="0003"/);
+
+  // A corrected but unchecked row must not accompany the selected correction.
+  handlers.change({ target: { dataset: { stockRow: '3', stockField: 'dmsStock' }, value: '4' } });
+  handlers.change({ target: { dataset: { stockRow: '4', stockField: 'partNumber' }, value: '0003' } });
+  handlers.change({ target: { dataset: { stockSelect: '4' }, checked: false } });
+  const correctedRows = initialRows.map(row => ({ ...row, status: 'VALID', reason: '', dlc: 10, mrp: 20 }));
+  responses.push({ reviewRows: correctedRows }, { summary: {} });
+  await toolbarHandlers.click();
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows), [3]);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /value="0002"/);
+  assert.match($('#stockReviewRows').innerHTML, /value="0003"/);
+  assert.equal(context.state.dealerStockReview.committed.has(4), false);
+  assert.match($('#stockReviewRows').innerHTML, /data-stock-delete="4"/);
+  assert.match($('#stockReviewRows').innerHTML, /class="btn light stock-review-icon"/);
+
+  // Reproduce the screenshot: selected dealer mismatch transfers without a
+  // separate dealer-correction click, while other exceptions stay behind.
+  context.state.dealerStockReview = null;
+  responses.push({ reviewRows: initialRows });
+  await context.uploadDealerStock(form);
+  handlers.change({ target: { dataset: { stockSelect: '3' }, checked: true } });
+  const dealerCorrectedRows = initialRows.map(row => row.rowNumber === 3
+    ? { ...row, dealerCode: '1168A', status: 'VALID', reason: '', dlc: 10, mrp: 20 } : row);
+  responses.push({ reviewRows: dealerCorrectedRows }, { summary: {} });
+  await toolbarHandlers.click();
+  assert.equal(JSON.parse(sent.at(-2).corrections)['3'].dealerCode, '1168A');
+  assert.equal(JSON.parse(sent.at(-2).corrections)['4'], undefined);
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows), [2, 3]);
+  assert.equal(context.state.dealerStockReview.committed.has(3), true);
+  assert.equal(context.state.dealerStockReview.committed.has(4), false);
+  assert.match($('#stockReviewRows').innerHTML, /value="0003"/);
+  assert.equal($('#stockReviewFeedback').textContent, $('#dealerStockUploadMessage').textContent);
+
+  // Deletion removes only the pending upload row and survives validation.
+  handlers.click({ target: { closest: selector => selector === '[data-stock-delete]' ? { dataset: { stockDelete: '4' } } : null } });
+  assert.equal(context.state.dealerStockReview.deleted.has(4), true);
+  assert.equal(context.state.dealerStockReview.committed.has(4), false);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /value="0003"/);
+  assert.equal($('#stockReviewRevalidate').disabled, true);
+  selectAllHandlers.change({ target: { checked: true } });
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(4), false);
+  responses.push({ reviewRows: correctedRows });
+  const beforeDeletedValidation = sent.length;
+  await toolbarHandlers.click();
+  assert.equal(sent.length, beforeDeletedValidation + 1, 'deleted row cannot trigger a stock save');
+  assert.equal(context.state.dealerStockReview.deleted.has(4), true);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /value="0003"/);
+  // Corrections are marked immediately, can be filtered, and can be selected
+  // together without transferring an untouched row that was checked earlier.
+  context.state.dealerStockReview = null;
+  const correctionRows = [...initialRows,
+    { rowNumber: 5, partNumber: 'UNKNOWN5', status: 'WRONG_PART', reason: 'Part not found', dmsStock: 1 }];
+  responses.push({ reviewRows: correctionRows });
+  await context.uploadDealerStock(form);
+  handlers.change({ target: { dataset: { stockRow: '3', stockField: 'dealerCode' }, value: '1168A' } });
+  handlers.change({ target: { dataset: { stockRow: '4', stockField: 'dmsStock' }, value: '5' } });
+  assert.equal(($('#stockReviewRows').innerHTML.match(/✓ Corrected/g) || []).length, 2);
+  $('#stockReviewFilter').value = 'CORRECTED';
+  context.renderDealerStockReview();
+  assert.match($('#stockReviewRows').innerHTML, /value="0002"/);
+  assert.match($('#stockReviewRows').innerHTML, /value="0003"/);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /value="0001"|UNKNOWN5/);
+  selectAllHandlers.change({ target: { checked: false } });
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), false);
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(4), false);
+  assert.equal(context.state.dealerStockReview.excluded.has(2), false, 'filter select-all leaves untouched rows alone');
+  $('#stockReviewFilter').value = 'UNCORRECTED';
+  context.renderDealerStockReview();
+  assert.match($('#stockReviewRows').innerHTML, /value="0001"/);
+  assert.match($('#stockReviewRows').innerHTML, /UNKNOWN5/);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /✓ Corrected/);
+  const correctedHandlers = {};
+  $('#stockReviewSelectCorrected').addEventListener = (name, handler) => { correctedHandlers[name] = handler; };
+  const correctedStart = source.indexOf("    $('#stockReviewSelectCorrected')?.addEventListener");
+  vm.runInContext(source.slice(correctedStart, source.indexOf("    $('#stockReviewExport')", correctedStart)), context);
+  $('#stockReviewSearch').value = 'old search';
+  correctedHandlers.click();
+  assert.equal($('#stockReviewFilter').value, 'CORRECTED');
+  assert.equal($('#stockReviewSearch').value, '');
+  assert.equal(context.state.dealerStockReview.excluded.has(2), true);
+  assert.deepEqual([...context.state.dealerStockReview.selectedExceptions], [3, 4]);
+  const validatedCorrections = correctionRows.map(row => row.rowNumber === 3 || row.rowNumber === 4
+    ? { ...row, status: 'VALID', reason: '', dlc: 10, mrp: 20 } : row);
+  responses.push({ reviewRows: validatedCorrections }, { summary: {} });
+  await toolbarHandlers.click();
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows), [3, 4]);
+  assert.equal(context.state.dealerStockReview.committed.has(2), false);
+  assert.equal(context.state.dealerStockReview.committed.has(5), false);
+  assert.match($('#stockReviewRows').innerHTML, /No rows remain/);
+  $('#stockReviewFilter').value = 'UNCORRECTED';
+  context.renderDealerStockReview();
+  assert.match($('#stockReviewRows').innerHTML, /UNKNOWN5/);
+  // A later transfer for the same SKU includes earlier rows from this sheet;
+  // the server replaces that SKU with their combined quantity, not the last row.
+  context.state.dealerStockReview = null;
+  const splitRows=[{rowNumber:2,partNumber:'SPLIT',status:'VALID',dmsStock:2},
+    {rowNumber:3,partNumber:'SPLIT',status:'VALID',dmsStock:3}];
+  responses.push({reviewRows:splitRows});await context.uploadDealerStock(form);
+  handlers.change({target:{dataset:{stockSelect:'3'},checked:false}});
+  responses.push({reviewRows:splitRows},{summary:{}});await toolbarHandlers.click();
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows),[2]);
+  handlers.change({target:{dataset:{stockSelect:'3'},checked:true}});
+  responses.push({reviewRows:splitRows},{summary:{}});await toolbarHandlers.click();
+  assert.deepEqual(JSON.parse(sent.at(-1).selectedRows),[2,3]);
+  assert.equal(context.state.dealerStockReview.committed.size,2);
   assert.match(fs.readFileSync('public/Daksh.html', 'utf8'), /id="stockReviewRevalidate"[^>]*>Validate and Transfer</);
 });

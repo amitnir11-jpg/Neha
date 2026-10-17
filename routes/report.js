@@ -152,7 +152,7 @@ async function resolveReportAuditQuery(query = {}) {
   // Complete audit packs without an explicitly selected audit should match
   // dealer-wide report downloads instead of silently narrowing to the active
   // audit, which may have no scans yet.
-  if (query._includeAllAudits === true || query._includeAllAudits === 'true') {
+  if (!require('../services/CentralValuationService').enabled() && (query._includeAllAudits === true || query._includeAllAudits === 'true')) {
     resolved.auditId = '';
     return resolved;
   }
@@ -169,20 +169,28 @@ async function resolveReportAuditQuery(query = {}) {
 }
 
 async function cachedBuildReportData(query = {}) {
-  return cachedReport('report-data', await resolveReportAuditQuery(query), buildReportData);
+  const data=await cachedReport('report-data', await resolveReportAuditQuery(query), buildReportData);
+  if(data.snapshotId){query.snapshotId=data.snapshotId;query.auditId=data.scope.auditId;}
+  return data;
 }
 
 async function cachedBuildPartwiseInventoryAuditReport(query = {}) {
-  return cachedReport('partwise-inventory-audit', await resolveReportAuditQuery(query), buildPartwiseInventoryAuditReport);
+  const data=await cachedReport('partwise-inventory-audit', await resolveReportAuditQuery(query), buildPartwiseInventoryAuditReport);
+  if(data.snapshotId){query.snapshotId=data.snapshotId;query.auditId=data.scope.auditId;}
+  return data;
 }
 
 async function cachedBuildCategoryWiseVarianceSummary(query = {}) {
-  return cachedReport('category-wise-variance-summary', await resolveReportAuditQuery(query), buildCategoryWiseVarianceSummary);
+  const data=await cachedReport('category-wise-variance-summary', await resolveReportAuditQuery(query), buildCategoryWiseVarianceSummary);
+  if(data.snapshotId){query.snapshotId=data.snapshotId;query.auditId=data.scope.auditId;}
+  return data;
 }
 
 
 async function cachedBuildStockSummaryReport(query = {}) {
-  return cachedReport('stock-summary', await resolveReportAuditQuery(query), buildStockSummaryReport);
+  const data=await cachedReport('stock-summary', await resolveReportAuditQuery(query), buildStockSummaryReport);
+  if(data.snapshotId){query.snapshotId=data.snapshotId;query.auditId=data.scope.auditId;}
+  return data;
 }
 
 function cachedBuildPartsInventoryRefreshRows(query = {}) {
@@ -2265,6 +2273,7 @@ async function enrichScanUsers(scans = []) {
 }
 
 async function buildReportData(query = {}) {
+  if (require('../services/CentralValuationService').enabled()) return require('../services/ValuationReportProjection').project(query,'raw');
   query = normalizeReportQuery(query);
   if (isAggregationReport(query.reportType)) {
     const error = new Error(`Report type "${query.reportType}" must use its dedicated aggregation builder.`);
@@ -2788,6 +2797,7 @@ function applyPartwiseFilters(rows, query = {}) {
 }
 
 async function buildPartwiseInventoryAuditReport(query = {}) {
+  if (require('../services/CentralValuationService').enabled()) return {...await require('../services/ValuationReportProjection').project(query,'partwise'), columns:partwiseInventoryAuditColumns()};
   const startTime = performance.now();
   const log = (stage, extra = {}) => {
     const elapsed = (performance.now() - startTime).toFixed(2);
@@ -3011,6 +3021,7 @@ function addPartwiseInventoryAuditSheet(workbook, data, name = 'Partwise Invento
   sheet.getCell(1, 1).font = { bold: true, size: 14 };
   sheet.addRow(['Dealer', data.summary.dealerName || 'All', 'Dealer Code', data.summary.dealerCode || 'All', 'Audit', data.summary.auditId || 'All']);
   sheet.addRow(['Date Range', `${data.summary.fromDate || 'All'} to ${data.summary.toDate || 'All'}`, 'Product Category', data.summary.productCategory || 'All', 'Status', data.summary.status || 'All']);
+  if(data.snapshotId)sheet.addRow(['Valuation Snapshot',data.snapshotId,'Calculation',data.calculationVersion]);
   sheet.addRow([]);
   sheet.addRow(columns.map((column) => column.header));
   const headerRowNumber = sheet.rowCount;
@@ -3110,6 +3121,7 @@ function addCategoryVarianceGroup(groupMap, productCategory, action, varianceQty
 }
 
 async function buildCategoryWiseVarianceSummary(query = {}, providedPartwise = null) {
+  if(require('../services/CentralValuationService').enabled())return require('../services/ValuationReportProjection').project(query,'category');
   query = normalizeReportQuery(query);
   {
   const partwise = providedPartwise || await cachedBuildPartwiseInventoryAuditReport(query);
@@ -3699,6 +3711,7 @@ function stockSummaryMetadata(selectedDealer = {}, selectedAudit = {}, query = {
 }
 
 async function buildStockSummaryReport(query = {}, providedPartwise = null) {
+  if(require('../services/CentralValuationService').enabled())return {...await require('../services/ValuationReportProjection').project(query,'stock'),columns:stockSummaryColumns()};
   query = normalizeReportQuery(query);
   const dealerCode = query.dealerCode;
   const partwise = providedPartwise || await cachedBuildPartwiseInventoryAuditReport({ ...query, showFullMasterWithZeroScan: 'on' });
@@ -3806,6 +3819,21 @@ async function buildStockSummaryReport(query = {}, providedPartwise = null) {
 }
 
 async function validateValuationReports(query = {}, provided = {}) {
+  if(require('../services/CentralValuationService').enabled()){
+    const scoped=await resolveReportAuditQuery(query);const snapshot=await require('../services/CentralValuationService').getSnapshot(scoped);const v=snapshot.summary;
+    const {decimalSum}=require('../utils/auditValuation');
+    const fields={totalSystemQty:'dmsQuantity',totalPhysicalQty:'actualQuantity',totalVarianceQty:'varianceQty',
+      totalDmsDlcValue:'dmsDlcValue',totalPhysicalDlcValue:'actualDlcValue',totalDmsMrpValue:'dmsMrpValue',
+      totalPhysicalMrpValue:'actualMrpValue',totalVarianceDlcValue:'dlcDifference',totalVarianceMrpValue:'mrpDifference'};
+    const lineTotals=Object.fromEntries(Object.entries(fields).map(([total,key])=>[total,
+      snapshot.rows.some(row=>row[key]===null)?null:decimalSum(snapshot.rows.map(row=>row[key]),/Qty$/.test(total)?8:2)]));
+    const mismatches=Object.keys(fields).filter(key=>lineTotals[key]===null||v[key]===null
+      ?lineTotals[key]!==v[key]:Math.abs(lineTotals[key]-v[key])>0.00000001);
+    const calculationTotalsMatch=mismatches.length===0;
+    return {passed:calculationTotalsMatch&&v.valuationComplete&&v.reconciliationComplete,calculationTotalsMatch,mismatches,
+      valuationComplete:v.valuationComplete,snapshotId:snapshot.snapshotId,
+      totals:{dashboard:v.totalPhysicalDlcValue,partwise:lineTotals.totalPhysicalDlcValue,stockSummary:v.totalPhysicalDlcValue,category:v.totalPhysicalDlcValue},valuationSummary:v};
+  }
   const reportQuery = requireDealerForReport(query);
   const partwise = provided.partwise || await cachedBuildPartwiseInventoryAuditReport(reportQuery);
   const [stockSummary, category] = await Promise.all([

@@ -257,13 +257,15 @@ class ScannerManager {
   async list(scope = {}) {
     await this.markExpiredOffline();
     const cutoff = new Date(Date.now() - LIVE_WINDOW_MS);
-    const [online, offline] = await Promise.all([
+    const [online, offline, pending] = await Promise.all([
       Device.find({ ...scope, removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).sort({ scannerPriority: -1, lastSeen: -1 }).lean(),
-      Device.find({ ...scope, removedAt: null, $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }] }).sort({ lastSeen: -1 }).limit(100).lean()
+      Device.find({ ...scope, removedAt: null, approved: { $ne: false }, $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }] }).sort({ lastSeen: -1 }).limit(100).lean(),
+      Device.find({ ...scope, removedAt: null, deviceType: 'mobile', approved: false }).sort({ approvalRequestedAt: -1, lastSeen: -1 }).limit(100).lean()
     ]);
     return {
       online: online.map((device) => this.publicDevice(device)),
-      offline: offline.map((device) => this.publicDevice(device))
+      offline: offline.map((device) => this.publicDevice(device)),
+      pending: pending.map((device) => this.publicDevice(device))
     };
   }
 

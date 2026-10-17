@@ -105,3 +105,71 @@ test('device summary reuses list rows without repeating expiry or online query',
   assert.equal(result.pendingSyncCount, 3);
   assert.equal(result.offlineDevices, 150, 'offline count must not use the capped list');
 });
+
+test('device listing exposes pending mobile approval for the selected dealer', async () => {
+  const queries = [];
+  const Device = {
+    find: (query) => {
+      queries.push(query);
+      const rows = query.approved === false
+        ? [{ deviceId: 'phone-1', dealerCode: '24644', deviceType: 'mobile', approved: false, status: 'pending' }]
+        : [];
+      return { sort() { return this; }, limit() { return this; }, lean: async () => rows };
+    }
+  };
+  const context = { module: { exports: {} }, require: (name) => name === '../models/Device' ? Device : {} };
+  vm.runInNewContext(fs.readFileSync('services/ScannerManager.js', 'utf8'), context);
+  const manager = new context.module.exports();
+  manager.markExpiredOffline = async () => 0;
+  const listed = await manager.list({ dealerCode: '24644' });
+  assert.equal(listed.pending.length, 1);
+  assert.equal(listed.pending[0].deviceId, 'phone-1');
+  assert.equal(listed.online.length, 0);
+  assert.ok(queries.every((query) => query.dealerCode === '24644'));
+});
+
+test('admin sees pending phone approvals across dealers without changing the selected dealer summary', async () => {
+  const source = fs.readFileSync('routes/devices.js', 'utf8');
+  const start = source.indexOf('async function listDevices(req, res)');
+  const end = source.indexOf("router.get('/', auth.requireAuth, listDevices);", start);
+  const queries = [];
+  const pending = [{ deviceId: 'phone-1', dealerCode: '24644', approved: false }];
+  const context = {
+    auth: { isAdminRole: (role) => role === 'admin' },
+    Device: { find: (query) => {
+      queries.push(query);
+      return { sort() { return this; }, limit() { return this; }, lean: async () => pending };
+    } },
+    getActiveAudit: async () => null,
+    publicAudit: () => null
+  };
+  vm.createContext(context);
+  vm.runInContext(`${source.slice(start, end)}\nthis.listDevices = listDevices;`, context);
+  const listedScopes = [];
+  const manager = {
+    list: async (scope) => { listedScopes.push(scope.dealerCode); return { online: [], offline: [], pending: [] }; },
+    summary: async () => ({ connectedDevices: 0 }),
+    publicDevice: (device) => device
+  };
+  const request = (role) => ({ activeDealerId: 'QA20389576', user: { role }, app: { get: () => manager } });
+  let adminResponse;
+  await context.listDevices(request('admin'), { json: (value) => { adminResponse = value; } });
+  assert.equal(adminResponse.pendingDevices[0].dealerCode, '24644');
+  assert.equal(adminResponse.activeCount, 0);
+  assert.equal(queries[0].dealerCode, undefined);
+  assert.equal(listedScopes[0], 'QA20389576');
+
+  let userResponse;
+  await context.listDevices(request('mobile_user'), { json: (value) => { userResponse = value; } });
+  assert.equal(userResponse.pendingDevices.length, 0);
+  assert.equal(queries.length, 1, 'non-admin listing must not query other dealers');
+});
+
+test('dashboard keeps valuation health in reconciliation instead of the dashboard header', () => {
+  const html = fs.readFileSync('public/Daksh.html', 'utf8');
+  const ui = fs.readFileSync('public/ui.js', 'utf8');
+  assert.doesNotMatch(html, /id="dashboardPriceHealth"/);
+  assert.doesNotMatch(ui, /dashboardPriceHealth/);
+  assert.match(html, /id="reconPriceHealthSummary"/);
+  assert.match(ui, /reconPriceHealthSummary/);
+});

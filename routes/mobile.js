@@ -430,25 +430,9 @@ router.post('/device-register', auth.requireAuth, async (req, res) => {
       Dealer.findOne({ dealerCode: access.requestedDealer }).lean(),
       getActiveAudit({ dealerCode: access.requestedDealer }).catch(() => null)
     ]);
-    const approvedDevice = await devices.requireApprovedMobileDevice(req, res, {
-      deviceId,
-      deviceName: clean(req.body.deviceName || 'Daksh Android Scanner'),
-      model: clean(req.body.model || 'Android'),
-      deviceType: 'mobile',
-      dealerCode: access.requestedDealer,
-      dealerName: dealer?.dealerName || '',
-      auditId: activeAudit ? activeAudit.auditId : '',
-      userId: clean(req.user.id),
-      loginId: clean(req.user.username),
-      userName: clean(req.user.name || req.user.username),
-      role: clean(req.user.role),
-      serverUrl: clean(req.body.serverUrl),
-      appVersion: clean(req.body.appVersion || MOBILE_APP_VERSION),
-      status: 'pending'
-    });
-    if (!approvedDevice) return;
-    if (approvedDevice.dealerCode && upper(approvedDevice.dealerCode) !== upper(access.requestedDealer)) {
-      return res.status(403).json({ success: false, approved: false, message: 'This device is assigned to a different dealer. Ask an Admin to reassign it.' });
+    const existingDevice = await Device.findOne({ deviceId, removedAt: null }).lean();
+    if (existingDevice?.scannerStatus === 'blocked') {
+      return res.status(403).json({ success: false, message: 'This device was blocked by an administrator.' });
     }
     const now = new Date();
     const device = await Device.findOneAndUpdate(
@@ -463,11 +447,11 @@ router.post('/device-register', auth.requireAuth, async (req, res) => {
         dealerCode: access.requestedDealer,
         dealerName: dealer?.dealerName || req.body.dealerName || '',
         auditId: activeAudit ? activeAudit.auditId : '',
-        userId: clean(req.body.userId || req.user.id),
-        loginId: clean(req.body.loginId || req.user.username),
-        userName: clean(req.body.userName || req.user.name || req.user.username),
-        staffName: clean(req.body.staffName || req.body.userName || req.user.name || req.user.username),
-        role: clean(req.body.role || req.user.role).toLowerCase(),
+        userId: clean(req.user.id),
+        loginId: clean(req.user.username),
+        userName: clean(req.user.name || req.user.username),
+        staffName: clean(req.user.name || req.user.username),
+        role: clean(req.user.role).toLowerCase(),
         serverUrl: clean(req.body.serverUrl || serverInfo(req.app.locals.activePort, req.ip || req.socket.remoteAddress, req.protocol, req.get('x-forwarded-host') || req.get('host') || '').serverUrl),
         status: 'online',
         syncStatus: Number(req.body.failedCount || 0) > 0 ? 'failed' : 'idle',

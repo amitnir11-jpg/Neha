@@ -1,4 +1,7 @@
 (function (global) {
+  const invalidScannerSequenceTitle = 'Invalid Barcode / QR Sequence';
+  const invalidScannerSequenceMessage = 'Only valid 1D barcode or 2D QR sequences are allowed here. To enter a part number, use Manual Entry, Local Part, or Excel Stock Upload.';
+
   function clean(value) {
     return String(value === undefined || value === null ? '' : value)
       .replace(/[\u0000-\u001F\u007F]/g, '')
@@ -244,8 +247,64 @@
     return { ...base, success: false, reason: 'UNSUPPORTED_CODE' };
   }
 
+  function hasValidCheckDigit(value) {
+    if (!/^\d+$/.test(value)) return false;
+    const digits = value.split('').map(Number);
+    const checkDigit = digits.pop();
+    const weightedSum = digits.reverse().reduce((sum, digit, index) =>
+      sum + digit * (index % 2 === 0 ? 3 : 1), 0);
+    return (10 - (weightedSum % 10)) % 10 === checkDigit;
+  }
+
+  function hasKnownOneDimensionalStructure(value) {
+    const normalized = normalizeDecodedValue(value);
+    if ((normalized.length === 13 || normalized.length === 8) && hasValidCheckDigit(normalized)) return true;
+    if (normalized.length === 12 && hasValidCheckDigit(normalized)) return true;
+    return /^[A-D][0-9$+./:-]{4,}[A-D]$/.test(normalized);
+  }
+
+  function validateScannerSequence(rawValue, format) {
+    const parsed = parseScannedCode(rawValue, format);
+    if (!parsed.success) return { valid: false, parsed, reason: parsed.reason || 'UNSUPPORTED_CODE' };
+
+    if (['HERO_QR', 'HERO_SKU_LABEL', 'HERO_LEGACY_1D', 'LEGACY_UPI'].includes(parsed.type)) {
+      return { valid: true, parsed, reason: '' };
+    }
+
+    // JSON, URL/query and key-value labels already carry explicit field names.
+    // Keep the existing parser authoritative for those supported structures.
+    if (parsed.type === 'STRUCTURED_CODE') return { valid: true, parsed, reason: '' };
+
+    // Symbology metadata alone must not make a bare Hero part number valid.
+    // Recognize the catalogue part structures, rather than rejecting all
+    // alphanumeric 1D identifiers or relying on the presence of a slash.
+    if (/^(?=.*[A-Z])(?:\d{2}[A-Z]\d{3,4}S|\d{5}[A-Z0-9]{5,10}|K\d{5}[A-Z0-9]{5,10})$/.test(parsed.normalizedValue)) {
+      return { valid: false, parsed, reason: 'PLAIN_PART_NUMBER' };
+    }
+
+    if (['EAN_8', 'EAN_13', 'UPC_A'].includes(parsed.barcodeFormat)) {
+      const length = { EAN_8: 8, EAN_13: 13, UPC_A: 12 }[parsed.barcodeFormat];
+      return { valid: parsed.normalizedValue.length === length && hasValidCheckDigit(parsed.normalizedValue),
+        parsed, reason: parsed.normalizedValue.length === length && hasValidCheckDigit(parsed.normalizedValue) ? '' : 'INVALID_CHECK_DIGIT' };
+    }
+
+    const oneDimensionalFormats = [
+      'CODABAR', 'CODE_39', 'CODE_93', 'CODE_128', 'EAN_8', 'EAN_13',
+      'ITF', 'UPC_A', 'UPC_E', 'RSS_14'
+    ];
+    if (parsed.type === 'DIRECT_BARCODE' && (
+      oneDimensionalFormats.includes(parsed.barcodeFormat)
+      || (parsed.barcodeFormat === 'UNKNOWN' && hasKnownOneDimensionalStructure(rawValue))
+    )) {
+      return { valid: true, parsed, reason: '' };
+    }
+
+    return { valid: false, parsed, reason: 'UNSUPPORTED_CODE',
+      requiresIdentityLookup: parsed.type === 'DIRECT_BARCODE' && parsed.barcodeFormat === 'UNKNOWN' };
+  }
+
   const cameraBarcodeFormats = ['QR_CODE', 'CODE_128', 'CODE_39', 'CODE_93', 'EAN_13', 'EAN_8', 'UPC_A', 'UPC_E', 'ITF', 'CODABAR', 'RSS_14', 'DATA_MATRIX', 'AZTEC', 'PDF_417'];
-  const api = { cameraBarcodeFormats, clean, normalizePartToken, parseScanValue, parseScannedCode, parseHeroSkuLabel, parseHeroLegacyOneDLabel, normalizeDecodedValue, normalizeBarcodeFormat, isQuantityToken, isLikelyPartToken, resolveHeroPartIndex, resolveDecodedQuantity };
+  const api = { cameraBarcodeFormats, clean, normalizePartToken, parseScanValue, parseScannedCode, validateScannerSequence, invalidScannerSequenceTitle, invalidScannerSequenceMessage, parseHeroSkuLabel, parseHeroLegacyOneDLabel, normalizeDecodedValue, normalizeBarcodeFormat, isQuantityToken, isLikelyPartToken, resolveHeroPartIndex, resolveDecodedQuantity };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.DakshScanParser = api;
   global.scanParser = api;

@@ -2,8 +2,10 @@ const database = require('../services/prisma');
 const Inventory = require('../models/Inventory');
 const DealerStock = require('../models/DealerStock');
 const AuditLog = require('../models/AuditLog');
+const Audit = require('../models/Audit');
 const partMasterPrice = require('./partMasterPrice');
 const { normalizePartNumber } = require('./normalize');
+const { activeStatusFilter, auditWorkflowStatus, cleanCode } = require('./audit');
 
 function refreshError(message, statusCode) {
   return Object.assign(new Error(message), { statusCode });
@@ -108,4 +110,39 @@ async function refreshOngoingAuditPrices(input = {}, user = {}) {
   }, { timeout: 120000 });
 }
 
-module.exports = { refreshOngoingAuditPrices };
+function ongoingAuditScopes(audits = []) {
+  const scopes = new Map();
+  for (const audit of audits) {
+    if (!['ACTIVE', 'IN_PROGRESS'].includes(auditWorkflowStatus(audit))) continue;
+    const dealerCode = cleanCode(audit.dealerCode);
+    const auditId = String(audit.auditId || audit._id || '').trim();
+    if (!dealerCode || !auditId) continue;
+    scopes.set(`${dealerCode}:${auditId}`, { dealerCode, auditId });
+  }
+  return [...scopes.values()];
+}
+
+function sumRefreshResults(results, field) {
+  return results.reduce((total, result) => total + Number(result[field] || 0), 0);
+}
+
+async function refreshAllOngoingAuditPrices(user = {}) {
+  const audits = await Audit.find(activeStatusFilter()).lean();
+  const scopes = ongoingAuditScopes(audits);
+  const results = [];
+  for (const scope of scopes) {
+    results.push(await refreshOngoingAuditPrices(scope, user));
+  }
+  return {
+    allOngoing: true,
+    ongoingAuditCount: scopes.length,
+    refreshedAuditCount: results.length,
+    updatedScanCount: sumRefreshResults(results, 'updatedScanCount'),
+    updatedStockCount: sumRefreshResults(results, 'updatedStockCount'),
+    matchedPartCount: sumRefreshResults(results, 'matchedPartCount'),
+    missingPartCount: sumRefreshResults(results, 'missingPartCount'),
+    audits: results
+  };
+}
+
+module.exports = { refreshOngoingAuditPrices, refreshAllOngoingAuditPrices, ongoingAuditScopes };

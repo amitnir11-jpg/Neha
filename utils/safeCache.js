@@ -256,6 +256,15 @@ function applyCacheHeaders(res, meta = {}) {
 }
 
 async function getCachedResponse(namespace, query, builder, options = {}) {
+  // Cross-process database revision is authoritative; never reuse a stale value
+  // just because another app instance did not receive a socket invalidation.
+  if (process.env.CENTRAL_VALUATION_ENABLED==='true' && /report|dashboard|reconciliation|partwise|stock-summary|category-wise/.test(namespace)
+      && query?.dealerCode && query?.dealerCode!=='ALL') {
+    let auditId=query.auditId;
+    if (!auditId || auditId==='active') auditId=(await require('../services/InventoryCalculationService').resolveCurrentAudit(query.dealerCode))?.auditId;
+    if(auditId){const snapshot=await require('../services/CentralValuationService').getSnapshot({...query,auditId});
+      query={...query,auditId,snapshotId:snapshot.snapshotId};}
+  }
   const defaults = namespaceDefaults(namespace);
   const mergedOptions = {
     ttlMs: defaults.ttlMs,

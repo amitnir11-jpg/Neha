@@ -32,7 +32,7 @@ function harness() {
     dashboardScopeDealerCode: () => state.dashboardDealerCode,
     formatDealerDisplay: dealer => dealer.dealerCode, setLivePill: noop, setDashboardKpiValue: noop,
     updateDashboardScopeSummary: noop, syncLocalPartFormIdentity: noop, restoreManualScanBin: noop,
-    updateAuditPriceRefreshUi: noop, toast: noop, loadDealerStockPreview: async () => {},
+    updateBulkAuditPriceRefreshUi: noop, toast: noop, loadDealerStockPreview: async () => {},
     queryFromForm: () => ({ dealerCode: '1168A' })
   };
   vm.createContext(context);

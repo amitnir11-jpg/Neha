@@ -1031,6 +1031,7 @@ function groupedScanSummary(scans, keyFn, seedFn, memberFields = {}) {
 }
 
 function selectRows(data, type) {
+  if(data.snapshotId && ['bin-wise-stock','bin-stock','bin-wise'].includes(type))return data.binRows;
   if (type === 'bin-wise-stock' || type === 'bin-stock' || type === 'bin-wise') {
     // Bin Transfer and this report must use the same movement/bin attribution
     // and the same net-stock ledger. In particular, OUTWARD/FITTED/DAMAGE rows
@@ -2054,6 +2055,7 @@ function normalizeAuditPackSelection(payload = {}) {
     dealerCode: selectedDealerCode(payload),
     auditId,
     _includeAllAudits: !auditId,
+    ...(payload.snapshotId ? { snapshotId: clean(payload.snapshotId) } : {}),
     fromDate: clean(payload.fromDate || payload.from || ''),
     toDate: clean(payload.toDate || payload.to || ''),
     includeSummary: payload.includeSummary !== false && payload.includeSummary !== 'false',
@@ -2272,12 +2274,21 @@ function buildAuditSummaryRows(reportData = {}, context = null, productGroupSumm
       ['Final Net Difference (DLC)', amount('totalVarianceDlcValue')],
       ['Final Net Difference (MRP)', amount('totalVarianceMrpValue')]
     ]),
+    ...(reportData.snapshotId?packMetricRows('Master Price Health',[
+      ['Valuation Snapshot',reportData.snapshotId],['Calculation',reportData.calculationVersion],
+      ['Uploaded Rows',totals.uploadedRowCount],['Unique DMS SKUs',totals.uniqueDmsSkuCount],
+      ['Scan Transactions',totals.scanTransactionCount],['Scan Transaction Units',totals.scanTransactionUnits],
+      ['Fully Priced DMS Units',totals.pricedDmsQty],['Units Awaiting Prices',totals.dmsPriceMissingQty],
+      ['Quantity Price Coverage',`${totals.quantityPriceCoverage}%`],
+      ['DMS DLC Known Subtotal',packCurrency(totals.totalDmsDlcValueKnownSubtotal)],
+      ['DMS MRP Known Subtotal',packCurrency(totals.totalDmsMrpValueKnownSubtotal)]
+    ]):[]),
     ...packMetricRows('Product Group Summary', [
       ['Total Groups', packNumber(Array.isArray(productGroupSummary.rows) ? productGroupSummary.rows.length : 0, 0)],
       ['Total Scans', packNumber(groupTotals.totalScans || 0, 0)],
       ['Total Quantity', packNumber(groupTotals.totalQuantity || 0, 0)],
-      ['Actual Stock Value (DLC)', packCurrency(groupTotals.totalDlcValue || 0)],
-      ['MRP Value Reference', packCurrency(groupTotals.totalMrpValue || 0)]
+      ['Actual Stock Value (DLC)', packCurrency(groupTotals.totalDlcValue === undefined ? 0 : groupTotals.totalDlcValue)],
+      ['MRP Value Reference', packCurrency(groupTotals.totalMrpValue === undefined ? 0 : groupTotals.totalMrpValue)]
     ]),
     ...packMetricRows('Final Remarks', [
       ['Valuation Status', totals.reconciliationComplete === false ? 'INCOMPLETE — STOCK UPLOAD REQUIRED' : totals.valuationComplete === false ? 'INCOMPLETE — PRICE MISSING' : 'Verified valuation'],
@@ -2435,6 +2446,7 @@ function buildUserWiseSummaryRows(reportData = {}) {
 
 function buildCategoryVarianceRows(data = {}, context = null) {
   const rows = Array.isArray(data.rows) ? data.rows.slice() : [];
+  if (data.snapshotId && data.grandTotal) return rows.concat([{ ...data.grandTotal, rowType: 'grandTotal' }]);
   const totals = context && context.totals ? context.totals : {};
   return rows.concat([{
     productCategory: 'Grand Total',
@@ -2474,6 +2486,7 @@ function reconciliationRemarksText(summary = {}) {
 }
 
 function buildReconciliationCategoryRows(report = {}, context = null) {
+  if(report.centralCategoryRows)return report.centralCategoryRows;
   const rows = Array.isArray(report.rows) ? report.rows : [];
   const buckets = new Map();
   rows.forEach(row => {
@@ -2518,7 +2531,7 @@ function buildReconciliationSummaryRows(report = {}, context = null) {
     ['Total Fast Moving Parts', totals.fastMovingCount || summary.totalFastMovingParts || 0],
     ['Total Slow Moving Parts', totals.slowMovingCount || summary.totalSlowMovingParts || 0],
     ['Total Dead Stock Parts', totals.deadStockCount || summary.totalDeadStockParts || 0],
-    ['Total Inventory Value', amount('totalPhysicalDlcValue', 'actualStockValueDLC')],
+    ['Total Inventory Value', amount('totalDmsDlcValue', 'totalInventoryValue')],
     ['Actual Stock Value (DLC)', amount('totalPhysicalDlcValue', 'actualStockValueDLC')],
     ['DMS Stock Value (DLC)', amount('totalDmsDlcValue', 'dmsStockValueDLC')],
     ['Total Shortage Value', amount('totalShortValue', 'totalShortageValue')],
@@ -2545,6 +2558,7 @@ function buildReconciliationSummaryRows(report = {}, context = null) {
 
 async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
   const normalized = normalizeAuditPackSelection(payload);
+  if(require('../services/CentralValuationService').enabled()) normalized._includeAllAudits=false;
   if (!normalized.dealerCode) {
     const error = new Error('Select dealer code first to generate complete audit pack');
     error.statusCode = 400;
@@ -2552,6 +2566,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
   }
 
   let reportData = await reportModule.buildReportData(normalized);
+  if(reportData.snapshotId) normalized.snapshotId=reportData.snapshotId;
   const resolvedAuditId = normalized._includeAllAudits
     ? ''
     : clean(normalized.auditId || reportData.selectedAudit?.auditId || reportData.selectedDealer?.currentAuditId || (Array.isArray(reportData.audits) && reportData.audits[0] ? reportData.audits[0].auditId : ''));
@@ -2841,7 +2856,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
     },
     'product-group-summary': async () => {
       const partwise = await getPartwiseData();
-      const productGroupSummary = buildProductGroupSummaryPackRows(partwise.rows || []);
+      const productGroupSummary = partwise.snapshotId?await require('../services/ValuationReportProjection').productGroups(resolvedQuery):buildProductGroupSummaryPackRows(partwise.rows || []);
       return {
         title: 'Product Group Summary',
         kind: 'table',
@@ -3076,7 +3091,7 @@ async function buildCompleteAuditPackWorkbook(payload = {}, user = {}) {
 
   const coreReportKeys = new Set(['stock-summary', 'bin-wise-stock', 'partwise-inventory-audit', 'scan-register', 'product-group-summary']);
   const [stockSummaryData, partwiseData] = await Promise.all([getStockSummaryData(), getPartwiseData()]);
-  const productGroupSummary = buildProductGroupSummaryPackRows(partwiseData.rows || []);
+  const productGroupSummary = partwiseData.snapshotId?await require('../services/ValuationReportProjection').productGroups(resolvedQuery):buildProductGroupSummaryPackRows(partwiseData.rows || []);
 
   const coreSpecs = [
     {

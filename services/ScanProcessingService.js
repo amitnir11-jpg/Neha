@@ -157,6 +157,8 @@ async function processScan(input = {}, options = {}) {
     status,
     httpStatus: responseStatusFor(result),
     message,
+    code: result.code || '',
+    title: result.title || '',
     scan,
     parsed: normalized.parsed || {},
     duplicate,
