@@ -1708,7 +1708,7 @@
     updateDashboardScopeSummary();
     syncLocalPartFormIdentity();
     restoreManualScanBin();
-    updateAuditPriceRefreshUi();
+    updateBulkAuditPriceRefreshUi();
   }
 
   async function loadActiveAudit(options = {}) {
@@ -9378,7 +9378,7 @@
     if (exportButton) exportButton.disabled = Boolean(busy || state.partMasterExportInFlight);
     if (failedRowsButton) failedRowsButton.disabled = Boolean(busy);
     state.catalogueUploadInFlight = Boolean(busy);
-    updateAuditPriceRefreshUi();
+    updateBulkAuditPriceRefreshUi();
     if (busy) {
       const uploadStats = $('#uploadStats');
       if (uploadStats) uploadStats.textContent = 'Upload in progress...';
