@@ -127,3 +127,40 @@ test('device listing exposes pending mobile approval for the selected dealer', a
   assert.equal(listed.online.length, 0);
   assert.ok(queries.every((query) => query.dealerCode === '24644'));
 });
+
+test('admin sees pending phone approvals across dealers without changing the selected dealer summary', async () => {
+  const source = fs.readFileSync('routes/devices.js', 'utf8');
+  const start = source.indexOf('async function listDevices(req, res)');
+  const end = source.indexOf("router.get('/', auth.requireAuth, listDevices);", start);
+  const queries = [];
+  const pending = [{ deviceId: 'phone-1', dealerCode: '24644', approved: false }];
+  const context = {
+    auth: { isAdminRole: (role) => role === 'admin' },
+    Device: { find: (query) => {
+      queries.push(query);
+      return { sort() { return this; }, limit() { return this; }, lean: async () => pending };
+    } },
+    getActiveAudit: async () => null,
+    publicAudit: () => null
+  };
+  vm.createContext(context);
+  vm.runInContext(`${source.slice(start, end)}\nthis.listDevices = listDevices;`, context);
+  const listedScopes = [];
+  const manager = {
+    list: async (scope) => { listedScopes.push(scope.dealerCode); return { online: [], offline: [], pending: [] }; },
+    summary: async () => ({ connectedDevices: 0 }),
+    publicDevice: (device) => device
+  };
+  const request = (role) => ({ activeDealerId: 'QA20389576', user: { role }, app: { get: () => manager } });
+  let adminResponse;
+  await context.listDevices(request('admin'), { json: (value) => { adminResponse = value; } });
+  assert.equal(adminResponse.pendingDevices[0].dealerCode, '24644');
+  assert.equal(adminResponse.activeCount, 0);
+  assert.equal(queries[0].dealerCode, undefined);
+  assert.equal(listedScopes[0], 'QA20389576');
+
+  let userResponse;
+  await context.listDevices(request('mobile_user'), { json: (value) => { userResponse = value; } });
+  assert.equal(userResponse.pendingDevices.length, 0);
+  assert.equal(queries.length, 1, 'non-admin listing must not query other dealers');
+});

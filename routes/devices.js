@@ -303,11 +303,14 @@ function cleanDevice(device) {
 async function listDevices(req, res) {
   try {
     const scope = { dealerCode: req.activeDealerId };
+    const pendingScope = auth.isAdminRole(req.user && req.user.role) ? {} : scope;
     const manager = req.app.get('scannerManager');
     if (manager) {
-      const [listed, activeAudit] = await Promise.all([
+      const [listed, activeAudit, adminPending] = await Promise.all([
         manager.list(scope),
-        getActiveAudit(scope)
+        getActiveAudit(scope),
+        pendingScope === scope ? null : Device.find({ ...pendingScope, deviceType: 'mobile', removedAt: null, approved: false })
+          .sort({ approvalRequestedAt: -1, lastSeen: -1 }).limit(100).lean()
       ]);
       const summary = await manager.summary(listed, scope);
       return res.json({
@@ -321,7 +324,7 @@ async function listDevices(req, res) {
         wifiOnline: summary.wifiOnline,
         usbOnline: summary.usbOnline,
         devices: listed.online,
-        pendingDevices: listed.pending,
+        pendingDevices: adminPending ? adminPending.map((device) => manager.publicDevice(device)) : listed.pending,
         oldDevices: listed.offline,
         activeAudit: publicAudit(activeAudit),
         mobileSyncEnabled: Boolean(activeAudit),
@@ -339,7 +342,7 @@ async function listDevices(req, res) {
         approved: { $ne: false },
         $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }]
       }).sort({ lastSeen: -1 }).limit(50).lean(),
-      Device.find({ ...scope, deviceType: 'mobile', removedAt: null, approved: false }).sort({ approvalRequestedAt: -1, lastSeen: -1 }).limit(100).lean(),
+      Device.find({ ...pendingScope, deviceType: 'mobile', removedAt: null, approved: false }).sort({ approvalRequestedAt: -1, lastSeen: -1 }).limit(100).lean(),
       getActiveAudit(scope)
     ]);
     res.json({
