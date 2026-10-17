@@ -105,3 +105,25 @@ test('device summary reuses list rows without repeating expiry or online query',
   assert.equal(result.pendingSyncCount, 3);
   assert.equal(result.offlineDevices, 150, 'offline count must not use the capped list');
 });
+
+test('device listing exposes pending mobile approval for the selected dealer', async () => {
+  const queries = [];
+  const Device = {
+    find: (query) => {
+      queries.push(query);
+      const rows = query.approved === false
+        ? [{ deviceId: 'phone-1', dealerCode: '24644', deviceType: 'mobile', approved: false, status: 'pending' }]
+        : [];
+      return { sort() { return this; }, limit() { return this; }, lean: async () => rows };
+    }
+  };
+  const context = { module: { exports: {} }, require: (name) => name === '../models/Device' ? Device : {} };
+  vm.runInNewContext(fs.readFileSync('services/ScannerManager.js', 'utf8'), context);
+  const manager = new context.module.exports();
+  manager.markExpiredOffline = async () => 0;
+  const listed = await manager.list({ dealerCode: '24644' });
+  assert.equal(listed.pending.length, 1);
+  assert.equal(listed.pending[0].deviceId, 'phone-1');
+  assert.equal(listed.online.length, 0);
+  assert.ok(queries.every((query) => query.dealerCode === '24644'));
+});

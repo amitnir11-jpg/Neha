@@ -321,6 +321,7 @@ async function listDevices(req, res) {
         wifiOnline: summary.wifiOnline,
         usbOnline: summary.usbOnline,
         devices: listed.online,
+        pendingDevices: listed.pending,
         oldDevices: listed.offline,
         activeAudit: publicAudit(activeAudit),
         mobileSyncEnabled: Boolean(activeAudit),
@@ -329,14 +330,16 @@ async function listDevices(req, res) {
     }
     await markExpiredDevicesOffline();
     const cutoff = liveCutoff();
-    const [devices, oldDevices, activeAudit] = await Promise.all([
+    const [devices, oldDevices, pendingDevices, activeAudit] = await Promise.all([
       Device.find({ ...scope, deviceType: 'mobile', removedAt: null, status: 'online', lastSeen: { $gte: cutoff } }).sort({ lastSeen: -1 }).lean(),
       Device.find({
         ...scope,
         deviceType: 'mobile',
         removedAt: null,
+        approved: { $ne: false },
         $or: [{ status: 'offline' }, { lastSeen: { $lt: cutoff } }]
       }).sort({ lastSeen: -1 }).limit(50).lean(),
+      Device.find({ ...scope, deviceType: 'mobile', removedAt: null, approved: false }).sort({ approvalRequestedAt: -1, lastSeen: -1 }).limit(100).lean(),
       getActiveAudit(scope)
     ]);
     res.json({
@@ -344,6 +347,7 @@ async function listDevices(req, res) {
       activeCount: devices.length,
       devices: devices.map(cleanDevice),
       oldDevices: oldDevices.map(cleanDevice),
+      pendingDevices: pendingDevices.map(cleanDevice),
       activeAudit: publicAudit(activeAudit),
       mobileSyncEnabled: Boolean(activeAudit),
       message: activeAudit ? 'Mobile sync enabled' : 'No active audit found. Mobile sync is disabled.'

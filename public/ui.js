@@ -10830,12 +10830,14 @@
     }
     updateActiveAuditUi();
     const connected = data.devices || [];
+    const approvalQueue = data.pendingDevices || [];
+    const visibleDevices = [...approvalQueue, ...connected];
     const oldDevices = data.oldDevices || [];
-    $('#deviceRows').innerHTML = connected.length ? connected.map((device) => `
+    $('#deviceRows').innerHTML = visibleDevices.length ? visibleDevices.map((device) => `
       <div class="device-card">
         <div class="device-card-head">
           <div class="scanner-device-title"><span class="scanner-device-icon">${escapeHtml(scannerIcon(device))}</span><strong>${scannerLink(device)}</strong></div>
-          <span class="live-pill ${scannerStatusClass(device)}">${escapeHtml(device.healthStatus || 'Online')}</span>
+          <span class="live-pill ${device.approved === false ? 'orange-dot' : scannerStatusClass(device)}">${device.approved === false ? 'Awaiting approval' : escapeHtml(device.healthStatus || 'Online')}</span>
         </div>
         <span class="muted">${deviceLink(device.deviceId)}</span>
         <div class="scanner-health-grid">
@@ -10868,7 +10870,7 @@
           <button class="btn danger-soft admin-only removeDevice ${isAdmin() ? '' : 'hidden'}" data-id="${escapeHtml(device.deviceId)}" type="button">Remove Device</button>
         </div>
       </div>
-    `).join('') : '<div class="muted">No live devices in the last 30 seconds.</div>';
+    `).join('') : '<div class="muted">No mobile devices for this dealer.</div>';
     const syncRows = $('#syncDeviceRows');
     if (syncRows) {
       syncRows.innerHTML = connected.map((device) => `
@@ -10949,7 +10951,7 @@
       button.addEventListener('click', async () => {
         const block = button.dataset.block === 'true';
         await api('/api/admin/mobile-device/block', { method: 'POST', body: { deviceId: button.dataset.id, block } });
-        toast(block ? 'Mobile device blocked' : 'Mobile device approved');
+        toast(block ? 'Mobile device blocked' : 'Device approved. Retry login in the Android app.');
         await loadDevices();
       });
     });
