@@ -73,6 +73,10 @@
 .excel-stock-panel .excel-stock-table th:last-child,
 .excel-stock-panel .excel-stock-table td:last-child { text-align: right; }
 .excel-stock-panel .excel-stock-table td.part-cell { font-family: inherit; letter-spacing: 0; }
+.excel-stock-panel .excel-stock-table td.part-cell small { display: block; margin-top: 3px; color: #66758a; }
+.excel-stock-panel .excel-stock-table td .excel-stock-status { display: block; font-size: 11px; }
+.excel-stock-panel .excel-stock-table td .excel-stock-status.rejected { color: #b4232b; }
+.excel-stock-panel .excel-stock-table td .excel-stock-status.accepted { color: #087443; }
 .excel-row-reason { display: block; color: #ff2828; font-size: 10px; line-height: 13px; }
 .excel-row-status { display: inline-flex; align-items: center; gap: 6px; }
 .excel-row-status input { width: 14px; height: 14px; margin: 0; accent-color: #008d43; }

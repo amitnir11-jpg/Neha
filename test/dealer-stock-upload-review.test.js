@@ -41,6 +41,15 @@ test('only selected valid source rows contribute to the confirmed DMS update', a
   assert.equal(selected.records[0].dmsStock, 3);
 });
 
+test('one original Excel part can produce only one correction in a sheet', async () => {
+  const rows = [headings, row('1168A', '0004', '2'), row('1168A', '0005', '3')];
+  const originals = new Map([[2, '38501?LC?760S'], [3, '38501?LC?760S']]);
+  const result = await rowsToStockRecords(rows, '1168A', 'AUDIT-1', 'Tester', () => {}, null, originals);
+  assert.deepEqual(result.reviewRows.map(item => item.status), ['VALID', 'DUPLICATE']);
+  assert.deepEqual(result.records.map(item => item.partNumber), ['0004']);
+  assert.deepEqual(result.records[0].sourcePartNumbers, ['38501?LC?760S']);
+});
+
 test('required dealer heading and whole nonnegative DMS quantities are enforced', async () => {
   const missingHeading = await rowsToStockRecords([['Part Number', 'Dms Stock'], ['0001', 2]], '1168A', 'AUDIT-1', 'Tester');
   assert.match(missingHeading.errorRows[0].message, /Dealer Code/);
@@ -82,7 +91,14 @@ test('HTTP review uploads only selected valid rows, then accepts a corrected dea
   replace(Audit, 'findOne', () => query({ dealerCode: '1168A', auditId: 'AUDIT-1', status: 'ACTIVE' }));
   const saved = [];
   replace(prisma, '$transaction', async work => work(prisma));
-  replace(DealerStock, 'find', filter => query(saved.filter(item => item.dealerCode === filter.dealerCode && item.auditId === filter.auditId && (!filter.normalizedPartNumber || filter.normalizedPartNumber.$in.includes(item.normalizedPartNumber)))));
+  replace(prisma, '$queryRaw', async () => []);
+  replace(DealerStock, 'find', filter => query(saved.filter(item => item.dealerCode === filter.dealerCode && item.auditId === filter.auditId &&
+    (!filter.normalizedPartNumber || filter.normalizedPartNumber.$in.includes(item.normalizedPartNumber)) &&
+    (!filter.sourcePartNumbers || Boolean(item.sourcePartNumbers?.length) === Boolean(filter.sourcePartNumbers.$exists)) &&
+    (!filter.$or || filter.$or.some(condition => {
+      const [field, expected] = Object.entries(condition)[0];
+      return (expected.$in || [expected]).includes(item[field]);
+    })) )));
   replace(DealerStock, 'bulkUpsertBy', async rows => { saved.push(...rows); return { insertedCount: rows.length }; });
   replace(ScanAuditLog, 'create', async () => ({}));
   const app = express();
@@ -116,10 +132,45 @@ test('HTTP review uploads only selected valid rows, then accepts a corrected dea
   const valid = await send(true, csv);
   assert.equal(valid.status, 200, JSON.stringify(await valid.clone().json()));
   assert.deepEqual(saved.map(item => item.partNumber), ['0001']);
+  const lookup = await fetch(`http://127.0.0.1:${server.address().port}/api/reconciliation/stock-preview?dealerCode=1168A&partNumber=0001`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  assert.equal((await lookup.json()).alreadyUploaded, true, 'saved stock is still recognized by the server after a new request');
   const corrected = await send(true, csv, '[3]', '{"3":{"dealerCode":"1168A"}}');
   assert.equal(corrected.status, 200, JSON.stringify(await corrected.clone().json()));
   assert.equal((await corrected.json()).summary.systemStockValue, 50);
   assert.deepEqual(saved.map(item => [item.dealerCode, item.partNumber]), [['1168A', '0001'], ['1168A', '0002']]);
+  const repeated = await send(false, csv);
+  assert.deepEqual((await repeated.json()).reviewRows.map(item => item.status), ['ALREADY_UPLOADED', 'REJECTED']);
+  const repeatedTransfer = await send(true, csv);
+  assert.equal(repeatedTransfer.status, 409);
+  assert.match((await repeatedTransfer.json()).message, /already uploaded/);
+  assert.equal(saved.length, 2, 'a second sheet cannot replace uploaded parts');
+  const exactRepeat = await send(false, `${header}\n1168A,0001,,2,A-01,,`);
+  assert.equal((await exactRepeat.json()).reviewRows[0].status, 'ALREADY_UPLOADED', 'the exact same valid file is rejected on review');
+  const correctedToExisting = await send(true, `${header}\n1168A,UNKNOWN,,2,A-01,,`, '[2]', '{"2":{"partNumber":"0001"}}');
+  assert.equal(correctedToExisting.status, 409, 'manual correction cannot reuse an uploaded part');
+  assert.match((await correctedToExisting.json()).message, /already uploaded/);
+  assert.equal(saved.length, 2, 'manual correction did not change saved stock');
+  const refreshedStock = await fetch(`http://127.0.0.1:${server.address().port}/api/reconciliation/stock-preview?dealerCode=1168A`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  assert.equal((await refreshedStock.json()).total, 2, 'previously uploaded stock remains after another request');
+  const nextSheet = await send(true, `${header}\n1168A,0001,,2,A-01,,\n1168A,0003,,4,B-01,,`, '[3]');
+  assert.equal(nextSheet.status, 200);
+  assert.deepEqual(saved.map(item => item.partNumber), ['0001', '0002', '0003'], 'new parts still upload alongside a repeated part');
+  const originalSheet = `${header}\n1168A,38501?LC?760S,,2,A-01,,`;
+  const firstCorrection = await send(true, originalSheet, '[2]', '{"2":{"partNumber":"0004"}}');
+  assert.equal(firstCorrection.status, 200, JSON.stringify(await firstCorrection.clone().json()));
+  assert.deepEqual(saved.at(-1).sourcePartNumbers, ['38501?LC?760S']);
+  const sourceLookup = await fetch(`http://127.0.0.1:${server.address().port}/api/reconciliation/stock-preview?dealerCode=1168A&partNumber=0005&sourcePartNumber=38501%3FLC%3F760S`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  assert.equal((await sourceLookup.json()).sourceAlreadyCorrected, true, 'original Excel part stays linked to the first correction');
+  const secondCorrection = await send(true, originalSheet, '[2]', '{"2":{"partNumber":"0005"}}');
+  assert.equal(secondCorrection.status, 409, 'the same original Excel part cannot increase stock through a different corrected part');
+  assert.match((await secondCorrection.json()).message, /already corrected and uploaded/);
+  assert.equal(saved.length, 4, 'second correction leaves stock untouched');
 });
 
 test('browser review retains only exceptions after upload and selects revalidated corrections', async () => {
@@ -140,11 +191,22 @@ test('browser review retains only exceptions after upload and selects revalidate
     { reviewRows: [{ rowNumber: 2, partNumber: '0001', dmsStock: 2, dlc: 10, mrp: 20, status: 'VALID' },
       { rowNumber: 3, dealerCode: '1168A', partNumber: '0002', dmsStock: 3, dlc: 10, mrp: 20, status: 'VALID' }] }
   ];
+  const existingParts = new Set();
+  const correctedSources = new Map();
   const sent = [];
   const context = { $, state: {}, URLSearchParams, window: { crypto: { randomUUID: () => 'review-id' } },
     FormData: class { constructor() { this.fields = {}; } set(key, value) { this.fields[key] = value; } },
     api: async (path, options) => {
-      if (path.startsWith('/api/parts/suggestions?')) return { suggestions: [{ partNumber: '0003', partDescription: 'MASTER 0003' }] };
+      if (path.startsWith('/api/parts/suggestions?')) {
+        const partNumber = new URL(path, 'http://localhost').searchParams.get('q') === '0002' ? '0002' : '0003';
+        return { suggestions: [{ partNumber, partDescription: `MASTER ${partNumber}`, dlc: 10, mrp: 20 }] };
+      }
+      if (path.startsWith('/api/reconciliation/stock-preview?')) {
+        const params = new URL(path, 'http://localhost').searchParams;
+        return { success: true, alreadyUploaded: existingParts.has(params.get('partNumber')),
+          sourceAlreadyCorrected: correctedSources.has(params.get('sourcePartNumber')),
+          correctedPartNumber: correctedSources.get(params.get('sourcePartNumber')) || '' };
+      }
       sent.push(options.body.fields); const response = responses.shift(); if (response instanceof Error) throw response; return response;
     },
     cleanDealerCode: value => String(value || '').toUpperCase(), activeReconDealer: () => '1168A',
@@ -167,6 +229,7 @@ test('browser review retains only exceptions after upload and selects revalidate
   vm.runInContext(source.slice(changeStart, source.indexOf("    $('#stockReviewSelectAll')?.addEventListener", changeStart)), context);
   selectionHandlers.change({ target: { dataset: { stockSelect: '3' }, checked: true } });
   assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), true);
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /Corrected &amp; Validated/, 'selecting an exception must not mark it validated');
   assert.equal($('#stockReviewSelectedCount').textContent, '2');
   assert.equal($('#stockReviewSelectAll').checked, true);
   const selectAllHandlers = {};
@@ -185,14 +248,21 @@ test('browser review retains only exceptions after upload and selects revalidate
   assert.match($('#stockReviewRows').innerHTML, /UNKNOWN/);
   selectionHandlers.change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: '0002' } });
   assert.equal(context.state.dealerStockReview.rows[1].status, 'PENDING');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), false, 'a valid part with the wrong dealer is not ready to transfer');
+  selectionHandlers.change({ target: { dataset: { stockRow: '3', stockField: 'dealerCode' }, value: '1168A' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), true, 'correcting the dealer revalidates and selects the exact part');
+  assert.match($('#stockReviewRows').innerHTML, /data-stock-select="3"[^>]*checked/);
+  selectionHandlers.change({ target: { dataset: { stockRow: '3', stockField: 'dealerCode' }, value: '12320' } });
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), false, 'changing dealer again clears the selection');
   assert.equal($('#stockReviewUseDealer').disabled, false, 'dealer mismatch remains correctable after a part edit');
   const dealerHandlers = {};
   $('#stockReviewUseDealer').addEventListener = (name, handler) => { dealerHandlers[name] = handler; };
   const dealerStart = source.indexOf("    $('#stockReviewUseDealer')?.addEventListener('click'");
   vm.runInContext(source.slice(dealerStart, source.indexOf("    $('#stockReviewExport')?.addEventListener", dealerStart)), context);
-  dealerHandlers.click();
+  await dealerHandlers.click();
   assert.equal(context.state.dealerStockReview.corrections[3].dealerCode, '1168A');
-  await context.uploadDealerStock(form);
   assert.equal(context.state.dealerStockReview.excluded.has(3), false);
   assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), false);
   assert.equal(context.state.dealerStockReview.committed.has(2), true);
@@ -225,6 +295,34 @@ test('browser review retains only exceptions after upload and selects revalidate
   boundSearch.onSelect({ partNumber: '0003' });
   assert.equal(context.state.dealerStockReview.corrections[3].partNumber, '0003');
   assert.equal(context.state.dealerStockReview.rows[1].status, 'PENDING');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match($('#stockReviewRows').innerHTML, /Corrected &amp; Validated/, 'an exact priced Part Master match gets the green mark');
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), true, 'a verified correction is selected automatically for revalidation');
+  assert.match($('#stockReviewRows').innerHTML, /data-stock-select="3"[^>]*checked/, 'the corrected row checkbox reflects auto-selection');
+  assert.equal(context.state.dealerStockReview.rows[1].partDescription, 'MASTER 0003');
+  correctedSources.set('UNKNOWN', '0009');
+  selectionHandlers.change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: '0002' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match($('#stockReviewRows').innerHTML, /Already Corrected/, 'the original Excel part cannot be corrected to another target');
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), false);
+  correctedSources.clear();
+  existingParts.add('0002');
+  selectionHandlers.change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: '0003' } });
+  await new Promise(resolve => setImmediate(resolve));
+  selectionHandlers.change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: '0002' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match($('#stockReviewRows').innerHTML, /Already Uploaded/, 'an uploaded part cannot show the green corrected mark');
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), false, 'an uploaded part is not selected for transfer');
+  selectionHandlers.change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: '000' } });
+  assert.doesNotMatch($('#stockReviewRows').innerHTML, /Corrected &amp; Validated/, 'editing again immediately clears validation');
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), false, 'editing again clears automatic selection');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match($('#stockReviewRows').innerHTML, /Invalid Part Number/, 'a partial part cannot pass exact validation');
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), false, 'an invalid part is not automatically selected');
+  selectionHandlers.change({ target: { dataset: { stockRow: '3', stockField: 'partNumber' }, value: '0003' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match($('#stockReviewRows').innerHTML, /Corrected &amp; Validated/);
+  assert.equal(context.state.dealerStockReview.selectedExceptions.has(3), true);
   assert.equal(destroyed, true);
 
   // Exercise the toolbar through validation and the existing dealer-stock save handler.

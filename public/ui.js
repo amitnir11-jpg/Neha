@@ -225,6 +225,7 @@
     masterCatalogueCount: 0,
     partMasterExportInFlight: false,
     masterSearch: { q: '', page: 1, limit: 10, total: 0, sort: 'partNumber', direction: 'asc' },
+    partSearchRequestId: 0,
     masterSearchRows: [],
     partMasterSelected: new Set(),
     activeAudit: null,
@@ -3169,8 +3170,14 @@
   function tableDefaultColumnWidth(table, key) {
     if (table.id === 'dealerStockReviewTable') return ({
       'excel-row': 110, 'dealer-code': 150, 'part-number': 300, description: 220,
-      'dms-qty': 110, 'bin-loc-1': 135, 'bin-loc-2': 135, 'bin-loc-3': 135,
+      'dms-qty': 110,
       dlc: 105, mrp: 105, status: 320
+    })[key] || 130;
+    if (table.id === 'reconciliationReportTable') return ({
+      'part-number': 180, description: 250, category: 140, 'dms-qty': 110,
+      'scanned-qty': 120, 'variance-qty': 120, status: 120, mrp: 120,
+      'dlc-dlp': 130, 'dms-stock-value': 150, 'scanned-value': 150,
+      'bin-location': 140, movement: 130, 'fast-slow-dead': 150
     })[key] || 130;
     const dashboardStreamWidths = {
       time: 160,
@@ -3230,7 +3237,7 @@
   function scanHistoryLayoutStorageKey() {
     const user = state.user || readStoredJson('dakshUser') || {};
     const identity = String(user.id || user.username || user.email || user.name || 'user').trim().toLowerCase();
-    return `daksh_table_scan_history:${encodeURIComponent(identity)}`;
+    return `daksh_table_scan_history:${encodeURIComponent(identity)}${isBarcodeWorkspaceActive() ? ':barcode' : ''}`;
   }
 
   function applyTableColumnOrder(table, order) {
@@ -3379,7 +3386,7 @@
       const sourceKey = event.dataTransfer.getData('text/plain');
       if (!target || !sourceKey || sourceKey === target.dataset.colKey) return;
       event.preventDefault();
-      const current = Array.from(headRow.children).map((th) => th.dataset.colKey);
+      const current = Array.from(table.tHead.rows[0].children).map((th) => th.dataset.colKey);
       const next = current.filter((key) => key !== sourceKey);
       const targetIndex = next.indexOf(target.dataset.colKey);
       const afterTarget = event.clientX > target.getBoundingClientRect().left + target.getBoundingClientRect().width / 2;
@@ -3400,8 +3407,11 @@
     const scanHistoryTable = $('#scanHistoryRows')?.closest('table');
     enhanceDataTable(scanHistoryTable, scanHistoryLayoutStorageKey());
     initScanHistorySorting(scanHistoryTable);
-    enhanceDataTable($('#dealerStockPreviewTable'), 'daksh_table_dealer_stock_preview');
     enhanceDataTable($('#localPartHistoryTable'), 'daksh_table_local_part_history');
+    enhanceDataTable($('#reconciliationReportTable'), 'daksh_table_reconciliation_report');
+    enhanceDataTable($('#validatorMissingRows')?.closest('table'), 'daksh_table_invalid_scans');
+    enhanceDataTable($('#validatorDetailRows')?.closest('table'), 'daksh_table_invalid_scan_details');
+    enhanceDataTable($('#scanModificationHistoryRows')?.closest('table'), 'daksh_table_scan_modification_history');
   }
 
   function setUserChrome() {
@@ -4045,6 +4055,13 @@
       screenReader.className = 'sr-only scan-history-sort-status';
       indicator.append(up, down);
       button.append(labelNode, indicator, screenReader);
+      const dragHandle = document.createElement('span');
+      dragHandle.className = 'column-drag-handle';
+      dragHandle.draggable = true;
+      dragHandle.title = 'Drag to move column';
+      dragHandle.setAttribute('aria-label', `Move ${th.dataset.sortLabel} column`);
+      dragHandle.textContent = '⋮⋮';
+      th.appendChild(dragHandle);
       if (resizer) th.insertBefore(button, resizer);
       else th.appendChild(button);
     });
@@ -5241,14 +5258,17 @@
     });
     const binInput = $('[name="bin"], [name="binLocation"]', form);
     const binLabel = binInput?.closest('label');
-    const needsSourceBinFirst = ['OUTWARD', 'FITTED'].includes(scanType);
-    const upiFirstBarcode = form.id === 'barcodeScanForm' && needsSourceBinFirst;
-    const manualBinFirst = form.id === 'manualScanForm' && scanType !== 'VERIFICATION';
+    const deductionScan = ['OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType);
+    const needsSourceBinFirst = deductionScan;
+    const upiFirstBarcode = form.id === 'barcodeScanForm' && ['OUTWARD', 'FITTED'].includes(scanType);
+    // INWARD needs a destination before a part is entered. A deduction needs
+    // the part first so we can offer only bins that actually hold that part.
+    const manualBinFirst = form.id === 'manualScanForm' && scanType === 'INWARD';
     const manualBinValue = String(binInput?.value || '').trim();
     const manualBinMissing = manualBinFirst && (!manualBinValue || (scanType === 'INWARD' && state.validatedManualBin !== `${form.elements.dealerCode.value}|${cleanDealerCode(manualBinValue)}`));
     const showPartLookupBin = !upiFirstBarcode;
     if (binInput) {
-      binInput.required = manualBinFirst || (!upiFirstBarcode && needsSourceBinFirst) || (form.id === 'barcodeScanForm' && ['INWARD', 'DAMAGE'].includes(scanType));
+      binInput.required = (form.id === 'manualScanForm' && scanType !== 'VERIFICATION') || (!upiFirstBarcode && needsSourceBinFirst) || (form.id === 'barcodeScanForm' && ['INWARD', 'DAMAGE'].includes(scanType));
       binInput.disabled = form.id === 'barcodeScanForm' && scanType === 'VERIFICATION';
     }
     if (binLabel && form.id === 'barcodeScanForm') {
@@ -5259,6 +5279,14 @@
     if (binLabel) {
       binLabel.classList.toggle('source-bin-required', needsSourceBinFirst);
       binLabel.classList.toggle('source-bin-missing', needsSourceBinFirst && !String(binInput?.value || '').trim());
+    }
+    if (form.id === 'manualScanForm') {
+      const label = $('#manualBinLabel');
+      const hint = $('#manualBinHint');
+      if (label) label.firstChild.textContent = deductionScan ? 'Source Bin Location *' : 'Bin Location *';
+      if (hint) hint.textContent = deductionScan
+        ? 'Enter the part number first. Choose the physical source bin shown with its available quantity.'
+        : 'Bin stays selected after saving. Change it when moving to another location.';
     }
     const partInput = $('[name="part"]', form);
     const rawInput = $('[name="rawScan"]', form);
@@ -8528,12 +8556,6 @@
     return count > 0 ? `1-${count}` : '0';
   }
 
-  function dealerStockPreviewRangeText(total, visible) {
-    const count = dealerStockSummaryCount({ partLineCount: total });
-    const shown = Math.min(count, Math.max(0, Math.trunc(Number(visible || 0) || 0)));
-    return count > 0 && shown > 0 ? `1-${shown} of ${count}` : `0 of ${count}`;
-  }
-
   function setDealerStockUploadSummary(summary = {}) {
     const partLineCount = dealerStockSummaryCount(summary);
     const dmsStock = Number(summary.totalDmsStockQty ?? summary.dmsStockQty ?? summary.dmsStock ?? 0);
@@ -8586,7 +8608,7 @@
     setText('stockReviewWrong', wholeNumber(rows.filter(row => row.status === 'WRONG_PART').length));
     setText('stockReviewMissing', wholeNumber(rows.filter(row => row.status === 'MISSING_PRICE').length));
     setText('stockReviewRejected', wholeNumber(rows.filter(row => row.status === 'REJECTED').length));
-    setText('stockReviewDuplicate', wholeNumber(rows.filter(row => row.status === 'DUPLICATE').length));
+    setText('stockReviewDuplicate', wholeNumber(rows.filter(row => ['DUPLICATE', 'ALREADY_UPLOADED', 'SOURCE_ALREADY_CORRECTED'].includes(row.status)).length));
     setText('stockReviewSelectedCount', wholeNumber(selected.length + selectedExceptions.size));
     setText('stockReviewQty', wholeNumber(selected.reduce((sum, row) => sum + Number(row.dmsStock || 0), 0)));
     setText('stockReviewDlc', `₹ ${money2(selected.reduce((sum, row) => sum + Number(row.dmsStock || 0) * Number(row.dlc || 0), 0))}`);
@@ -8604,16 +8626,81 @@
     $('#stockReviewSelectAll').indeterminate = selectedFiltered.length > 0 && selectedFiltered.length < filtered.length;
     $('#stockReviewRows').innerHTML = pageRows.map(row => `<tr>
       <td><input type="checkbox" data-stock-select="${row.rowNumber}" aria-label="Select Excel row ${row.rowNumber} ${row.status === 'VALID' ? 'for upload' : 'for correction'}" ${row.status === 'VALID' ? !review.excluded.has(row.rowNumber) ? 'checked' : '' : selectedExceptions.has(row.rowNumber) ? 'checked' : ''}></td>
-      <td>${row.rowNumber}</td>
+      <td>${row.rowNumber}${dealerStockValidationBadge(review, row)}</td>
       <td><input data-stock-row="${row.rowNumber}" data-stock-field="dealerCode" value="${escapeHtml(row.dealerCode || '')}" aria-label="Dealer code at Excel row ${row.rowNumber}" ${row.status === 'VALID' ? 'readonly' : ''}></td>
       <td><div class="stock-review-part-edit"><input data-stock-row="${row.rowNumber}" data-stock-field="partNumber" value="${escapeHtml(row.partNumber || '')}" title="${escapeHtml(row.partNumber || '')}" aria-label="Part number at Excel row ${row.rowNumber}"><button type="button" class="btn light" data-stock-edit="${row.rowNumber}" aria-label="Edit part number at Excel row ${row.rowNumber}">Edit</button></div></td>
-      <td>${escapeHtml(row.partDescription || '')}</td>
+      <td data-stock-description="${row.rowNumber}">${escapeHtml(row.partDescription || '')}</td>
       <td><input type="number" min="0" step="1" data-stock-row="${row.rowNumber}" data-stock-field="dmsStock" value="${escapeHtml(row.dmsStock ?? '')}" aria-label="DMS quantity at Excel row ${row.rowNumber}"></td>
-      ${[1, 2, 3].map(index => `<td><input data-stock-row="${row.rowNumber}" data-stock-field="binLoc${index}" value="${escapeHtml(row[`binLoc${index}`] || '')}" aria-label="Bin ${index} at Excel row ${row.rowNumber}"></td>`).join('')}
-      <td>${row.status === 'VALID' ? `₹ ${money2(row.dlc)}` : '—'}</td><td>${row.status === 'VALID' ? `₹ ${money2(row.mrp)}` : '—'}</td>
-      <td title="${escapeHtml(row.reason || '')}">${escapeHtml(row.reason || row.status)}</td>
-    </tr>`).join('') || '<tr><td colspan="12">No rows remain for review.</td></tr>';
+      <td>${row.status === 'VALID' || review.rowValidation?.[row.rowNumber]?.isValidated ? `₹ ${money2(row.dlc)}` : '—'}</td><td>${row.status === 'VALID' || review.rowValidation?.[row.rowNumber]?.isValidated ? `₹ ${money2(row.mrp)}` : '—'}</td>
+      <td title="${escapeHtml(review.rowValidation?.[row.rowNumber]?.validationError || row.reason || '')}">${escapeHtml(review.rowValidation?.[row.rowNumber]?.validationError || row.reason || row.status)}</td>
+    </tr>`).join('') || '<tr><td colspan="9">No rows remain for review.</td></tr>';
     enhanceDataTable($('#dealerStockReviewTable'), 'daksh_table_dealer_stock_review');
+  }
+
+  function dealerStockValidationBadge(review, row) {
+    const validation = review.rowValidation?.[row.rowNumber];
+    if (!validation?.isEdited) return '';
+    if (validation.isValidated && validation.validationStatus === 'VALIDATED') return '<span class="stock-review-corrected" title="Verified against Part Master">✓ Corrected &amp; Validated</span>';
+    if (validation.validationStatus === 'ALREADY_UPLOADED') return '<span class="stock-review-invalid" title="This part is already in uploaded stock">✗ Already Uploaded</span>';
+    if (validation.validationStatus === 'SOURCE_ALREADY_CORRECTED') return '<span class="stock-review-invalid" title="This original Excel part was already corrected">✗ Already Corrected</span>';
+    if (validation.validationStatus === 'INVALID') return '<span class="stock-review-invalid" title="Part Master validation failed">✗ Invalid Part Number</span>';
+    return '<span class="stock-review-pending" title="Waiting for Part Master validation">● Pending Validation</span>';
+  }
+
+  async function validateDealerStockPart(review, rowNumber) {
+    const row = review.rows.find(item => item.rowNumber === rowNumber);
+    const partNumber = clean(row?.partNumber).toUpperCase();
+    if (!partNumber) return;
+    try {
+      const response = await api(`/api/parts/suggestions?${new URLSearchParams({ q: partNumber, dealerCode: review.dealerCode, limit: '1' })}`);
+      if (state.dealerStockReview !== review || clean(row.partNumber).toUpperCase() !== partNumber) return;
+      const parts = response.parts || response.suggestions || response.rows || [];
+      const match = parts.find(part => clean(part.partNumber || part.part || '').toUpperCase() === partNumber);
+      const validation = review.rowValidation ||= {};
+      const entry = validation[rowNumber] || (validation[rowNumber] = { isEdited: true });
+      if (match && Number(match.dlc) > 0 && Number(match.mrp) > 0) {
+        const stock = await api(`/api/reconciliation/stock-preview?${new URLSearchParams({ dealerCode: review.dealerCode, partNumber,
+          sourcePartNumber: review.originalPartNumbers?.[rowNumber] || '' })}`);
+        if (state.dealerStockReview !== review || clean(row.partNumber).toUpperCase() !== partNumber) return;
+        if (stock.sourceAlreadyCorrected) {
+          review.selectedExceptions.delete(rowNumber);
+          entry.validationStatus = 'SOURCE_ALREADY_CORRECTED'; entry.isValidated = false; entry.isSelected = false;
+          entry.validationError = `Original part ${review.originalPartNumbers?.[rowNumber]} was already corrected and uploaded as ${stock.correctedPartNumber}. It cannot be corrected again.`;
+          row.reason = entry.validationError;
+          renderDealerStockReview();
+          return;
+        }
+        if (stock.alreadyUploaded) {
+          review.selectedExceptions.delete(rowNumber);
+          entry.validationStatus = 'ALREADY_UPLOADED'; entry.isValidated = false; entry.isSelected = false;
+          entry.validationError = `Part ${partNumber} is already uploaded for this dealer and audit.`;
+          row.reason = entry.validationError;
+          renderDealerStockReview();
+          return;
+        }
+        row.partDescription = clean(match.partDescription || match.partName || match.description || '');
+        row.dlc = Number(match.dlc); row.mrp = Number(match.mrp);
+        entry.validationStatus = 'VALIDATED'; entry.isValidated = true; entry.validationError = '';
+        const dealerMatches = cleanDealerCode(row.dealerCode) === review.dealerCode;
+        if (dealerMatches) review.selectedExceptions.add(rowNumber);
+        else review.selectedExceptions.delete(rowNumber);
+        entry.isSelected = dealerMatches;
+        row.reason = dealerMatches
+          ? 'Validated against Part Master. Validate and Transfer will verify again before saving.'
+          : `Part validated, but dealer code ${row.dealerCode} does not match selected dealer ${review.dealerCode}. Correct dealer code before transfer.`;
+      } else {
+        row.partDescription = match ? clean(match.partDescription || match.partName || match.description || '') : '';
+        entry.validationStatus = 'INVALID'; entry.isValidated = false;
+        entry.validationError = match ? 'DLC or MRP is missing in Part Master' : 'Part number not found in Part Master';
+        row.reason = entry.validationError;
+      }
+      renderDealerStockReview();
+    } catch (_) {
+      if (state.dealerStockReview !== review || clean(row.partNumber).toUpperCase() !== partNumber) return;
+      const entry = (review.rowValidation ||= {})[rowNumber] ||= { isEdited: true };
+      entry.validationStatus = 'PENDING'; entry.isValidated = false; entry.validationError = 'Part Master or uploaded-stock validation could not be completed';
+      renderDealerStockReview();
+    }
   }
 
   function isReconciliationDealerSelect(select) {
@@ -8663,8 +8750,6 @@
 
   function renderDealerStockPreview(rows = [], total = rows.length, summary = {}) {
     const safeRows = Array.isArray(rows) ? rows : [];
-    const panel = $('#dealerStockPreviewPanel');
-    if (panel) panel.hidden = false;
     const totalRows = dealerStockSummaryCount({ partLineCount: summary.partLineCount ?? summary.totalPartsUploaded ?? summary.rows ?? total ?? safeRows.length });
     const fallbackSummary = {
       partLineCount: totalRows,
@@ -8672,31 +8757,12 @@
       stockValue: safeRows.reduce((sum, row) => sum + Number(row.stockValue || 0), 0)
     };
     setDealerStockUploadSummary({ ...fallbackSummary, ...summary, partLineCount: totalRows });
-    $('#dealerStockPreviewRows').innerHTML = safeRows.map((row) => `
-      <tr>
-        <td>${escapeHtml(row.dealerCode)}</td>
-        <td>${partLink(row.partNumber)}</td>
-        <td>${escapeHtml(row.partDescription)}</td>
-        <td>${escapeHtml(row.dmsStock || row.systemQty || 0)}</td>
-        <td>${escapeHtml(row.binLoc1 || row.systemBinLoc1 || '')}</td>
-        <td>${escapeHtml(row.binLoc2 || row.systemBinLoc2 || '')}</td>
-        <td>${escapeHtml(row.binLoc3 || row.systemBinLoc3 || '')}</td>
-        <td>${row.validationStatus === 'VALID' || !isAdmin() ? '—' : `<button type="button" class="btn light" data-stock-correct="${escapeHtml(row.id || '')}" data-stock-part="${escapeHtml(row.partNumber || '')}" data-stock-qty="${escapeHtml(row.dmsStock || 0)}">Correct</button>`}</td>
-      </tr>
-    `).join('') || '<tr><td colspan="8" class="muted">No dealer stock uploaded yet</td></tr>';
-    enhanceDataTable($('#dealerStockPreviewTable'), 'daksh_table_dealer_stock_preview');
-    const message = $('#dealerStockUploadMessage');
-    if (message && safeRows.length) {
-      message.className = 'form-message success';
-      message.textContent = `Preview showing ${dealerStockPreviewRangeText(totalRows, safeRows.length)} DMS stock row(s).`;
-    }
   }
 
   async function loadDealerStockPreview() {
     const dealerCode = activeReconDealer();
     if (!dealerCode || dealerCode === 'ALL') throw new Error('Select Dealer Code first');
-    const invalidOnly = $('#dealerStockInvalidOnly')?.checked ? '&invalidOnly=1' : '';
-    const data = await api(`/api/reconciliation/stock-preview?dealerCode=${encodeURIComponent(dealerCode)}${invalidOnly}`);
+    const data = await api(`/api/reconciliation/stock-preview?dealerCode=${encodeURIComponent(dealerCode)}`);
     if (activeReconDealer() !== dealerCode) return null;
     renderDealerStockPreview(data.stock || [], data.total || 0, data.summary || {});
     renderDealerStockErrors([]);
@@ -8704,7 +8770,7 @@
     if (message) {
       message.className = (data.stock || []).length ? 'form-message success' : 'form-message';
       const lineRange = data.summary?.lineRange?.text || dealerStockLineRangeText(data.total || 0);
-      message.textContent = (data.stock || []).length ? `Loaded ${data.total || 0} uploaded DMS stock row(s) for ${dealerCode}. ${data.invalidCount || 0} require Part Master correction. Line range ${lineRange}.` : `No ${invalidOnly ? 'invalid ' : ''}uploaded DMS stock found for ${dealerCode}.`;
+      message.textContent = (data.stock || []).length ? `Loaded ${data.total || 0} uploaded DMS stock row(s) for ${dealerCode}. ${data.invalidCount || 0} require Part Master correction. Line range ${lineRange}.` : `No uploaded DMS stock found for ${dealerCode}.`;
     }
     loadReconciliation({ silent: true }).catch(() => undefined);
     return data;
@@ -8738,18 +8804,35 @@
       state.dealerStockReview = {
         dealerCode, file, rows: data.reviewRows || [], corrections: state.dealerStockReview?.corrections || {},
         excluded: current?.excluded || new Set(), committed: current?.committed || new Set(),
-        selectedExceptions: current?.selectedExceptions || new Set(), page: current?.page || 1
+        selectedExceptions: current?.selectedExceptions || new Set(), rowValidation: current?.rowValidation || {}, page: current?.page || 1,
+        originalPartNumbers: current?.originalPartNumbers || Object.fromEntries((data.reviewRows || []).map(row => [row.rowNumber, row.partNumber]))
       };
       (data.reviewRows || []).forEach(row => {
+        if (row.status === 'ALREADY_UPLOADED' || row.status === 'SOURCE_ALREADY_CORRECTED') {
+          state.dealerStockReview.selectedExceptions.delete(row.rowNumber);
+          state.dealerStockReview.excluded.add(row.rowNumber);
+        }
+        if (row.status !== 'VALID' && state.dealerStockReview.rowValidation[row.rowNumber]) {
+          Object.assign(state.dealerStockReview.rowValidation[row.rowNumber], {
+            validationStatus: row.status, isValidated: false, isSelected: false, validationError: row.reason || ''
+          });
+        }
         if (row.status === 'VALID' && current?.rows?.find(previousRow => previousRow.rowNumber === row.rowNumber)?.status === 'PENDING') {
           state.dealerStockReview.excluded.delete(row.rowNumber);
         }
         if (row.status === 'VALID') state.dealerStockReview.selectedExceptions.delete(row.rowNumber);
       });
+      // Invalid rows are already present in the editable review grid. Do not
+      // render the same rows again in the separate skipped-rows panel.
+      const errorPanel = $('#dealerStockErrorReport');
+      if (errorPanel) { errorPanel.hidden = true; errorPanel.innerHTML = ''; }
       renderDealerStockReview();
       if (message) {
-        message.className = 'form-message success';
-        message.textContent = data.message || 'Validated for review. No stock was saved.';
+        const uploadedCount = (data.reviewRows || []).filter(row => row.status === 'ALREADY_UPLOADED' || row.status === 'SOURCE_ALREADY_CORRECTED').length;
+        message.className = uploadedCount ? 'form-message error' : 'form-message success';
+        message.textContent = uploadedCount
+          ? `${uploadedCount} part(s) already uploaded or corrected earlier for this dealer and audit. These rows cannot be transferred again; review the remaining rows below.`
+          : data.message || 'Validated for review. No stock was saved.';
       }
       return data;
     } finally {
@@ -8864,6 +8947,7 @@
           </tr>
         `;
       }).join('') || '<tr><td colspan="14" class="muted">No reconciliation data found for selected dealer/filter</td></tr>';
+      enhanceDataTable($('#reconciliationReportTable'), 'daksh_table_reconciliation_report');
     }
     setText('reconReportCount', `(${wholeNumber(totalRows)} records)`);
     setText('reconPageSummary', totalRows ? `Showing ${wholeNumber(start + 1)} to ${wholeNumber(start + visibleRows.length)} of ${wholeNumber(totalRows)} records` : 'Showing 0 of 0 records');
@@ -8932,6 +9016,7 @@
   }
 
   function clearPartSearch(message = '') {
+    state.partSearchRequestId += 1;
     state.masterSearch = { ...state.masterSearch, q: '', page: 1, limit: 10, total: 0 };
     state.masterSearchRows = [];
     state.partMasterSelected.clear();
@@ -8962,7 +9047,7 @@
     });
     const min = $('#partMrpMinFilter')?.value.trim() || '';
     const max = $('#partMrpMaxFilter')?.value.trim() || '';
-    if (min || max) params.set('mrp', min && max ? `${min}-${max}` : min ? `>=${min}` : `<=${max}`);
+    if (min || max) params.set('mrp', min && max ? `${min}-${max}` : min === '0' || max === '0' ? '0' : min ? `>=${min}` : `<=${max}`);
     params.set('page', String(page));
     params.set('limit', String(state.masterSearch.limit || 10));
     params.set('sort', state.masterSearch.sort || 'partNumber');
@@ -8976,6 +9061,7 @@
   }
 
   async function loadParts(page = 1) {
+    const requestId = ++state.partSearchRequestId;
     const params = partSearchParams(page);
     state.masterSearch = { ...state.masterSearch, q: params.get('partNumber') || '', page, limit: state.masterSearch.limit || 10 };
     const box = $('#partSearchMessage');
@@ -8984,6 +9070,7 @@
       box.textContent = hasPartSearchFilter() ? 'Searching master data...' : 'Loading all master parts...';
     }
     const data = await api(`/api/master/search?${params.toString()}`);
+    if (requestId !== state.partSearchRequestId) return;
     state.masterSearchRows = data.parts || [];
     state.masterSearch.total = Number(data.total || 0);
     $('#partMasterResultsCard').hidden = false;
@@ -8997,6 +9084,7 @@
         <td>${escapeHtml(part.manufacturingYear || part.year || '')}</td><td>${escapeHtml(money(part.mrp))}</td><td>${escapeHtml(money(part.dlc))}</td>
         <td>${updated ? escapeHtml(new Date(updated).toLocaleDateString()) : '—'}</td><td><button class="btn part-row-edit" data-part-number="${escapeHtml(code)}" type="button" aria-label="Edit ${escapeHtml(code)}">✎</button><button class="btn danger-soft part-row-delete" data-part-number="${escapeHtml(code)}" type="button" aria-label="Delete ${escapeHtml(code)}">▣</button></td></tr>`;
     }).join('') || '<tr><td colspan="12" class="muted">No matching master catalogue parts found</td></tr>';
+    enhanceDataTable($('#partMasterResultTable'), 'daksh_table_part_master_results');
     const totalPages = Math.max(Number(data.totalPages || 1), 1);
     $('#partPageInfo').textContent = `Page ${data.page || page} of ${totalPages} | ${data.total || 0} records`;
     $('#partMasterCount').textContent = `Total Parts: ${wholeNumber(data.total || 0)}`;
@@ -9077,26 +9165,21 @@
     fill('partYearFilter', data.years || [], 'All Years');
   }
 
-  function exportPartSearchResults() {
-    const rows = state.masterSearchRows || [];
-    if (!rows.length) {
-      toast('No search result to export', 'error');
-      return;
+  async function exportPartSearchResults() {
+    const button = $('#partExportSearchBtn');
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const params = partSearchParams(1);
+      params.delete('page');
+      params.delete('limit');
+      params.set('format', 'csv');
+      await downloadGet(`/api/master/search?${params}`, 'Master_Part_Filtered_Results.csv', { timeoutMs: 300000 });
+    } catch (error) {
+      toast(error.message || 'Could not export filtered parts.', 'error');
+    } finally {
+      button.disabled = false;
     }
-    const headers = ['Part Number', 'Part Description', 'Category', 'Product Group', 'Product Sub Group', 'Year', 'Model', 'MRP', 'DLC'];
-    const csvRows = rows.map((part) => [
-      part.partNumber || part.partNo || '',
-      part.partDescription || part.partName || '',
-      part.productCategory || part.category || '',
-      part.productGroup || '',
-      part.partSubGroup || '',
-      part.manufacturingYear || part.year || '',
-      part.model || '',
-      part.mrp || 0,
-      part.dlc || 0
-    ]);
-    const csv = [headers].concat(csvRows).map((cols) => cols.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
-    triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'Master_Part_Search_Result.csv');
   }
 
   async function downloadCompletePartMaster() {
@@ -9810,7 +9893,7 @@
     const status = $('#binManagementStatus');
     if (!dealerCode) {
       state.binMasterRows = [];
-      if ($('#binMasterRows')) $('#binMasterRows').innerHTML = '<tr><td colspan="5" class="muted">Select dealer to view BIN locations</td></tr>';
+      if ($('#binMasterRows')) $('#binMasterRows').innerHTML = '<tr><td colspan="7" class="muted">Select dealer to view BIN locations</td></tr>';
       if (status) {
         status.className = 'form-message';
         status.textContent = 'Select dealer to manage BIN locations.';
@@ -9832,9 +9915,11 @@
         <td>${escapeHtml(bin.binCode)}</td>
         <td>${escapeHtml(bin.dealerCode)}</td>
         <td>${escapeHtml(bin.category)}</td>
-        <td><div class="row-actions"><button class="btn light small edit-bin-btn admin-only" type="button" data-id="${escapeHtml(bin.id || bin._id)}">Edit</button><button class="btn danger-soft small delete-bin-btn admin-only" type="button" data-id="${escapeHtml(bin.id || bin._id)}" data-bin="${escapeHtml(bin.binCode)}">Delete</button></div></td>
+        <td><span class="bin-status ${bin.active !== false ? 'active' : 'inactive'}">${bin.active !== false ? 'Active' : 'Inactive'}</span></td>
+        <td>${escapeHtml(String(Number(bin.availableQty || 0)))}</td>
+        <td><div class="row-actions"><button class="btn light small edit-bin-btn admin-only" type="button" data-id="${escapeHtml(bin.id || bin._id)}">Edit</button><button class="btn light small toggle-bin-active-btn admin-only" type="button" data-id="${escapeHtml(bin.id || bin._id)}">${bin.active !== false ? 'Deactivate' : 'Activate'}</button><button class="btn danger-soft small delete-bin-btn admin-only" type="button" data-id="${escapeHtml(bin.id || bin._id)}" data-bin="${escapeHtml(bin.binCode)}">Delete</button></div></td>
       </tr>
-    `).join('') || '<tr><td colspan="5" class="muted">No BIN locations found for selected dealer</td></tr>';
+    `).join('') || '<tr><td colspan="7" class="muted">No BIN locations found for selected dealer</td></tr>';
     if ($('#selectAllBins')) $('#selectAllBins').checked = false;
     if (status) {
       status.className = bins.length ? 'form-message success' : 'form-message';
@@ -9906,12 +9991,28 @@
     if (!binCode) throw new Error('Bin code is required');
     await api(`/api/bin-master/${encodeURIComponent(binId)}`, {
       method: 'PUT',
-      body: { dealerCode, binCode, binName: binCode, category: categoryInput.trim() }
+      body: { dealerCode, binCode, binName: binCode, category: categoryInput.trim(), active: bin.active !== false }
     });
     toast('Bin updated');
     if ($('#binManagementDealer')) $('#binManagementDealer').value = dealerCode;
     await loadBins();
     await loadBinTransferDestinationBins(dealerCode, $('.bin-transfer-from')?.value || '').catch(() => null);
+  }
+
+  async function setBinActive(binId, active) {
+    const bin = findBinRow(binId);
+    if (!bin) throw new Error('Bin not found');
+    if (!active && Number(bin.availableQty || 0) > 0) {
+      throw new Error(`BIN ${bin.binCode} has available stock and cannot be set inactive. Transfer or remove its stock first.`);
+    }
+    if (!window.confirm(`${active ? 'Activate' : 'Deactivate'} BIN ${bin.binCode}?`)) return;
+    await api(`/api/bin-master/${encodeURIComponent(binId)}`, {
+      method: 'PUT',
+      body: { dealerCode: bin.dealerCode, binCode: bin.binCode, binName: bin.binName || bin.binCode, category: bin.category || '', active }
+    });
+    toast(`BIN ${bin.binCode} ${active ? 'activated' : 'deactivated'}`);
+    await loadBins();
+    await loadBinTransferDestinationBins(bin.dealerCode, $('.bin-transfer-from')?.value || '').catch(() => null);
   }
 
   async function exportBinMaster() {
@@ -10973,6 +11074,7 @@
           </td>
         </tr>
       `).join('') || '<tr><td colspan="9" class="muted">No invalid unmatched scans found.</td></tr>';
+      enhanceDataTable(rows.closest('table'), 'daksh_table_invalid_scans');
       bindValidatorRowActions();
     }
   }
@@ -11002,6 +11104,7 @@
         <td>${escapeHtml(detail.binLocation || '-')}</td>
       </tr>
     `).join('') || '<tr><td colspan="6" class="muted">No scan detail available.</td></tr>';
+    enhanceDataTable($('#validatorDetailRows')?.closest('table'), 'daksh_table_invalid_scan_details');
     $('#validatorDetailModal')?.classList.remove('hidden');
   }
 
@@ -11611,6 +11714,7 @@
         <td><details><summary>View snapshots</summary><pre class="scan-audit-snapshot">${escapeHtml(JSON.stringify({ oldData: row.oldData, newData: row.newData }, null, 2))}</pre>${row.action === 'DELETE' ? `<button class="btn light restore-audited-scan" type="button" data-scan-id="${escapeHtml(row.scanId || '')}">Restore</button>` : ''}</details></td>
       </tr>
     `).join('') : '<tr><td colspan="8" class="muted">No scan modifications found.</td></tr>';
+    enhanceDataTable(tbody.closest('table'), 'daksh_table_scan_modification_history');
   }
 
   function dealerDeleteCriteria() {
@@ -12660,6 +12764,51 @@
     }
   }
 
+  async function lookupManualSourceBins(form = $('#manualScanForm')) {
+    if (!form) return [];
+    const scanType = String(form.elements.type?.value || '').toUpperCase();
+    const partNumber = normalizePartText(form.elements.part?.value || '');
+    if (!['OUTWARD', 'FITTED', 'DAMAGE'].includes(scanType) || !validPartText(partNumber)) return [];
+    const dealerCode = cleanDealerCode(form.elements.dealerCode?.value || currentDealerCode());
+    const binInput = form.elements.bin;
+    const options = $('#manualBinOptions');
+    const hint = $('#manualBinHint');
+    if (!dealerCode || !binInput || !options) return [];
+
+    if (hint) hint.textContent = 'Checking available source bins…';
+    const data = await api(`/api/bin-transfer/parts?${new URLSearchParams({ dealerCode, partNumber }).toString()}`);
+    if (normalizePartText(form.elements.part?.value || '') !== partNumber) return [];
+    const bins = (data.parts || [])
+      .filter((row) => normalizePartText(row.partNumber) === partNumber && Number(row.availableQty || row.quantity || 0) > 0)
+      .map((row) => ({
+        binLocation: cleanDealerCode(row.currentBin || row.binLocation || row.binCode || ''),
+        availableQty: Number(row.availableQty || row.quantity || 0)
+      }))
+      .filter((row) => row.binLocation);
+    const merged = Array.from(bins.reduce((byBin, row) => {
+      byBin.set(row.binLocation, (byBin.get(row.binLocation) || 0) + row.availableQty);
+      return byBin;
+    }, new Map()), ([binLocation, availableQty]) => ({ binLocation, availableQty }))
+      .sort((left, right) => left.binLocation.localeCompare(right.binLocation, undefined, { numeric: true }));
+
+    options.innerHTML = merged.map((row) => `<option value="${escapeHtml(row.binLocation)}" label="Available: ${escapeHtml(row.availableQty)}"></option>`).join('');
+    const current = cleanDealerCode(binInput.value);
+    const currentBin = merged.find((row) => row.binLocation === current);
+    if (merged.length === 1) {
+      binInput.value = merged[0].binLocation;
+      if (hint) hint.textContent = `${merged[0].binLocation} selected automatically — Available: ${merged[0].availableQty}.`;
+    } else if (merged.length > 1) {
+      if (!currentBin) binInput.value = '';
+      if (hint) hint.textContent = `Select Source Bin Location: ${merged.map((row) => `${row.binLocation} — Available: ${row.availableQty}`).join(' | ')}`;
+      binInput.focus();
+    } else {
+      binInput.value = '';
+      if (hint) hint.textContent = 'No available stock was found for this part. Choose another part or check the source bin.';
+    }
+    updateScanTypeFields(form);
+    return merged;
+  }
+
   function renderPartStockSummary(summary) {
     const node = $('#scanPartSummary');
     if (!node || !summary) return;
@@ -12684,12 +12833,12 @@
     if (requestId === state.partSummaryRequestId && dealerCode === scanStockDealerCode()) renderPartStockSummary(summary);
   }
 
-  function ensureScanBinReady(dealerCode, binLocation) {
-    const key = `${dealerCode}|${cleanDealerCode(binLocation)}`;
+  function ensureScanBinReady(dealerCode, binLocation, scanType = 'INWARD') {
+    const key = `${dealerCode}|${cleanDealerCode(binLocation)}|${scanType}`;
     const pending = state.scanBinValidationRequests.get(key);
     if (pending) return pending;
     const request = api('/api/scans/set-bin', { method: 'POST', body: {
-      dealerCode, auditId: activeAuditIdForScope(), binLocation: cleanDealerCode(binLocation)
+      dealerCode, auditId: activeAuditIdForScope(), binLocation: cleanDealerCode(binLocation), scanType
     } }).finally(() => {
       if (state.scanBinValidationRequests.get(key) === request) state.scanBinValidationRequests.delete(key);
     });
@@ -12707,7 +12856,7 @@
     updateScanTypeFields(form);
     if (!binLocation || !dealerCode) return;
     try {
-      const result = await ensureScanBinReady(dealerCode, binLocation);
+      const result = await ensureScanBinReady(dealerCode, binLocation, form.elements.type.value);
       if (`${form.elements.dealerCode.value}|${cleanDealerCode(form.elements.bin.value)}` !== key) return;
       state.validatedManualBin = result.valid ? key : '';
       updateScanTypeFields(form);
@@ -12726,7 +12875,7 @@
     updateBarcodeWorkspace(form);
     if (!binLocation || !dealerCode) return;
     try {
-      const result = await ensureScanBinReady(dealerCode, binLocation);
+      const result = await ensureScanBinReady(dealerCode, binLocation, form.elements.type.value);
       if (`${form.elements.dealerCode.value}|${cleanDealerCode(form.elements.binLocation.value)}` !== key) return;
       state.validatedBarcodeBin = result.valid ? key : '';
       updateBarcodeWorkspace(form);
@@ -13498,6 +13647,19 @@
       updateScanTypeFields(form);
       validateManualSourceBin(form).then(() => { if (!$('[name="part"]', form).disabled) $('[name="part"]', form).focus(); }).catch(console.warn);
     });
+    $('#manualScanForm [name="part"]')?.addEventListener('input', (event) => {
+      const form = event.target.closest('form');
+      clearTimeout(state.manualSourceBinLookupTimer);
+      state.manualSourceBinLookupTimer = setTimeout(() => {
+        lookupManualSourceBins(form).catch((error) => {
+          const hint = $('#manualBinHint');
+          if (hint) hint.textContent = `Could not load source bins: ${error.message}`;
+        });
+      }, 280);
+    });
+    $('#manualScanForm [name="part"]')?.addEventListener('change', (event) => {
+      lookupManualSourceBins(event.target.closest('form')).catch(console.warn);
+    });
     $('#clearManualScan')?.addEventListener('click', () => {
       const form = $('#manualScanForm');
       localStorage.removeItem(manualBinStorageKey(form));
@@ -13514,7 +13676,7 @@
       updateScanTypeFields($('#barcodeBinLocation').closest('form'));
     });
     $('#binManagementDealer')?.addEventListener('change', () => {
-      $('#binMasterRows').innerHTML = '<tr><td colspan="5" class="muted">Loading BIN locations...</td></tr>';
+      $('#binMasterRows').innerHTML = '<tr><td colspan="7" class="muted">Loading BIN locations...</td></tr>';
       loadBins().catch((error) => toast(error.message, 'error'));
     });
     $('#binManagementSearch')?.addEventListener('input', () => {
@@ -13532,6 +13694,12 @@
       const editButton = event.target.closest('.edit-bin-btn');
       if (editButton) {
         editBin(editButton.dataset.id).catch((error) => toast(error.message, 'error'));
+        return;
+      }
+      const toggleButton = event.target.closest('.toggle-bin-active-btn');
+      if (toggleButton) {
+        const bin = findBinRow(toggleButton.dataset.id);
+        setBinActive(toggleButton.dataset.id, !(bin?.active !== false)).catch((error) => toast(error.message, 'error'));
         return;
       }
       const deleteButton = event.target.closest('.delete-bin-btn');
@@ -13690,41 +13858,35 @@
       if (!excelStockBatch) return [];
       const query = clean($('#excelStockSearch')?.value).toUpperCase(); const filter = $('#excelStockFilter')?.value || 'ALL';
       return (excelStockBatch.rows || []).map((row, index) => ({ row, index })).filter(({ row }) =>
-        !row.deleted && (row.status === 'REJECTED' || row.validationStatus === 'DUPLICATE_RECORD') && (filter === 'ALL' || row.validationStatus === filter) && (!query || `${row.partNumber} ${row.binLocation} ${row.reason}`.toUpperCase().includes(query)));
+        !row.deleted && (filter === 'ALL' || (filter === 'READY' && row.status === 'ACCEPTED' && !row.committed)
+          || (filter === 'REJECTED' && row.status === 'REJECTED') || (filter === 'SAVED' && row.committed))
+        && (!query || `${row.sourceRow} ${row.partNumber} ${row.binLocation} ${row.reason}`.toUpperCase().includes(query)));
     };
     const renderExcelStockBatch = () => {
       if (!excelStockBatch) return;
       const rows = (excelStockBatch.rows || []).filter(row => !row.deleted); const accepted = rows.filter(row => row.status === 'ACCEPTED'); const rejected = rows.filter(row => row.status === 'REJECTED').length;
-      const validation = excelStockBatch.validationSummary || {};
-      const money = value => `₹ ${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
       $('#excelStockWorkspace').hidden = false;
       const editable = ['PENDING', 'PARTIALLY_COMMITTED'].includes(excelStockBatch.status);
-      $('#excelTotalRows').textContent = rows.length; $('#excelAcceptedRows').textContent = accepted.length;
-      $('#excelInvalidPartsCount').textContent = validation.invalidPartRows || 0;
-      $('#excelMissingPricesCount').textContent = Number(validation.missingDlcRows || 0) + Number(validation.missingMrpRows || 0) + Number(validation.bothPricesMissingRows || 0);
-      $('#excelMissingDlcCount').textContent = validation.missingDlcRows || 0; $('#excelMissingMrpCount').textContent = validation.missingMrpRows || 0;
-      $('#excelBothPricesCount').textContent = validation.bothPricesMissingRows || 0; $('#excelDuplicateCount').textContent = validation.duplicateRows || 0;
-      $('#excelAffectedQty').textContent = validation.affectedQty || 0;
-      $('#excelApprovedRows').textContent = accepted.filter(row => !row.committed).length; $('#excelExceptionRows').textContent = rejected;
-      $('#excelApprovedQty').textContent = validation.approvedStockQty ?? accepted.reduce((sum, row) => sum + Number(row.qty || 0), 0);
-      $('#excelPendingQty').textContent = validation.pendingExceptionQty ?? rows.filter(row => row.status === 'REJECTED').reduce((sum, row) => sum + Number(row.qty || 0), 0);
-      $('#excelValidatedDlc').textContent = money(validation.validatedDlcValue); $('#excelValidatedMrp').textContent = money(validation.validatedMrpValue);
+      $('#excelTotalRows').textContent = rows.length; $('#excelAcceptedRows').textContent = accepted.filter(row => !row.committed).length;
+      $('#excelInvalidPartsCount').textContent = rejected;
+      $('#excelSavedRows').textContent = rows.filter(row => row.committed).length;
       $('#excelBatchLabel').textContent = `Batch ${excelStockBatch.batchId}`;
       const statusLabels = { PENDING: 'Pending review', PARTIALLY_COMMITTED: 'Partially uploaded', COMMITTED: 'Uploaded', REVERSED: 'Reversed', SUPERSEDED: 'Replaced', CANCELLED: 'All rows deleted' };
       $('#excelReviewStatus').textContent = statusLabels[excelStockBatch.status] || excelStockBatch.status;
       $('#excelReviewStatus').className = `excel-badge ${excelStockBatch.status === 'COMMITTED' ? 'accepted' : 'pending'}`;
       $('#excelStockStatus').textContent = excelStockBatch.status === 'COMMITTED' ? 'Uploaded to stock' : excelStockBatch.status === 'PARTIALLY_COMMITTED' ? 'Some parts uploaded' : excelStockBatch.status === 'REVERSED' ? 'Stock upload reversed' : 'Not uploaded to stock';
       $('#excelStockStatus').className = $('#excelReviewStatus').className;
-      $('#excelFilterAll').textContent = `All issues (${rejected})`;
+      $('#excelFilterAll').textContent = `All (${rows.length})`;
       $('#excelStockUploadPanel').querySelectorAll('[data-excel-filter]').forEach(button => {
         const selected = button.dataset.excelFilter === $('#excelStockFilter').value;
         button.classList.toggle('active', selected); button.setAttribute('aria-selected', String(selected));
       });
       const visible = excelStockVisibleRows(); const pageSize = Number($('#excelRowsPerPage')?.value || 50); const pages = Math.max(1, Math.ceil(visible.length / pageSize));
       excelStockPage = Math.min(excelStockPage, pages); const start = (excelStockPage - 1) * pageSize; const pageRows = visible.slice(start, start + pageSize);
-      $('#excelStockRows').innerHTML = pageRows.map(({ row, index }) => `<tr><td><input type="checkbox" data-excel-exception-check="${index}" ${row.exceptionSelected ? 'checked' : ''} aria-label="Select exception ${excelHtml(row.partNumber)}"></td><td class="part-cell"><span>${excelHtml(row.partNumber)}</span></td><td>${excelHtml(row.qty)}</td><td>${excelHtml(row.binLocation)}</td><td><small class="excel-row-reason">${excelHtml(row.reason)}</small></td><td><div class="excel-row-actions"><button type="button" class="btn light excel-icon-button" data-excel-edit="${index}" ${row.committed || !editable ? 'disabled' : ''} title="Edit part" aria-label="Edit part ${excelHtml(row.partNumber)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12H4v-5L16 3Z M14 5l5 5"/></svg></button></div></td></tr>`).join('') || '<tr><td colspan="6">No exception rows match this filter.</td></tr>';
-      $('#excelSelectAllExceptions').checked = pageRows.length > 0 && pageRows.every(({ row }) => row.exceptionSelected);
-      $('#excelSelectedExceptionsDownload').disabled = !rows.some(row => row.status === 'REJECTED' && row.exceptionSelected);
+      $('#excelStockRows').innerHTML = pageRows.map(({ row, index }) => `<tr><td><input type="checkbox" data-excel-check="${index}" ${row.checked || row.committed ? 'checked' : ''} ${row.status !== 'ACCEPTED' || row.committed || !editable ? 'disabled' : ''} aria-label="Select valid part ${excelHtml(row.partNumber)}"></td><td class="part-cell"><span>${excelHtml(row.partNumber)}</span><small class="muted">Excel row ${excelHtml(row.sourceRow)}</small></td><td>${excelHtml(row.qty)}</td><td>${excelHtml(row.binLocation)}</td><td><span class="excel-stock-status ${row.status === 'REJECTED' ? 'rejected' : 'accepted'}">${row.committed ? 'Saved to scans' : row.validationStatus === 'DUPLICATE_STOCK' ? 'Already uploaded — review' : row.validationStatus === 'APPROVED_ADDITIONAL_QTY' ? 'Additional qty approved' : row.status === 'REJECTED' ? 'Needs correction' : 'Valid'}</span>${row.reason ? `<small class="excel-row-reason">${excelHtml(row.reason)}</small>` : ''}</td><td><div class="excel-row-actions"><button type="button" class="btn light excel-icon-button" data-excel-edit="${index}" ${row.committed || !editable ? 'disabled' : ''} title="Edit part" aria-label="Edit part ${excelHtml(row.partNumber)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12H4v-5L16 3Z M14 5l5 5"/></svg></button>${row.validationStatus === 'DUPLICATE_STOCK' && editable ? `<button type="button" class="btn light" data-excel-approve-duplicate="${index}" title="Confirm this is additional stock after checking the existing bin quantity">Approve additional qty</button>` : ''}</div></td></tr>`).join('') || '<tr><td colspan="6">No uploaded rows match this filter.</td></tr>';
+      const selectable = pageRows.filter(({ row }) => row.status === 'ACCEPTED' && !row.committed);
+      $('#excelSelectAllExceptions').checked = selectable.length > 0 && selectable.every(({ row }) => row.checked);
+      $('#excelSelectAllExceptions').disabled = !editable || selectable.length === 0;
       $('#excelPageLabel').textContent = `Showing ${pageRows.length ? start + pageRows.length : 0} of ${visible.length}`; $('#excelPrevPage').disabled = excelStockPage <= 1; $('#excelNextPage').disabled = excelStockPage >= pages;
       $('#excelPrevPage').hidden = pages <= 1; $('#excelNextPage').hidden = pages <= 1;
       $('#excelConfirmUpload').disabled = !editable || !accepted.some(row => row.checked && !row.committed);
@@ -13753,7 +13915,7 @@
         if (latest.batch.dealerCode === excelSelectedDealer()) { excelStockBatch = latest.batch; renderExcelStockBatch(); }
       }
     });
-    const loadExcelUploadHistory = () => excelHistory.load();
+    const loadExcelUploadHistory = (show = false) => excelHistory.load(show);
     const openExcelStockRowEdit = (index) => {
       if (!excelStockBatch || !['PENDING', 'PARTIALLY_COMMITTED'].includes(excelStockBatch.status)) return;
       const row = excelStockBatch.rows[index]; if (!row || row.committed) return;
@@ -13764,7 +13926,12 @@
       $('#excelEditDialog').showModal();
     };
     $('#excelStockUploadTab')?.addEventListener('click', openExcelUploadTab);
-    $('#excelUploadHistoryBtn')?.addEventListener('click', () => loadExcelUploadHistory().catch(error => excelStockNotice(error.message, true)));
+    $('#excelUploadHistoryBtn')?.addEventListener('click', () => {
+      const panel = $('#excelHistoryPanel');
+      panel.hidden = !panel.hidden;
+      $('#excelUploadHistoryBtn').setAttribute('aria-expanded', String(!panel.hidden));
+      if (!panel.hidden) loadExcelUploadHistory(true).catch(error => excelStockNotice(error.message, true));
+    });
     document.querySelector('#excelStockUploadPanel .excel-upload-actions a')?.addEventListener('click', (event) => {
       event.preventDefault(); downloadExcelStockFile(`${excelStockApi}/template`, 'daksh-stock-upload-template.xlsx').catch(error => excelStockNotice(error.message, true));
     });
@@ -13787,7 +13954,7 @@
         excelSelectedFile = null; $('#excelStockFile').value = ''; $('#excelSelectedFileName').textContent = `Uploaded: ${file.name}`;
         $('#excelSelectedFileName').hidden = true; $('#excelUploadFileBtn').hidden = true;
         renderExcelStockBatch(); await loadExcelUploadHistory();
-        excelStockNotice('Sheet uploaded for review. Edit rejected parts, verify accepted rows, then click Submit Upload to add stock.'); renderExcelStockBatch();
+        excelStockNotice('Review all rows below. Correct any rejected part, select valid rows, then save them to Recent Scan History.');
       } catch (error) { excelStockNotice(error.message || 'The file could not be validated.', true); }
       finally {
         excelUploadInProgress = false; $('#excelStockFile').disabled = !excelSelectedDealer();
@@ -13795,10 +13962,6 @@
       }
     });
     $('#excelStockRows')?.addEventListener('change', async (event) => {
-      const exceptionIndex = Number(event.target.dataset.excelExceptionCheck);
-      if (Number.isInteger(exceptionIndex) && excelStockBatch?.rows?.[exceptionIndex]) {
-        excelStockBatch.rows[exceptionIndex].exceptionSelected = event.target.checked; renderExcelStockBatch(); return;
-      }
       const index = Number(event.target.dataset.excelCheck); if (!Number.isInteger(index) || !excelStockBatch) return;
       excelStockBatch.rows[index].checked = event.target.checked; try { await saveExcelStockRows(); } catch (error) { excelStockNotice(error.message, true); }
     });
@@ -13832,12 +13995,37 @@
       event.preventDefault(); if (!excelStockBatch || excelEditingRow < 0) return;
       const row = excelStockBatch.rows[excelEditingRow];
       row.partNumber = $('#excelEditPart').value; row.qty = $('#excelEditQty').value; row.binLocation = $('#excelEditBin').value;
-      row.checked = false; row.correctedPartNumber = ''; row.correctedQty = undefined; row.correctedBinLocation = '';
-      try { await saveExcelStockRows(); $('#excelEditDialog').close(); excelStockNotice('Correction saved and revalidated. Valid rows are ready for verification.'); }
+      row.checked = false; row.duplicateAcknowledged = false; row.correctedPartNumber = ''; row.correctedQty = undefined; row.correctedBinLocation = '';
+      try {
+        await saveExcelStockRows();
+        let validated = excelStockBatch.rows[excelEditingRow];
+        if (validated.status === 'ACCEPTED' && !validated.committed) {
+          validated.checked = true;
+          await saveExcelStockRows();
+          validated = excelStockBatch.rows[excelEditingRow];
+        }
+        $('#excelEditDialog').close();
+        excelStockNotice(validated.status === 'ACCEPTED'
+          ? 'Part validated and selected. Save valid rows to add it to Recent Scan History.'
+          : `Part still needs correction: ${validated.reason}`);
+      }
       catch (error) { $('#excelEditStatus').textContent = error.message; }
     });
     $('#excelStockSearch')?.addEventListener('input', () => { excelStockPage = 1; renderExcelStockBatch(); });
-    $('#excelStockUploadPanel')?.addEventListener('click', event => {
+    $('#excelStockUploadPanel')?.addEventListener('click', async event => {
+      const approve = event.target.closest('[data-excel-approve-duplicate]');
+      if (approve && excelStockBatch) {
+        const row = excelStockBatch.rows[Number(approve.dataset.excelApproveDuplicate)];
+        if (!row || row.validationStatus !== 'DUPLICATE_STOCK') return;
+        if (!window.confirm(`Already uploaded: ${row.partNumber}, ${row.qty} units in ${row.binLocation}. Current bin balance: ${row.existingQty || 0}. Check the physical bin. Add these as additional units to the existing scan record?`)) return;
+        row.duplicateAcknowledged = true; row.checked = true;
+        try {
+          await saveExcelStockRows();
+          const updated = excelStockBatch.rows.find(item => item.sourceRow === row.sourceRow);
+          excelStockNotice(updated?.status === 'ACCEPTED' ? 'Additional quantity approved and selected. Save valid rows to update the existing bin stock.' : updated?.reason || 'The duplicate still needs review.', updated?.status !== 'ACCEPTED');
+        } catch (error) { excelStockNotice(error.message, true); }
+        return;
+      }
       const filter = event.target.closest('[data-excel-filter]'); if (!filter) return;
       $('#excelStockFilter').value = filter.dataset.excelFilter; excelStockPage = 1; renderExcelStockBatch();
     });
@@ -13846,7 +14034,8 @@
     $('#excelPrevPage')?.addEventListener('click', () => { excelStockPage = Math.max(1, excelStockPage - 1); renderExcelStockBatch(); });
     $('#excelNextPage')?.addEventListener('click', () => { excelStockPage += 1; renderExcelStockBatch(); });
     $('#excelSelectAllExceptions')?.addEventListener('change', (event) => {
-      excelStockVisibleRows().forEach(({ row }) => { row.exceptionSelected = event.target.checked; }); renderExcelStockBatch();
+      excelStockVisibleRows().forEach(({ row }) => { if (row.status === 'ACCEPTED' && !row.committed) row.checked = event.target.checked; });
+      saveExcelStockRows().catch(error => excelStockNotice(error.message, true));
     });
     $('#excelExceptionsDownload')?.addEventListener('click', () => { if (excelStockBatch) downloadExcelStockFile(`${excelStockApi}/batches/${encodeURIComponent(excelStockBatch.batchId)}/exceptions.xlsx`, `${excelStockBatch.batchId}-all-exceptions.xlsx`).catch(error => excelStockNotice(error.message, true)); });
     $('#excelSelectedExceptionsDownload')?.addEventListener('click', () => {
@@ -13856,13 +14045,16 @@
     });
     $('#excelConfirmUpload')?.addEventListener('click', async () => {
       if (!excelStockBatch) return;
-      const validRows = excelStockBatch.rows.filter(row => row.status === 'ACCEPTED' && !row.committed && !row.deleted);
+      const validRows = excelStockBatch.rows.filter(row => row.status === 'ACCEPTED' && row.checked && !row.committed && !row.deleted);
       const pendingRows = excelStockBatch.rows.filter(row => row.status === 'REJECTED' && !row.deleted);
       if (!validRows.length || !window.confirm(`Save ${validRows.length} valid row(s) to ${excelStockBatch.dealerCode}? ${pendingRows.length} exception row(s) will remain pending for correction.`)) return;
       try {
-        validRows.forEach(row => { row.checked = true; }); await saveExcelStockRows();
         const response = await api(`${excelStockApi}/batches/${encodeURIComponent(excelStockBatch.batchId)}/confirm`, { method: 'POST', body: { dealerCode: excelSelectedDealer() } });
-        const latest = await api(`${excelStockApi}/batches/${encodeURIComponent(excelStockBatch.batchId)}`); excelStockBatch = latest.batch; renderExcelStockBatch(); await loadExcelUploadHistory(); excelStockNotice(`Saved ${response.acceptedRows} rows (${response.uploadedQty} units). ${response.rejectedRows} rejected rows remain available for correction.`);
+        const latest = await api(`${excelStockApi}/batches/${encodeURIComponent(excelStockBatch.batchId)}`); excelStockBatch = latest.batch; renderExcelStockBatch(); await loadExcelUploadHistory();
+        state.scanHistoryPage = 1;
+        await loadScanHistory().catch(error => console.warn('[EXCEL UPLOAD] Scan history refresh failed:', error));
+        refreshScanViewsSoon();
+        excelStockNotice(`Saved ${response.acceptedRows} rows (${response.uploadedQty} units) to Recent Scan History. ${response.rejectedRows} rows still need correction.`);
       } catch (error) { excelStockNotice(error.message, true); }
     });
     $('#excelEditPart')?.addEventListener('input', async (event) => {
@@ -13947,6 +14139,9 @@
           localStorage.removeItem(BARCODE_LAST_BIN_KEY);
         }
         updateScanTypeFields(select.closest('form'));
+        if (select.closest('form')?.id === 'manualScanForm' && ['OUTWARD', 'FITTED', 'DAMAGE'].includes(select.value)) {
+          lookupManualSourceBins(select.closest('form')).catch(console.warn);
+        }
         if (select.closest('form')?.id === 'barcodeScanForm' && select.value === 'INWARD') {
           validateBarcodeSourceBin().catch(console.warn);
           select.closest('form').elements.binLocation.focus();
@@ -14066,7 +14261,7 @@
         if (select.id === 'binManagementDealer' || select.closest('#binSequenceTab')) {
           const dealerCode = cleanDealerCode(select.value || '');
           if ($('#binManagementDealer') && select.id !== 'binManagementDealer') $('#binManagementDealer').value = dealerCode;
-          $('#binMasterRows').innerHTML = '<tr><td colspan="5" class="muted">Loading BIN locations...</td></tr>';
+          $('#binMasterRows').innerHTML = '<tr><td colspan="7" class="muted">Loading BIN locations...</td></tr>';
           loadBins()
             .then(() => loadBinTransferDestinationBins(dealerCode, $('.bin-transfer-from')?.value || ''))
             .catch((error) => toast(error.message, 'error'));
@@ -14598,18 +14793,24 @@
           else review.excluded.add(rowNumber);
         } else if (event.target.checked) review.selectedExceptions.add(rowNumber);
         else review.selectedExceptions.delete(rowNumber);
+        if (review.rowValidation?.[rowNumber]) review.rowValidation[rowNumber].isSelected = Boolean(event.target.checked);
         renderDealerStockReview();
         return;
       }
       const rowNumber = Number(event.target.dataset.stockRow);
       const field = event.target.dataset.stockField;
-      if (!rowNumber || !['dealerCode', 'partNumber', 'dmsStock', 'binLoc1', 'binLoc2', 'binLoc3'].includes(field)) return;
+      if (!rowNumber || !['dealerCode', 'partNumber', 'dmsStock'].includes(field)) return;
       const row = review.rows.find(item => item.rowNumber === rowNumber);
       if (!row || String(row[field] ?? '') === event.target.value) return;
       review.corrections[rowNumber] = { ...(review.corrections[rowNumber] || {}), [field]: event.target.value };
+      review.selectedExceptions.delete(rowNumber);
+      review.rowValidation ||= {};
+      review.rowValidation[rowNumber] = { isEdited: true, isSelected: false, validationStatus: 'PENDING', isValidated: false, validationError: '' };
       review.excluded.add(rowNumber);
       row[field] = event.target.value; row.status = 'PENDING'; row.reason = 'Correction requires revalidation';
+      if (field === 'partNumber') row.partDescription = '';
       renderDealerStockReview();
+      if (field === 'partNumber' || (field === 'dealerCode' && cleanDealerCode(row.dealerCode) === review.dealerCode)) validateDealerStockPart(review, rowNumber);
     });
     $('#stockReviewSelectAll')?.addEventListener('change', (event) => {
       const review = state.dealerStockReview;
@@ -14630,10 +14831,11 @@
     $('#stockReviewPrev')?.addEventListener('click', () => { state.dealerStockReview.page -= 1; renderDealerStockReview(); });
     $('#stockReviewNext')?.addEventListener('click', () => { state.dealerStockReview.page += 1; renderDealerStockReview(); });
     $('#stockReviewRevalidate')?.addEventListener('click', () => validateAndTransferDealerStock($('#dealerStockUploadForm')).catch(error => toast(error.message, 'error')));
-    $('#stockReviewUseDealer')?.addEventListener('click', () => {
+    $('#stockReviewUseDealer')?.addEventListener('click', async () => {
       const review = state.dealerStockReview;
       if (!review || review.dealerCode !== activeReconDealer()) return;
-      review.rows.filter(row => !review.committed.has(row.rowNumber) && cleanDealerCode(row.dealerCode) !== review.dealerCode && (!review.selectedExceptions.size || review.selectedExceptions.has(row.rowNumber))).forEach(row => {
+      const rowsToCorrect = review.rows.filter(row => !review.committed.has(row.rowNumber) && cleanDealerCode(row.dealerCode) !== review.dealerCode && (!review.selectedExceptions.size || review.selectedExceptions.has(row.rowNumber)));
+      rowsToCorrect.forEach(row => {
         review.corrections[row.rowNumber] = { ...(review.corrections[row.rowNumber] || {}), dealerCode: review.dealerCode };
         review.excluded.add(row.rowNumber);
         row.dealerCode = review.dealerCode;
@@ -14641,6 +14843,10 @@
         row.reason = 'Dealer correction requires revalidation';
       });
       renderDealerStockReview();
+      if (rowsToCorrect.length) {
+        try { await uploadDealerStock($('#dealerStockUploadForm')); }
+        catch (error) { toast(error.message, 'error'); }
+      }
     });
     $('#stockReviewExport')?.addEventListener('click', () => {
       const review = state.dealerStockReview;
@@ -14666,7 +14872,9 @@
         body.set('selectedRows', JSON.stringify(selected.map(row => row.rowNumber)));
         const data = await api(`/api/reconciliation/upload-stock?dealerCode=${encodeURIComponent(review.dealerCode)}`, { method: 'POST', body });
         renderDealerStockPreview(data.preview || [], data.summary?.partLineCount || 0, data.summary || {});
-        renderDealerStockErrors(data.errorRows || [], data.skippedCount || 0, data.errorRowsTruncated);
+        // The editable review grid remains the single correction surface.
+        // Its row status contains every skipped-row reason.
+        renderDealerStockErrors([]);
         $('#dealerStockUploadMessage').textContent = data.message || 'Validated dealer stock uploaded.';
         $('#dealerStockUploadMessage').className = 'form-message success';
         selected.forEach(row => review.committed.add(row.rowNumber));
@@ -14677,23 +14885,7 @@
       } finally { state.dealerStockConfirming = false; renderDealerStockReview(); }
     };
     $('#stockReviewConfirm')?.addEventListener('click', () => confirmDealerStockReview());
-    $('#dealerStockInvalidOnly')?.addEventListener('change', () => loadDealerStockPreview().catch(error => toast(error.message, 'error')));
-    $('#dealerStockPreviewRows')?.addEventListener('click', async (event) => {
-      const action = event.target.closest('[data-stock-correct]');
-      if (!action || !isAdmin()) return;
-      const dealerCode = activeReconDealer();
-      const oldPart = action.dataset.stockPart || '';
-      const partNumber = clean(window.prompt(`Correct uploaded part ${oldPart} (${action.dataset.stockQty} units) for dealer ${dealerCode}. Enter the verified Part Master number:`, oldPart) || '').toUpperCase();
-      if (!partNumber || partNumber === oldPart || !window.confirm(`Change ${oldPart} to ${partNumber} for dealer ${dealerCode}? The DMS correction will be recorded in the audit log.`)) return;
-      action.disabled = true;
-      try {
-        await api(`/api/reconciliation/stock/${encodeURIComponent(action.dataset.stockCorrect)}?dealerCode=${encodeURIComponent(dealerCode)}`, { method: 'PATCH', body: { partNumber } });
-        await loadDealerStockPreview();
-        toast(`Corrected uploaded DMS part ${oldPart} to ${partNumber}`);
-      } catch (error) { action.disabled = false; toast(error.message, 'error'); }
-    });
     $('#dealerStockTemplateDownloadBtn')?.addEventListener('click', () => downloadGet('/api/reconciliation/dealer-stock-template', 'Daksh_Dealer_Stock_Upload_Template.xlsx').catch((error) => toast(error.message, 'error')));
-    $('#reconPreviewBtn')?.addEventListener('click', () => loadDealerStockPreview().catch((error) => toast(error.message, 'error')));
     $('#stockUploadHistoryBtn')?.addEventListener('click', async () => {
       const dealerCode = activeReconDealer();
       if (!dealerCode) return toast('Select Dealer Code first', 'error');
@@ -14945,11 +15137,24 @@
         toast(error.message, 'error');
       }
     });
+    let partSearchTimer;
+    $('#partSearchForm').addEventListener('input', (event) => {
+      if (!event.target.matches('input')) return;
+      clearTimeout(partSearchTimer);
+      partSearchTimer = setTimeout(() => loadParts(1).catch((error) => toast(error.message, 'error')), 300);
+    });
+    $('#partSearchForm').addEventListener('change', (event) => {
+      if (!event.target.matches('select')) return;
+      clearTimeout(partSearchTimer);
+      loadParts(1).catch((error) => toast(error.message, 'error'));
+    });
     $('#partSearchForm').addEventListener('submit', (event) => {
       event.preventDefault();
-      loadParts().catch((error) => toast(error.message, 'error'));
+      clearTimeout(partSearchTimer);
+      loadParts(1).catch((error) => toast(error.message, 'error'));
     });
     $('#partClearSearchBtn')?.addEventListener('click', () => {
+      clearTimeout(partSearchTimer);
       $('#partSearchForm').reset();
       $('#partPageSize').value = '10'; state.masterSearch.limit = 10; clearPartSearch(); loadParts(1).catch((error) => toast(error.message, 'error'));
       const menu = $('#partMasterSuggestMenu');
@@ -15524,6 +15729,7 @@
       bootLog('binding dashboard UI start');
       bindNavigation();
       bindEvents();
+      enhanceCoreTables();
       bindSuggestions();
       bindMasterSearchSuggestions();
       bindUppercaseInputs();

@@ -7,6 +7,7 @@ const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
 const { randomUUID } = require('crypto');
 const { jsPDF } = require('jspdf');
+const { Prisma } = require('@prisma/client');
 const autoTableModule = require('jspdf-autotable');
 const DealerStock = require('../models/DealerStock');
 const Inventory = require('../models/Inventory');
@@ -24,7 +25,7 @@ const { aggregateDealerStockRows } = require('../utils/dmsStockAggregation');
 const { getPricesFromPartMaster, savedAuditPrice } = require('../utils/partMasterPrice');
 const { resolveCategoryFromMaster } = require('../utils/categoryResolver');
 const { applyCacheHeaders, getCachedResponse, invalidateCache } = require('../utils/safeCache');
-const { withDatabaseTransaction } = require('../services/prisma');
+const { withDatabaseTransaction, getPrismaClient } = require('../services/prisma');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
@@ -319,6 +320,9 @@ function valueForKey(values = [], indexes = [], key = '') {
 }
 
 function mergeRecord(target, item) {
+  if (item.sourcePartNumbers?.length) {
+    target.sourcePartNumbers = [...new Set([...(target.sourcePartNumbers || []), ...item.sourcePartNumbers])];
+  }
   const textFields = [
     'partDescription',
     'hsn',
@@ -354,7 +358,7 @@ function mergeRecord(target, item) {
   return target;
 }
 
-async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, onProgress = () => {}, selectedRows = null) {
+async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, onProgress = () => {}, selectedRows = null, originalParts = new Map()) {
   if (!rows.length) return { records: [], errorRows: [{ rowNumber: 0, message: 'File is empty' }], columns: [], duplicateRowsMerged: 0, skippedCount: 1 };
 
   const headerInfo = findHeaderRow(rows);
@@ -385,6 +389,7 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
   const now = new Date();
   const byPart = new Map();
   const seenSourceRows = new Set();
+  const seenCorrectedSources = new Set();
   const errorRows = [];
   const reviewRows = [];
   let duplicateRowsMerged = 0;
@@ -431,6 +436,16 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
     if (selectedRows && !selectedRows.has(rowNumber)) {
       reviewRows.push({ rowNumber, dealerCode, partNumber, partDescription: clean(item.partDescription), dmsStock: item.dmsStock, binLoc1: upper(item.binLoc1), binLoc2: upper(item.binLoc2), binLoc3: upper(item.binLoc3), status: 'EXCLUDED', reason: 'Excluded from this upload' });
       continue;
+    }
+    const originalPart = normalizePart(originalParts.get(rowNumber));
+    if (originalPart && originalPart !== partNumber) {
+      if (seenCorrectedSources.has(originalPart)) {
+        duplicateRowsMerged += 1;
+        reviewRows.push({ rowNumber, dealerCode, partNumber, partDescription: clean(item.partDescription), dmsStock: item.dmsStock,
+          status: 'DUPLICATE', reason: `Original part ${originalPart} was corrected more than once in this sheet.` });
+        continue;
+      }
+      seenCorrectedSources.add(originalPart);
     }
     const sourceSignature = [
       partNumber,
@@ -487,6 +502,7 @@ async function rowsToStockRecords(rows, selectedDealerCode, auditId, userName, o
       uploadedBy: userName,
       uploadedAt: now
     };
+    if (originalPart && originalPart !== partNumber) record.sourcePartNumbers = [originalPart];
 
     reviewRows.push({ rowNumber, dealerCode, partNumber, partDescription: record.partDescription, dmsStock: record.dmsStock, binLoc1: record.binLoc1, binLoc2: record.binLoc2, binLoc3: record.binLoc3, status: 'VALID', reason: '' });
 
@@ -714,10 +730,30 @@ async function saveDealerStockRecords(records = [], onProgress = () => {}, uploa
     const now = new Date();
     let insertedCount = 0;
     let updatedCount = 0;
+    const scope = records[0];
+    await getPrismaClient().$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`dealer-stock:${scope.dealerCode}:${scope.auditId}`})) IS NULL AS locked`);
+    const sourceParts = new Set(records.flatMap(record => record.sourcePartNumbers || []));
+    if (sourceParts.size) {
+      const previousCorrections = await DealerStock.find({ dealerCode: scope.dealerCode, auditId: scope.auditId,
+        sourcePartNumbers: { $exists: true } }).select('sourcePartNumbers').lean();
+      const repeated = previousCorrections.flatMap(row => row.sourcePartNumbers || []).find(part => sourceParts.has(part));
+      if (repeated) {
+        const error = new Error(`Original part ${repeated} was already corrected and uploaded. It cannot be corrected again.`);
+        error.statusCode = 409;
+        throw error;
+      }
+    }
     for (let index = 0; index < records.length; index += DEALER_STOCK_UPLOAD_BATCH_SIZE) {
       const chunk = records.slice(index, index + DEALER_STOCK_UPLOAD_BATCH_SIZE).map((record) => ({ ...record, updatedAt: now }));
+      const parts = chunk.map(record => record.normalizedPartNumber);
       const previous = await DealerStock.find({ dealerCode: chunk[0].dealerCode, auditId: chunk[0].auditId,
-        normalizedPartNumber: { $in: chunk.map(record => record.normalizedPartNumber) } }).lean();
+        $or: [{ normalizedPartNumber: { $in: parts } }, { partNumber: { $in: parts } }] }).lean();
+      if (previous.length) {
+        const partNumber = normalizePart(previous[0].normalizedPartNumber || previous[0].partNumber);
+        const error = new Error(`Part ${partNumber} is already uploaded for this dealer and audit.`);
+        error.statusCode = 409;
+        throw error;
+      }
       const result = await DealerStock.bulkUpsertBy(chunk,
         ['dealerCode', 'auditId', 'normalizedPartNumber'],
         { lockKey: `dealer-stock:${chunk[0].dealerCode}:${chunk[0].auditId}` });
@@ -1719,6 +1755,7 @@ async function uploadDealerStockHandler(req, res) {
     const partIndex = header.keys.indexOf('partNumber');
     const qtyIndex = header.keys.indexOf('dmsStock');
     const binIndexes = ['binLoc1', 'binLoc2', 'binLoc3'].map(key => header.keys.indexOf(key));
+    const originalParts = new Map();
     let corrections;
     let selectedRowNumbers;
     try {
@@ -1736,7 +1773,11 @@ async function uploadDealerStockHandler(req, res) {
       const values = rows[rowNumber - 1];
       if (!Array.isArray(values)) return res.status(400).json({ success: false, message: 'Excel row was not found.' });
       if (dealerIndex >= 0 && edit.dealerCode !== undefined) values[dealerIndex] = clean(edit.dealerCode);
-      if (partIndex >= 0 && edit.partNumber !== undefined) values[partIndex] = clean(edit.partNumber);
+      if (partIndex >= 0 && edit.partNumber !== undefined) {
+        const originalPart = normalizePart(values[partIndex]);
+        if (originalPart && originalPart !== normalizePart(edit.partNumber)) originalParts.set(rowNumber, originalPart);
+        values[partIndex] = clean(edit.partNumber);
+      }
       if (qtyIndex >= 0 && edit.dmsStock !== undefined) values[qtyIndex] = clean(edit.dmsStock);
       binIndexes.forEach((index, position) => { if (index >= 0 && edit[`binLoc${position + 1}`] !== undefined) values[index] = clean(edit[`binLoc${position + 1}`]); });
     }
@@ -1744,15 +1785,51 @@ async function uploadDealerStockHandler(req, res) {
     const selectedRows = selectedRowNumbers === null ? null : new Set(selectedRowNumbers.map(Number));
     if (selectedRows && [...selectedRows].some(row => !Number.isSafeInteger(row) || row <= header.index + 1 || row > rows.length)) return res.status(400).json({ success: false, message: 'Invalid row selection.' });
     const parsed = await rowsToStockRecords(rows, scope.dealerCode, scope.auditId, userName,
-      (processed, total) => sendProgress('validating', processed, total), req.body.confirmed === 'true' ? selectedRows : null);
+      (processed, total) => sendProgress('validating', processed, total), req.body.confirmed === 'true' ? selectedRows : null, originalParts);
     markPerf('validationAndMergeMs');
     if (!parsed.reviewRows) return res.status(400).json({ success: false, message: parsed.errorRows?.[0]?.message || 'Invalid Dealer Stock template.' });
+    const candidates = [...new Set(parsed.reviewRows.filter(row => row.status === 'VALID').map(row => row.partNumber))];
+    const alreadyUploaded = new Set();
+    for (let index = 0; index < candidates.length; index += DEALER_STOCK_UPLOAD_BATCH_SIZE) {
+      const parts = candidates.slice(index, index + DEALER_STOCK_UPLOAD_BATCH_SIZE);
+      const existing = await DealerStock.find({ dealerCode: scope.dealerCode, auditId: scope.auditId,
+        $or: [{ normalizedPartNumber: { $in: parts } }, { partNumber: { $in: parts } }] })
+        .select('normalizedPartNumber partNumber').lean();
+      existing.forEach(row => alreadyUploaded.add(normalizePart(row.normalizedPartNumber || row.partNumber)));
+    }
+    if (alreadyUploaded.size) {
+      parsed.reviewRows.forEach(row => {
+        if (row.status !== 'VALID' || !alreadyUploaded.has(row.partNumber)) return;
+        row.status = 'ALREADY_UPLOADED';
+        row.reason = `Part ${row.partNumber} is already uploaded for this dealer and audit.`;
+        parsed.skippedCount += 1;
+        if (parsed.errorRows.length < UPLOAD_ERROR_LIMIT) parsed.errorRows.push({ rowNumber: row.rowNumber, dealerCode: row.dealerCode, partNumber: row.partNumber, message: row.reason });
+      });
+      parsed.records = parsed.records.filter(record => !alreadyUploaded.has(record.partNumber));
+    }
+    if (originalParts.size) {
+      const previousCorrections = await DealerStock.find({ dealerCode: scope.dealerCode, auditId: scope.auditId,
+        sourcePartNumbers: { $exists: true } }).select('partNumber sourcePartNumbers').lean();
+      const sourceTargets = new Map(previousCorrections.flatMap(record =>
+        (record.sourcePartNumbers || []).map(source => [source, record.partNumber])));
+      const blockedParts = new Set();
+      parsed.reviewRows.forEach(row => {
+        const source = originalParts.get(row.rowNumber);
+        if (row.status !== 'VALID' || !sourceTargets.has(source)) return;
+        row.status = 'SOURCE_ALREADY_CORRECTED';
+        row.reason = `Original part ${source} was already corrected and uploaded as ${sourceTargets.get(source)}. It cannot be corrected again.`;
+        blockedParts.add(row.partNumber);
+        parsed.skippedCount += 1;
+        if (parsed.errorRows.length < UPLOAD_ERROR_LIMIT) parsed.errorRows.push({ rowNumber: row.rowNumber, dealerCode: row.dealerCode, partNumber: row.partNumber, message: row.reason });
+      });
+      if (blockedParts.size) parsed.records = parsed.records.filter(record => !blockedParts.has(record.partNumber));
+    }
     const reviewSummary = {
       excelRows: parsed.reviewRows?.length || 0,
       validRows: parsed.reviewRows?.filter(row => row.status === 'VALID').length || 0,
       wrongParts: parsed.reviewRows?.filter(row => row.status === 'WRONG_PART').length || 0,
       missingPrices: parsed.reviewRows?.filter(row => row.status === 'MISSING_PRICE').length || 0,
-      duplicates: parsed.reviewRows?.filter(row => row.status === 'DUPLICATE').length || 0,
+      duplicates: parsed.reviewRows?.filter(row => ['DUPLICATE', 'ALREADY_UPLOADED', 'SOURCE_ALREADY_CORRECTED'].includes(row.status)).length || 0,
       selectedQty: parsed.records.reduce((sum, row) => sum + row.dmsStock, 0),
       dlcValue: money(parsed.records.reduce((sum, row) => sum + row.stockValue, 0)),
       mrpValue: money(parsed.records.reduce((sum, row) => sum + row.dmsStock * row.mrp, 0))
@@ -1840,6 +1917,20 @@ async function previewDealerStockHandler(req, res) {
   try {
     const scope = await resolveScope(req);
     if (!requireScope(scope, res)) return null;
+    if (req.query.partNumber) {
+      const partNumber = normalizePart(req.query.partNumber);
+      if (!partNumber) return res.status(400).json({ success: false, message: 'Part Number is required' });
+      const existing = await DealerStock.find({ dealerCode: scope.dealerCode, auditId: scope.auditId,
+        $or: [{ normalizedPartNumber: partNumber }, { partNumber }] }).select('partNumber').lean();
+      const originalPart = normalizePart(req.query.sourcePartNumber);
+      const previousCorrections = originalPart
+        ? await DealerStock.find({ dealerCode: scope.dealerCode, auditId: scope.auditId,
+          sourcePartNumbers: { $exists: true } }).select('partNumber sourcePartNumbers').lean()
+        : [];
+      const correctedStock = previousCorrections.find(row => (row.sourcePartNumbers || []).includes(originalPart));
+      return res.json({ success: true, dealerCode: scope.dealerCode, auditId: scope.auditId, partNumber,
+        alreadyUploaded: existing.length > 0, sourceAlreadyCorrected: Boolean(correctedStock), correctedPartNumber: correctedStock?.partNumber || '' });
+    }
     const limit = Math.min(Math.max(Number(req.query.limit || PREVIEW_LIMIT), 1), 2000);
     const query = { dealerCode: scope.dealerCode, auditId: scope.auditId };
     const allRows = await DealerStock.find(query).sort({ partNumber: 1 }).lean();
