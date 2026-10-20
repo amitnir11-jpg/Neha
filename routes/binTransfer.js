@@ -481,19 +481,10 @@ async function dealerBins(dealerCode, auditId = '') {
 
 async function destinationBinsForDealer(dealerCode, sourceBin = '') {
   const sourceKey = upper(sourceBin);
-  const { fromBins, toBins } = await dealerBins(dealerCode);
-  const masterBins = toBins.filter((bin) => upper(bin.binCode) !== sourceKey);
-
-  if (toBins.length) {
-    return {
-      bins: masterBins.map((bin) => bin.binCode),
-      source: 'bin_master'
-    };
-  }
-
+  const { fromBins } = await dealerBins(dealerCode);
   return {
     bins: fromBins.filter((bin) => upper(bin.binCode) !== sourceKey).map((bin) => bin.binCode),
-    source: 'fallback_from_current_stock'
+    source: 'current_stock'
   };
 }
 
@@ -553,14 +544,12 @@ router.get('/bins', auth.requireAuth, async (req, res) => {
     // A source bin must contain positive available stock. Master-only bins
     // remain valid destinations, but should not appear as transferable stock.
     const bins = binData.fromBins;
-    // Source bins are the live ledger result only. Master and historical
-    // activity locations are destinations or audit history, never source stock.
+    // Both pickers reflect current live stock. Empty Bin Master entries are
+    // configuration/history and must not be presented as active locations.
     const allBins = bins;
     const sourceKey = upper(req.query.sourceBin || req.query.fromBin);
-    const destinationBins = binData.toBins.length
-      ? binData.toBins.filter((bin) => upper(bin.binCode) !== sourceKey).map((bin) => bin.binCode)
-      : binData.fromBins.filter((bin) => upper(bin.binCode) !== sourceKey).map((bin) => bin.binCode);
-    const message = destinationBins.length ? '' : 'No destination bins found. Please create bins in Bin Master / Sequence Creation or scan stock into another bin.';
+    const destinationBins = binData.fromBins.filter((bin) => upper(bin.binCode) !== sourceKey).map((bin) => bin.binCode);
+    const message = destinationBins.length ? '' : 'No active destination bins contain scanned stock.';
     return res.json({
       success: true,
       auditId,
@@ -570,7 +559,7 @@ router.get('/bins', auth.requireAuth, async (req, res) => {
       fromBins: bins,
       toBins: binData.toBins,
       destinationBins,
-      destinationSource: binData.toBins.length ? 'bin_master' : 'fallback_from_current_stock',
+      destinationSource: 'current_stock',
       message
     });
   } catch (error) {

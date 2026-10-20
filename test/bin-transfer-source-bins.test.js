@@ -83,7 +83,7 @@ test('bin transfer source options only include bins with available scanned stock
     assert.equal(response.payload.auditId, 'AUD1');
     assert.deepEqual(response.payload.bins.map((bin) => bin.binCode), ['1']);
     assert.deepEqual(response.payload.sourceBins.map((bin) => bin.binCode), ['1']);
-    assert.deepEqual(response.payload.destinationBins, ['1', 'A1', 'A2']);
+    assert.deepEqual(response.payload.destinationBins, ['1']);
   } finally {
     Inventory.find = inventoryFind;
     Bin.find = binFind;
