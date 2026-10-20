@@ -18,7 +18,7 @@
       if (requestedView) document.documentElement.dataset.initialView = requestedView;
     })();
   </script>
-  <link rel="stylesheet" href="/style.css?v=20261016-remove-extra-correction-v1">
+  <link rel="stylesheet" href="/style.css?v=20261018-resizable-scan-reports-7">
   <link rel="stylesheet" href="/variables.css?v=20260714-app-layout-v1">
   <link rel="stylesheet" href="/layout.css?v=20260714-app-layout-v1">
   <link rel="stylesheet" href="/components.css?v=20260714-app-layout-v1">
@@ -30,7 +30,7 @@
   <link rel="stylesheet" href="/dashboard-layout.css?v=20260928-dashboard-dealer-picker-v2">
   <link rel="stylesheet" href="/compact-layout.css?v=20260921-global-density-v2">
   <link rel="stylesheet" href="/barcode-workspace.css?v=20261012-excel-stock-upload-v1">
-  <link rel="stylesheet" href="/excel-stock-upload.css?v=20261012-row-delete-v2">
+  <link rel="stylesheet" href="/excel-stock-upload.css?v=20261019-review-v1">
   <link rel="stylesheet" href="/excel-upload-history.css?v=20261012-compact-v1">
 </head>
 <body class="app-booting">
@@ -129,7 +129,7 @@
           <strong id="sideActiveAuditDealer">Checking...</strong>
           <span id="sideActiveAuditStatus">Checking...</span>
         </div>
-        <div class="side-version">Version 2.0.49</div>
+        <div class="side-version">Version 2.0.47</div>
       </div>
       <button id="sideResizeHandle" class="side-resize-handle" type="button" aria-label="Adjust menu width" title="Adjust menu width"></button>
     </aside>
@@ -319,7 +319,7 @@
             <form id="manualScanForm" class="grid-form">
               <label>Dealer<select name="dealerCode" class="dealerSelect" required></select></label>
               <label>Scan Type<select name="type"><option>INWARD</option><option>OUTWARD</option><option>VERIFICATION</option><option>FITTED</option><option>DAMAGE</option></select></label>
-              <label>Source Bin Location *<input name="bin" autocomplete="off" placeholder="Enter bin first" required><small>Bin stays selected after saving. Change it when moving to another location.</small></label>
+              <label id="manualBinLabel">Bin Location *<input name="bin" list="manualBinOptions" autocomplete="off" placeholder="Enter bin first" required><datalist id="manualBinOptions"></datalist><small id="manualBinHint">Bin stays selected after saving. Change it when moving to another location.</small></label>
               <label>Part Number<div class="suggest-wrap"><input name="part" class="partSuggestInput" autocomplete="off" placeholder="Enter bin first" required disabled><div class="suggest-menu"></div></div></label>
               <label>MRP<input name="mrp" data-fill="mrp" type="number" step="0.01" min="0" placeholder="From Part Master" readonly></label>
               <label>DLC<input name="dlc" data-fill="dlc" type="number" step="0.01" min="0" placeholder="From Part Master" readonly></label>
@@ -462,16 +462,14 @@
                     <div class="excel-upload-actions"><label class="btn excel-select-file" for="excelStockFile"><span aria-hidden="true">↥</span> Select Excel / CSV</label><input id="excelStockFile" type="file" accept=".xlsx,.xls,.csv" hidden><a class="btn light" href="/api/excel-stock-upload/template"><span aria-hidden="true">↓</span> Template</a><button id="excelUploadHistoryBtn" class="btn light" type="button"><span aria-hidden="true">↶</span> History</button><button id="excelUploadFileBtn" class="btn primary" type="button" disabled hidden>Validate &amp; Preview Stock</button><span id="excelSelectedFileName" hidden>No sheet selected</span></div>
                     <p id="excelStockMessage" class="form-message" aria-live="polite" hidden></p>
                     <div id="excelStockWorkspace" hidden>
-                      <div class="excel-upload-summary"><div><strong id="excelTotalRows">0</strong><span>Total Uploaded</span></div><div><strong id="excelAcceptedRows">0</strong><span>Valid Rows</span></div><div><strong id="excelInvalidPartsCount">0</strong><span>Invalid Parts</span></div><div><strong id="excelMissingPricesCount">0</strong><span>Missing Prices</span></div></div>
-                      <div class="excel-validation-breakdown" aria-label="Upload validation breakdown"><span>Missing DLC <strong id="excelMissingDlcCount">0</strong></span><span>Missing MRP <strong id="excelMissingMrpCount">0</strong></span><span>Both prices missing <strong id="excelBothPricesCount">0</strong></span><span>Duplicate records <strong id="excelDuplicateCount">0</strong></span><span>Total affected quantity <strong id="excelAffectedQty">0</strong></span></div>
-                      <div class="excel-details-head"><div><h4>Uploaded Part Details</h4><p id="excelBatchLabel">Batch</p></div><span id="excelStockStatus" class="excel-badge pending">Not uploaded to stock</span></div>
-                      <div class="excel-stock-toolbar"><div class="excel-filter-tabs" role="tablist" aria-label="Filter uploaded parts"><button id="excelFilterAll" type="button" role="tab" aria-selected="true" class="active" data-excel-filter="ALL">All (0)</button><button type="button" role="tab" data-excel-filter="INVALID_PART_NUMBER">Invalid parts</button><button type="button" role="tab" data-excel-filter="DLC_MISSING">Missing DLC</button><button type="button" role="tab" data-excel-filter="MRP_MISSING">Missing MRP</button><button type="button" role="tab" data-excel-filter="BOTH_PRICES_MISSING">Both missing</button><button type="button" role="tab" data-excel-filter="DUPLICATE_RECORD">Duplicates</button></div><input id="excelStockSearch" type="search" placeholder="Search part or bin..." aria-label="Search uploaded parts"><select id="excelStockFilter" hidden aria-hidden="true"><option value="ALL">All rows</option><option value="INVALID_PART_NUMBER">Invalid parts</option><option value="DLC_MISSING">Missing DLC</option><option value="MRP_MISSING">Missing MRP</option><option value="BOTH_PRICES_MISSING">Both missing</option><option value="DUPLICATE_RECORD">Duplicates</option></select></div>
-                      <div class="excel-table-wrap"><table id="excelUploadPartsTable" class="excel-stock-table" aria-label="Invalid and missing-price uploaded parts"><thead><tr><th><input id="excelSelectAllExceptions" type="checkbox" aria-label="Select all filtered exceptions"></th><th>Part Number</th><th>Qty</th><th>Bin</th><th>Issue</th><th>Edit</th></tr></thead><tbody id="excelStockRows"></tbody></table></div>
+                      <div class="excel-upload-summary"><div><strong id="excelTotalRows">0</strong><span>Rows in file</span></div><div><strong id="excelAcceptedRows">0</strong><span>Valid</span></div><div><strong id="excelInvalidPartsCount">0</strong><span>Needs correction</span></div><div><strong id="excelSavedRows">0</strong><span>Saved scans</span></div></div>
+                      <div class="excel-details-head"><div><h4>Excel Upload Review</h4><p id="excelBatchLabel">Batch</p></div><span id="excelStockStatus" class="excel-badge pending">Not uploaded to stock</span></div>
+                      <div class="excel-stock-toolbar"><div class="excel-filter-tabs" role="tablist" aria-label="Filter uploaded parts"><button id="excelFilterAll" type="button" role="tab" aria-selected="true" class="active" data-excel-filter="ALL">All (0)</button><button type="button" role="tab" data-excel-filter="READY">Ready</button><button type="button" role="tab" data-excel-filter="REJECTED">Needs correction</button><button type="button" role="tab" data-excel-filter="SAVED">Saved</button></div><input id="excelStockSearch" type="search" placeholder="Search part, bin or issue..." aria-label="Search uploaded parts"><select id="excelStockFilter" hidden aria-hidden="true"><option value="ALL">All rows</option><option value="READY">Ready</option><option value="REJECTED">Needs correction</option><option value="SAVED">Saved</option></select></div>
+                      <div class="excel-table-wrap"><table id="excelUploadPartsTable" class="excel-stock-table" aria-label="Excel upload valid and correction rows"><thead><tr><th><input id="excelSelectAllExceptions" type="checkbox" aria-label="Select all ready rows"></th><th>Part Number</th><th>Qty</th><th>Bin</th><th>Status / Issue</th><th>Edit</th></tr></thead><tbody id="excelStockRows"></tbody></table></div>
                       <div class="excel-stock-pager"><label>Rows/page <select id="excelRowsPerPage"><option>25</option><option selected>50</option><option>100</option></select></label><div><button id="excelPrevPage" class="btn light" type="button">Previous</button><span id="excelPageLabel">Showing 0 of 0</span><button id="excelNextPage" class="btn light" type="button">Next</button></div></div>
                       <div class="excel-table-hint"><span>Drag headings to move columns. Drag column edges to resize.</span><button type="button" class="btn light" data-excel-reset-columns>Reset columns</button></div>
-                      <div class="excel-review-tools"><button id="excelExceptionsDownload" class="btn light" type="button">Download All Exceptions (.xlsx)</button><button id="excelSelectedExceptionsDownload" class="btn light" type="button" disabled>Download Selected Exceptions (.xlsx)</button></div>
-                      <div class="excel-approval-summary"><strong>Upload Approval Summary</strong><span>Valid rows available for upload <b id="excelApprovedRows">0</b></span><span>Exception rows held for correction <b id="excelExceptionRows">0</b></span><span>Approved stock quantity <b id="excelApprovedQty">0</b></span><span>Pending exception quantity <b id="excelPendingQty">0</b></span><span>Validated DLC value <b id="excelValidatedDlc">₹ 0.00</b></span><span>Validated MRP value <b id="excelValidatedMrp">₹ 0.00</b></span></div>
-                      <div class="excel-confirm-bar"><span>Only approved valid records are saved. Exceptions remain pending in this batch.</span><button id="excelConfirmUpload" class="btn primary" type="button"><span aria-hidden="true">ⓥ</span> Confirm &amp; Save Valid Stock</button></div>
+                      <div class="excel-review-tools"><button id="excelExceptionsDownload" class="btn light" type="button">Download Issues (.xlsx)</button></div>
+                      <div class="excel-confirm-bar"><span>Correct rejected rows, then save the selected valid rows. Saved rows appear in Recent Scan History.</span><button id="excelConfirmUpload" class="btn primary" type="button">Save Valid Rows to Scans</button></div>
                     </div>
                     <section id="excelHistoryPanel" class="excel-history-panel" aria-label="Upload History" hidden>
                       <div class="excel-history-heading"><div class="excel-history-title"><span class="excel-history-title-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 8V3 M4 8h5 M4 8a8 8 0 1 1-1 8 M12 7v5l3 2"/></svg></span><div><h4>Upload History</h4><p>View, open, edit, reverse or delete uploaded stock files</p></div></div><label class="excel-history-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="excelHistorySearch" type="search" placeholder="Search file, batch ID or date..." aria-label="Search upload history"></label></div>
@@ -836,7 +834,7 @@
               <label>Search BIN<input id="binManagementSearch" placeholder="Search BIN, name or category"></label>
             </div>
             <div id="binManagementStatus" class="form-message"></div>
-            <div class="table-wrap master-table-wrap bin-management-wrap"><table class="bin-management-table"><thead><tr><th class="select-col"><input id="selectAllBins" type="checkbox" aria-label="Select all BINs"></th><th>Bin</th><th>Dealer</th><th>Category</th><th class="action-col">Action</th></tr></thead><tbody id="binMasterRows"></tbody></table></div>
+            <div class="table-wrap master-table-wrap bin-management-wrap"><table class="bin-management-table"><thead><tr><th class="select-col"><input id="selectAllBins" type="checkbox" aria-label="Select all BINs"></th><th>Bin</th><th>Dealer</th><th>Category</th><th>Status</th><th>Available Stock</th><th class="action-col">Action</th></tr></thead><tbody id="binMasterRows"></tbody></table></div>
           </section>
         </section>
 
@@ -865,8 +863,6 @@
 
       <section id="reconciliation" class="view">
         <div class="recon-tabs" role="tablist" aria-label="Reconciliation sections">
-          <button class="recon-tab active" type="button" role="tab" aria-selected="true" aria-controls="reconUploadTab" data-recon-tab="reconUploadTab">Upload Dealer Stock</button>
-          <button class="recon-tab" type="button" role="tab" aria-selected="false" aria-controls="reconPriceValidationTab" data-recon-tab="reconPriceValidationTab">Price Validation</button>
           <button class="recon-tab" type="button" role="tab" aria-selected="false" aria-controls="reconSummaryTab" data-recon-tab="reconSummaryTab">Final Summary</button>
         </div>
 
@@ -889,18 +885,14 @@
             <section id="dealerStockReview" class="dealer-stock-review" hidden aria-label="Dealer stock upload review">
               <div class="recon-summary-head"><h3>Dealer Stock Upload Review</h3><span id="dealerStockReviewScope"></span></div>
               <div class="excel-upload-summary"><div><strong id="stockReviewTotal">0</strong><span>Excel Rows</span></div><div><strong id="stockReviewValid">0</strong><span>Valid Parts</span></div><div><strong id="stockReviewWrong">0</strong><span>Wrong Parts</span></div><div><strong id="stockReviewMissing">0</strong><span>Missing Price</span></div><div><strong id="stockReviewRejected">0</strong><span>Rejected Rows</span></div><div><strong id="stockReviewDuplicate">0</strong><span>Duplicates</span></div><div><strong id="stockReviewSelectedCount">0</strong><span>Selected Rows</span></div><div><strong id="stockReviewQty">0</strong><span>Selected DMS Qty</span></div><div><strong id="stockReviewDlc">₹ 0.00</strong><span>DLC Value</span></div><div><strong id="stockReviewMrp">₹ 0.00</strong><span>MRP Value</span></div></div>
-              <div class="excel-stock-toolbar"><label>Status <select id="stockReviewFilter"><option value="ALL">All Parts</option><option value="CORRECTED">Corrected Parts</option><option value="UNCORRECTED">Uncorrected Parts</option><option value="VALID">Valid Parts</option><option value="WRONG_PART">Wrong Parts</option><option value="MISSING_PRICE">Missing Price</option><option value="DUPLICATE">Duplicates</option><option value="REJECTED">Rejected</option></select></label><input id="stockReviewSearch" type="search" placeholder="Search part or description" aria-label="Search upload rows"><button id="stockReviewUseDealer" class="btn light" type="button">Correct Dealer Code in Exceptions</button><button id="stockReviewSelectCorrected" class="btn light" type="button">Select All Corrected</button><button id="stockReviewRevalidate" class="btn light" type="button">Validate and Transfer</button><button id="stockReviewExport" class="btn light" type="button">Download Exceptions (.xlsx)</button></div>
-              <p class="muted">Validate and Transfer sends checked rows to the dealer shown above, using its Part Master prices. Edited rows show ✓ Corrected. Use Select All Corrected, then Validate and Transfer to send them together. Rows with invalid parts or missing prices remain for correction.</p>
-              <div id="stockReviewFeedback" class="form-message" role="status" aria-live="polite"></div>
-              <datalist id="stockReviewSuggestions"></datalist>
+              <div class="excel-stock-toolbar"><label>Status <select id="stockReviewFilter"><option value="ALL">All Parts</option><option value="VALID">Valid Parts</option><option value="WRONG_PART">Wrong Parts</option><option value="MISSING_PRICE">Missing Price</option><option value="DUPLICATE">Duplicates</option><option value="ALREADY_UPLOADED">Already Uploaded</option><option value="SOURCE_ALREADY_CORRECTED">Already Corrected</option><option value="REJECTED">Rejected</option></select></label><input id="stockReviewSearch" type="search" placeholder="Search part or description" aria-label="Search upload rows"><button id="stockReviewUseDealer" class="btn light" type="button">Correct Dealer Code in Exceptions</button><button id="stockReviewRevalidate" class="btn light" type="button">Validate and Transfer</button><button id="stockReviewExport" class="btn light" type="button">Download Exceptions (.xlsx)</button></div>
               <div class="table-wrap recon-stock-preview-wrap"><table id="dealerStockReviewTable"><thead><tr><th><input id="stockReviewSelectAll" type="checkbox" aria-label="Select all filtered review rows"></th><th>Excel Row</th><th>Dealer Code</th><th>Part Number</th><th>Description</th><th>DMS Qty</th><th>DLC</th><th>MRP</th><th>Status</th></tr></thead><tbody id="stockReviewRows"></tbody></table></div>
-              <p class="muted">Drag a column heading's right edge to widen it. Use the pencil to edit a part number or the trash icon to remove a row from this upload review.</p>
+              <p class="muted">Drag a column heading's right edge to widen it. Use Edit beside a part number to view and correct its full value.</p>
               <div class="excel-stock-pager"><span id="stockReviewPageLabel"></span><div><button id="stockReviewPrev" class="btn light" type="button">Previous</button><button id="stockReviewNext" class="btn light" type="button">Next</button></div></div>
               <div class="excel-confirm-bar"><span id="stockReviewSelected">0 valid rows ready to upload.</span><button id="stockReviewConfirm" class="btn primary" type="button" disabled>Transfer Corrected to Uploaded Stock</button></div>
             </section>
             <div id="dealerStockUploadMessage" class="form-message">Upload columns: Dealer Code, Part Number, Part Description, Dms Stock, Bin Loc 1, Bin Loc 2, Bin Loc 3. Drag headers to move columns and drag the header edge to resize them.</div>
             <div id="dealerStockErrorReport" class="stock-error-report" hidden></div>
-            <div id="reconPriceHealthSummary" class="card" hidden></div>
             <div id="stockUploadHistory" class="stock-error-report" hidden></div>
           </section>
 
@@ -967,7 +959,7 @@
           <section class="card recon-report-card">
             <div class="card-head"><h2>Dealer Reconciliation Report <span id="reconReportCount" class="muted">(0 records)</span></h2><p class="muted">Shows uploaded dealer stock parts compared with physically scanned stock.</p></div>
             <div class="table-wrap">
-              <table class="recon-report-table">
+              <table id="reconciliationReportTable" class="recon-report-table">
                 <thead><tr><th>Part Number</th><th>Description</th><th>Category</th><th>DMS Qty</th><th>Scanned Qty</th><th>Variance Qty</th><th>Status</th><th>MRP (₹)</th><th>DLC / DLP (₹)</th><th>DMS Stock Value (₹)</th><th>Scanned Value (₹)</th><th>Bin Location</th><th>Movement</th><th>Fast/Slow/Dead</th></tr></thead>
                 <tbody id="reconRows"></tbody>
               </table>
@@ -979,7 +971,6 @@
           </section>
         </section>
 
-        <section id="reconPriceValidationTab" class="recon-panel" role="tabpanel" hidden><section class="card"><div id="reconPriceExceptions" hidden></div></section></section>
         <section id="reconSummaryTab" class="recon-panel" role="tabpanel" hidden>
           <section class="card">
             <div class="card-head"><h2>Final Summary</h2></div>
@@ -1013,10 +1004,10 @@
 
       <section id="master" class="view">
         <div class="master-tabs" role="tablist" aria-label="Master Data sections">
+          <button class="master-tab active" type="button" role="tab" aria-selected="true" aria-controls="partMasterTab" data-master-tab="partMasterTab">Part Master</button>
           <button class="master-tab" type="button" role="tab" aria-selected="false" aria-controls="dealerAuditTab" data-master-tab="dealerAuditTab">Dealer Master / Audit Setup</button>
           <button class="master-tab admin-only" type="button" role="tab" aria-selected="false" aria-controls="userApprovalTab" data-master-tab="userApprovalTab">User Login Approval</button>
           <button class="master-tab admin-only" type="button" role="tab" aria-selected="false" aria-controls="adminDeleteMasterTab" data-master-tab="adminDeleteMasterTab">Admin Delete Manager</button>
-          <button class="master-tab active" type="button" role="tab" aria-selected="true" aria-controls="partMasterTab" data-master-tab="partMasterTab">Part Master</button>
           <button class="master-tab admin-only" type="button" role="tab" aria-selected="false" aria-controls="scanModificationHistoryTab" data-master-tab="scanModificationHistoryTab">Scan Modification History</button>
           <button class="master-tab admin-only" type="button" role="tab" aria-selected="false" aria-controls="backupTab" data-master-tab="backupTab">Backup</button>
           <button class="master-tab admin-only" type="button" role="tab" aria-selected="false" aria-controls="toolsTab" data-master-tab="toolsTab">Tools</button>
@@ -1026,11 +1017,11 @@
           <section id="partMasterTab" class="master-tab-panel active" role="tabpanel">
             <section class="card part-master-heading-card">
               <header class="part-master-header">
-                <div><h2 id="partMasterHeading">▦ &nbsp;Master Data - Part Master</h2><p id="partMasterSubheading">Manage the part catalogue and refresh prices for all ongoing audits.</p></div>
+                <div><h2 id="partMasterHeading">▦ &nbsp;Master Data - Part Master</h2><p id="partMasterSubheading">Manage part catalogue and refresh audit prices (MRP &amp; DLC)</p></div>
                 <div class="part-master-header-actions">
                   <button id="addPartTopBtn" class="btn primary" type="button">＋ Add Part</button>
                   <button id="editPartTopBtn" class="btn light" type="button">✎ &nbsp;Edit Part</button>
-                  <button id="refreshPartPricesTopBtn" class="btn light part-refresh-top" type="button">⟳ &nbsp;Refresh Ongoing Audit Prices</button>
+                  <button id="refreshPartPricesTopBtn" class="btn light part-refresh-top" type="button">⟳ &nbsp;Refresh Audit Prices</button>
                   <button id="downloadCatalogueTemplateBtn" class="btn light admin-only" type="button">↓ &nbsp;Download Template</button>
                   <details class="part-master-more admin-only"><summary class="btn light">••• &nbsp;More</summary>
                     <div class="part-master-more-menu">
@@ -1066,15 +1057,15 @@
                 <label>Product Group<select name="group" id="partGroupFilter"><option value="">All Groups</option></select></label>
                 <label>Model<select name="model" id="partModelFilter"><option value="">All Models</option></select></label>
                 <label>Year<select name="year" id="partYearFilter"><option value="">All Years</option></select></label>
-                <label>MRP Range<span class="part-mrp-range"><input id="partMrpMinFilter" type="number" min="0" step="0.01" placeholder="Min"><input id="partMrpMaxFilter" type="number" min="0" step="0.01" placeholder="Max"></span></label>
+                <label>MRP Range (0 = zero only)<span class="part-mrp-range"><input id="partMrpMinFilter" type="number" min="0" step="0.01" placeholder="Min"><input id="partMrpMaxFilter" type="number" min="0" step="0.01" placeholder="Max"></span></label>
                 <button class="btn primary" type="submit">⌕ &nbsp;Search</button><button id="partClearSearchBtn" class="btn light" type="button">↻ &nbsp;Clear</button>
-                <button id="partExportSearchBtn" class="btn light" type="button" hidden>Export Search Result</button>
+                <button id="partExportSearchBtn" class="btn light" type="button">Export Filtered Results (CSV)</button>
               </form>
             </section>
 
             <section id="partMasterResultsCard" class="card part-list-card">
               <div class="part-list-heading"><h3>☷ &nbsp;Part List</h3><span id="partMasterCount" class="part-list-total"></span><span id="partListRange" class="part-list-range"></span></div>
-              <div class="table-wrap part-list-table-wrap"><table class="advanced-part-result-table"><thead><tr>
+              <div class="table-wrap part-list-table-wrap"><table id="partMasterResultTable" class="advanced-part-result-table"><thead><tr>
                 <th><input id="partSelectAll" type="checkbox" aria-label="Select all parts on this page"></th><th>SN</th>
                 <th><button class="part-sort" data-sort="partNumber">Part Number ↕</button></th><th>Description</th>
                 <th><button class="part-sort" data-sort="productCategory">Category ↕</button></th><th><button class="part-sort" data-sort="productGroup">Product Group ↕</button></th>
@@ -1096,6 +1087,18 @@
                   <label>Model<input name="model"></label><label>Year<input name="year"></label>
                   <label>MRP (₹)<input name="mrp" type="number" min="0" step="0.01"></label><label>DLC (₹)<input name="dlc" type="number" min="0" step="0.01"></label>
                   <div class="part-entry-actions"><button id="cancelPartEditBtn" class="btn light" type="button" hidden>Cancel</button><button id="savePartBtn" class="btn primary" type="submit">Save Part</button></div>
+                </form>
+              </section>
+              <section id="auditPriceRefreshCard" class="card part-bottom-card audit-price-card">
+                <div class="part-bottom-card-head"><h3>⟳ &nbsp;Refresh Audit Prices (MRP &amp; DLC)</h3></div>
+                <div class="part-price-info">ⓘ &nbsp;This updates MRP and DLC for selected parts or all parts from the master. Existing scan, inventory and audit data is unchanged except allowed audit price values.</div>
+                <form id="auditPriceRefreshForm" class="audit-price-form" aria-busy="false">
+                  <div class="audit-price-field-row"><label>Dealer<select id="auditPriceDealerSelect" name="dealerCode" required><option value="">Select Dealer</option></select></label><label>Current Audit<input id="auditPriceCurrentAudit" readonly placeholder="Select a dealer"></label><label>Status<input id="auditPriceAuditStatus" readonly placeholder="Select a dealer"></label></div>
+                  <fieldset><legend>Update For</legend><label><input name="updateFor" type="radio" value="all" checked> All Parts</label><label><input name="updateFor" type="radio" value="selected"> Selected Parts (from table)</label></fieldset>
+                  <fieldset><legend>Price Source</legend><label><input name="priceSource" type="radio" value="master" checked> From Master</label><label><input name="priceSource" type="radio" value="upload"> From Upload File (Excel/CSV)</label></fieldset>
+                  <div id="auditPriceUploadSource" class="audit-price-upload-source" hidden><input id="auditPriceUploadFile" type="file" accept=".xlsx,.xls,.csv"><button id="refreshPriceTemplateBtn" class="btn light" type="button">Download Template</button></div>
+                  <p id="auditPriceRefreshHint" class="muted">Select one dealer with an ongoing audit.</p><div id="auditPriceRefreshMessage" class="form-message" role="status" aria-live="polite" hidden></div>
+                  <div class="part-entry-actions"><button id="cancelPriceRefreshBtn" class="btn light" type="button">Cancel</button><button id="refreshAuditPricesBtn" class="btn primary" type="submit" disabled>Refresh Prices</button></div>
                 </form>
               </section>
             </div>
@@ -1830,7 +1833,7 @@
 
   <script src="/config.js"></script>
   <script src="/js/scan-parser.js?v=20261014-scanner-sequence-v1"></script>
-  <script src="/js/runtime.js?v=20261017-reconciliation-sync-v2"></script>
+  <script src="/js/runtime.js?v=20261010-qr-quantity-v2"></script>
   <script src="/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="/sku-bin-picker.css?v=20261008-sku-v10">
   <script src="/js/sku-bin-picker.js?v=20261008-sku-v10"></script>
@@ -1838,8 +1841,8 @@
   <link rel="stylesheet" href="/scan-edit-checkboxes.css?v=20261011-scan-edit-checkboxes-v3">
   <script src="/js/smart-part-search.js?v=20261015-stock-review-suggestions"></script>
   <script src="/js/excel-upload-table.js?v=20261012-adjustable-v1"></script>
-  <script src="/js/excel-upload-history.js?v=20261012-compact-v1"></script>
-<script src="/ui.js?v=20261017-dealer-reconciliation-production-v3"></script>
+  <script src="/js/excel-upload-history.js?v=20261019-review-v1"></script>
+  <script src="/ui.js?v=20261020-duplicate-stock-review-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>
