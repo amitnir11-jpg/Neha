@@ -229,6 +229,7 @@ module.exports = {
   detectLanIp,
   lanAddresses,
   detectLanIpForRemote,
+  isPrivateLanIp,
   isLocalhostUrl,
   isPlaceholderPublicUrl,
   parseRequestHost,

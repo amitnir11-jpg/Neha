@@ -596,6 +596,8 @@ const RAW_UPI_COLUMNS = [
   { header: 'Entry Mode', key: 'entryMode', width: 18 },
   { header: 'Entry Channel', key: 'entryChannel', width: 16 },
   { header: 'Entry Source', key: 'scanSourceLabel', width: 24 },
+  { header: 'Scan Source', key: 'scanSource', width: 24 },
+  { header: 'User ID', key: 'userId', width: 20 },
   { header: 'Staff', key: 'staffName', width: 18 },
   { header: 'Warnings', key: 'warnings', width: 32 }
 ];

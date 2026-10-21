@@ -116,6 +116,7 @@
         <button class="side-link" data-view="reports" data-icon="reports"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-reports"></use></svg><span>Reports</span></button>
         <button class="side-link" data-view="binTransfer" data-icon="transfer"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-transfer"></use></svg><span>Bin Transfer</span></button>
         <button class="side-link" data-view="reconciliation" data-icon="reconcile"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-reconcile"></use></svg><span>Reconciliation</span></button>
+        <button class="side-link" data-view="quotations" data-icon="reports"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-reports"></use></svg><span>Quotations</span></button>
         <button class="side-link" data-view="master" data-icon="master"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-master"></use></svg><span>Master Data</span></button>
         <button class="side-link" data-view="validator" data-icon="validator"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-validator"></use></svg><span>Validator</span></button>
         <button class="side-link" data-view="qr" data-icon="qr"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-qr"></use></svg><span>QR / Barcode</span></button>
@@ -153,7 +154,7 @@
             <button class="header-icon-btn" type="button" title="Notifications" aria-label="Notifications">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
-            <button class="header-icon-btn" type="button" title="Settings" aria-label="Settings">
+            <button id="companyProfileSettingsOpen" class="header-icon-btn admin-only" type="button" title="Company Profile & PDF Template Settings" aria-label="Company Profile & PDF Template Settings">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m19.4 15 .1.1 1.3 1.1-2 3.4-1.6-.6a7.7 7.7 0 0 1-2.1 1.2L14.9 22h-3.8l-.3-1.8a7.7 7.7 0 0 1-2.1-1.2l-1.6.6-2-3.4 1.3-1.1.1-.1a7.4 7.4 0 0 1 0-2l-.1-.1-1.3-1.1 2-3.4 1.6.6a7.7 7.7 0 0 1 2.1-1.2l.3-1.8h3.8l.3 1.8a7.7 7.7 0 0 1 2.1 1.2l1.6-.6 2 3.4-1.3 1.1-.1.1a7.4 7.4 0 0 1 0 2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
             </button>
             <div class="topbar-user-meta">
@@ -261,8 +262,8 @@
             </div>
             <div class="table-wrap compact-table dashboard-table-wrap dashboard-stream-wrap recent-scans-table-wrapper">
               <table class="dashboard-data-table dashboard-stream-table">
-                <thead><tr><th>Time</th><th>Part Number</th><th>Description</th><th>Qty</th><th>Bin</th><th>Entry By</th></tr></thead>
-                <tbody id="streamRows"><tr><td colspan="6" class="muted">Loading live recent scans...</td></tr></tbody>
+                <thead><tr><th>Time</th><th>Part Number</th><th>Description</th><th>Qty</th><th>Bin</th><th>Scan Source</th><th>User ID</th></tr></thead>
+                <tbody id="streamRows"><tr><td colspan="7" class="muted">Loading live recent scans...</td></tr></tbody>
               </table>
             </div>
           </section>
@@ -528,7 +529,7 @@
           </div>
           <div class="table-wrap scan-history-wrap">
             <table class="scan-history-table">
-              <thead><tr><th data-col-key="select"><input id="scanHistorySelectAll" type="checkbox"></th><th data-col-key="time" data-sort-key="time">Time</th><th data-col-key="part-number" data-sort-key="partNumber">Part Number</th><th data-col-key="part-description" data-sort-key="partDescription">Part Description</th><th data-col-key="product-category" data-sort-key="productCategory">Product Category</th><th data-col-key="mrp" data-sort-key="mrp">MRP</th><th data-col-key="dlc" data-sort-key="dlc">DLC</th><th data-col-key="product-group" data-sort-key="productGroup">Product Group</th><th data-col-key="model" data-sort-key="model">Model</th><th data-col-key="year" data-sort-key="year">Year</th><th data-col-key="qty" data-sort-key="qty">Qty</th><th data-col-key="total-qty" data-sort-key="totalQty">Total Qty</th><th data-col-key="type" data-sort-key="type">Type</th><th data-col-key="bin" data-sort-key="bin">Bin Location</th><th data-col-key="dealer" data-sort-key="dealer">Dealer</th><th data-col-key="device" data-sort-key="device">Device</th><th data-col-key="status" data-sort-key="status">Status</th><th data-col-key="action">Action</th></tr></thead>
+              <thead><tr><th data-col-key="select"><input id="scanHistorySelectAll" type="checkbox"></th><th data-col-key="time" data-sort-key="time">Time</th><th data-col-key="part-number" data-sort-key="partNumber">Part Number</th><th data-col-key="part-description" data-sort-key="partDescription">Part Description</th><th data-col-key="product-category" data-sort-key="productCategory">Product Category</th><th data-col-key="mrp" data-sort-key="mrp">MRP</th><th data-col-key="dlc" data-sort-key="dlc">DLC</th><th data-col-key="product-group" data-sort-key="productGroup">Product Group</th><th data-col-key="model" data-sort-key="model">Model</th><th data-col-key="year" data-sort-key="year">Year</th><th data-col-key="qty" data-sort-key="qty">Qty</th><th data-col-key="total-qty" data-sort-key="totalQty">Total Qty</th><th data-col-key="type" data-sort-key="type">Type</th><th data-col-key="bin" data-sort-key="bin">Bin Location</th><th data-col-key="dealer" data-sort-key="dealer">Dealer</th><th data-col-key="device" data-sort-key="device">Device</th><th data-col-key="audit-stamp">Recorded By / Source</th><th data-col-key="status" data-sort-key="status">Status</th><th data-col-key="action">Action</th></tr></thead>
               <tbody id="scanHistoryRows"></tbody>
             </table>
           </div>
@@ -1502,6 +1503,40 @@
         </section>
       </section>
 
+      <section id="quotations" class="view">
+        <section class="card">
+          <div class="card-head"><div><h2>Quotation Management</h2><p class="muted">Create, update, track and print customer quotations.</p></div><button id="newQuotationBtn" class="btn primary" type="button">New quotation</button></div>
+          <div class="filters-row">
+            <label>Search<input id="quotationSearch" type="search" placeholder="Quotation no. or customer"></label>
+            <label>Status<select id="quotationStatusFilter"><option value="ALL">All statuses</option><option>DRAFT</option><option>SENT</option><option>ACCEPTED</option><option>REJECTED</option><option>EXPIRED</option><option>CANCELLED</option></select></label>
+            <button id="quotationRefreshBtn" class="btn light" type="button">Refresh</button>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>No.</th><th>Customer</th><th>Issue date</th><th>Status</th><th class="number">Total</th><th>Actions</th></tr></thead><tbody id="quotationRows"><tr><td colspan="6" class="muted">Open Quotations to load records.</td></tr></tbody></table></div>
+        </section>
+        <section id="quotationEditor" class="card hidden">
+          <div class="card-head"><h2 id="quotationEditorTitle">New quotation</h2><button id="closeQuotationEditorBtn" class="btn light" type="button">Close</button></div>
+          <form id="quotationForm">
+            <input id="quotationId" type="hidden">
+            <div class="form-grid">
+              <label>Quotation no.<input id="quotationNumber" name="quotationNumber" placeholder="Auto-generated if blank"></label>
+              <label>Customer name *<input id="quotationCustomerName" name="customerName" required maxlength="200"></label>
+              <label>Phone<input id="quotationCustomerPhone" name="customerPhone" maxlength="50"></label>
+              <label>Email<input id="quotationCustomerEmail" name="customerEmail" type="email" maxlength="200"></label>
+              <label>Issue date *<input id="quotationIssueDate" name="issueDate" type="date" required></label>
+              <label>Valid until<input id="quotationValidUntil" name="validUntil" type="date"></label>
+              <label>Status<select id="quotationStatus" name="status"><option>DRAFT</option><option>SENT</option><option>ACCEPTED</option><option>REJECTED</option><option>EXPIRED</option><option>CANCELLED</option></select></label>
+              <label>Additional discount<input id="quotationAdditionalDiscount" name="additionalDiscount" type="number" min="0" step="0.01" value="0"></label>
+              <label class="span-2">Address<textarea id="quotationCustomerAddress" name="customerAddress" rows="2"></textarea></label>
+            </div>
+            <div class="card-head"><h3>Line items</h3><button id="addQuotationItemBtn" class="btn light" type="button">Add item</button></div>
+            <div class="table-wrap"><table><thead><tr><th>Part no.</th><th>Description *</th><th>Qty *</th><th>Unit</th><th>Rate *</th><th>Discount %</th><th>Tax %</th><th></th></tr></thead><tbody id="quotationItemRows"></tbody></table></div>
+            <div class="form-grid"><label class="span-2">Notes<textarea id="quotationNotes" name="notes" rows="2"></textarea></label><label class="span-2">Terms &amp; conditions<textarea id="quotationTerms" name="terms" rows="2"></textarea></label></div>
+            <div id="quotationTotals" class="card muted">Subtotal: ₹0.00 &nbsp; | &nbsp; Discount: ₹0.00 &nbsp; | &nbsp; Tax: ₹0.00 &nbsp; | &nbsp; <strong>Total: ₹0.00</strong></div>
+            <div class="actions"><button class="btn primary" type="submit">Save quotation</button><button id="quotationCancelBtn" class="btn light" type="button">Cancel</button></div>
+          </form>
+        </section>
+      </section>
+
       <section id="syncCenter" class="view">
         <section class="card">
           <div class="card-head">
@@ -1829,6 +1864,24 @@
       </div>
     </div>
   </div>
+  <div id="companyProfileSettingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="companyProfileSettingsTitle">
+    <div class="modal-card">
+      <div class="modal-head"><h2 id="companyProfileSettingsTitle">Company Profile &amp; PDF Template Settings</h2><button id="companyProfileSettingsClose" class="btn icon-btn" type="button" aria-label="Close">&times;</button></div>
+      <form id="companyProfileSettingsForm">
+        <div class="form-grid">
+          <label class="span-2">Company name *<input id="companyProfileName" name="companyName" required maxlength="160"></label>
+          <label class="span-2">Address line 1 *<input id="companyProfileAddressLine1" name="addressLine1" required maxlength="240"></label>
+          <label class="span-2">Address line 2 *<input id="companyProfileAddressLine2" name="addressLine2" required maxlength="240"></label>
+          <label class="span-2">Quotation heading *<input id="companyProfileQuotationTitle" name="quotationTitle" required maxlength="160"></label>
+          <label class="span-2">Quotation subtitle<input id="companyProfileQuotationSubtitle" name="quotationSubtitle" maxlength="240"></label>
+          <label>Authorized signatory<input id="companyProfileSignatory" name="authorizedSignatory" maxlength="120"></label>
+          <label>Signatory title<input id="companyProfileSignatoryTitle" name="signatoryTitle" maxlength="120"></label>
+        </div>
+        <p class="muted">The circular company stamp is rendered beside the signatory from this centrally managed profile. Changes affect new quotations only; existing quotations retain their issued profile snapshot.</p>
+        <div class="modal-actions"><button id="companyProfileSettingsCancel" class="btn light" type="button">Cancel</button><button class="btn primary" type="submit">Save company profile</button></div>
+      </form>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
 
   <script src="/config.js"></script>
@@ -1842,7 +1895,7 @@
   <script src="/js/smart-part-search.js?v=20261015-stock-review-suggestions"></script>
   <script src="/js/excel-upload-table.js?v=20261012-adjustable-v1"></script>
   <script src="/js/excel-upload-history.js?v=20261019-review-v1"></script>
-  <script src="/ui.js?v=20261020-duplicate-stock-review-v1"></script>
+  <script src="/ui.js?v=20261021-scan-audit-columns-v1"></script>
   <script src="/js/select-system.js?v=20260908-enterprise-select-v3"></script>
   <script src="/js/app-layout.js?v=20260908-enterprise-controls-v2"></script>
 </body>

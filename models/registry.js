@@ -272,6 +272,15 @@ function prepareCommonLog(data) {
   if (!data.timestamp && !data.time && !data.dateTime) data.timestamp = new Date();
 }
 
+function prepareQuotation(data) {
+  uppercaseFields(data, ['dealerCode', 'quotationNumber', 'status']);
+  if (!data.status) data.status = 'DRAFT';
+  if (!data.currency) data.currency = 'INR';
+  if (!data.issueDate) data.issueDate = new Date();
+  if (!data.createdAt) data.createdAt = new Date();
+  if (!data.updatedAt) data.updatedAt = new Date();
+}
+
 function model(name, delegate, tableName, extra = {}) {
   return createModel({ name, delegate, tableName, ...extra });
 }
@@ -340,6 +349,7 @@ module.exports = {
   RejectedScan: model('RejectedScan', 'rejectedScan', 'rejectedscans', { prepare: prepareCommonLog }),
   ReportFilterSetting: model('ReportFilterSetting', 'reportFilterSetting', 'reportfiltersettings', { prepare: prepareCommonLog }),
   ReportSnapshot: model('ReportSnapshot', 'reportSnapshot', 'reportsnapshots', { prepare: prepareCommonLog }),
+  Quotation: model('Quotation', 'quotation', 'quotations', { prepare: prepareQuotation }),
   Scan: model('Scan', 'scan', 'scans', { prepare: prepareInventory, indexes: scanIndexes }),
   ScanAuditLog: model('ScanAuditLog', 'scanAuditLog', 'scanauditlogs', { prepare: prepareScanAuditLog }),
   ScannerLog: model('ScannerLog', 'scannerLog', 'scannerlogs', { prepare: prepareCommonLog }),

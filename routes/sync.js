@@ -764,12 +764,14 @@ function isValidPartNumber(value) {
 
 function normalizeSource(value, fallback = 'mobile') {
   const source = clean(value || fallback).toLowerCase();
+  if (/regular[_\s-]*part.*manual|manual.*regular[_\s-]*part/.test(source)) return 'regular_part_manual';
+  if (/excel.*(manual|upload)|manual.*excel/.test(source)) return 'excel_manual_upload';
   if (/manual/.test(source)) return 'manual';
   if (/ocr|ai/.test(source)) return 'ocr_label';
   if (/^qr$|qr[_\s-]*scan/.test(source)) return 'qr';
   if (/barcode/.test(source)) return 'barcode';
   if (/camera|mobile/.test(source)) return 'mobile';
-  if (['manual', 'scanner', 'import', 'api', 'ocr_label', 'qr'].includes(source)) return source;
+  if (['manual', 'regular_part_manual', 'excel_manual_upload', 'scanner', 'import', 'api', 'ocr_label', 'qr'].includes(source)) return source;
   return fallback;
 }
 
@@ -1511,7 +1513,7 @@ function duplicateQuery(scan) {
 }
 
 function isManualEntry(scan = {}) {
-  return normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, 'mobile') === 'manual';
+  return ['manual', 'regular_part_manual'].includes(normalizeSource(scan.scanSource || scan.source?.source || scan.source?.scanSource || scan.source, 'mobile'));
 }
 
 async function logDuplicateScan(scan = {}, existing = {}, reason = 'Duplicate scan skipped') {
@@ -2339,6 +2341,10 @@ async function saveNormalizedScan(scan, req, options = {}) {
     loginId: scan.loginId || (req.user ? req.user.username || req.user.email : ''),
     staffName: scan.staffName || (req.user ? req.user.name : ''),
     userName: scanUserName(req, scan),
+    createdBy: scan.createdBy || scan.userId || (req.user ? req.user.id || req.user._id : ''),
+    createdByUsername: scan.createdByUsername || scan.loginId || (req.user ? req.user.username || req.user.email : ''),
+    createdByName: scan.createdByName || scan.userName || scan.staffName || scanUserName(req, scan),
+    createdByRole: scan.createdByRole || role,
     role,
     timestamp: finalSavedTime,
     synced: true,

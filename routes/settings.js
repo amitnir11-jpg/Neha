@@ -4,12 +4,23 @@ const auth = require('./auth');
 
 const router = express.Router();
 const SMART_BIN_KEY = 'smart-bin-suggestion';
+const QUOTATION_COMPANY_PROFILE_KEY = 'quotation-company-profile';
 const DEFAULT_SETTINGS = {
   enabled: true,
   allowMultipleLocations: true,
   requireReason: true,
   maxAllowedLocationsPerPart: 3
 };
+const DEFAULT_QUOTATION_COMPANY_PROFILE = Object.freeze({
+  companyName: 'DAKSH INVENTORY SOLUTION V2',
+  addressLine1: 'S-2/63, Deep Nagar, Benad Road,',
+  addressLine2: 'Jhotwara, Jaipur, Rajasthan - 302012',
+  quotationTitle: 'PART INVENTORY AUDIT QUOTATION',
+  quotationSubtitle: 'INVENTORY AUDIT / STOCK VERIFICATION / RECONCILIATION',
+  authorizedSignatory: 'Bineet',
+  signatoryTitle: 'Authorized Signatory',
+  stampLabel: 'DAKSH INVENTORY SOLUTION V2'
+});
 let smartBinSettingsCache = null;
 let smartBinSettingsRead = null;
 
@@ -42,6 +53,28 @@ function normalizeSettings(input = {}) {
     requireReason: toBoolean(source.requireReason, DEFAULT_SETTINGS.requireReason),
     maxAllowedLocationsPerPart: Math.max(1, toInteger(source.maxAllowedLocationsPerPart, DEFAULT_SETTINGS.maxAllowedLocationsPerPart) || DEFAULT_SETTINGS.maxAllowedLocationsPerPart)
   };
+}
+
+function normalizeQuotationCompanyProfile(input = {}) {
+  const source = input && typeof input === 'object'
+    ? (input.data && typeof input.data === 'object' ? { ...input.data, ...input } : { ...input })
+    : {};
+  const value = (key, fallback, limit) => clean(source[key] === undefined ? fallback : source[key]).slice(0, limit);
+  return {
+    companyName: value('companyName', DEFAULT_QUOTATION_COMPANY_PROFILE.companyName, 160) || DEFAULT_QUOTATION_COMPANY_PROFILE.companyName,
+    addressLine1: value('addressLine1', DEFAULT_QUOTATION_COMPANY_PROFILE.addressLine1, 240),
+    addressLine2: value('addressLine2', DEFAULT_QUOTATION_COMPANY_PROFILE.addressLine2, 240),
+    quotationTitle: value('quotationTitle', DEFAULT_QUOTATION_COMPANY_PROFILE.quotationTitle, 160) || DEFAULT_QUOTATION_COMPANY_PROFILE.quotationTitle,
+    quotationSubtitle: value('quotationSubtitle', DEFAULT_QUOTATION_COMPANY_PROFILE.quotationSubtitle, 240),
+    authorizedSignatory: value('authorizedSignatory', DEFAULT_QUOTATION_COMPANY_PROFILE.authorizedSignatory, 120),
+    signatoryTitle: value('signatoryTitle', DEFAULT_QUOTATION_COMPANY_PROFILE.signatoryTitle, 120),
+    stampLabel: value('stampLabel', DEFAULT_QUOTATION_COMPANY_PROFILE.stampLabel, 160)
+  };
+}
+
+async function readQuotationCompanyProfile() {
+  const record = await Setting.findOne({ key: QUOTATION_COMPANY_PROFILE_KEY }).lean();
+  return normalizeQuotationCompanyProfile(record || DEFAULT_QUOTATION_COMPANY_PROFILE);
 }
 
 async function readSettings() {
@@ -120,7 +153,33 @@ router.post('/smart-bin-suggestion', auth.requireAuth, auth.requireAdmin, async 
   }
 });
 
+router.get('/quotation-company-profile', auth.requireAuth, async (req, res) => {
+  try {
+    return res.json({ success: true, key: QUOTATION_COMPANY_PROFILE_KEY, profile: await readQuotationCompanyProfile() });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message || 'Failed to load quotation company profile' });
+  }
+});
+
+router.put('/quotation-company-profile', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const profile = normalizeQuotationCompanyProfile(req.body || {});
+    await Setting.findOneAndUpdate(
+      { key: QUOTATION_COMPANY_PROFILE_KEY },
+      { $set: { key: QUOTATION_COMPANY_PROFILE_KEY, ...profile, updatedBy: clean(req.user && (req.user.username || req.user.email || req.user.id)) } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    return res.json({ success: true, key: QUOTATION_COMPANY_PROFILE_KEY, profile });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message || 'Failed to save quotation company profile' });
+  }
+});
+
 module.exports = router;
 module.exports.readSettings = readSettings;
 module.exports.normalizeSettings = normalizeSettings;
 module.exports.DEFAULT_SETTINGS = DEFAULT_SETTINGS;
+module.exports.QUOTATION_COMPANY_PROFILE_KEY = QUOTATION_COMPANY_PROFILE_KEY;
+module.exports.DEFAULT_QUOTATION_COMPANY_PROFILE = DEFAULT_QUOTATION_COMPANY_PROFILE;
+module.exports.normalizeQuotationCompanyProfile = normalizeQuotationCompanyProfile;
+module.exports.readQuotationCompanyProfile = readQuotationCompanyProfile;

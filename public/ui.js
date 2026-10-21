@@ -470,6 +470,7 @@
     qr: 'QR / Barcode',
     devices: 'Device Control',
     syncCenter: 'Sync Report',
+    quotations: 'Quotations',
     archiveRestore: 'Archive & Restore Center'
   };
 
@@ -3237,7 +3238,9 @@
   function scanHistoryLayoutStorageKey() {
     const user = state.user || readStoredJson('dakshUser') || {};
     const identity = String(user.id || user.username || user.email || user.name || 'user').trim().toLowerCase();
-    return `daksh_table_scan_history:${encodeURIComponent(identity)}${isBarcodeWorkspaceActive() ? ':barcode' : ''}`;
+    // Version the layout when mandatory audit columns change so a saved browser
+    // layout cannot hide the required Scan Source and User ID fields.
+    return `daksh_table_scan_history:v2:${encodeURIComponent(identity)}${isBarcodeWorkspaceActive() ? ':barcode' : ''}`;
   }
 
   function applyTableColumnOrder(table, order) {
@@ -3974,7 +3977,7 @@
       Array.from(table.tHead.rows[0].children).forEach((th) => { delete th.dataset.originalIndex; });
       table.querySelector('colgroup')?.remove();
       if (compact) {
-        const columns = [['select', ''], ['row', '#'], ['time', 'Date & Time'], ['type', 'Type'], ['part-number', 'Part Number'], ['part-description', 'Description'], ['bin', 'Bin Location'], ['qty', 'Qty'], ['mrp', 'MRP (₹)'], ['dlc', 'DLC (₹)'], ['regdNo', 'Regd No'], ['jobCardNo', 'Job Card No'], ['device', 'Device'], ['action', 'Action']];
+        const columns = [['select', ''], ['row', '#'], ['time', 'Date & Time'], ['type', 'Type'], ['part-number', 'Part Number'], ['part-description', 'Description'], ['bin', 'Bin Location'], ['qty', 'Qty'], ['mrp', 'MRP (₹)'], ['dlc', 'DLC (₹)'], ['regdNo', 'Regd No'], ['jobCardNo', 'Job Card No'], ['device', 'Device'], ['scan-source', 'Scan Source'], ['user-id', 'User ID'], ['action', 'Action']];
         table.tHead.innerHTML = `<tr>${columns.map(([key, title]) => `<th data-col-key="${key}"${['time', 'type', 'part-number', 'part-description', 'bin', 'qty', 'mrp', 'dlc', 'device'].includes(key) ? ` data-sort-key="${key === 'part-number' ? 'partNumber' : key === 'part-description' ? 'partDescription' : key}"` : ''}>${key === 'select' ? '<input id="scanHistorySelectAll" type="checkbox" aria-label="Select all visible scans">' : title}</th>`).join('')}</tr>`;
       } else {
         table.tHead.innerHTML = state.scanHistoryFullHeader;
@@ -4002,7 +4005,7 @@
     if (!body) return;
     configureScanHistoryLayout();
     const rows = (Array.isArray(records) ? records : []).slice(0, isBarcodeWorkspaceActive() ? 10 : 500);
-    body.innerHTML = rows.length ? rows.map((scan, index) => scanHistoryRow(scan, index)).join('') : `<tr><td colspan="${isBarcodeWorkspaceActive() ? 14 : 18}" class="muted">No scan history found</td></tr>`;
+    body.innerHTML = rows.length ? rows.map((scan, index) => scanHistoryRow(scan, index)).join('') : `<tr><td colspan="${isBarcodeWorkspaceActive() ? 16 : 19}" class="muted">No scan history found</td></tr>`;
     const table = body.closest('table');
     if (table) enhanceDataTable(table, scanHistoryLayoutStorageKey());
     const resetLayout = $('#scanHistoryResetLayout');
@@ -4177,16 +4180,32 @@
     if (scan.scanSourceLabel) return scan.scanSourceLabel;
     const source = String(scan.source || scan.scanSource || '').trim().toLowerCase();
     const deviceId = String(scan.deviceId || '').trim().toUpperCase();
-    const channel = deviceId.startsWith('MOB-') || /mobile|camera|qr|ocr/.test(source) ? 'Mobile' : deviceId.startsWith('WEB-') ? 'Web' : 'Server';
+    const channel = /excel.*(manual|upload)|manual.*excel/.test(source)
+      ? 'Upload'
+      : deviceId.startsWith('MOB-') || /mobile|camera|qr|ocr/.test(source) ? 'Mobile' : deviceId.startsWith('WEB-') ? 'Web' : 'Server';
+    if (/regular[_\s-]*part.*manual|manual.*regular[_\s-]*part/.test(source)) return `${channel} Regular Part Manual Entry`;
+    if (/excel.*(manual|upload)|manual.*excel/.test(source)) return `${channel} Excel Manual Upload`;
     if (/manual/.test(source)) return `${channel} Manual Entry`;
     if (/barcode|scanner|qr|camera|mobile|ocr/.test(source)) return `${channel} Barcode/QR Scan`;
     return `${channel} System/API`;
   }
 
+  function scanAuditStamp(scan = {}) {
+    const username = String(scan.createdByUsername || scan.loginId || scan.username || '').trim();
+    const name = String(scan.createdByName || scan.userName || scan.staffName || '').trim();
+    const userId = String(scan.createdBy || scan.userId || '').trim();
+    const actor = name || username || userId || 'System';
+    const identifier = username && username !== actor ? ` (${username})` : userId && userId !== actor ? ` (${userId})` : '';
+    return `${actor}${identifier} — ${scanEntrySourceLabel(scan)}`;
+  }
+
+  function scanUserId(scan = {}) {
+    return String(scan.createdByUsername || scan.loginId || scan.createdBy || scan.userId || scan.username || '').trim() || 'Not recorded (legacy)';
+  }
+
   function scanStreamRow(scan = {}) {
     const syncStatus = normalizedDisplaySyncStatus(scan) || 'pending';
     const partDescription = scan.partDescription || scan.partName || scan.description || scan.part || '-';
-    const entryBy = scan.enteredByName || scan.staffName || scan.userName || scan.userId || scanEntrySourceLabel(scan);
     return `
       <tr>
         <td>${escapeHtml(compactDateTime(scan.timestamp))}</td>
@@ -4200,14 +4219,14 @@
         <td>${escapeHtml(partDescription)}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin)}</td>
-        <td>${escapeHtml(entryBy)}</td>
+        <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
+        <td>${escapeHtml(scanUserId(scan))}</td>
       </tr>
     `;
   }
 
   function safeScanStreamRow(scan = {}) {
     const partDescription = scan.partDescription || scan.partName || scan.description || scan.part || '-';
-    const entryBy = scan.enteredByName || scan.staffName || scan.userName || scan.userId || scanEntrySourceLabel(scan);
     return `
       <tr>
         <td>${escapeHtml(compactDateTime(scan.timestamp || scan.scanTime || scan.createdAt || ''))}</td>
@@ -4221,7 +4240,8 @@
         <td>${escapeHtml(partDescription)}</td>
         <td>${escapeHtml(scanQuantity(scan, 0))}</td>
         <td>${escapeHtml(scan.binLocation || scan.bin || '-')}</td>
-        <td>${escapeHtml(entryBy)}</td>
+        <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
+        <td>${escapeHtml(scanUserId(scan))}</td>
       </tr>
     `;
   }
@@ -4924,6 +4944,8 @@
         <td>${escapeHtml(money(rowMrp))}</td><td>${escapeHtml(money(rowDlc))}</td>
         <td>${escapeHtml(scan.regdNo || '-')}</td><td>${escapeHtml(scan.jobCardNo || '-')}</td>
         <td title="${escapeHtml(scan.deviceId || '')}">${escapeHtml(String(scan.deviceId || '').startsWith('WEB-') ? 'WEB' : scan.deviceName || scan.deviceId || '-')}</td>
+        <td>${escapeHtml(scanEntrySourceLabel(scan))}</td>
+        <td>${escapeHtml(scanUserId(scan))}</td>
         <td>${actionDropdown}</td></tr>`;
     }
     return `
@@ -4950,6 +4972,7 @@
         <td>${escapeHtml(scan.binLocation || scan.bin || '')}</td>
         <td>${escapeHtml(scan.dealerName || scan.dealerCode)}</td>
         <td>${deviceLink(scan.deviceId)}</td>
+        <td>${escapeHtml(scanAuditStamp(scan))}</td>
         <td>${statusCell(scan)}</td>
         <td>${actionDropdown}</td>
       </tr>
@@ -13097,7 +13120,10 @@
     state.barcodeAutoSaving = true;
     $('#saveBarcodeManualScan').disabled = true;
     try {
-      const result = await submitScan(manualForm, { confirmBeforeSave: false });
+      const result = await submitScan(manualForm, {
+        confirmBeforeSave: false,
+        payload: { ...formObject(manualForm), source: 'regular_part_manual', scanMode: 'Regular Part Manual Entry' }
+      });
       if (result?.scan) fillPart(form, {
         ...result.scan,
         partName: result.scan.partDescription || result.scan.partName,
@@ -13297,11 +13323,162 @@
     setTimeout(() => document.body.classList.remove('print-labels'), 500);
   }
 
+  function quotationItemRow(item = {}) {
+    return `<tr class="quotation-item-row">
+      <td><input name="partNumber" value="${escapeHtml(item.partNumber || '')}" maxlength="80"></td>
+      <td><input name="description" value="${escapeHtml(item.description || '')}" required maxlength="500"></td>
+      <td><input name="quantity" type="number" min="0.001" step="0.001" value="${escapeHtml(item.quantity || 1)}" required></td>
+      <td><input name="unit" value="${escapeHtml(item.unit || 'Nos')}" maxlength="32"></td>
+      <td><input name="unitPrice" type="number" min="0" step="0.01" value="${escapeHtml(item.unitPrice || 0)}" required></td>
+      <td><input name="discountRate" type="number" min="0" max="100" step="0.01" value="${escapeHtml(item.discountRate || 0)}"></td>
+      <td><input name="taxRate" type="number" min="0" max="100" step="0.01" value="${escapeHtml(item.taxRate || 0)}"></td>
+      <td><button class="btn light remove-quotation-item" type="button" aria-label="Remove item">×</button></td>
+    </tr>`;
+  }
+
+  async function loadQuotationCompanyProfile() {
+    const data = await api('/api/settings/quotation-company-profile');
+    return data.profile || {};
+  }
+
+  async function openCompanyProfileSettings() {
+    try {
+      const profile = await loadQuotationCompanyProfile();
+      const fields = { companyName: 'companyProfileName', addressLine1: 'companyProfileAddressLine1', addressLine2: 'companyProfileAddressLine2', quotationTitle: 'companyProfileQuotationTitle', quotationSubtitle: 'companyProfileQuotationSubtitle', authorizedSignatory: 'companyProfileSignatory', signatoryTitle: 'companyProfileSignatoryTitle' };
+      Object.entries(fields).forEach(([key, id]) => { const node = $(`#${id}`); if (node) node.value = profile[key] || ''; });
+      $('#companyProfileSettingsModal')?.classList.remove('hidden');
+    } catch (error) { toast(error.message || 'Company profile could not be loaded.', 'error'); }
+  }
+
+  function closeCompanyProfileSettings() { $('#companyProfileSettingsModal')?.classList.add('hidden'); }
+
+  async function previewQuotationPdf(id) {
+    const response = await fetch(apiUrl(withActiveDealerQuery(`/api/quotations/${encodeURIComponent(id)}/pdf`)), { headers: state.token ? { Authorization: `Bearer ${state.token}` } : {} });
+    if (!response.ok) throw new Error(apiErrorMessage(await parseApiResponse(response), response.statusText));
+    const url = URL.createObjectURL(await response.blob());
+    const tab = window.open(url, '_blank', 'noopener');
+    if (!tab) { URL.revokeObjectURL(url); throw new Error('The browser blocked the PDF preview. Allow pop-ups and try again.'); }
+    window.setTimeout(() => URL.revokeObjectURL(url), 120000);
+  }
+
+  function quotationMoney(value) {
+    return `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
+  function quotationItemsFromForm() {
+    return $$('#quotationItemRows .quotation-item-row').map(row => ({
+      partNumber: $('[name="partNumber"]', row)?.value || '', description: $('[name="description"]', row)?.value || '',
+      quantity: $('[name="quantity"]', row)?.value || 0, unit: $('[name="unit"]', row)?.value || 'Nos',
+      unitPrice: $('[name="unitPrice"]', row)?.value || 0, discountRate: $('[name="discountRate"]', row)?.value || 0,
+      taxRate: $('[name="taxRate"]', row)?.value || 0
+    }));
+  }
+
+  function updateQuotationTotals() {
+    const values = quotationItemsFromForm();
+    let subtotal = 0; let discount = Number($('#quotationAdditionalDiscount')?.value || 0); let tax = 0;
+    values.forEach(item => {
+      const base = Number(item.quantity || 0) * Number(item.unitPrice || 0);
+      const afterDiscount = base * (1 - Number(item.discountRate || 0) / 100);
+      subtotal += base; discount += base - afterDiscount; tax += afterDiscount * Number(item.taxRate || 0) / 100;
+    });
+    const total = subtotal - discount + tax;
+    const node = $('#quotationTotals');
+    if (node) node.innerHTML = `Subtotal: ${quotationMoney(subtotal)} &nbsp; | &nbsp; Discount: ${quotationMoney(discount)} &nbsp; | &nbsp; Tax: ${quotationMoney(tax)} &nbsp; | &nbsp; <strong>Total: ${quotationMoney(total)}</strong>`;
+  }
+
+  function openQuotationEditor(quotation = null) {
+    const editor = $('#quotationEditor'); const form = $('#quotationForm');
+    if (!editor || !form) return;
+    form.reset();
+    $('#quotationId').value = quotation?.id || quotation?._id || '';
+    $('#quotationEditorTitle').textContent = quotation ? `Edit ${quotation.quotationNumber}` : 'New quotation';
+    $('#quotationNumber').value = quotation?.quotationNumber || '';
+    $('#quotationCustomerName').value = quotation?.customerName || '';
+    $('#quotationCustomerPhone').value = quotation?.customerPhone || '';
+    $('#quotationCustomerEmail').value = quotation?.customerEmail || '';
+    $('#quotationCustomerAddress').value = quotation?.customerAddress || '';
+    $('#quotationIssueDate').value = String(quotation?.issueDate || new Date().toISOString()).slice(0, 10);
+    $('#quotationValidUntil').value = quotation?.validUntil ? String(quotation.validUntil).slice(0, 10) : '';
+    $('#quotationStatus').value = quotation?.status || 'DRAFT';
+    $('#quotationAdditionalDiscount').value = quotation?.additionalDiscount || 0;
+    $('#quotationNotes').value = quotation?.notes || '';
+    $('#quotationTerms').value = quotation?.terms || '';
+    $('#quotationItemRows').innerHTML = (quotation?.items?.length ? quotation.items : [{}]).map(quotationItemRow).join('');
+    editor.classList.remove('hidden'); updateQuotationTotals();
+    $('#quotationCustomerName').focus();
+  }
+
+  function closeQuotationEditor() { $('#quotationEditor')?.classList.add('hidden'); }
+
+  async function loadQuotations() {
+    const dealerCode = currentDealerCode();
+    if (!dealerCode) return;
+    const params = new URLSearchParams({ dealerCode, limit: '50' });
+    const search = $('#quotationSearch')?.value.trim(); const status = $('#quotationStatusFilter')?.value;
+    if (search) params.set('search', search); if (status && status !== 'ALL') params.set('status', status);
+    const data = await api(`/api/quotations?${params}`);
+    const rows = data.quotations || [];
+    $('#quotationRows').innerHTML = rows.length ? rows.map(quotation => `<tr>
+      <td>${escapeHtml(quotation.quotationNumber)}</td><td>${escapeHtml(quotation.customerName)}</td>
+      <td>${escapeHtml(String(quotation.issueDate || '').slice(0, 10))}</td><td>${escapeHtml(quotation.status)}</td>
+      <td class="number">${quotationMoney(quotation.totalAmount)}</td>
+      <td><button class="btn light quote-edit" type="button" data-id="${escapeHtml(quotation.id || quotation._id)}">Edit</button> <button class="btn light quote-preview" type="button" data-id="${escapeHtml(quotation.id || quotation._id)}">Preview / Print</button> <button class="btn light quote-pdf" type="button" data-id="${escapeHtml(quotation.id || quotation._id)}" data-number="${escapeHtml(quotation.quotationNumber)}">PDF</button> <button class="btn danger quote-delete" type="button" data-id="${escapeHtml(quotation.id || quotation._id)}">Delete</button></td>
+    </tr>`).join('') : '<tr><td colspan="6" class="muted">No quotations found.</td></tr>';
+    state.quotations = rows;
+  }
+
+  async function editQuotation(id) {
+    const data = await api(`/api/quotations/${encodeURIComponent(id)}`);
+    openQuotationEditor(data.quotation);
+  }
+
+  function bindQuotationEvents() {
+    $('#companyProfileSettingsOpen')?.addEventListener('click', openCompanyProfileSettings);
+    $('#companyProfileSettingsClose')?.addEventListener('click', closeCompanyProfileSettings);
+    $('#companyProfileSettingsCancel')?.addEventListener('click', closeCompanyProfileSettings);
+    $('#companyProfileSettingsForm')?.addEventListener('submit', async event => {
+      event.preventDefault();
+      try {
+        const profile = Object.fromEntries(new FormData(event.currentTarget).entries());
+        await api('/api/settings/quotation-company-profile', { method: 'PUT', body: profile });
+        closeCompanyProfileSettings(); toast('Company profile saved. New quotations will use these details.', 'success');
+      } catch (error) { toast(error.message || 'Company profile could not be saved.', 'error'); }
+    });
+    $('#newQuotationBtn')?.addEventListener('click', () => openQuotationEditor());
+    $('#closeQuotationEditorBtn')?.addEventListener('click', closeQuotationEditor);
+    $('#quotationCancelBtn')?.addEventListener('click', closeQuotationEditor);
+    $('#addQuotationItemBtn')?.addEventListener('click', () => { $('#quotationItemRows').insertAdjacentHTML('beforeend', quotationItemRow()); updateQuotationTotals(); });
+    $('#quotationRefreshBtn')?.addEventListener('click', () => loadQuotations().catch(error => toast(error.message, 'error')));
+    $('#quotationSearch')?.addEventListener('change', () => loadQuotations().catch(error => toast(error.message, 'error')));
+    $('#quotationStatusFilter')?.addEventListener('change', () => loadQuotations().catch(error => toast(error.message, 'error')));
+    $('#quotationItemRows')?.addEventListener('click', event => { if (event.target.closest('.remove-quotation-item')) { event.target.closest('tr').remove(); updateQuotationTotals(); } });
+    $('#quotationEditor')?.addEventListener('input', event => { if (event.target.matches('input, textarea, select')) updateQuotationTotals(); });
+    $('#quotationRows')?.addEventListener('click', event => {
+      const button = event.target.closest('button[data-id]'); if (!button) return;
+      const id = button.dataset.id;
+      if (button.classList.contains('quote-edit')) editQuotation(id).catch(error => toast(error.message, 'error'));
+      else if (button.classList.contains('quote-preview')) previewQuotationPdf(id).catch(error => toast(error.message, 'error'));
+      else if (button.classList.contains('quote-pdf')) downloadGet(`/api/quotations/${encodeURIComponent(id)}/pdf`, `${button.dataset.number || 'quotation'}.pdf`).catch(error => toast(error.message, 'error'));
+      else if (button.classList.contains('quote-delete') && window.confirm('Delete this quotation?')) api(`/api/quotations/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(loadQuotations).catch(error => toast(error.message, 'error'));
+    });
+    $('#quotationForm')?.addEventListener('submit', async event => {
+      event.preventDefault();
+      try {
+        const id = $('#quotationId').value;
+        const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+        payload.dealerCode = currentDealerCode(); payload.items = quotationItemsFromForm();
+        await api(id ? `/api/quotations/${encodeURIComponent(id)}` : '/api/quotations', { method: id ? 'PUT' : 'POST', body: payload });
+        closeQuotationEditor(); await loadQuotations(); toast('Quotation saved successfully.', 'success');
+      } catch (error) { toast(error.message || 'Quotation could not be saved.', 'error'); }
+    });
+  }
+
   function openView(viewId, title) {
     if (viewId === 'admin') viewId = 'master';
     const role = normalizeUiRole(state.user && state.user.role);
     if (['audit_user', 'mobile_user'].includes(role)
-      && !['dashboard', 'scan', 'binTransfer', 'reports', 'master'].includes(viewId)) {
+      && !['dashboard', 'scan', 'binTransfer', 'reports', 'master', 'quotations'].includes(viewId)) {
       toast('This section is not available for your role.', 'error');
       return;
     }
@@ -13371,6 +13548,7 @@
     if (viewId === 'reconciliation' && !state.reconLoaded && activeReconDealer()) {
       loadReconciliation().catch((error) => toast(error.message, 'error'));
     }
+    if (viewId === 'quotations') loadQuotations().catch((error) => toast(error.message, 'error'));
   }
 
   function restoreActiveViewShell() {
@@ -15730,6 +15908,7 @@
       bindNavigation();
       bindEvents();
       enhanceCoreTables();
+      bindQuotationEvents();
       bindSuggestions();
       bindMasterSearchSuggestions();
       bindUppercaseInputs();
