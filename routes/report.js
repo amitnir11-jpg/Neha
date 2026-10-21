@@ -114,7 +114,7 @@ const REPORT_SCAN_SELECT = [
   'qty quantity mrp scanMRP manualMRP valuationMRP valuationSource finalInventoryValue finalMRP defaultMRP currentCatalogueMRP currentCatalogueDLC dlc',
   'bin binLocation autoDetectedBin binSelectionMode stockDeductedFromBin returnedToBin sourceBin sourceFittedScanId regdNo jobCardNo isFitted fittedQty fittedLocation fittedStatus billedAt returnedAt status type scanType',
   'upiId upiNo dealerCode dealerName auditId rawScan rawScanString rawBarcode rawQR rawUpi',
-  'deviceId deviceName userId loginId staffName userName role timestamp scanTime createdAt serverReceivedAt',
+  'deviceId deviceName userId loginId staffName userName role createdBy createdByUsername createdByName createdByRole timestamp scanTime createdAt serverReceivedAt',
   'syncStatus synced isSynced scanStatus isReversed reversedAt source scanMode warnings remarks masterFound masterMatch isMasterMatched',
   'priceHistoryId pricePeriodFrom pricePeriodTo pricePeriodMatched pricePeriodStatus'
 ].join(' ');
@@ -383,6 +383,8 @@ function pricePeriodDisplay(scans = [], priceHistories = [], valueRows = []) {
 
 function scanSourceValue(scan = {}) {
   const source = String(scan.source || scan.scanSource || '').trim().toLowerCase();
+  if (/regular[_\s-]*part.*manual|manual.*regular[_\s-]*part/.test(source)) return 'regular_part_manual';
+  if (/excel.*(manual|upload)|manual.*excel/.test(source)) return 'excel_manual_upload';
   if (/manual/.test(source)) return 'manual';
   if (/ocr|ai/.test(source)) return 'ocr_label';
   if (/^qr$|qr[_\s-]*scan/.test(source)) return 'qr';
@@ -396,12 +398,18 @@ function scanSourceValue(scan = {}) {
 function scanSourceLabels(scan = {}) {
   const source = scanSourceValue(scan);
   const deviceId = String(scan.deviceId || '').trim().toUpperCase();
-  const entryChannel = deviceId.startsWith('MOB-') || ['mobile', 'camera', 'qr', 'ocr_label'].includes(source)
+  const entryChannel = source === 'excel_manual_upload'
+    ? 'Upload'
+    : deviceId.startsWith('MOB-') || ['mobile', 'camera', 'qr', 'ocr_label'].includes(source)
     ? 'Mobile'
-    : deviceId.startsWith('WEB-') || ['manual', 'barcode', 'scanner'].includes(source)
+    : deviceId.startsWith('WEB-') || ['manual', 'regular_part_manual', 'barcode', 'scanner'].includes(source)
       ? 'Web'
       : 'Server';
-  const entryMode = source === 'manual'
+  const entryMode = source === 'regular_part_manual'
+    ? 'Regular Part Manual Entry'
+    : source === 'excel_manual_upload'
+      ? 'Excel Upload'
+    : source === 'manual'
     ? 'Manual Entry'
     : source === 'ocr_label'
       ? 'OCR Label Scan'
@@ -409,6 +417,15 @@ function scanSourceLabels(scan = {}) {
         ? 'Barcode/QR Scan'
         : 'System/API';
   return { entryMode, entryChannel, scanSourceLabel: `${entryChannel} ${entryMode}` };
+}
+
+function scanSourceDisplay(scan = {}) {
+  const source = scanSourceValue(scan);
+  if (source === 'excel_manual_upload') return 'Excel Upload';
+  if (source === 'regular_part_manual') return 'Regular Part Manual Entry';
+  if (source === 'manual') return 'Manual Entry';
+  if (['barcode', 'scanner', 'qr', 'mobile', 'camera', 'ocr_label'].includes(source)) return 'Barcode / UPI Scan';
+  return 'System / API';
 }
 
 const CATEGORY_VARIANCE_ACTIONS = [
@@ -1289,6 +1306,8 @@ function scanColumns() {
     { header: 'Entry Mode', key: 'entryMode', width: 18 },
     { header: 'Entry Channel', key: 'entryChannel', width: 16 },
     { header: 'Entry Source', key: 'scanSourceLabel', width: 24 },
+    { header: 'Scan Source', key: 'scanSource', width: 24 },
+    { header: 'User ID', key: 'userId', width: 20 },
     { header: 'Staff', key: 'staffName', width: 18 },
     { header: 'Raw Scan', key: 'rawScan', width: 45 },
     { header: 'Warnings', key: 'warnings', width: 32 }
@@ -1422,6 +1441,8 @@ async function createWorkbook(query) {
     { header: 'Entry Mode', key: 'entryMode', width: 18 },
     { header: 'Entry Channel', key: 'entryChannel', width: 16 },
     { header: 'Entry Source', key: 'scanSourceLabel', width: 24 },
+    { header: 'Scan Source', key: 'scanSource', width: 24 },
+    { header: 'User ID', key: 'userId', width: 20 },
     { header: 'Staff', key: 'staffName', width: 18 },
     { header: 'Warnings', key: 'warnings', width: 32 }
   ], data.rawLogRows);
@@ -2465,13 +2486,14 @@ async function buildReportData(query = {}) {
       bin: fittedScanQty(scan) ? 'FITTED - VEHICLE' : (scan.binLocation || scan.bin),
       dealerCode: scan.dealerCode,
       auditId: scan.auditId,
-      userId: scan.userId || scan.loginId || '',
+      userId: scan.createdByUsername || scan.loginId || scan.createdBy || scan.userId || '',
+      scanSource: scanSourceDisplay(scan),
       userName: scan.userName || scan.staffName || scan.loginId || '',
       role: scan.role || '',
       deviceId: scan.deviceId,
-      entryMode: scan.entryMode,
-      entryChannel: scan.entryChannel,
-      scanSourceLabel: scan.scanSourceLabel,
+      entryMode: scan.entryMode || scanSourceLabels(scan).entryMode,
+      entryChannel: scan.entryChannel || scanSourceLabels(scan).entryChannel,
+      scanSourceLabel: scan.scanSourceLabel || scanSourceLabels(scan).scanSourceLabel,
       staffName: scan.staffName,
       regdNo: scan.regdNo || '',
       jobCardNo: scan.jobCardNo || '',

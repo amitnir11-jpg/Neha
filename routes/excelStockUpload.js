@@ -289,6 +289,7 @@ router.post('/batches/:batchId/confirm', auth.requireAuth, async (req, res, next
         if (!bin) await Bin.create({ dealerCode: batch.dealerCode, binCode: row.binLocation, binName: row.binLocation, bin: row.binLocation, binLocation: row.binLocation, active: true });
         const stock = await loadPartStock({ dealerCode: batch.dealerCode, auditId: batch.auditId, partNumber: row.partNumber });
         const existing = Number(stock.binBreakdown?.find(item => upper(item.binLocation) === row.binLocation)?.availableQty ?? 0);
+        const scanId = `EXCEL-${batch.batchId}-${row.sourceRow}-${randomUUID()}`;
         await Inventory.create({ dealerCode: batch.dealerCode, dealerName: batch.dealerName, auditId: batch.auditId,
           partNumber: row.partNumber, normalizedPartNumber: row.partNumber, part: row.partNumber,
           partName: row.partDescription, quantity: row.qty, qty: row.qty,
@@ -296,8 +297,10 @@ router.post('/batches/:batchId/confirm', auth.requireAuth, async (req, res, next
           scanType: 'INWARD', type: 'INWARD', movementType: 'INWARD', source: 'EXCEL_MANUAL', scanMode: 'Excel Manual Stock Upload',
           masterFound: true, masterMatch: true, isMasterMatched: true, isLocalPart: false,
           activeInventory: true, remainingQty: Number(row.qty), status: 'ACCEPTED', scanStatus: 'ACCEPTED', syncStatus: 'synced',
-          uniqueScanId: `EXCEL-${batch.batchId}-${row.sourceRow}-${randomUUID()}`, scanId: `EXCEL-${batch.batchId}-${row.sourceRow}-${randomUUID()}`,
-          timestamp: now, scanTime: now, createdAt: now, userId: actor(req), username: req.user?.username || '', staffName: actorName(req),
+          uniqueScanId: scanId, scanId,
+          timestamp: now, scanTime: now, createdAt: now,
+          userId: actor(req), loginId: req.user?.username || '', username: req.user?.username || '', userName: actorName(req), staffName: actorName(req), role: req.user?.role || '',
+          createdBy: actor(req), createdByUsername: req.user?.username || '', createdByName: actorName(req), createdByRole: req.user?.role || '',
           uploadBatchId: batch.batchId, uploadExistingQty: existing, uploadFinalQty: existing + Number(row.qty) });
         row.existingQty = existing;
         row.finalQty = existing + Number(row.qty);
@@ -449,7 +452,9 @@ router.post('/batches/:batchId/reverse', auth.requireAuth, auth.requireAdmin, as
           masterFound: true, masterMatch: true, isMasterMatched: true, isLocalPart: false,
           activeInventory: false, remainingQty: 0, status: 'ACCEPTED', scanStatus: 'ACCEPTED', syncStatus: 'synced',
           uniqueScanId: scanId, scanId, timestamp: now, scanTime: now, createdAt: now,
-          userId: actor(req), username: req.user?.username || '', staffName: actorName(req), uploadBatchId: batch.batchId, reversalOf: row.sourceRow });
+          userId: actor(req), loginId: req.user?.username || '', username: req.user?.username || '', userName: actorName(req), staffName: actorName(req), role: req.user?.role || '',
+          createdBy: actor(req), createdByUsername: req.user?.username || '', createdByName: actorName(req), createdByRole: req.user?.role || '',
+          uploadBatchId: batch.batchId, reversalOf: row.sourceRow });
       }
       await db.excelStockUploadBatch.update({ where: { id: batch.id }, data: { status: 'REVERSED' } });
       return { dealerCode: batch.dealerCode, auditId: batch.auditId, reversedRows: rows.length, reversedQty: rows.reduce((sum, row) => sum + Number(row.qty || 0), 0), rows };

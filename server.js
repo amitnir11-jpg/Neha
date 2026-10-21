@@ -3,9 +3,19 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { spawn } = require('child_process');
-const configuredEnvPath = process.env.DAKSH_CONFIG_PATH || (process.platform === 'win32'
-  ? path.join(process.env.ProgramData || 'C:\\ProgramData', 'DAKSH', 'config', 'daksh.env')
-  : '');
+const programDataRoot = process.env.ProgramData || 'C:\\ProgramData';
+// The Windows installer stores its runtime configuration under
+// ProgramData\DakshInventory.  Keep the earlier DAKSH location as a
+// compatibility fallback, but always prefer an explicitly supplied path.
+const defaultEnvPaths = process.platform === 'win32'
+  ? [
+      path.join(programDataRoot, 'DakshInventory', 'Config', 'daksh.env'),
+      path.join(programDataRoot, 'DAKSH', 'config', 'daksh.env')
+    ]
+  : [];
+const configuredEnvPath = process.env.DAKSH_CONFIG_PATH
+  || defaultEnvPaths.find((candidate) => fs.existsSync(candidate))
+  || '';
 require('dotenv').config({ path: configuredEnvPath || undefined });
 // A dedicated environment must not inherit missing values from the source .env.
 if (!process.env.DAKSH_CONFIG_PATH) require('dotenv').config();
@@ -71,6 +81,9 @@ function corsOriginAllowed(origin) {
   ].filter(Boolean).join(',').split(',').map((value) => parseRequestHost(value).hostname).filter(Boolean);
   const hostname = parseRequestHost(origin).hostname;
   if (configured.includes(hostname)) return true;
+  // The dashboard, REST API, and Socket.IO server share this local process.
+  // Permit private Wi-Fi origins only when the server is explicitly local.
+  if (connectionConfig?.isLocal && isPrivateLanIp(hostname)) return true;
   return ['localhost', '127.0.0.1', '::1', 'daksh.local'].includes(hostname) || hostname.endsWith('.localhost');
 }
 
@@ -78,7 +91,7 @@ const User = require('./models/User');
 const Device = require('./models/Device');
 const Inventory = require('./models/Inventory');
 const SyncLog = require('./models/SyncLog');
-const { isPlaceholderPublicUrl, parseRequestHost, serverInfo } = require('./utils/network');
+const { isPlaceholderPublicUrl, isPrivateLanIp, parseRequestHost, serverInfo } = require('./utils/network');
 const { getActiveAudit, publicAudit } = require('./utils/audit');
 const authRoutes = require('./routes/auth');
 const licenseService = require('./services/LicenseService');
@@ -768,6 +781,7 @@ app.use('/api/scan', require('./routes/inventory'));
 app.use('/api/scan-audit', require('./routes/scanAudit'));
 app.use('/api/audit-dashboard', require('./routes/audit-dashboard'));
 app.use('/api/local-parts', localPartsRouter);
+app.use('/api/quotations', require('./routes/quotations'));
 app.use('/api/excel-stock-upload', require('./routes/excelStockUpload'));
 app.use('/api/reports', reportsRouter);
 app.use('/api/report-filter-settings', require('./routes/reportFilterSettings'));
@@ -1299,6 +1313,7 @@ async function start() {
   console.log(`Server started successfully on port ${activePort}`);
   const info = serverInfo(activePort);
   console.log(`PC app URL: ${info.serverUrl}`);
+  console.log(`LAN app URL: ${info.lanUrl}/dashboard`);
   console.log(`Mobile web URL for same WiFi/hotspot: ${info.mobileWebUrl || info.mobileScannerUrl}`);
   console.log(`Server identity: ${serverIdentity.get(activePort).serverId}`);
   scheduleDatabaseInitialization(0);

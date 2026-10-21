@@ -743,33 +743,45 @@ function normalizeSource(value, fallback = 'manual') {
     value = value.source || value.scanSource || value.entryMode || value.type || '';
   }
   const source = String(value || fallback).trim().toLowerCase();
+  if (/regular[_\s-]*part.*manual|manual.*regular[_\s-]*part/.test(source)) return 'regular_part_manual';
+  if (/excel.*(manual|upload)|manual.*excel/.test(source)) return 'excel_manual_upload';
   if (/manual/.test(source)) return 'manual';
   if (/bluetooth/.test(source)) return 'bluetooth_scanner';
   if (/ocr|ai/.test(source)) return 'ocr_label';
   if (/^qr$|qr[_\s-]*scan/.test(source)) return 'qr';
   if (/barcode/.test(source)) return 'barcode';
   if (/camera|mobile/.test(source)) return 'mobile';
-  if (['manual', 'scanner', 'bluetooth_scanner', 'import', 'api', 'ocr_label', 'qr'].includes(source)) return source;
+  if (['manual', 'regular_part_manual', 'excel_manual_upload', 'scanner', 'bluetooth_scanner', 'import', 'api', 'ocr_label', 'qr'].includes(source)) return source;
   return fallback;
+}
+
+function isManualSource(source) {
+  return ['manual', 'regular_part_manual'].includes(normalizeSource(source, ''));
 }
 
 function isManualEntryMode(input = {}, rawScanText = '', upiId = '', defaultSource = 'manual') {
   const sourceText = firstValue(input, ['entryMode', 'scanMode', 'scanSource', 'source']);
   const fallback = rawScanText || upiId ? 'barcode' : defaultSource;
-  return normalizeSource(sourceText, fallback) === 'manual';
+  return isManualSource(normalizeSource(sourceText, fallback));
 }
 
 function sourceLabels(scan = {}) {
   const source = normalizeSource(scan.source || scan.scanSource || '', '');
   const deviceId = String(scan.deviceId || '').trim().toUpperCase();
-  const channel = source === 'bluetooth_scanner'
+  const channel = source === 'excel_manual_upload'
+    ? 'Upload'
+    : source === 'bluetooth_scanner'
     ? 'Bluetooth'
     : deviceId.startsWith('MOB-') || ['mobile', 'camera', 'qr', 'ocr_label'].includes(source)
     ? 'Mobile'
-    : deviceId.startsWith('WEB-') || ['manual', 'barcode', 'scanner'].includes(source)
+    : deviceId.startsWith('WEB-') || ['manual', 'regular_part_manual', 'excel_manual_upload', 'barcode', 'scanner'].includes(source)
       ? 'Web'
       : 'Server';
-  const entryMode = source === 'manual'
+  const entryMode = source === 'regular_part_manual'
+    ? 'Regular Part Manual Entry'
+    : source === 'excel_manual_upload'
+      ? 'Excel Manual Upload'
+    : source === 'manual'
     ? 'Manual Entry'
     : source === 'bluetooth_scanner'
       ? 'Bluetooth Scanner'
@@ -2050,7 +2062,7 @@ async function smartBinSuggestionForScan(input = {}) {
     };
   }
 
-  const manualInward = normalizeSource(input.source || input.scanSource, 'barcode') === 'manual'
+  const manualInward = isManualSource(normalizeSource(input.source || input.scanSource, 'barcode'))
     && upper(input.scanType || input.type) === 'INWARD';
   const suggestion = await getPartBinLocationSuggestion({
     dealerCode,
@@ -2359,7 +2371,7 @@ function isManualScanRecord(scan = {}) {
     .map((value) => String(value || '').toLowerCase())
     .join(' ');
   const rawText = scanRawText(scan);
-  return source === 'manual'
+  return isManualSource(source)
     || /\bmanual\b/.test(text)
     || /^MANUAL:/i.test(rawText)
     || /MANUAL_ENTERED_MRP/i.test(String(scan.valuationSource || ''))
@@ -3111,13 +3123,17 @@ async function saveScanRequest(req, res) {
       rawQR: candidate.rawScan,
       rawUpi: candidate.rawScan,
       source: entrySource,
-      scanMode: req.body.scanMode || (entrySource === 'manual' ? 'Manual' : 'Barcode/Web Scan'),
+      scanMode: req.body.scanMode || (isManualSource(entrySource) ? 'Manual' : 'Barcode/Web Scan'),
       deviceId: String(req.body.deviceId || ''),
       deviceName: String(req.body.deviceName || req.body.device || ''),
       userId: requestUser.userId,
       loginId: requestUser.loginId,
       staffName: requestUser.staffName,
       userName: requestUser.userName,
+      createdBy: requestUser.userId || requestUser.loginId,
+      createdByUsername: requestUser.loginId,
+      createdByName: requestUser.userName || requestUser.staffName,
+      createdByRole: role,
       role,
       timestamp,
       scanTime: timestamp,
@@ -3264,7 +3280,7 @@ function isManualScanRecord(scan = {}) {
     .map((value) => String(value || '').toLowerCase())
     .join(' ');
   const rawText = scanRawText(scan);
-  return source === 'manual'
+  return isManualSource(source)
     || /\bmanual\b/.test(text)
     || /^MANUAL:/i.test(rawText)
     || /MANUAL_ENTERED_MRP/i.test(String(scan.valuationSource || ''))
@@ -3910,13 +3926,17 @@ async function saveScanRequest(req, res) {
       rawQR: candidate.rawScan,
       rawUpi: candidate.rawScan,
       source: entrySource,
-      scanMode: req.body.scanMode || (entrySource === 'manual' ? 'Manual' : 'Barcode/Web Scan'),
+      scanMode: req.body.scanMode || (isManualSource(entrySource) ? 'Manual' : 'Barcode/Web Scan'),
       deviceId: String(req.body.deviceId || ''),
       deviceName: String(req.body.deviceName || req.body.device || ''),
       userId: requestUser.userId,
       loginId: requestUser.loginId,
       staffName: requestUser.staffName,
       userName: requestUser.userName,
+      createdBy: requestUser.userId || requestUser.loginId,
+      createdByUsername: requestUser.loginId,
+      createdByName: requestUser.userName || requestUser.staffName,
+      createdByRole: role,
       role,
       timestamp,
       scanTime: timestamp,
@@ -4574,7 +4594,14 @@ router.post('/:scanId/fitted-status', auth.requireAuth, auth.requireAdmin, async
           synced: true,
           isSynced: true,
           userId: String(req.user?.id || req.user?._id || ''),
+          loginId: String(req.user?.username || req.user?.email || ''),
           userName: String(req.user?.name || req.user?.username || req.user?.email || ''),
+          staffName: String(req.user?.name || req.user?.username || req.user?.email || ''),
+          role: String(req.user?.role || ''),
+          createdBy: String(req.user?.id || req.user?._id || req.user?.username || ''),
+          createdByUsername: String(req.user?.username || req.user?.email || ''),
+          createdByName: String(req.user?.name || req.user?.username || req.user?.email || ''),
+          createdByRole: String(req.user?.role || ''),
           deviceId: String(scan.deviceId || ''),
           timestamp: now,
           scanTime: now,
